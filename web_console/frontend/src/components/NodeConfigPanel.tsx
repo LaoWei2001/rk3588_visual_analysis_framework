@@ -94,7 +94,8 @@ function F({ label, children }: { label: string; children: ReactNode }) {
 function useAssetUpload() {
   const appName    = useEditorStore(s => s.appName)
   const loadAssets = useEditorStore(s => s.loadAssets)
-  const [busy, setBusy] = useState<string | null>(null)   // 正在上传的字段名
+  const [busy, setBusy]         = useState<string | null>(null)   // 正在上传的字段名
+  const [progress, setProgress] = useState(0)                     // 该字段的上传进度 0–100
 
   const upload = async (
     field: string,
@@ -112,8 +113,9 @@ function useAssetUpload() {
       )
     }
     setBusy(field)
+    setProgress(0)
     try {
-      const r = await uploadAsset(appName, file, overwrite)
+      const r = await uploadAsset(appName, file, overwrite, pct => setProgress(pct))
       await loadAssets(appName)         // 刷新下拉列表
       onDone(r.path)                    // 自动选中刚导入的文件
       if (r.renamed) window.alert(`原文件已保留，新文件另存为 ${r.name}`)
@@ -123,10 +125,11 @@ function useAssetUpload() {
       window.alert(`导入失败：${msg}`)
     } finally {
       setBusy(null)
+      setProgress(0)
     }
   }
 
-  return { busy, upload }
+  return { busy, progress, upload }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -134,7 +137,7 @@ function useAssetUpload() {
 // ─────────────────────────────────────────────────────────────────────────────
 function StreamForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'] }) {
   const assets  = useEditorStore(s => s.assets)
-  const { busy, upload } = useAssetUpload()
+  const { busy, progress, upload } = useAssetUpload()
   const d   = node.data as Record<string, unknown>
   const set = (k: string, v: unknown) => onUpdate(node.id, { [k]: v })
 
@@ -224,6 +227,7 @@ function StreamForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'
             emptyHint="该程序 assets/ 下暂无视频文件，请点「导入」上传"
             accept=".mp4,.avi,.mkv"
             uploading={busy === 'url'}
+            progress={busy === 'url' ? progress : 0}
             onUpload={f => upload('url', f, assets.videos, p => set('url', p))}
           />
         </F>
@@ -243,7 +247,7 @@ function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
   const assets     = useEditorStore(s => s.assets)
   const info       = useConsoleStore(s => s.info)
   const modelTypes = info?.known_model_types ?? ['yolov8_det', 'yolov5', 'yolov8_pose', 'yolov5_seg']
-  const { busy, upload } = useAssetUpload()
+  const { busy, progress, upload } = useAssetUpload()
 
   const d   = node.data as Record<string, unknown>
   const set = (k: string, v: unknown) => onUpdate(node.id, { [k]: v })
@@ -281,6 +285,7 @@ function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
           emptyHint="该程序 assets/ 下暂无 .rknn 模型，请点「导入」上传"
           accept=".rknn"
           uploading={busy === 'model_path'}
+          progress={busy === 'model_path' ? progress : 0}
           onUpload={f => upload('model_path', f, assets.models, p => set('model_path', p))}
         />
       </F>
@@ -293,6 +298,7 @@ function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
           emptyHint="该程序 assets/ 下暂无 .txt 标签文件，请点「导入」上传"
           accept=".txt"
           uploading={busy === 'label_path'}
+          progress={busy === 'label_path' ? progress : 0}
           onUpload={f => upload('label_path', f, assets.labels, p => set('label_path', p))}
         />
       </F>

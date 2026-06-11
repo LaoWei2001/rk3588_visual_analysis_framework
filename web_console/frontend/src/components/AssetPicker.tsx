@@ -6,7 +6,8 @@ interface AssetPickerProps {
   options: string[]
   emptyHint?: string                 // options 为空时显示的提示（取代旧的手动输入框）
   accept?: string                    // 导入按钮的文件类型过滤（如 ".rknn"）
-  uploading?: boolean                // 上传中：禁用导入按钮并显示 …
+  uploading?: boolean                // 上传中：禁用导入按钮、显示进度
+  progress?: number                  // 上传进度 0–100
   onUpload?: (file: File) => void    // 提供则显示「导入」按钮
 }
 
@@ -18,7 +19,7 @@ interface AssetPickerProps {
 export default function AssetPicker({
   value, onChange, options,
   emptyHint = '（该目录暂无文件，请点「导入」上传）',
-  accept, uploading, onUpload,
+  accept, uploading, progress = 0, onUpload,
 }: AssetPickerProps) {
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -45,22 +46,29 @@ export default function AssetPicker({
         onClick={() => fileRef.current?.click()}
         title="从本机导入文件到 assets/"
       >
-        {uploading ? '…' : '导入'}
+        {uploading ? `${progress}%` : '导入'}
       </button>
     </>
   )
 
   return (
-    <div className="asset-picker">
-      {allOpts.length === 0 ? (
-        <span className="picker-empty">{emptyHint}</span>
-      ) : (
-        <select value={value} onChange={e => onChange(e.target.value)}>
-          <option value="">— 选择文件 —</option>
-          {allOpts.map(o => <option key={o} value={o}>{o}</option>)}
-        </select>
+    <div className="asset-picker-col">
+      <div className="asset-picker">
+        {allOpts.length === 0 ? (
+          <span className="picker-empty">{emptyHint}</span>
+        ) : (
+          <select value={value} onChange={e => onChange(e.target.value)}>
+            <option value="">— 选择文件 —</option>
+            {allOpts.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+        )}
+        {uploadBtn}
+      </div>
+      {uploading && (
+        <div className="picker-progress" aria-hidden="true">
+          <div className="picker-progress-bar" style={{ width: `${progress}%` }} />
+        </div>
       )}
-      {uploadBtn}
     </div>
   )
 }

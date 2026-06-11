@@ -209,6 +209,25 @@
   padding: 3px 2px;
 }
 
+/* 导入进度：下拉行 + 进度条纵向排列 */
+.asset-picker-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.picker-progress {
+  height: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.picker-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.15s ease;
+}
+
 /* Color-coded by edge type */
 .react-flow__handle[data-handleid="stream-out"],
 .react-flow__handle[data-handleid="stream-in"]  { background: #3b82f6 !important; }
