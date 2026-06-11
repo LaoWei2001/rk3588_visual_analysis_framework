@@ -8,7 +8,7 @@ import { Node } from '@xyflow/react'
 import { useEditorStore }  from '../store/editorStore'
 import { useConsoleStore } from '../store/consoleStore'
 import { useROIStore, type Zone } from '../store/roiStore'
-import { fetchAppLogics, asLogicDef, type LogicDef, type LogicParam } from '../api/client'
+import { fetchAppLogics, asLogicDef, uploadAsset, type LogicDef, type LogicParam } from '../api/client'
 import { getSrcType, SRC_TYPES } from '../utils/streamSource'
 import AssetPicker         from './AssetPicker'
 import NumberField         from './NumberField'
@@ -89,10 +89,52 @@ function F({ label, children }: { label: string; children: ReactNode }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 资源导入：重名提示覆盖，不覆盖则后端另存为 _copy；成功后刷新列表并自动选中。
+// ─────────────────────────────────────────────────────────────────────────────
+function useAssetUpload() {
+  const appName    = useEditorStore(s => s.appName)
+  const loadAssets = useEditorStore(s => s.loadAssets)
+  const [busy, setBusy] = useState<string | null>(null)   // 正在上传的字段名
+
+  const upload = async (
+    field: string,
+    file: File,
+    existing: string[],                 // 同类已有文件（用于重名判断）
+    onDone: (path: string) => void,     // 写回节点字段（自动选中）
+  ) => {
+    if (!appName) { window.alert('未选择程序，无法导入'); return }
+    const dup = existing.some(p => (p.split('/').pop() ?? p) === file.name)
+    let overwrite = false
+    if (dup) {
+      overwrite = window.confirm(
+        `assets/ 下已存在同名文件「${file.name}」。\n\n` +
+        `确定 = 覆盖原文件\n取消 = 保留原文件，另存为副本（文件名加 _copy）`,
+      )
+    }
+    setBusy(field)
+    try {
+      const r = await uploadAsset(appName, file, overwrite)
+      await loadAssets(appName)         // 刷新下拉列表
+      onDone(r.path)                    // 自动选中刚导入的文件
+      if (r.renamed) window.alert(`原文件已保留，新文件另存为 ${r.name}`)
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        ?? (e instanceof Error ? e.message : String(e))
+      window.alert(`导入失败：${msg}`)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return { busy, upload }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Stream form
 // ─────────────────────────────────────────────────────────────────────────────
 function StreamForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'] }) {
   const assets  = useEditorStore(s => s.assets)
+  const { busy, upload } = useAssetUpload()
   const d   = node.data as Record<string, unknown>
   const set = (k: string, v: unknown) => onUpdate(node.id, { [k]: v })
 
@@ -179,7 +221,10 @@ function StreamForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'
             value={String(d.url ?? '')}
             onChange={v => set('url', v)}
             options={assets.videos}
-            placeholder="assets/test.mp4"
+            emptyHint="该程序 assets/ 下暂无视频文件，请点「导入」上传"
+            accept=".mp4,.avi,.mkv"
+            uploading={busy === 'url'}
+            onUpload={f => upload('url', f, assets.videos, p => set('url', p))}
           />
         </F>
         <label className="node-toggle">
@@ -198,6 +243,7 @@ function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
   const assets     = useEditorStore(s => s.assets)
   const info       = useConsoleStore(s => s.info)
   const modelTypes = info?.known_model_types ?? ['yolov8_det', 'yolov5', 'yolov8_pose', 'yolov5_seg']
+  const { busy, upload } = useAssetUpload()
 
   const d   = node.data as Record<string, unknown>
   const set = (k: string, v: unknown) => onUpdate(node.id, { [k]: v })
@@ -232,7 +278,10 @@ function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
           value={String(d.model_path ?? '')}
           onChange={v => set('model_path', v)}
           options={assets.models}
-          placeholder="assets/yolov8n.rknn"
+          emptyHint="该程序 assets/ 下暂无 .rknn 模型，请点「导入」上传"
+          accept=".rknn"
+          uploading={busy === 'model_path'}
+          onUpload={f => upload('model_path', f, assets.models, p => set('model_path', p))}
         />
       </F>
 
@@ -241,7 +290,10 @@ function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
           value={String(d.label_path ?? '')}
           onChange={v => set('label_path', v)}
           options={assets.labels}
-          placeholder="assets/labels.txt"
+          emptyHint="该程序 assets/ 下暂无 .txt 标签文件，请点「导入」上传"
+          accept=".txt"
+          uploading={busy === 'label_path'}
+          onUpload={f => upload('label_path', f, assets.labels, p => set('label_path', p))}
         />
       </F>
 

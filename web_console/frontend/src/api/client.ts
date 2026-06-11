@@ -107,6 +107,16 @@ export const saveROI = (name: string, roi: Record<string, RoiEntry>) =>
 export const fetchAssets = (name: string) =>
   api.get<AppAssets>(`/apps/${name}/assets`).then(r => r.data)
 
+// 导入一个视频/模型/标签文件到 assets/。重名且 overwrite=false → 后端另存为 _copy。
+export const uploadAsset = (name: string, file: File, overwrite: boolean) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('overwrite', overwrite ? 'true' : 'false')
+  return api.post<{ ok: boolean; path: string; name: string; category: string; renamed: boolean }>(
+    `/apps/${name}/assets/upload`, fd,
+  ).then(r => r.data)
+}
+
 export const fetchConsoleInfo = () =>
   api.get<ConsoleInfo>('/console/info').then(r => r.data)
 

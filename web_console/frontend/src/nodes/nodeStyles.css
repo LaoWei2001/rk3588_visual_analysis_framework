@@ -197,6 +197,17 @@
   transition: all 0.15s;
 }
 .picker-toggle:hover { background: var(--border); color: var(--text); }
+.picker-toggle:disabled { opacity: 0.5; cursor: default; }
+
+/* 资源目录为空时的占位提示（取代旧的手动输入框） */
+.picker-empty {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text2);
+  font-style: italic;
+  padding: 3px 2px;
+}
 
 /* Color-coded by edge type */
 .react-flow__handle[data-handleid="stream-out"],
