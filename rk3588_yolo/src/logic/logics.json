@@ -1,0 +1,269 @@
+{
+  "_comment": "逻辑参数清单：集中声明每个 logic 可调参数，供 Web 控制台动态渲染。param.key 必须等于 config.json 里的键 == ChannelConfig 字段(在 config_init.cpp 用 REG_C 注册) == logic 里读取的键。新增参数：①ChannelConfig 加字段+REG_C ②logic 里读它 ③这里加一条，前端无需改。",
+  "channel_logics": [
+    {
+      "name": "logic_default",
+      "label": "默认（无动作）",
+      "params": []
+    },
+    {
+      "name": "logic_hook",
+      "label": "吊钩安全圈检测",
+      "params": [
+        {
+          "key": "radius",
+          "type": "int",
+          "label": "安全圈半径",
+          "default": 50,
+          "min": 1,
+          "max": 1000,
+          "help": "目标中心离安全圈中心超过此半径即判定出圈告警"
+        }
+      ]
+    },
+    {
+      "name": "logic_roll",
+      "label": "传送带/料斗占用率",
+      "params": []
+    },
+    {
+      "name": "logic_custom",
+      "label": "自定义示例（ROI 计数）",
+      "params": []
+    },
+    {
+      "name": "logic_person_alarm",
+      "label": "人员区域告警",
+      "params": []
+    },
+    {
+      "name": "logic_cross_camera",
+      "label": "跨摄像头联动示例",
+      "params": []
+    },
+    {
+      "name": "logic_server",
+      "label": "服务器告警上报",
+      "report": "server",
+      "params": [
+        { "key": "report_interval_sec", "type": "int", "label": "上报间隔(秒)", "default": 5, "min": 1, "max": 3600, "help": "两次上报之间的最小间隔秒数" }
+      ]
+    },
+    {
+      "name": "logic_dify",
+      "label": "Dify 二次核验",
+      "report": "dify",
+      "params": [
+        { "key": "report_interval_sec", "type": "int", "label": "上报间隔(秒)", "default": 5, "min": 1, "max": 3600, "help": "两次上报之间的最小间隔秒数" }
+      ]
+    },
+    {
+      "name": "logic_dify_person_verify",
+      "label": "人员 Dify 去重核验",
+      "report": "dify",
+      "params": []
+    },
+    {
+      "name": "logic_roi",
+      "label": "ROI/坐标可视化",
+      "params": []
+    },
+    {
+      "name": "logic_multi_roi",
+      "label": "多 ROI 区域示例",
+      "params": []
+    },
+    {
+      "name": "logic_wafer_sop",
+      "label": "晶圆清洗SOP(花篮顺序/朝向/抖动)",
+      "params": [
+        {
+          "key": "sop_sequence",
+          "type": "string",
+          "label": "进槽顺序(逗号分隔)",
+          "default": "去胶槽1,去胶槽2,IPA槽,纯水槽",
+          "placeholder": "去胶槽1,去胶槽2,IPA槽,纯水槽",
+          "help": "花篮应依次进入的槽位名; 每个名字必须与本通道一个 ROI 区域名完全一致。最后一个槽视为纯水槽(抖动检测槽)"
+        },
+        {
+          "key": "basket_normal_label",
+          "type": "string",
+          "label": "花篮正常朝向类名",
+          "default": "bkt_normal",
+          "help": "检测模型里花篮正常朝向的类别名, 须与 labels.txt 完全一致"
+        },
+        {
+          "key": "basket_abnormal_label",
+          "type": "string",
+          "label": "花篮翻转朝向类名",
+          "default": "bkt_abnormal",
+          "help": "检测模型里花篮翻转朝向的类别名; 转移中出现即判定方向偏转告警"
+        },
+        {
+          "key": "sop_shake_amplitude",
+          "type": "int",
+          "label": "抖动幅度阈值(px)",
+          "default": 15,
+          "min": 1,
+          "max": 320,
+          "help": "纯水槽内一次有效上/下摆动的最小幅度(模型坐标像素), 越小越灵敏"
+        },
+        {
+          "key": "sop_shake_min_count",
+          "type": "int",
+          "label": "最少抖动次数",
+          "default": 3,
+          "min": 1,
+          "max": 100,
+          "help": "工序内纯水槽所需的最小有效抖动次数, 不足则结算告警"
+        },
+        {
+          "key": "sop_enter_sec",
+          "type": "float",
+          "label": "进入区域确认(秒)",
+          "default": 0.8,
+          "min": 0,
+          "max": 10,
+          "help": "花篮中心须在某槽内持续此秒数才算真正进入, 滤除转移时短暂划过造成的误判顺序错乱。0=立即进入"
+        },
+        {
+          "key": "sop_dir_sec",
+          "type": "float",
+          "label": "朝向切换确认(秒)",
+          "default": 0.5,
+          "min": 0,
+          "max": 10,
+          "help": "花篮翻转/恢复(类别切换)须持续此秒数才判定为真正变向, 滤除瞬时误检。0=立即判定"
+        }
+      ]
+    },
+    {
+      "name": "logic_wafer2",
+      "label": "晶圆轨迹分段可视化(py移植)",
+      "params": []
+    },
+    {
+      "name": "logic_fall_detect",
+      "label": "人员跌倒/挥手求救检测",
+      "report": "server",
+      "params": [
+        {
+          "key": "fall_ratio_thresh",
+          "type": "float",
+          "label": "横躺宽高比阈值",
+          "default": 1.25,
+          "min": 0.5,
+          "max": 3.0,
+          "step": 0.05,
+          "help": "人员框 width/height 超过该值时判为跌倒嫌疑; pose 模型会同时参考肩髋关键点"
+        },
+        {
+          "key": "fall_dwell_sec",
+          "type": "float",
+          "label": "持续确认时间(秒)",
+          "default": 2.0,
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "help": "跌倒嫌疑持续达到该时间后才报警, 用于过滤弯腰/短暂误检"
+        },
+        {
+          "key": "fall_cooldown_sec",
+          "type": "int",
+          "label": "报警冷却(秒)",
+          "default": 10,
+          "min": 1,
+          "max": 3600,
+          "help": "同一通道两次跌倒上报之间的最小间隔"
+        },
+        {
+          "key": "wave_min_swings",
+          "type": "int",
+          "label": "挥手最少摆动次数",
+          "default": 2,
+          "min": 1,
+          "max": 10,
+          "help": "手腕高于肩部后, 左右方向切换达到该次数才判定为挥手求救"
+        },
+        {
+          "key": "wave_window_sec",
+          "type": "float",
+          "label": "挥手统计窗口(秒)",
+          "default": 2.0,
+          "min": 0.2,
+          "max": 10,
+          "step": 0.1,
+          "help": "在该时间窗口内累计左右摆动次数, 超时未达标会重新计数"
+        }
+      ]
+    },
+    {
+      "name": "logic_wafer",
+      "label": "晶圆盘擦拭轨迹/覆盖率",
+      "params": [
+        {
+          "key": "line_width",
+          "type": "int",
+          "label": "线条宽度(px)",
+          "default": 20,
+          "min": 1,
+          "max": 200,
+          "help": "擦拭轨迹拓宽成扫过面积带的像素宽度;越大代表扫过的带越宽,覆盖率上升越快"
+        },
+        {
+          "key": "t_start",
+          "type": "float",
+          "label": "工序开始确认(秒)",
+          "default": 1.0,
+          "min": 0,
+          "max": 10,
+          "help": "cleanwiper 需在 wafer 框内持续此秒数才判定工序开始;滤除手短暂进入、反光/闪光误检。确认期内不绘制不计入。0=立即开始"
+        },
+        {
+          "key": "t_end",
+          "type": "float",
+          "label": "工序结束确认(秒)",
+          "default": 1.0,
+          "min": 0.1,
+          "max": 10,
+          "help": "工序进行中,cleanwiper 离开 wafer 区域或消失持续此秒数即判定工序结束并进行合规结算"
+        },
+        {
+          "key": "coverage_threshold",
+          "type": "float",
+          "label": "覆盖率合格阈值(%)",
+          "default": 80.0,
+          "min": 0,
+          "max": 100,
+          "help": "单次工序结束时,扫过面积占 wafer 框比例 >= 此值才算覆盖达标,否则右上角红字报警"
+        },
+        {
+          "key": "required_actions",
+          "type": "string",
+          "label": "必做动作(逗号分隔)",
+          "default": "",
+          "placeholder": "例如: 横擦,纵擦,圆弧擦",
+          "help": "必须出现的擦拭动作,逗号分隔。可填 横擦/纵擦/圆弧擦 或 h/v/arc。留空=跳过动作完整性校验。缺失则结算报警"
+        }
+      ]
+    }
+  ],
+  "global_logics": [
+    {
+      "name": "global_default",
+      "label": "默认全局逻辑",
+      "params": []
+    },
+    {
+      "name": "global_example",
+      "label": "全局示例",
+      "params": []
+    }
+  ],
+  "model_types": [
+    "yolov8_det",
+    "yolov5",
+    "yolov8_pose",
+    "yolov5_seg"
+  ]
+}

@@ -1,0 +1,5 @@
+*.mp4
+*.docx
+__pycache__
+build
+dist

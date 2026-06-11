@@ -1,0 +1,86 @@
+.gs-panel {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.gs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid var(--border);
+}
+.gs-header:hover { background: var(--surface2); }
+
+.gs-collapse-icon {
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.gs-body {
+  padding: 8px 16px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gs-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.gs-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 80px;
+}
+
+.gs-field.gs-wide {
+  flex: 1;
+  min-width: 180px;
+}
+
+.gs-field label {
+  font-size: 10px;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.gs-field input,
+.gs-field select {
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
+.gs-toggles {
+  gap: 14px;
+  padding-top: 2px;
+}
+
+.gs-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text2);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.gs-toggle input { width: auto; }

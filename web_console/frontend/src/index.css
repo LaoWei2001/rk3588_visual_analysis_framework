@@ -1,0 +1,100 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #22263a;
+  --border: #2e3352;
+  --accent: #4f8ef7;
+  --accent2: #7c3aed;
+  --green: #22c55e;
+  --red: #ef4444;
+  --yellow: #f59e0b;
+  --text: #e2e8f0;
+  --text2: #94a3b8;
+  --radius: 8px;
+}
+
+body {
+  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+button {
+  cursor: pointer;
+  border: none;
+  outline: none;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+input, select, textarea {
+  font-family: inherit;
+  font-size: 13px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 4px 8px;
+  outline: none;
+  width: 100%;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+}
+
+/* 数字输入框：去掉上下小箭头(spinner)，配合 JS 禁用方向键/滚轮，只能键盘直接输入 */
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+select option { background: var(--surface); }
+
+label {
+  font-size: 12px;
+  color: var(--text2);
+  display: block;
+  margin-bottom: 3px;
+}
+
+.field { margin-bottom: 10px; }
+
+/* React Flow overrides */
+.react-flow__node { border-radius: var(--radius); }
+.react-flow__background { background: var(--bg); }
+.react-flow__controls { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.react-flow__controls-button { background: var(--surface); border-color: var(--border); color: var(--text2); }
+.react-flow__controls-button:hover { background: var(--surface2); }
+.react-flow__minimap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.react-flow__edge-path { stroke: #4f8ef7; stroke-width: 2; }
+.react-flow__edge.selected .react-flow__edge-path { stroke: #93c5fd; }
+
+/* Handles — make them clearly visible */
+.react-flow__handle {
+  width: 12px !important;
+  height: 12px !important;
+  background: var(--accent) !important;
+  border: 2px solid var(--bg) !important;
+  border-radius: 50% !important;
+  transition: transform 0.15s, background 0.15s !important;
+}
+.react-flow__handle:hover {
+  transform: scale(1.4) !important;
+  background: #93c5fd !important;
+  cursor: crosshair !important;
+}
+.react-flow__handle-connecting {
+  background: var(--green) !important;
+}
+.react-flow__handle-valid {
+  background: var(--green) !important;
+  transform: scale(1.5) !important;
+}

@@ -1,0 +1,95 @@
+.gl-panel {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 10px 16px;
+  flex-shrink: 0;
+}
+
+.gl-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.gl-add-btn {
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  cursor: pointer;
+}
+.gl-add-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+.gl-empty {
+  font-size: 12px;
+  color: var(--text2);
+  padding: 4px 0;
+}
+
+.gl-entry {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+}
+.gl-entry.disabled { opacity: 0.5; }
+
+.gl-entry-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.gl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.gl-field label {
+  font-size: 10px;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0;
+}
+
+.gl-field input,
+.gl-field select {
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
+.gl-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text2);
+  cursor: pointer;
+  white-space: nowrap;
+  margin-bottom: 2px;
+  flex-shrink: 0;
+}
+.gl-toggle input { width: auto; }
+
+.gl-remove-btn {
+  background: none;
+  border: none;
+  color: var(--text2);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 4px;
+  flex-shrink: 0;
+  margin-bottom: 2px;
+}
+.gl-remove-btn:hover { color: var(--red); }

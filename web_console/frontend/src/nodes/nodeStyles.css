@@ -1,0 +1,209 @@
+/* ── Base card ── */
+.rf-node {
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+.rf-node.selected,
+.rf-node:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(79,142,247,0.25), 0 4px 20px rgba(0,0,0,0.4);
+}
+
+/* ── Header ── */
+.rf-node-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: var(--radius) var(--radius) 0 0;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+}
+
+/* Header accent colors */
+.header-stream  { background: linear-gradient(90deg,#1e3a8a,#2563eb); color:#dbeafe; }
+.header-model   { background: linear-gradient(90deg,#14532d,#16a34a); color:#dcfce7; }
+.header-roi     { background: linear-gradient(90deg,#7c2d12,#ea580c); color:#fed7aa; }
+.header-logic   { background: linear-gradient(90deg,#581c87,#9333ea); color:#f3e8ff; }
+.header-report  { background: linear-gradient(90deg,#7f1d1d,#dc2626); color:#fee2e2; }
+
+/* ── Body ── */
+.rf-node-body {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ── Fields ── */
+.node-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.node-field label {
+  font-size: 10px;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin: 0;
+}
+.node-field input,
+.node-field select,
+.node-field textarea {
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
+.node-row { display: flex; gap: 6px; }
+.node-row .node-field { flex: 1; }
+
+.node-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text2);
+  cursor: pointer;
+  user-select: none;
+}
+.node-toggle input[type="checkbox"] { width: auto; cursor: pointer; }
+
+.node-btn {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  transition: all 0.15s;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.node-btn:hover    { background: var(--border); color: var(--text); }
+.node-btn.primary  { background: #1e3a6b; border-color: #3b82f6; color: #93c5fd; }
+.node-btn.primary:hover { background: #2563eb; color: white; }
+.node-btn.danger   { border-color: #dc2626; color: #fca5a5; }
+.node-btn.danger:hover { background: #7f1d1d; }
+.node-btn.full     { width: 100%; text-align: center; }
+
+/* ── Compact node (form hidden, summary shown) ── */
+.rf-node-compact { min-width: 160px; max-width: 220px; }
+
+.rf-node-summary {
+  padding: 5px 12px 7px;
+  font-size: 11px;
+  color: var(--text2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Channel-id label inside stream node summary */
+.node-ch-label {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fbbf24;
+  background: rgba(251,191,36,0.12);
+  border: 1px solid rgba(251,191,36,0.3);
+  border-radius: 3px;
+  padding: 0px 5px;
+  letter-spacing: 0.3px;
+}
+
+/* small badge in header (type / status) */
+.node-type-badge,
+.node-status-badge {
+  margin-left: auto;
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.node-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2px 0;
+}
+
+/* ── Collapsible section inside a node ── */
+.node-section-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text2);
+  cursor: pointer;
+  user-select: none;
+  letter-spacing: 0.3px;
+}
+.node-section-hdr:hover { color: var(--text); }
+.node-section-arrow { font-size: 9px; opacity: 0.6; }
+
+.node-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 4px 0 2px 8px;
+  border-left: 2px solid var(--border);
+}
+
+/* ── Handles ── */
+.react-flow__handle {
+  width: 12px !important;
+  height: 12px !important;
+  border-radius: 50% !important;
+  border: 2px solid var(--bg) !important;
+  transition: transform 0.15s, opacity 0.15s;
+}
+.react-flow__handle:hover { transform: scale(1.4); }
+
+/* ── Asset picker ── */
+.asset-picker {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.asset-picker input,
+.asset-picker select {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+.picker-toggle {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text2);
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1.5;
+  transition: all 0.15s;
+}
+.picker-toggle:hover { background: var(--border); color: var(--text); }
+
+/* Color-coded by edge type */
+.react-flow__handle[data-handleid="stream-out"],
+.react-flow__handle[data-handleid="stream-in"]  { background: #3b82f6 !important; }
+.react-flow__handle[data-handleid="roi-out"],
+.react-flow__handle[data-handleid="roi-in"]     { background: #f97316 !important; }
+.react-flow__handle[data-handleid="logic-out"],
+.react-flow__handle[data-handleid="logic-in"]   { background: #a855f7 !important; }
+.react-flow__handle[data-handleid="report-out"],
+.react-flow__handle[data-handleid="report-in"]  { background: #ef4444 !important; }

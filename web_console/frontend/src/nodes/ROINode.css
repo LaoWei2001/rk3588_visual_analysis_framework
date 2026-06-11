@@ -1,0 +1,268 @@
+.roi-chip {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  text-align: center;
+}
+.roi-chip.active {
+  background: #431407;
+  border-color: #ea580c;
+  color: #fed7aa;
+}
+
+/* ── Modal overlay ── */
+.roi-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.roi-dialog {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+}
+
+.roi-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.roi-hdr-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.roi-grab-btn {
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: #1c3a6e;
+  border: 1px solid #3b82f6;
+  color: #93c5fd;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.roi-grab-btn:hover:not(:disabled) { background: #2563eb; color: white; }
+.roi-grab-btn:disabled { opacity: 0.5; cursor: default; }
+
+.roi-close-btn {
+  background: none;
+  border: none;
+  color: var(--text2);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.roi-close-btn:hover { color: #ef4444; }
+
+.roi-res {
+  font-size: 11px;
+  color: var(--text2);
+}
+
+.roi-err {
+  font-size: 11px;
+  color: #fca5a5;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Node body: zone count badge + zone name list ── */
+.roi-count-badge {
+  margin-left: auto;
+  min-width: 18px;
+  padding: 0 6px;
+  height: 18px;
+  line-height: 18px;
+  text-align: center;
+  border-radius: 9px;
+  font-size: 11px;
+  background: #ea580c;
+  color: #fff;
+}
+.roi-zone-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 2px 0;
+}
+.roi-zone-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text2);
+}
+.roi-zone-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.roi-zone-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Modal body: canvas + sidebar ── */
+.roi-body {
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+  flex: 1;
+}
+
+.roi-canvas-wrap {
+  overflow: auto;
+  flex: 1;
+}
+
+.roi-sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  gap: 8px;
+  background: var(--surface);
+}
+.roi-sidebar-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text2);
+}
+.roi-sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 60px;
+}
+.roi-sidebar-empty {
+  font-size: 11px;
+  color: var(--text2);
+  line-height: 1.6;
+  padding: 8px 4px;
+}
+.roi-zone-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+}
+.roi-zone-item.sel {
+  border-color: #3b82f6;
+}
+.roi-zone-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 3px 6px;
+}
+.roi-zone-pts {
+  font-size: 10px;
+  color: var(--text2);
+  flex-shrink: 0;
+}
+.roi-zone-del {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  opacity: 0.7;
+}
+.roi-zone-del:hover { opacity: 1; }
+.roi-add-btn { width: 100%; }
+.roi-edit-tip {
+  font-size: 11px;
+  color: var(--text2);
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+.roi-draw-hint {
+  font-size: 11px;
+  color: #fbbf24;
+  line-height: 1.6;
+  border: 1px dashed #b45309;
+  border-radius: 6px;
+  padding: 8px;
+}
+.roi-draw-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.roi-canvas {
+  display: block;
+  cursor: crosshair;
+}
+.roi-canvas.drawing { cursor: cell; }
+
+.roi-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.roi-hint {
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.roi-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.roi-btn {
+  padding: 5px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.roi-btn:hover  { background: var(--border); color: var(--text); }
+.roi-btn.danger  { border-color: #dc2626; color: #fca5a5; }
+.roi-btn.danger:hover  { background: #7f1d1d; }
+.roi-btn.primary { background: #1e3a6b; border-color: #3b82f6; color: #93c5fd; }
+.roi-btn.primary:hover { background: #2563eb; color: white; }

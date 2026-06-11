@@ -1,0 +1,127 @@
+.terminal-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.terminal-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.terminal-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminal-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.terminal-select-label {
+  font-size: 11px;
+  color: var(--text2);
+}
+
+.terminal-select {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 11px;
+  cursor: pointer;
+  outline: none;
+}
+.terminal-select:focus {
+  border-color: #3b82f6;
+}
+
+.terminal-hint {
+  font-size: 10px;
+  color: var(--text2);
+}
+
+/* ── 分屏网格 ── */
+.terminal-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 4px;
+  padding: 4px;
+  overflow: hidden;
+}
+
+.term-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;          /* 关键：让网格子项能收缩，xterm 才不会把单元撑大 */
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #080b14;
+}
+.term-pane:focus-within {
+  border-color: #3b82f6;
+}
+
+.term-pane-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  padding: 1px 4px 1px 8px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+}
+.term-pane-title {
+  font-size: 11px;
+  color: var(--text2);
+}
+.term-pane-close {
+  background: none;
+  border: none;
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.term-pane-close:hover:not(:disabled) {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
+}
+.term-pane-close:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.term-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 2px;
+}
+.term-pane-body .xterm {
+  height: 100%;
+}
+.term-pane-body .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: #2e3352 #080b14;
+}
