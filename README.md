@@ -149,7 +149,7 @@ bash deploy.sh ./assets/config.json
 - **改了配置不生效**：通道数量、流地址、显示分辨率、`infer_enable` 等需停止再启动；阈值/逻辑名/可调参数支持热重载。
 - **跌倒等姿态逻辑不准**：建议用 `yolov8_pose` 模型（有 17 关键点）。
 
-更多踩坑记录见 [`development_log.md`](development_log.md)。
+更多踩坑记录见 development_log.md。
 
 ---
 
