@@ -10,6 +10,8 @@
 |------|------|
 | `display.h` | `Display_t` 显示描述符、`dispBufferMap`、`display`、`render_overlays` 等接口声明 |
 | `display.cpp` | GTK3 窗口创建、双缓冲 framebuffer、tile 拼接、叠加渲染实现 |
+| `text_overlay.h / text_overlay.cpp` | freetype 中英文文字渲染（`draw_text_unicode`）：画面/上报图统一中文绘制 |
+| `rtsp_streamer.h / rtsp_streamer.cpp` | 内置 RTSP 推流服务（无显示器时经 VLC / 配置平台查看拼接画面）|
 
 ---
 
@@ -115,7 +117,7 @@ void display_swap_buffer();       // 原子交换前后缓冲区
 | `disp_height` | 显示分辨率高 |
 | `tile_cols` | 每行显示的通道数 |
 | `tile_rows` | 行数（为 0 时自动计算） |
-| `performance_display` | `true`=在画面上显示 FPS 信息 |
+| `performance_display` | 性能统计总开关：画面 FPS 叠加 + 终端性能日志（`display.cpp` 中与 `p.show_fps` 共同决定 FPS 是否上屏） |
 
 ---
 
@@ -150,7 +152,7 @@ draw_text(ctx, "ALARM", cv::Point(100, 90), cv::Scalar(0, 0, 255), 0.8, 2);
 `AlgoResult::box_color` 为 `(-1,-1,-1)` 时使用默认颜色（按类别 ID 自动分配色板）。在 logic 函数中可覆盖：
 
 ```cpp
-for (auto &r : ctx->results) {
+for (auto &r : *ctx->results) {           // ctx->results 是指针，先解引用
     if (r.label == "car")
         r.box_color = cv::Scalar(0, 128, 255);  // 橙色
 }

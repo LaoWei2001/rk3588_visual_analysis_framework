@@ -228,6 +228,94 @@
   transition: width 0.15s ease;
 }
 
+/* ── Custom dropdown (replaces native select in AssetPicker) ── */
+.picker-dropdown {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+.picker-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 3px 6px;
+  font-size: 12px;
+  background: var(--surface1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  line-height: 1.5;
+  text-align: left;
+}
+.picker-trigger .placeholder { color: var(--text2); }
+.picker-trigger.open { border-color: var(--accent); }
+.picker-arrow { font-size: 10px; color: var(--text2); margin-left: 4px; flex-shrink: 0; }
+
+.picker-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--surface1, #1e293b);
+  background-color: var(--surface1, #1e293b);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  z-index: 50;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+  margin-top: 2px;
+}
+.picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px;
+  font-size: 12px;
+  cursor: default;
+}
+.picker-item:hover { background: var(--surface2); }
+.picker-item.selected { background: var(--accent); color: #fff; }
+.picker-item.deleting { opacity: 0.5; pointer-events: none; }
+
+.picker-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 2px;
+  cursor: pointer;
+}
+
+.picker-delete-btn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #ef4444;
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  visibility: hidden;
+  transition: visibility 0s;
+}
+.picker-item:hover .picker-delete-btn {
+  visibility: visible;
+}
+.picker-delete-btn:hover {
+  background: rgba(239,68,68,0.15);
+}
+.picker-delete-btn:disabled { visibility: hidden; }
+
 /* Color-coded by edge type */
 .react-flow__handle[data-handleid="stream-out"],
 .react-flow__handle[data-handleid="stream-in"]  { background: #3b82f6 !important; }

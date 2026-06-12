@@ -313,8 +313,8 @@ export default function AppsPage() {
                 {app.config_files.length === 0 && <span className="warn">⚠ 无配置文件</span>}
               </div>
 
-              {/* 启动配置选择：存在多份配置文件时显示；运行中变灰不可改（保持卡片布局不跳动） */}
-              {cfgOpts.length > 1 && (
+              {/* 启动配置选择：只要有配置文件就显示（含仅 1 份的情况）；运行中变灰不可改（保持卡片布局不跳动） */}
+              {cfgOpts.length >= 1 && (
                 <div className="config-row">
                   <label>启动配置</label>
                   <select

@@ -45,8 +45,16 @@
 | `disp_height` | int | `1080` | 显示分辨率高（自动对齐 2 的倍数） |
 | `tile_cols` | int | `2` | 显示网格列数 |
 | `tile_rows` | int | `2` | 显示网格行数（为 0 时自动计算） |
-| `performance_display` | bool | `true` | 是否在终端打印 Feed 性能统计日志 |
+| `performance_display` | bool | `true` | 性能统计总开关：终端打印 Feed 性能日志，并叠加画面 FPS（与 `show_fps` 共同决定 FPS 是否上屏） |
 | `debug_display` | bool | `false` | 是否开启 `DBG_PRINT` 调试打印 |
+| `enable_pause_key` | bool | `false` | 暂停键开关：选中显示窗口按空格暂停/继续（需同时开启 `enable_display`） |
+| `enable_rtsp` | bool | `false` | 是否启用内置 RTSP 推流服务（无显示器时用 VLC / 配置平台看拼接画面） |
+| `rtsp_port` | int | `8554` | RTSP 端口，地址 `rtsp://<板IP>:<port><rtsp_path>` |
+| `rtsp_path` | string | `"/live"` | RTSP 挂载点（须以 `/` 开头） |
+| `rtsp_fps` | int | `25` | 推流帧率 |
+| `rtsp_bitrate` | int | `4096` | 软件编码码率(kbps)；硬件编码用默认码率 |
+| `rtsp_codec` | string | `"h264"` | 推流编码 `"h264"` / `"h265"` |
+| `rtsp_encoder` | string | `"auto"` | `"auto"`=有硬件就硬编否则软编，`"hw"`=强制硬编，`"sw"`=强制软编 |
 | `channel_threads` | int | `1` | 每通道并发推理线程数（默认值） |
 | `max_fps` | int | `30` | 每通道推理帧率上限（默认值） |
 | `local_default_fps` | int | `25` | 本地文件播放时的采样帧率 |
@@ -72,6 +80,8 @@
 | `stream.src_type` | string | **必填** | `"rtsp"` / `"file"` / `"usb"`（已取消自动推断，必须显式声明） |
 | `stream.video_enc` | string | `"h264"` | 视频编码类型（`"h264"` 或 `"h265"`） |
 | `stream.loop` | bool | `false` | 本地文件是否循环播放 |
+| `stream.usb_width` | int | `0` | USB 显式采集宽（0=随 fps 自动档）；设定后与 ROI 抓帧坐标统一、不随 fps 变 |
+| `stream.usb_height` | int | `0` | USB 显式采集高（0=随 fps 自动档） |
 | `logic` | string | `"logic_default"` | 绑定的通道逻辑名称 |
 | `model_type` | string | 继承全局 | 通道独立模型类型 |
 | `model_path` | string | 继承全局 | 通道独立模型路径，空=不做推理 |
@@ -87,9 +97,12 @@
 | `tracker_iou_thresh` | float | 继承全局 | 通道独立跟踪器 IoU 阈值 |
 | `tracker_max_miss` | int | 继承全局 | 通道独立最大丢失帧数 |
 | `tracker_min_hits` | int | 继承全局 | 通道独立最小命中帧数 |
-| `radius` | int | `1` | 自定义业务参数（供 logic_hook 使用） |
-| `test_value` | int | `123` | 自定义业务参数（调试/扩展用） |
-| `version` | string | — | 模型版本号（供 OTA 匹配） |
+| `radius` | int | `1` | logic_hook 安全圈半径（自定义业务参数示例） |
+| `report_interval_sec` | int | `5` | logic_server / logic_dify 两次上报的最小间隔（秒） |
+| `dify_prompt` | string | `""` | logic_dify 提示词，空=用默认 |
+| `server_url` | string | `""` | 该通道 HTTP 上报地址（方案2，空=用上报服务默认值） |
+| `dify_api_url` / `dify_api_key` | string | `""` | 该通道 Dify 地址 / 密钥（方案2，空=用默认） |
+| logic 专属算法参数 | — | — | 如 logic_wafer（`line_width`/`t_start`/`t_end`/`coverage_threshold`/`required_actions`）、logic_wafer_sop（`sop_sequence`/`basket_*`/`sop_*`）、logic_fall_detect（`fall_*`/`wave_*`）。完整清单与默认值见 `src/logic/logics.json` 与 `config.h` 的 `ChannelConfig`，此处不逐一列出 |
 
 ### 全局逻辑参数（`global_logics` 数组元素）
 

@@ -44,11 +44,11 @@ Python 微服务（dist/services/upload/main.py）
 
 ```cpp
 // 初始化 Redis 连接和异步上传线程（main.cpp 中 app_ctrl_init 之后调用）
-bool alarm_uploader_init(const char *redis_host = "127.0.0.1",
-                          int redis_port = 6379);
+// 返回 int（0=成功）；无默认参数，host/port 由调用方显式传入
+int alarm_uploader_init(const char *redis_host, int redis_port);
 
 // 停止上传线程，释放 Redis 连接（main.cpp 退出流程中调用）
-void alarm_uploader_deinit();
+void alarm_uploader_deinit(void);
 ```
 
 ### 入队接口
@@ -123,11 +123,12 @@ Dify 队列传递 Base64 图像，Python 微服务负责解码并调用 Dify 文
 #include "../uploader/alarm_uploader.h"
 
 static void logic_my(ChannelContext *ctx) {
-    for (auto &r : ctx->results) {
+    if (!ctx || !ctx->results || !ctx->frame) return;
+    for (auto &r : *ctx->results) {            // ctx->results 是指针，先解引用
         if (r.label != "person") continue;
 
-        // ctx->frame 是与 results 严格同源的帧，alarm_uploader 内部会 clone
-        alarm_uploader_enqueue(ctx->frame, ctx->frame,
+        // *ctx->frame 是与 results 严格同源的帧，alarm_uploader 内部会 clone
+        alarm_uploader_enqueue(*ctx->frame, *ctx->frame,
                                ctx->chnId, "person_detected");
         break; // 每帧最多报一次
     }

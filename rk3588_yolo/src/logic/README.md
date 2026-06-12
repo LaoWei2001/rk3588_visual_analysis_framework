@@ -43,27 +43,36 @@
 
 通道逻辑是**每路视频、每帧推理完成后同步调用**的回调函数。框架负责推理、跟踪、图像缩放，你只管业务判断。
 
-#### 第一步：在 `src/logic/channel_logic.cpp` 实现函数
+> **架构**：每个通道逻辑放在**独立的 `src/logic/logic_xxx.cpp` 文件**里，文件末尾用
+> `REGISTER_LOGIC` 宏**自注册**（在 `main()` 之前自动登记到分发表）。
+> `src/logic` 下的 `.cpp` 由 CMake (`aux_source_directory`) 自动收集编译，
+> 因此**新增一个逻辑只需新增一个文件、删除一个逻辑只需删掉对应文件**，不牵连任何其它文件。
+> `channel_logic.cpp` 只保留框架核心（`ChannelContext` 方法 / `draw_*` / 分发表），不再放具体逻辑。
 
-在文件末尾、`channel_logic_init()` 前面添加：
+#### 第一步：新建 `src/logic/logic_my_detect.cpp`
 
 ```cpp
+#include "logic_common.h"   // 一行包含所有 logic 常用头（ChannelContext / draw_* / 上报 / 状态结构…）
+
 static void logic_my_detect(ChannelContext *ctx)
 {
     if (!ctx) return;
     // 在此实现业务逻辑
 }
+
+REGISTER_LOGIC("logic_my_detect", logic_my_detect);  // ← 自注册，无需改动任何其它文件
 ```
 
-#### 第二步：在同文件的 `channel_logic_init()` 中注册
+#### 第二步：重新生成构建（让 CMake 收录新文件）
 
-```cpp
-void channel_logic_init(void)
-{
-    // ... 已有注册行 ...
-    register_logic("logic_my_detect", logic_my_detect);  // ← 新增
-}
+`aux_source_directory` 在 **configure 阶段**收集文件，新增/删除 `.cpp` 后需让 CMake 重新 configure：
+
+```bash
+cmake -S . -B build      # 或 touch CMakeLists.txt 触发重配；干净起见也可删 build 重建
+cmake --build build
 ```
+
+> 删除一个逻辑：直接 `rm src/logic/logic_xxx.cpp`，同样重新 configure 即可，自注册随文件一起消失。
 
 #### 第三步：在 `config.json` 指定通道使用该逻辑
 
@@ -599,9 +608,11 @@ REG_C("smoke_cooldown_sec", INT,   smoke_cooldown_sec);
 
 ### 第二步：实现通道逻辑
 
-**`src/logic/channel_logic.cpp`** — 在 `channel_logic_init()` 前面添加：
+新建 **`src/logic/logic_smoke_detect.cpp`**（顶部 `#include "logic_common.h"`，末尾自注册）：
 
 ```cpp
+#include "logic_common.h"
+
 /*======================== logic_smoke_detect — 烟雾检测告警 ========================*/
 
 struct SmokeState
@@ -712,15 +723,14 @@ static void logic_smoke_detect(ChannelContext *ctx)
 }
 ```
 
-### 第三步：注册
+### 第三步：自注册（同一文件末尾加一行）
 
 ```cpp
-void channel_logic_init(void)
-{
-    // ... 已有注册 ...
-    register_logic("logic_smoke_detect", logic_smoke_detect);  // ← 新增
-}
+REGISTER_LOGIC("logic_smoke_detect", logic_smoke_detect);
 ```
+
+无需改动 `channel_logic.cpp` / `channel_logic_init()`。新增文件后重新 configure 让 CMake 收录：
+`cmake -S . -B build && cmake --build build`。
 
 ### 第四步：配置文件
 

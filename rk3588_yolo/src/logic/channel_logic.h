@@ -6,10 +6,14 @@
  * - 跟踪器 (Tracker) 已移至 analyzer.cpp 全局执行
  * - 此模块仅用于用户自定义业务扩展
  *
- * 扩展方式:
- *   1. 在 channel_logic.cpp 中实现 static void logic_xxx(ChannelContext* ctx)
- *   2. 在 channel_logic_init() 中调用 register_logic("logic_xxx", logic_xxx) 注册
- *   3. 在 config.json 中将对应通道的 "logic" 字段设为 "logic_xxx"
+ * 扩展方式 (每个逻辑一个独立 .cpp 文件, 自注册):
+ *   1. 新建 src/logic/logic_xxx.cpp, 顶部 #include "logic_common.h"
+ *   2. 实现 static void logic_xxx(ChannelContext* ctx)
+ *   3. 文件末尾写一行: REGISTER_LOGIC("logic_xxx", logic_xxx);  // 自动注册, 无需改动其它文件
+ *   4. 在 config.json 中把对应通道的 "logic" 字段设为 "logic_xxx"
+ *
+ * 删除一个逻辑: 直接删掉对应的 logic_xxx.cpp 文件即可 —— src/logic 下的 .cpp 由 CMake
+ * (aux_source_directory) 自动收集编译, 自注册也随之消失, 不牵连任何其它文件。
  */
 #pragma once
 
@@ -322,10 +326,29 @@ struct LogicEntry
     ChannelLogicFunc func;
 };
 
+/* channel_logic_init / deinit: 历史接口, 保留以兼容 analyzer_init/deinit 的调用。
+ * 逻辑注册现已改为各 logic 文件「自注册」(见下方 REGISTER_LOGIC), 在 main() 之前完成,
+ * 故这两个函数为空实现; 切勿在其中清空注册表, 否则会抹掉静态期已完成的自注册。 */
 void channel_logic_init(void);
 void channel_logic_deinit(void);
 ChannelLogicFunc channel_logic_get(const char *name);
 
-/** @brief 注册自定义 logic (在 channel_logic_init 末尾调用).
- *  示例: register_logic("logic_mine", logic_mine); */
+/** @brief 注册一个 logic 到分发表 (同名则覆盖)。一般不直接调用, 用 REGISTER_LOGIC 宏。 */
 void register_logic(const char *name, ChannelLogicFunc func);
+
+/*======================== 自注册辅助 (推荐用法) ========================*/
+/**
+ * 在某个 logic 的 .cpp 文件末尾写一行:
+ *     REGISTER_LOGIC("logic_xxx", logic_xxx);
+ * 即可在 main() 之前(静态初始化阶段)把该 logic 自动注册进分发表 ——
+ * 原理是构造一个文件作用域的静态对象, 其构造函数调用 register_logic。
+ *
+ * 好处: 新增一个 logic 只需新增一个 .cpp 文件; 删除一个 logic 只需删掉对应 .cpp 文件,
+ *       无需改动 channel_logic.cpp / channel_logic_init() 或任何其它文件 —— 耦合最低。
+ */
+struct LogicRegistrar
+{
+    LogicRegistrar(const char *name, ChannelLogicFunc func) { register_logic(name, func); }
+};
+#define REGISTER_LOGIC(name_str, func) \
+    static const LogicRegistrar _logic_reg_##func(name_str, func)

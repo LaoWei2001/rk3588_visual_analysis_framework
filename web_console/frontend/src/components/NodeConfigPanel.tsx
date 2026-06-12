@@ -8,7 +8,7 @@ import { Node } from '@xyflow/react'
 import { useEditorStore }  from '../store/editorStore'
 import { useConsoleStore } from '../store/consoleStore'
 import { useROIStore, type Zone } from '../store/roiStore'
-import { fetchAppLogics, asLogicDef, uploadAsset, type LogicDef, type LogicParam } from '../api/client'
+import { fetchAppLogics, asLogicDef, uploadAsset, deleteAsset, type LogicDef, type LogicParam } from '../api/client'
 import { getSrcType, SRC_TYPES } from '../utils/streamSource'
 import AssetPicker         from './AssetPicker'
 import NumberField         from './NumberField'
@@ -133,6 +133,23 @@ function useAssetUpload() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 资源删除：确认后删除远端 RK3588 上的文件，刷新列表，若删除的是当前选中项则清空。
+// ─────────────────────────────────────────────────────────────────────────────
+function useAssetDelete(currentValue: string, onChange: (v: string) => void) {
+  const appName    = useEditorStore(s => s.appName)
+  const loadAssets = useEditorStore(s => s.loadAssets)
+
+  const del = async (path: string) => {
+    if (!appName) throw new Error('未选择程序')
+    await deleteAsset(appName, path)
+    await loadAssets(appName)
+    if (path === currentValue) onChange('')
+  }
+
+  return del
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Stream form
 // ─────────────────────────────────────────────────────────────────────────────
 function StreamForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'] }) {
@@ -141,6 +158,7 @@ function StreamForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'
   const d   = node.data as Record<string, unknown>
   const set = (k: string, v: unknown) => onUpdate(node.id, { [k]: v })
 
+  const deleteAsset_ = useAssetDelete(String(d.url ?? ''), v => set('url', v))
   const srcType = getSrcType(d)
 
   const setSrcType = (type: string) => {
@@ -229,6 +247,7 @@ function StreamForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'
             uploading={busy === 'url'}
             progress={busy === 'url' ? progress : 0}
             onUpload={f => upload('url', f, assets.videos, p => set('url', p))}
+            onDelete={deleteAsset_}
           />
         </F>
         <label className="node-toggle">
@@ -251,6 +270,8 @@ function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
 
   const d   = node.data as Record<string, unknown>
   const set = (k: string, v: unknown) => onUpdate(node.id, { [k]: v })
+  const deleteModel = useAssetDelete(String(d.model_path ?? ''), v => set('model_path', v))
+  const deleteLabel = useAssetDelete(String(d.label_path ?? ''), v => set('label_path', v))
 
   return (
     <div className="ncp-form">
@@ -287,6 +308,7 @@ function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
           uploading={busy === 'model_path'}
           progress={busy === 'model_path' ? progress : 0}
           onUpload={f => upload('model_path', f, assets.models, p => set('model_path', p))}
+          onDelete={deleteModel}
         />
       </F>
 
@@ -300,6 +322,7 @@ function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
           uploading={busy === 'label_path'}
           progress={busy === 'label_path' ? progress : 0}
           onUpload={f => upload('label_path', f, assets.labels, p => set('label_path', p))}
+          onDelete={deleteLabel}
         />
       </F>
 

@@ -116,3 +116,38 @@ async def upload_asset(
         "category": cat,
         "renamed": renamed,
     }
+
+
+@router.delete("/apps/{name}/assets")
+async def delete_asset(name: str, path: str):
+    """删除 assets/ 下的单个资源文件（模型/视频/标签）。
+
+    - path: 相对路径，如 assets/yolov8.rknn、assets/labels.txt
+    - 仅允许删除受支持的文件类型（.rknn / .txt / .mp4 / .avi / .mkv）
+    """
+    app_dir = APPS_ROOT / name
+    if not app_dir.exists():
+        raise HTTPException(status_code=404, detail=f"App '{name}' not found")
+
+    # 防路径穿越：规范化后必须在 app_dir/assets 内
+    fname = Path(path).name
+    if not fname or fname != Path(path).name or path.startswith("/") or ".." in path:
+        raise HTTPException(status_code=400, detail="非法路径")
+
+    cat = _category(Path(fname).suffix)
+    if not cat:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件类型: {Path(fname).suffix or '无扩展名'}（仅 .rknn/.txt/.mp4/.avi/.mkv）",
+        )
+
+    target = (app_dir / "assets" / fname).resolve()
+    allowed = (app_dir / "assets").resolve()
+    if not str(target).startswith(str(allowed) + os.sep):
+        raise HTTPException(status_code=400, detail="非法路径")
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    target.unlink()
+    return {"ok": True, "path": f"assets/{fname}", "category": cat}

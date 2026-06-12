@@ -1,30 +1,67 @@
-import { useRef } from 'react'
+import { useRef, useState, useEffect, useCallback } from 'react'
 
 interface AssetPickerProps {
   value: string
   onChange: (v: string) => void
   options: string[]
-  emptyHint?: string                 // options 为空时显示的提示（取代旧的手动输入框）
-  accept?: string                    // 导入按钮的文件类型过滤（如 ".rknn"）
-  uploading?: boolean                // 上传中：禁用导入按钮、显示进度
-  progress?: number                  // 上传进度 0–100
-  onUpload?: (file: File) => void    // 提供则显示「导入」按钮
+  emptyHint?: string
+  accept?: string
+  uploading?: boolean
+  progress?: number
+  onUpload?: (file: File) => void
+  onDelete?: (path: string) => Promise<void>
 }
 
-/**
- * 资源选择器：一律使用下拉菜单选择（已移除手动输入路径）。
- * - 没有任何文件 → 显示「无文件」提示，引导用户点「导入」上传。
- * - 当前值不在列表中（如旧配置指向已删除文件）→ 仍保留为一个可见选项，不丢数据。
- */
 export default function AssetPicker({
   value, onChange, options,
   emptyHint = '（该目录暂无文件，请点「导入」上传）',
   accept, uploading, progress = 0, onUpload,
+  onDelete,
 }: AssetPickerProps) {
   const fileRef = useRef<HTMLInputElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+  const [open, setOpen] = useState(false)
+  const [deleting, setDeleting] = useState<string | null>(null)
 
   const orphan  = value && !options.includes(value) ? [value] : []
   const allOpts = [...options, ...orphan]
+  const displayName = (p: string) => p.split('/').pop() ?? p
+
+  // close dropdown on outside click
+  const handleClickOutside = useCallback((e: MouseEvent) => {
+    if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+      setOpen(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (open) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [open, handleClickOutside])
+
+  const handleDelete = async (e: React.MouseEvent, p: string) => {
+    e.stopPropagation()
+    if (!onDelete) return
+    const name = displayName(p)
+    if (!window.confirm(`确定要删除远程 RK3588 上的文件「${name}」吗？\n\n此操作不可撤销。`)) return
+    setDeleting(p)
+    try {
+      await onDelete(p)
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        ?? (err instanceof Error ? err.message : String(err))
+      window.alert(`删除失败：${msg}`)
+    } finally {
+      setDeleting(null)
+    }
+  }
+
+  const selectAndClose = (p: string) => {
+    onChange(p)
+    setOpen(false)
+  }
 
   const uploadBtn = onUpload && (
     <>
@@ -35,7 +72,7 @@ export default function AssetPicker({
         style={{ display: 'none' }}
         onChange={e => {
           const f = e.target.files?.[0]
-          e.target.value = ''                 // 允许再次选择同名文件
+          e.target.value = ''
           if (f) onUpload(f)
         }}
       />
@@ -53,14 +90,51 @@ export default function AssetPicker({
 
   return (
     <div className="asset-picker-col">
-      <div className="asset-picker">
+      <div className="asset-picker" ref={dropdownRef}>
         {allOpts.length === 0 ? (
           <span className="picker-empty">{emptyHint}</span>
         ) : (
-          <select value={value} onChange={e => onChange(e.target.value)}>
-            <option value="">— 选择文件 —</option>
-            {allOpts.map(o => <option key={o} value={o}>{o}</option>)}
-          </select>
+          <div className="picker-dropdown">
+            <button
+              type="button"
+              className={`picker-trigger ${open ? 'open' : ''}`}
+              onClick={() => setOpen(o => !o)}
+            >
+              <span className={value ? '' : 'placeholder'}>
+                {value ? displayName(value) : '— 选择文件 —'}
+              </span>
+              <span className="picker-arrow">{open ? '▴' : '▾'}</span>
+            </button>
+            {open && (
+              <div className="picker-menu">
+                {allOpts.map(p => (
+                  <div
+                    key={p}
+                    className={`picker-item ${p === value ? 'selected' : ''} ${deleting === p ? 'deleting' : ''}`}
+                  >
+                    <span
+                      className="picker-item-name"
+                      onClick={() => selectAndClose(p)}
+                      title={p}
+                    >
+                      {displayName(p)}
+                    </span>
+                    {onDelete && (
+                      <button
+                        type="button"
+                        className="picker-delete-btn"
+                        disabled={deleting === p}
+                        onClick={e => handleDelete(e, p)}
+                        title={`删除 ${displayName(p)}`}
+                      >
+                        🗑
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
         {uploadBtn}
       </div>

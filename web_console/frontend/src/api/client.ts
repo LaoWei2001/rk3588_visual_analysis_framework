@@ -124,6 +124,9 @@ export const uploadAsset = (
   ).then(r => r.data)
 }
 
+export const deleteAsset = (name: string, path: string) =>
+  api.delete<{ ok: boolean; path: string; category: string }>(`/apps/${name}/assets`, { params: { path } }).then(r => r.data)
+
 export const fetchConsoleInfo = () =>
   api.get<ConsoleInfo>('/console/info').then(r => r.data)
 

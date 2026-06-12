@@ -15,6 +15,8 @@
 | `image_utils.cpp` | OpenCV `cvtColor` 路径实现 |
 | `base64_util.h` | Base64 编码接口 |
 | `base64_util.cpp` | Base64 编码实现（告警上传时用于图像序列化） |
+| `pause_ctrl.h` | 暂停控制接口（选中显示窗口按空格暂停/继续，需开启 `enable_pause_key`） |
+| `pause_ctrl.cpp` | 暂停状态维护与各流水线的暂停/继续协调实现 |
 
 ---
 
@@ -60,9 +62,11 @@ struct ChannelSnapshot {
     float                   infer_fps;
     float                   disp_fps;
     int64_t                 logic_frame_id;
+    int64_t                 frame_seq;      // frame 与 results 共同对应的帧序号（二者“同帧”的证明）
     int64_t                 result_age_ms;  // 距上次推理的毫秒数，-1=还没有结果
     bool                    has_results;
     shared_ptr<void>        logic_state;    // 与 frame/results 同一把锁读取，严格配对
+    ChannelOnlineState      online_state;   // 快照时刻的在线状态（CH_ONLINE/...）
 };
 ```
 
