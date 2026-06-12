@@ -1,0 +1,157 @@
+# RK3588 多路视觉分析框架
+
+> Multi-channel video AI analysis framework for Rockchip RK3588 — NPU 上的多路 YOLO 推理 + 可视化 Web 配置控制台 + 异步告警上报微服务。
+
+在一块 RK3588 上同时接入多路视频（RTSP / 本地文件 / USB），用 NPU 跑 YOLO 检测/分割/姿态，按「每通道一段业务逻辑」做入侵、计数、停留、跌倒等判断并上报，全程可在网页上拖拽配置、热重载、看实时画面。
+
+---
+
+## ✨ 特性
+
+- **多路并发推理**：单 batch + 多线程，15 路约 11–12 fps（接近 Jetson Orin Nano + DeepStream 的水平）。
+- **三种输入源**：RTSP 网络流、本地视频文件、USB 摄像头，自动重连。
+- **多种模型**：YOLOv5 / YOLOv8 检测、YOLOv8-Pose 关键点、YOLOv5-Seg 分割（`.rknn`）。
+- **可插拔业务逻辑**：每个逻辑一个 `logic_xxx.cpp` 文件，自注册，新增/删除一个功能只动一个文件。
+- **可视化 Web 控制台**：拖拽配置视频源/模型/ROI/逻辑/上报，生成 `config.json`，一键启动、看实时画面、查日志。
+- **热重载**：阈值、类别、逻辑名、可调参数、模型路径改了即生效，无需重启。
+- **异步上报**：C++ 只把告警写入 Redis，Python 微服务异步转发到业务服务器 / Dify 工作流。
+
+---
+
+## 🧩 项目结构
+
+```
+.
+├── install_deps.sh        # 一键安装运行/编译依赖（apt + Node + pip + Redis）
+├── rk3588_yolo/           # C++ 主程序（推理引擎 + 解码 + 显示 + 业务逻辑）
+│   ├── build.sh           #   编译打包（板端原生 / Docker 交叉）
+│   ├── install_app.sh     #   把产物装进控制台目录 /opt/ai_apps/
+│   └── src/               #   源码（各模块含 README）
+├── web_console/           # Web 配置控制台（FastAPI 后端 :8080 + React 前端）
+│   └── install.sh
+├── service/               # Python 微服务
+│   ├── upload/            #   告警上报（消费 Redis 队列 → HTTP / Dify）
+│   └── model_update/      #   OTA 模型在线更新
+└── docs/                  # 二次开发文档 / 技能说明 / 开发日志
+```
+
+---
+
+## 🔧 环境要求
+
+- **硬件**：Rockchip RK3588 / RK3588S 开发板（3 个 NPU 核心）。
+- **系统**：Debian / Ubuntu / Armbian（aarch64）。在 Debian 上验证最充分。
+- **网络**：能联网装依赖（脚本已内置国内镜像回退）。
+- **其它**：Redis（脚本会装并启动）；如需网页前端构建需 Node 18+（脚本会装）。
+- **模型**：NPU 只能跑 `.rknn`。仓库 `rk3588_yolo/assets/` 自带若干示例模型（yolov8n / yolov5s / pose / seg 等）；自训模型需 `pt → onnx → rknn` 转换后放进 `assets/`。
+
+> 仓库不含预编译产物（`build/`、`dist/` 已在 `.gitignore`），克隆后需自行编译。
+
+---
+
+## 🚀 快速开始（在你的 RK3588 上）
+
+以下命令都在板子上执行。
+
+### 0. 克隆
+
+```bash
+git clone <你的仓库地址> rk3588_vision
+cd rk3588_vision
+```
+
+### 1. 装依赖
+
+```bash
+# 既要在板端从源码编译主程序，就带 --build（含 OpenCV/GTK 等 -dev 包）
+bash install_deps.sh --build
+```
+> 如果你只想运行别人给的预编译 `dist` 包，不编译，则去掉 `--build`。脚本会装 apt 运行库、Node、Redis 和所有 `requirements.txt`。
+
+### 2. 编译主程序
+
+```bash
+cd rk3588_yolo
+./build.sh dist          # 自动识别 aarch64 → 板端原生编译，产物输出到 ./dist/
+```
+`dist/` 里是一个自包含程序包：可执行文件 `rk3588_yolo` + `assets/`（模型/标签）+ 依赖库 `libs/` + `run.sh` / `deploy.sh` 等脚本。
+
+### 3. 安装并打开 Web 控制台
+
+```bash
+cd ../web_console
+bash install.sh                       # 装到 /opt/ai_apps/_console，构建前端
+sudo systemctl enable --now rk3588-console   # 启动控制台服务（若 install.sh 未自动启用）
+```
+浏览器打开 **`http://<板子IP>:8080`** 即可进入控制台。
+
+### 4. 把程序装进控制台
+
+```bash
+cd ../rk3588_yolo
+sudo ./install_app.sh dist            # 复制 dist 到 /opt/ai_apps/，网页里就能看到这个程序
+```
+
+### 5. 在控制台里配置并启动
+
+1. 在「程序管理」找到刚装的程序，点 **配置** 进入画布。
+2. 拖拽节点配置：**视频流**（RTSP/文件/USB）→ **模型**（选 `assets/` 下的 `.rknn`）→ **ROI 区域** → **逻辑函数** →（可选）**上报配置**，保存即生成 `config.json`。
+3. 回到「程序管理」点 **▶ 启动**，再点 **👁 实时画面** 看效果。
+
+完成。后续改配置/换逻辑/调参数大多可热重载，无需重编译。
+
+---
+
+## 🖥️ 不用控制台？命令行直接跑
+
+`build.sh` 产出的 `dist/` 也能脱离控制台独立运行（需先准备一份 `config.json`，最简单是用控制台生成后拷出来，或参考 `docs/` 自己写）：
+
+```bash
+cd rk3588_yolo/dist
+bash run.sh ./assets/config.json      # 前台运行 + 显示窗口（接显示器/SSH X11）
+```
+
+正式后台部署（注册 systemd 服务：主程序 + 上报 + OTA，交互式选择启用）：
+
+```bash
+bash deploy.sh ./assets/config.json
+# 之后用 journalctl -u vision_app -f 看实时输出
+```
+
+---
+
+## 📡 上报与微服务（可选）
+
+业务逻辑里调用 `alarm_uploader_enqueue(...)` / `dify_uploader_enqueue(...)` 时，C++ 只把图片+元数据写入 Redis 队列，由 `service/upload` 微服务异步消费：
+
+- `server_queue` → HTTP POST 到业务服务器
+- `dify_queue` → 上传图片 + 触发 Dify 工作流（可在网页填提示词，让大模型做二次核验）
+
+上报地址按通道走（在网页「上报配置」节点填），留空则回落到 `service/upload/config.yaml` 的默认值。微服务由 `deploy.sh` 一并注册为 systemd 服务。
+
+---
+
+## 🛠️ 二次开发
+
+- **加一个通道逻辑**：在 `rk3588_yolo/src/logic/` 新建 `logic_xxx.cpp`（顶部 `#include "logic_common.h"`，实现 `static void logic_xxx(ChannelContext*)`，文件末尾 `REGISTER_LOGIC("logic_xxx", logic_xxx);`），重新 `build.sh` 即可。删除功能＝删除该文件。
+- **加可热重载参数**：`config.h` 的 `ChannelConfig` 加字段 + `config_init.cpp` 用 `REG_C` 注册 + `logics.json` 声明，网页自动渲染。
+- **完整指南**：见 `rk3588_yolo/src/logic/README.md` 与 `docs/skills/rk3588-channel-logic/`（含 `ChannelContext` API 速查与每个现成逻辑的真实代码示例）。各源码子目录（`analyzer/` `capturer/` `config/` `core/` `player/` `uploader/` `yolo/`）都带 README。
+
+---
+
+## ❓ 常见问题
+
+- **网页打不开 / 看不到程序**：确认 `rk3588-console` 服务在跑（`systemctl status rk3588-console`），程序已 `install_app.sh` 进 `/opt/ai_apps/`。
+- **实时画面是黑的 / 无视频流**：监看仅在程序运行时可用；要用网页看画面需在「全局配置」勾选 **RTSP 推流** 并重启程序。
+- **ROI 在画面上偏位**：ROI 与检测框统一在模型输入坐标系（640）。USB 摄像头高帧率会绑定低分辨率导致偏移——显式设置采集分辨率，或降低最大 FPS。
+- **类别一直不命中**：`r.label` 字符串必须和该模型 `labels.txt` 里的类名完全一致。
+- **改了配置不生效**：通道数量、流地址、显示分辨率、`infer_enable` 等需停止再启动；阈值/逻辑名/可调参数支持热重载。
+- **跌倒等姿态逻辑不准**：建议用 `yolov8_pose` 模型（有 17 关键点）。
+
+更多踩坑记录见 [`development_log.md`](development_log.md)。
+
+---
+
+## 📄 许可证
+
+请按需在仓库根目录补充 `LICENSE` 文件（项目当前未附带开源许可证）。
