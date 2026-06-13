@@ -1,2 +1,0 @@
-cleanwiper
-wafer

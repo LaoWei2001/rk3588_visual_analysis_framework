@@ -1,5 +1,5 @@
 {
-  "_comment": "逻辑参数清单：集中声明每个 logic 可调参数，供 Web 控制台动态渲染。param.key 必须等于 config.json 里的键 == ChannelConfig 字段(在 config_init.cpp 用 REG_C 注册) == logic 里读取的键。新增参数：①ChannelConfig 加字段+REG_C ②logic 里读它 ③这里加一条，前端无需改。",
+  "_comment": "逻辑参数清单：集中声明每个 logic 可调参数，供 Web 控制台动态渲染。param.key 必须等于 config.json 里的键 == ChannelConfig 字段(在 config_init.cpp 用 REG_C 注册) == logic 里读取的键。新增参数：①ChannelConfig 加字段+REG_C ②logic 里读取它, 前端自动识别。",
   "channel_logics": [
     {
       "name": "logic_default",
