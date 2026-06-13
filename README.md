@@ -109,13 +109,13 @@ cd ../rk3588_yolo
 
 ```bash
 cd rk3588_yolo/dist
-bash run.sh ./assets/config.json      # 前台运行 + 显示窗口（接显示器/SSH X11）
+./run.sh ./assets/config.json      # 前台运行 + 显示窗口（接显示器/SSH X11）
 ```
 
 正式后台部署（注册 systemd 服务：主程序 + 上报 + OTA，交互式选择启用）：
 
 ```bash
-bash deploy.sh ./assets/config.json
+./deploy.sh ./assets/config.json
 # 之后用 journalctl -u vision_app -f 看实时输出
 ```
 
@@ -132,7 +132,7 @@ bash deploy.sh ./assets/config.json
 
 ---
 
-## 二次开发
+## 二次开发(未来打算编写简单的教程)
 
 - **加一个通道逻辑**：在 `rk3588_yolo/src/logic/` 新建 `logic_xxx.cpp`（顶部 `#include "logic_common.h"`，实现 `static void logic_xxx(ChannelContext*)`，文件末尾 `REGISTER_LOGIC("logic_xxx", logic_xxx);`），重新 `build.sh` 即可。删除功能＝删除该文件。
 - **加可热重载参数**：`config.h` 的 `ChannelConfig` 加字段 + `config_init.cpp` 用 `REG_C` 注册 + `logics.json` 声明，网页自动渲染。
@@ -155,4 +155,25 @@ bash deploy.sh ./assets/config.json
 
 ## 许可证
 
-请按需在仓库根目录补充 `LICENSE` 文件（项目当前未附带开源许可证）。
+本项目向GNU计划致敬，采用 **GNU General Public License v3.0 (GPL-3.0)** 许可。
+
+```
+基于RK3588的多路视觉分析框架
+/*
+ * Copyright (C) 2026 Sunny_Wei
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+```
+完整的许可证文本见仓库根目录的 [LICENSE](LICENSE) 文件。
