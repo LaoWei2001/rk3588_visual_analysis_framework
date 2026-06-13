@@ -206,10 +206,13 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
                 auto now = std::chrono::steady_clock::now();
                 uint64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
 
-                if (data->last_frame_time_us == 0) {
+                if (data->last_frame_time_us == 0)
+                {
                     should_process = true;
                     data->last_frame_time_us = now_us;
-                } else {
+                }
+                else
+                {
                     uint64_t target_time = data->last_frame_time_us + period_us;
                     if (now_us >= target_time)
                     {
@@ -218,14 +221,17 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
                         break;
                     }
                 }
-            } else {
+            }
+            else
+            {
                 should_process = true;
                 break;
             }
         }
     }
-    
-    if (!should_process) {
+
+    if (!should_process)
+    {
         gst_sample_unref(sample);
         return GST_FLOW_OK;
     }
@@ -241,7 +247,8 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
     GstMapInfo map;
     if (gst_buffer_map(buffer, &map, GST_MAP_READ))
     {
-        for (int cid : data->chnIds) {
+        for (int cid : data->chnIds)
+        {
             ImgDesc_t imgDesc = {0};
             imgDesc.chnId = cid;
             imgDesc.width = stFrameDesc.width;
@@ -566,7 +573,8 @@ DecChannel::~DecChannel()
 bool DecChannel::hasChannel(int chnId) const
 {
     for (int id : mGstChn.chnIds)
-        if (id == chnId) return true;
+        if (id == chnId)
+            return true;
     return false;
 }
 
@@ -877,7 +885,7 @@ int DecChannel::createUsbDecChannel(bool start_thread)
             desired_fps = ch.max_fps;
         else if (app_ctrl_get_max_fps() > 0)
             desired_fps = app_ctrl_get_max_fps();
-        explicit_w = ch.stream.usb_width;   /* 方案B: 显式采集分辨率 */
+        explicit_w = ch.stream.usb_width; /* 方案B: 显式采集分辨率 */
         explicit_h = ch.stream.usb_height;
     }
     if (desired_fps < 1)
@@ -895,12 +903,16 @@ int DecChannel::createUsbDecChannel(bool start_thread)
         /* 方案B: 显式 USB 采集分辨率(来自 config: stream.usb_width/height) ——
          * 与 ROI 抓帧用的分辨率一致、不随 max_fps 变，从而"画的区域 == 逻辑/显示拿到的区域"。
          * 帧率仍按分辨率选相机支持的离散档；推理处理帧率由 max_fps 在推理层节流，互不影响。*/
-        preferred_width  = explicit_w;
+        preferred_width = explicit_w;
         preferred_height = explicit_h;
-        if (explicit_w <= 640)                            capture_fps = 30;
-        else if (explicit_w <= 1280 && explicit_h <= 720) capture_fps = 15;
-        else if (explicit_w <= 1280)                      capture_fps = 10;  /* 1280x960 */
-        else                                              capture_fps = 5;   /* 1920x1080 */
+        if (explicit_w <= 640)
+            capture_fps = 30;
+        else if (explicit_w <= 1280 && explicit_h <= 720)
+            capture_fps = 15;
+        else if (explicit_w <= 1280)
+            capture_fps = 10; /* 1280x960 */
+        else
+            capture_fps = 5; /* 1920x1080 */
     }
     else if (desired_fps >= 25)
     {
