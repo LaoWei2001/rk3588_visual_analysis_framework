@@ -1,0 +1,42 @@
+{
+    "global": {
+        "model_path": "assets/yolov5_test.rknn",
+        "label_path": "assets/labels.txt",
+        "enable_display": 1,
+        "disp_width": 960,
+        "disp_height": 960,
+        "tile_rows": 1,
+        "tile_cols": 1,
+        "max_fps": 25,
+        "queue_size": 0,
+        "channel_threads": 3,
+        "npu_cores": 3,
+        "obj_thresh": 0.2,
+        "nms_thresh": 0.45,
+        "detect_classes": [],
+        "tracker_enable": 1,
+        "tracker_iou_thresh": 0.2,
+        "tracker_max_miss": 50,
+        "tracker_min_hits": 3,
+        "performance_display": 0
+    },
+    "channels": [
+        {
+            "id": 0,
+            "enable": true,
+            "stream": {
+                "url": "assets/3.mp4",
+                "loop": true
+            },
+            "npu_core": 0,
+            "logic": "logic_default",
+            "model_type": "yolov8_det",
+            "model_path": "assets/huojia.rknn",
+            "label_path": "assets/labels_huojia.txt",
+            "obj_thresh": 0.5,
+            "nms_thresh": 0.2,
+            "detect_classes": [],
+            "version": ""
+        }
+    ]
+}
