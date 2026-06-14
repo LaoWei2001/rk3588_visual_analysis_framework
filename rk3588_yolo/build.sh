@@ -1,13 +1,12 @@
 #!/bin/bash
 # ============================================================
-# 统一构建与打包脚本 (支持: RK3588板端原生编译 / X86_Docker交叉编译)
+# 统一构建与打包脚本 (自动识别架构: aarch64->板端原生编译, x86_64->Docker交叉编译)
 # 用法： ./build.sh <输出目录名> [选项]
 #   <输出目录名>                          # [必填] 编译产物文件夹名(建于项目目录下), 如 dist / release_v8
-#   ./build.sh dist                       # 自动根据当前 CPU 架构推断模式, 产物输出到 ./dist
-#   ./build.sh release --mode onboard     # 强制板端原生编译, 产物输出到 ./release
-#   ./build.sh out --mode docker          # 强制 Docker 交叉编译
+#   ./build.sh --debug                    # [快速调试] 只编译出可执行文件(Debug构建), 不打包, 产物直接放在 build.sh 同级目录
+#   ./build.sh dist                       # 自动识别架构选择编译方式, 产物输出到 ./dist
 #   ./build.sh out --no-strip             # 禁用 strip (保留调试信息)
-#   ./build.sh out --no-bundle-libs       # 不打包依赖动态库 (仅原生编译有效)
+#   ./build.sh out --no-bundle-libs       # 不打包依赖动态库
 #   ./build.sh out --image <name>         # 指定交叉编译 Docker 镜像名
 # ============================================================
 
@@ -18,10 +17,12 @@ REPO_ROOT=$(dirname "$PROJECT_DIR")
 TARGET="rk3588_yolo"
 
 # --- 默认配置 ---
-OUT_NAME=""          # [必填] 输出目录名, 由命令行传入 (替代原先写死的 dist)
-MODE="auto"
+OUT_NAME=""          # 输出目录名, 由命令行传入 (--debug 模式无需指定)
+MODE=""              # 编译模式, 启动时按 CPU 架构自动识别 (onboard / docker)
 DO_STRIP=true
 BUNDLE_LIBS=true
+BUILD_TYPE="Release" # CMake 构建类型; --debug 模式改为 Debug
+DEBUG_ONLY=false     # true=只编译可执行文件, 跳过打包(由命令行的 --debug 选项触发)
 IMAGE_NAME="rk3588_builder:2026_4_30"
 
 # 需要打包的 Python 微服务列表（相对路径:目标名, 路径相对于项目根 common/）
@@ -32,16 +33,18 @@ PYTHON_SERVICES=(
 
 # --- 命令行参数解析 ---
 usage() {
-    echo "用法: ./build.sh <输出目录名> [--mode onboard|docker] [--no-strip] [--no-bundle-libs] [--image <name>]"
-    echo "  <输出目录名>  [必填] 编译产物文件夹名 (创建于 $PROJECT_DIR 下), 如 dist / release_v8"
+    echo "用法: ./build.sh <输出目录名> [--debug] [--no-strip] [--no-bundle-libs] [--image <name>]"
+    echo "  (编译方式按 CPU 架构自动识别: aarch64->板端原生, x86_64->Docker交叉编译)"
+    echo "  <输出目录名>  编译产物文件夹名 (创建于 $PROJECT_DIR 下), 如 dist / release_v8"
+    echo "  --debug       只编译可执行文件(Debug构建), 不打包, 产物直接放在 build.sh 同级目录"
 }
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --mode)            MODE="$2"; shift 2 ;;
         --no-strip)        DO_STRIP=false; shift ;;
         --no-bundle-libs)  BUNDLE_LIBS=false; shift ;;
         --image)           IMAGE_NAME="$2"; shift 2 ;;
         -h|--help)         usage; exit 0 ;;
+        --debug)           DEBUG_ONLY=true; BUILD_TYPE=Debug; DO_STRIP=false; BUNDLE_LIBS=false; shift ;;
         --*)               echo "[ERROR] 未知选项: $1"; usage; exit 1 ;;
         *)
             if [ -z "$OUT_NAME" ]; then
@@ -53,33 +56,40 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# --- 校验必填的输出目录名 ---
-if [ -z "$OUT_NAME" ]; then
-    echo "[ERROR] 必须指定输出目录名 (必填参数)。"
-    usage
-    exit 1
-fi
-# 安全校验: 只允许单层目录名, 禁止 '/' 与 '.'/'..' (避免下面的 rm -rf 误删父目录等)
-case "$OUT_NAME" in
-    */*|.|..) echo "[ERROR] 输出目录名只能是单层名字, 不能含 '/' 或为 '.' / '..': $OUT_NAME"; exit 1 ;;
-esac
-
-DIST_DIR="$PROJECT_DIR/$OUT_NAME"
-
-# --- 自动推断模式 ---
-if [ "$MODE" = "auto" ]; then
-    ARCH=$(uname -m)
-    if [[ "$ARCH" == "aarch64" || "$ARCH" == "armv7l" ]]; then
-        MODE="onboard"
-    else
-        MODE="docker"
+# --- 确定产物输出位置 ---
+if [ "$DEBUG_ONLY" = "true" ]; then
+    # debug: 不单独建文件夹, 可执行文件直接放在 build.sh 同级目录(项目根)
+    DIST_DIR="$PROJECT_DIR"
+    OUT_NAME="."          # 传给 Docker 容器: 直接拷到 /workspace 根目录
+else
+    if [ -z "$OUT_NAME" ]; then
+        echo "[ERROR] 必须指定输出目录名 (必填参数)。"
+        usage
+        exit 1
     fi
-    echo "[Sys] 自动检测架构: $ARCH -> 选定编译模式: $MODE"
+    # 安全校验: 只允许单层目录名, 禁止 '/' 与 '.'/'..' (避免下面的 rm -rf 误删父目录等)
+    case "$OUT_NAME" in
+        */*|.|..) echo "[ERROR] 输出目录名只能是单层名字, 不能含 '/' 或为 '.' / '..': $OUT_NAME"; exit 1 ;;
+    esac
+    DIST_DIR="$PROJECT_DIR/$OUT_NAME"
 fi
+
+# --- 按 CPU 架构自动识别编译方式 (无需手动指定) ---
+ARCH=$(uname -m)
+if [[ "$ARCH" == "aarch64" || "$ARCH" == "armv7l" ]]; then
+    MODE="onboard"
+else
+    MODE="docker"
+fi
+echo "[Sys] 自动检测架构: $ARCH -> 编译方式: $MODE"
 
 echo "========================================================"
 echo "  RK3588 视觉系统统一构建脚本"
 echo "  编译模式 : $MODE"
+echo "  构建类型 : $BUILD_TYPE"
+if [ "$DEBUG_ONLY" = "true" ]; then
+echo "  调试模式 : 仅编译可执行文件 (跳过打包)"
+fi
 echo "  项目目录 : $PROJECT_DIR"
 echo "  输出目录 : $DIST_DIR"
 echo "  Strip    : $DO_STRIP"
@@ -90,10 +100,18 @@ else
 fi
 echo "========================================================"
 
-# --- 编译前端准备 ---
+# --- 编译前准备 ---
 cd "$PROJECT_DIR"
-rm -rf "$DIST_DIR"
-mkdir -p "$DIST_DIR/libs"
+if [ "$DEBUG_ONLY" = "true" ]; then
+    : # debug: 产物直接放项目根目录, 不清空、不另建目录
+else
+    rm -rf "$DIST_DIR"
+    if [ "$BUNDLE_LIBS" = "true" ]; then
+        mkdir -p "$DIST_DIR/libs"
+    else
+        mkdir -p "$DIST_DIR"
+    fi
+fi
 
 # ============================================================
 # 分支 1: Docker 交叉编译 (运行于 x86_64)
@@ -108,6 +126,8 @@ if [ "$MODE" = "docker" ]; then
     docker run --rm -i \
         -v "$PROJECT_DIR:/workspace" \
         -e DO_STRIP="$DO_STRIP" \
+        -e BUNDLE_LIBS="$BUNDLE_LIBS" \
+        -e BUILD_TYPE="$BUILD_TYPE" \
         -e DIST_NAME="$OUT_NAME" \
         -e HOST_UID=$(id -u) \
         -e HOST_GID=$(id -g) \
@@ -141,7 +161,7 @@ set(ENV{PKG_CONFIG_LIBDIR} "/sysroot/usr/lib/pkgconfig:/sysroot/usr/share/pkgcon
 set(ENV{PKG_CONFIG_SYSROOT_DIR} "/sysroot")
 CROSS_EOF
 rm -rf build && mkdir -p build && cd build
-cmake .. -DCROSS_CMAKE_FILE=/workspace/cross.cmake -DCMAKE_BUILD_TYPE=Release
+cmake .. -DCROSS_CMAKE_FILE=/workspace/cross.cmake -DCMAKE_BUILD_TYPE=${BUILD_TYPE:-Release}
 echo "  [make] 开始编译..."
 make -j$(nproc)
 cd ..
@@ -153,16 +173,20 @@ if [ "$DO_STRIP" = "true" ]; then
     aarch64-linux-gnu-strip "$DIST/$TARGET"
 fi
 
-echo "  [readelf] 提取系统动态库依赖..."
-libs=$(aarch64-linux-gnu-readelf -d build/$TARGET | grep "NEEDED" | sed -r 's/.*\[(.*)\].*/\1/' | grep -vE "^(ld-linux|libc\.so|libm\.so|libdl\.so|librt\.so|libpthread\.so|libstdc\+\+\.so)")
-for lib in $libs; do
-    lib_path=$(find /sysroot -name "$lib" -print -quit 2>/dev/null)
-    if [ -n "$lib_path" ]; then
-        cp -L "$lib_path" $DIST/libs/
-    fi
-done
+if [ "$BUNDLE_LIBS" = "true" ]; then
+    echo "  [readelf] 提取系统动态库依赖..."
+    libs=$(aarch64-linux-gnu-readelf -d build/$TARGET | grep "NEEDED" | sed -r 's/.*\[(.*)\].*/\1/' | grep -vE "^(ld-linux|libc\.so|libm\.so|libdl\.so|librt\.so|libpthread\.so|libstdc\+\+\.so)")
+    for lib in $libs; do
+        lib_path=$(find /sysroot -name "$lib" -print -quit 2>/dev/null)
+        if [ -n "$lib_path" ]; then
+            cp -L "$lib_path" $DIST/libs/
+        fi
+    done
+fi
 
-chown -R $HOST_UID:$HOST_GID $DIST build
+chown -R $HOST_UID:$HOST_GID build
+chown $HOST_UID:$HOST_GID "$DIST/$TARGET"
+if [ "$BUNDLE_LIBS" = "true" ]; then chown -R $HOST_UID:$HOST_GID "$DIST/libs"; fi
 echo "  Docker 构建流完成。"
 DOCKER_CMD
 
@@ -172,7 +196,7 @@ DOCKER_CMD
 elif [ "$MODE" = "onboard" ]; then
     echo ">>> [1/4] 开始板端原生编译..."
     rm -rf build && mkdir -p build && cd build
-    cmake .. -DCMAKE_BUILD_TYPE=Release
+    cmake .. -DCMAKE_BUILD_TYPE=$BUILD_TYPE
     make -j$(nproc)
     cd "$PROJECT_DIR"
     
@@ -203,6 +227,16 @@ fi
 if [ ! -f "$DIST_DIR/$TARGET" ]; then
     echo "[ERROR] 构建失败，未找到产物 $TARGET。"
     exit 1
+fi
+
+# --- debug 仅编译模式: 到此结束, 跳过后续所有打包步骤 ---
+if [ "$DEBUG_ONLY" = "true" ]; then
+    echo ""
+    echo "========================================================"
+    echo "  [debug] 仅编译完成 — 只生成了可执行文件, 未打包。"
+    echo "  可执行文件: $DIST_DIR/$TARGET"
+    echo "========================================================"
+    exit 0
 fi
 
 # --- 拷贝通用资产与 Python 源码 ---

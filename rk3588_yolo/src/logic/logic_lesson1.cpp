@@ -18,9 +18,10 @@ static void logic_lesson1(ChannelContext *ctx)
     printf("本通道使用的逻辑函数为：%s\n", ctx->config->logic.c_str());
     printf("当前帧的帧号为：%ld\n", ctx->frame_id);
     printf("显示的帧率为：%f FPS\n", ctx->disp_fps);
+    // 时间戳为系统的开机运行时长(ms)
     printf("当前帧的时间戳为：%lu ms\n", ctx->timestamp_ms);
     printf("当前一帧距离上一帧经过了%f ms\n", ctx->dt_ms);
 }
 
-// 每一个实现逻辑函数的logic_xxx.cpp文件最底部都需要添加这一行, 完成自行编写的逻辑的注册。
+// 每一个实现逻辑函数的logic_xxx.cpp文件最底部都必须添加这一行, 完成自行编写的逻辑的注册。
 REGISTER_LOGIC("logic_lesson1", logic_lesson1);

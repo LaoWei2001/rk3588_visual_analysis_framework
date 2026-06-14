@@ -64,9 +64,13 @@ export default function ROINode({ id, selected }: NodeProps) {
     usbRes: { width: number; height: number } | null
   } => {
     const edges = rf.getEdges()
-    const toModel = edges.find(e => e.source === id && e.sourceHandle === 'roi-out')
-    if (!toModel) return { streamData: null, usbRes: null }
-    const toStream = edges.find(e => e.target === toModel.target && e.targetHandle === 'stream-in')
+    // ROI 可接到 YOLO 模型节点(经 stream-in 取流) 或 传统通道里被视频流直连的逻辑节点(经 logic-in 取流)。
+    const toAnchor = edges.find(e => e.source === id && e.sourceHandle === 'roi-out')
+    if (!toAnchor) return { streamData: null, usbRes: null }
+    const toStream = edges.find(e =>
+      e.target === toAnchor.target &&
+      (e.targetHandle === 'stream-in' || e.targetHandle === 'logic-in') &&
+      rf.getNode(e.source)?.type === 'stream')
     if (!toStream) return { streamData: null, usbRes: null }
     const streamData = (rf.getNode(toStream.source)?.data as Record<string, unknown>) ?? null
 
@@ -77,9 +81,10 @@ export default function ROINode({ id, selected }: NodeProps) {
       if (ew > 0 && eh > 0) {
         usbRes = { width: ew, height: eh }
       } else {
-        const modelData = rf.getNode(toModel.target)?.data as Record<string, unknown> | undefined
-        const playbackFps = Number(modelData?.playback_fps ?? 0)
-        const maxFps      = Number(modelData?.max_fps      ?? 0)
+        // 锚点可能是 model(带 playback_fps/max_fps) 或 logic(无 → 回退全局最大FPS)
+        const anchorData = rf.getNode(toAnchor.target)?.data as Record<string, unknown> | undefined
+        const playbackFps = Number(anchorData?.playback_fps ?? 0)
+        const maxFps      = Number(anchorData?.max_fps      ?? 0)
         const fps = playbackFps > 0 ? playbackFps
                   : maxFps      > 0 ? maxFps
                   : globalMaxFps > 0 ? globalMaxFps

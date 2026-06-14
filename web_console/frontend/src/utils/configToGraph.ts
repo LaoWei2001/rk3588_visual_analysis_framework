@@ -93,8 +93,15 @@ export function configToGraph(
     const origId = (ch.id as number) ?? idx
     const stream = ch.stream as Record<string, unknown> ?? {}
 
+    // 该通道是否带 YOLO 模型节点: 配了 model_type 或 model_path → 画 model 节点
+    // (含“启用推理”关掉但仍配了模型的 YOLO 通道); 两者皆空 → 传统/无推理通道:
+    // 视频流直连逻辑函数, 不画 model 节点。graphToConfig 对传统通道刻意不写这两个字段。
+    const mType = typeof ch.model_type === 'string' ? (ch.model_type as string).trim() : ''
+    const mPath = typeof ch.model_path === 'string' ? (ch.model_path as string).trim() : ''
+    const hasModel = mType !== '' || mPath !== ''
+
     // ── Stream node — 每个通道独立创建，不做去重 ──
-    // 通道号 (channel_id) 唯一，一个 StreamNode 只能连一个 ModelNode，
+    // 通道号 (channel_id) 唯一，一个 StreamNode 只能连一个下游节点，
     // 因此即使两个通道 URL 相同，也必须各自有独立的 StreamNode。
     const streamId = uid('stream')
     nodes.push({
@@ -103,23 +110,29 @@ export function configToGraph(
       data: { ...stream, channel_id: origId },
     })
 
-    // ── Model node ──
-    const modelId = uid('model')
+    // ── 通道字段分流：模型字段 → 模型节点；其余(radius 及任意 logic 参数) → 逻辑节点 ──
     const { stream: _s, logic: _lg, dify_prompt: _dp, server_url: _su,
             dify_api_url: _du, dify_api_key: _dk, ...rest } = ch
-    // 通道字段分流：模型字段 → 模型节点；其余(radius 及任意 logic 参数) → 逻辑节点
     const modelData:   Record<string, unknown> = {}
     const logicParams: Record<string, unknown> = {}
     Object.entries(rest).forEach(([k, v]) => {
       if (MODEL_KEYS.has(k)) modelData[k] = v
       else                   logicParams[k] = v
     })
-    nodes.push({
-      id: modelId, type: 'model',
-      position: { x: MODEL_X, y },
-      data: { ...modelData },
-    })
-    edges.push(edge(streamId, 'stream-out', modelId, 'stream-in', '#3b82f6'))
+
+    // ── Model node (仅 YOLO 通道) ──
+    // 节点创建顺序保持 stream→model→roi→logic→report, 使同一份配置始终生成相同节点 ID
+    // (localStorage 画布布局恢复依赖确定性 ID)。
+    let modelId: string | null = null
+    if (hasModel) {
+      modelId = uid('model')
+      nodes.push({
+        id: modelId, type: 'model',
+        position: { x: MODEL_X, y },
+        data: { ...modelData },
+      })
+      edges.push(edge(streamId, 'stream-out', modelId, 'stream-in', '#3b82f6'))
+    }
 
     // ── ROI node (一个 ROI 节点 = 该通道的多个命名区域) ──
     // Use sequential position (idx) as key — must match C++ load_roi_zones() which iterates
@@ -137,15 +150,17 @@ export function configToGraph(
       zones = [{ name: '', polygon: ch.roi_polygon as number[][] }]
     }
     zones = zones.filter(z => Array.isArray(z.polygon) && z.polygon.length >= 3)
+    let roiId: string | null = null
     if (zones.length > 0) {
-      const roiId = uid('roi')
+      roiId = uid('roi')
       nodes.push({
         id: roiId, type: 'roi',
         position: { x: ROI_X, y: y - 80 },
         data: {},
       })
-      edges.push(edge(roiId, 'roi-out', modelId, 'roi-in', '#f97316'))
       roiMapping[roiId] = zones
+      // YOLO 通道此处即连 model; 传统通道的 roi→logic 连线在 logic 节点创建后补。
+      if (hasModel) edges.push(edge(roiId, 'roi-out', modelId!, 'roi-in', '#f97316'))
     }
 
     // ── Logic node ──
@@ -155,10 +170,16 @@ export function configToGraph(
     const logicData: Record<string, unknown> = { logic, ...logicParams }
     nodes.push({
       id: logicId, type: 'logic',
-      position: { x: LOGIC_X, y },
+      position: { x: hasModel ? LOGIC_X : MODEL_X, y },  // 传统通道 logic 占据 model 的列位置, 更紧凑
       data: logicData,
     })
-    edges.push(edge(modelId, 'logic-out', logicId, 'logic-in', '#a855f7'))
+    if (hasModel) {
+      edges.push(edge(modelId!, 'logic-out', logicId, 'logic-in', '#a855f7'))
+    } else {
+      // 传统/无推理通道: 视频流直连逻辑函数; 有 ROI 则 ROI 接到逻辑函数顶部
+      edges.push(edge(streamId, 'stream-out', logicId, 'logic-in', '#3b82f6'))
+      if (roiId) edges.push(edge(roiId, 'roi-out', logicId, 'roi-in', '#f97316'))
+    }
 
     // ── Report node (only for logics that need it) ──
     const reportType = resolveReport(logic, reportByLogic)
@@ -176,7 +197,7 @@ export function configToGraph(
       }
       nodes.push({
         id: reportId, type: 'report',
-        position: { x: REPORT_X, y },
+        position: { x: hasModel ? REPORT_X : LOGIC_X, y },
         data: reportData,
       })
       edges.push(edge(logicId, 'report-out', reportId, 'report-in', '#ef4444'))

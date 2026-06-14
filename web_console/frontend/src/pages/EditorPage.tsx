@@ -283,13 +283,13 @@ export default function EditorPage() {
 
   // ── Colored edges based on source handle ──
   const onConnect = useCallback((params: Connection) => {
-    // 视频流节点 stream-out 只允许连一个推理节点（通道号唯一，不能一对多）
+    // 视频流节点 stream-out 只允许连一个下游节点（通道号唯一，不能一对多）
     if (params.sourceHandle === 'stream-out') {
       const alreadyUsed = edgesRef.current.some(
         e => e.source === params.source && e.sourceHandle === 'stream-out'
       )
       if (alreadyUsed) {
-        showToast('视频流节点已连接推理节点 — 通道号唯一，不支持一对多', false)
+        showToast('视频流节点已连接 — 通道号唯一，一个视频流只能接一路（YOLO 推理或逻辑函数）', false)
         return
       }
     }
@@ -568,12 +568,21 @@ export default function EditorPage() {
   // ── 由当前画布生成配置（含校验）；失败时弹 toast 并返回 null ──
   const buildConfig = (): { config: Record<string, unknown>; roi: Record<string, RoiEntry> } | null => {
     if (!appName) { showToast('未选择程序', false); return null }
-    if (!nodes.some(n => n.type === 'model')) { showToast('请先添加 YOLO 推理节点', false); return null }
+    // 通道锚点 = YOLO 推理节点，或被「视频流」直连的逻辑函数节点（传统 / 无推理通道）。
+    const hasModel = nodes.some(n => n.type === 'model')
+    const hasDirectLogic = nodes.some(n =>
+      n.type === 'logic' &&
+      edges.some(e => e.target === n.id && e.targetHandle === 'logic-in'
+                      && nodes.find(s => s.id === e.source)?.type === 'stream'))
+    if (!hasModel && !hasDirectLogic) {
+      showToast('画布为空：请添加 YOLO 推理节点，或把视频流直接连到逻辑函数节点', false)
+      return null
+    }
 
-    // ── 检测重复通道号（只检查真正连接了模型节点的视频流节点）──
+    // ── 检测重复通道号（检查所有真正接入下游的视频流节点：接 YOLO 推理 或 直连逻辑函数）──
     const connectedStreamIds = new Set(
       edges
-        .filter(e => e.targetHandle === 'stream-in')
+        .filter(e => e.targetHandle === 'stream-in' || e.targetHandle === 'logic-in')
         .map(e => e.source)
     )
     const dupSet = new Set<number>()
@@ -768,7 +777,12 @@ export default function EditorPage() {
                   <strong style={{color:'#16a34a'}}>YOLO推理</strong> →{' '}
                   <strong style={{color:'#9333ea'}}>逻辑函数</strong> →{' '}
                   <strong style={{color:'#dc2626'}}>上报配置</strong>
-                  （ROI 区域可选，连到推理节点顶部）
+                  （ROI 区域可选，连到节点顶部）
+                  <br />
+                  <span style={{ opacity: 0.85 }}>
+                    不用 YOLO？把 <strong style={{color:'#3b82f6'}}>视频流</strong> 直接连到{' '}
+                    <strong style={{color:'#9333ea'}}>逻辑函数</strong>，即为传统 CV / 无推理通道
+                  </span>
                 </div>
               </Panel>
             )}

@@ -9,10 +9,6 @@
  *     DifyPersonVerifyState / logic_roll_compute_occupancy ...)
  *   - 上报接口 (alarm_uploader_enqueue / dify_uploader_enqueue)
  *   - 中英文文字渲染 (draw_text_unicode)
- *
- * 说明: 这里刻意镜像了原 channel_logic.cpp(拆分前)的 include 集合, 因此每个拆出来的
- * logic 文件的可见符号与拆分前完全一致, 不会出现缺头。app_ctrl.h 会间接引入
- * display.h(render_overlays 即来源于此)。
  */
 #pragma once
 

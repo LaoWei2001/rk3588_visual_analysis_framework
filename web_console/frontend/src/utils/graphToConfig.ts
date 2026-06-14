@@ -27,13 +27,6 @@ function resolveReport(
   return null
 }
 
-function sortByPosition(nodes: Node[]): Node[] {
-  return [...nodes].sort((a, b) => {
-    const dy = a.position.y - b.position.y
-    return Math.abs(dy) > 20 ? dy : a.position.x - b.position.x
-  })
-}
-
 function buildStream(d: Record<string, unknown>): Record<string, unknown> {
   // src_type 必填、不再自动推断；按【显式】类型分别落字段（新建节点已带 src_type）。
   const t = getSrcType(d)
@@ -58,18 +51,41 @@ export function graphToConfig(
   globalSettings: GlobalSettingsData,
   reportByLogic: Record<string, string> = {}
 ): { config: Record<string, unknown>; roi: Record<string, RoiEntry> } | null {
-  const modelNodes = nodes.filter(n => n.type === 'model')
-  if (modelNodes.length === 0) return null
-  const sorted = sortByPosition(modelNodes)
+  // ── 收集“通道锚点”: 一个锚点 = 一条通道 ──
+  // YOLO 通道锚点 = model 节点; 传统/无推理通道锚点 = 被「视频流」直连的 logic 节点。
+  // 用户可以不放 YOLO 节点, 把视频流直接接到逻辑函数 → 该路走传统 CV / 非 YOLO 算法。
+  const isStreamFedLogic = (n: Node): boolean => {
+    if (n.type !== 'logic') return false
+    const inEdge = edges.find(e => e.target === n.id && e.targetHandle === 'logic-in')
+    if (!inEdge) return false
+    return nodes.find(s => s.id === inEdge.source)?.type === 'stream'
+  }
+
+  type Anchor = { node: Node; isModel: boolean }
+  const anchors: Anchor[] = [
+    ...nodes.filter(n => n.type === 'model').map(node => ({ node, isModel: true })),
+    ...nodes.filter(isStreamFedLogic).map(node => ({ node, isModel: false })),
+  ]
+  if (anchors.length === 0) return null
+
+  // 统一按画布位置排序(主按 y 分行, 同一行再按 x)。序号 idx 即通道在 config.channels 中的位置,
+  // 也是 ROI 的 key —— 必须与 C++ load_roi_zones() 的“按位置遍历(ch=0,1,2…)”对齐。
+  anchors.sort((a, b) => {
+    const dy = a.node.position.y - b.node.position.y
+    return Math.abs(dy) > 20 ? dy : a.node.position.x - b.node.position.x
+  })
 
   const channels: Record<string, unknown>[] = []
   const roiOut: Record<string, RoiEntry> = {}
 
-  sorted.forEach((mNode, idx) => {
-    const m = mNode.data as Record<string, unknown>
+  anchors.forEach(({ node: aNode, isModel }, idx) => {
+    const m = isModel ? (aNode.data as Record<string, unknown>) : {}
 
-    // ── Stream ──
-    const streamEdge = edges.find(e => e.target === mNode.id && e.targetHandle === 'stream-in')
+    // ── Stream ── YOLO: 流接 model 的 stream-in; 传统: 流直连 logic 的 logic-in ──
+    const streamEdge = isModel
+      ? edges.find(e => e.target === aNode.id && e.targetHandle === 'stream-in')
+      : edges.find(e => e.target === aNode.id && e.targetHandle === 'logic-in'
+                        && nodes.find(s => s.id === e.source)?.type === 'stream')
     const streamNode = streamEdge ? nodes.find(n => n.id === streamEdge.source) : null
     const stream = streamNode ? buildStream(streamNode.data as Record<string, unknown>) : { url: '', video_enc: 'h264' }
 
@@ -78,20 +94,24 @@ export function graphToConfig(
       ? Number((streamNode.data as Record<string, unknown>).channel_id)
       : idx
 
-    // ── ROI(一个 ROI 节点 = 该通道的多个命名区域) ──
+    // ── ROI(一个 ROI 节点 = 该通道的多个命名区域; model 与 logic 都用同一个 roi-in handle) ──
     // KEY MUST be sequential position (idx), NOT channel_id.
     // C++ load_roi_zones() iterates channels by sorted position (ch=0,1,2…) and looks up
     // key = std::to_string(ch). Using channel_id here would misplace ROI for non-sequential ids.
-    const roiEdge = edges.find(e => e.target === mNode.id && e.targetHandle === 'roi-in')
+    const roiEdge = edges.find(e => e.target === aNode.id && e.targetHandle === 'roi-in')
     const zones: RoiZone[] = (roiEdge ? (roiZones[roiEdge.source] ?? []) : [])
       .filter(z => Array.isArray(z.polygon) && z.polygon.length >= 3)
       .map(z => ({ name: z.name ?? '', polygon: z.polygon }))
     const roiPoly = zones.length > 0 ? zones[0].polygon : []   // 首区域(向后兼容单 ROI)
     roiOut[String(idx)] = { polygon: roiPoly, zones }
 
-    // ── Logic ──
-    const logicEdge = edges.find(e => e.source === mNode.id && e.sourceHandle === 'logic-out')
-    const logicNode = logicEdge ? nodes.find(n => n.id === logicEdge.target) : null
+    // ── Logic ── YOLO: model 的 logic-out → logic 节点; 传统: 锚点自身即 logic 节点 ──
+    const logicNode = isModel
+      ? (() => {
+          const le = edges.find(e => e.source === aNode.id && e.sourceHandle === 'logic-out')
+          return le ? nodes.find(n => n.id === le.target) ?? null : null
+        })()
+      : aNode
     const l = logicNode ? (logicNode.data as Record<string, unknown>) : {}
     const logic = String(l.logic ?? 'logic_default')
 
@@ -102,20 +122,32 @@ export function graphToConfig(
     const reportNode = reportEdge ? nodes.find(n => n.id === reportEdge.target) : null
     const r = reportNode ? (reportNode.data as Record<string, unknown>) : {}
 
-    const ch: Record<string, unknown> = {
-      id:             chId,
-      enable:         true,                       // 通道存在即启用；YOLO 节点的开关现在控制 infer_enable
-      infer_enable:   m.infer_enable   ?? true,   // 推理开关：false=传统算法通道(仍解码/显示/逐帧跑逻辑)
-      stream,
-      npu_core:       m.npu_core       ?? 0,
-      logic,
-      model_type:     m.model_type     ?? 'yolov8_det',
-      model_path:     m.model_path     ?? '',
-      label_path:     m.label_path     ?? '',
-      obj_thresh:     m.obj_thresh     ?? 0.3,
-      nms_thresh:     m.nms_thresh     ?? 0.45,
-      detect_classes: (m.detect_classes as string[]) ?? [],
-    }
+    // ── 通道基础字段 ── YOLO 与传统通道字段集不同 ──
+    const ch: Record<string, unknown> = isModel
+      ? {
+          id:             chId,
+          enable:         true,                       // 通道存在即启用；YOLO 节点的开关现在控制 infer_enable
+          infer_enable:   m.infer_enable   ?? true,   // 推理开关：false=传统算法通道(仍解码/显示/逐帧跑逻辑)
+          stream,
+          npu_core:       m.npu_core       ?? 0,
+          logic,
+          model_type:     m.model_type     ?? 'yolov8_det',
+          model_path:     m.model_path     ?? '',
+          label_path:     m.label_path     ?? '',
+          obj_thresh:     m.obj_thresh     ?? 0.3,
+          nms_thresh:     m.nms_thresh     ?? 0.45,
+          detect_classes: (m.detect_classes as string[]) ?? [],
+        }
+      : {
+          // 传统/无推理通道: 不写任何模型字段。C++ 见 model_path 为空即跳过 NPU 推理,
+          // 仍解码/显示/逐帧跑 logic(ctx->results 为空, ctx->infer_enabled=0)。
+          // 缺省 model_type/model_path 也是 configToGraph 区分“无 YOLO 节点”的依据。
+          id:           chId,
+          enable:       true,
+          infer_enable: false,
+          stream,
+          logic,
+        }
 
     // 上报参数仍由「上报配置」节点提供
     // 方案2: 上报地址每通道独立写进 config.json(空=用上报服务默认值)，随后经 C++ → Redis 消息下发
@@ -134,7 +166,7 @@ export function graphToConfig(
       if (v != null) ch[k] = v
     })
 
-    // Per-channel tracker overrides (if set)
+    // Per-channel tracker overrides (仅 YOLO 通道; 传统通道 m={} 自然跳过)
     if (m.tracker_enable   != null) ch.tracker_enable   = m.tracker_enable
     if (m.tracker_iou_thresh != null) ch.tracker_iou_thresh = m.tracker_iou_thresh
     if (m.tracker_max_miss != null) ch.tracker_max_miss = m.tracker_max_miss
