@@ -251,6 +251,51 @@
       "name": "logic_lesson1",
       "label": "教程1: 获取视频流信息",
       "params": []
+    },
+    {
+      "name": "logic_lesson2",
+      "label": "教程1: 获取视频流信息",
+      "params": []
+    },
+    {
+      "name": "logic_lesson3",
+      "label": "教程1: 获取视频流信息",
+      "params": []
+    },
+    {
+      "name": "logic_lesson4",
+      "label": "教程1: 获取视频流信息",
+      "params": []
+    },
+    {
+      "name": "logic_lesson5",
+      "label": "教程1: 获取视频流信息",
+      "params": []
+    },
+    {
+      "name": "logic_lesson6",
+      "label": "教程1: 获取视频流信息",
+      "params": []
+    },
+    {
+      "name": "logic_lesson7",
+      "label": "教程1: 获取视频流信息",
+      "params": []
+    },
+    {
+      "name": "logic_lesson8",
+      "label": "教程1: 获取视频流信息",
+      "params": []
+    },
+    {
+      "name": "logic_lesson9",
+      "label": "教程1: 获取视频流信息",
+      "params": []
+    },
+    {
+      "name": "logic_lesson10",
+      "label": "教程1: 获取视频流信息",
+      "params": []
     }
   ],
   "global_logics": [
