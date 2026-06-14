@@ -3,9 +3,9 @@
 """
 Unified upload consumer (Multi-threaded version).
 
-Consumes two queues from Redis in parallel using separate threads:
-- Thread 1: server_queue -> send alarm payload to business server
-- Thread 2: dify_queue -> upload image and trigger Dify workflow
+Two worker threads run in parallel:
+- Thread 1: OutboxForwarder -> 扫描本地发件箱目录(C++落盘), 补传告警到业务服务器, 传成功即删本地
+- Thread 2: dify_queue (Redis) -> upload image and trigger Dify workflow
 """
 
 import base64
@@ -26,40 +26,137 @@ import yaml
 _shutdown_event = threading.Event()
 
 
-class ServerUploader:
-    def __init__(self, config: Dict[str, Any]):
-        # 方案2: config.yaml 的地址降级为"默认值", 消息自带 server_url 时优先用消息里的
+class OutboxForwarder:
+    """扫描本地"发件箱"目录(C++ 报警时落盘), 把每条告警补传到业务服务器; 传成功即删本地。
+
+    行为(对应"送达即删 / 断网攒着 / 通了边传边删"):
+    - 平台/网络不可达(requests 抛异常)→ 整轮退避 RETRY_WAIT 秒再重扫, 不疯狂重试。
+    - 服务器拒绝(非 200)→ 跳过该条、不删除, 下一轮再试, 不阻塞其它记录。
+    - 传成功(200)→ 立刻删除该条的 .json + 图片。
+    - 空闲(无待传)→ 每 SCAN_IDLE 秒轮询一次。
+    地址方案2: 优先用记录自带的 server_url, 留空回落到 config.yaml 默认。
+    """
+
+    SCAN_IDLE = 3.0    # 无待传时的轮询间隔(秒)
+    RETRY_WAIT = 15.0  # 平台不可达时的退避(秒)
+
+    def __init__(self, config: Dict[str, Any], store_dir: str):
         self.default_url = config["server"]["url"]
         self.timeout = config["server"]["timeout"]
+        self.store_dir = store_dir
 
-    def upload(self, data: Dict[str, Any]) -> bool:
-        # 地址随消息走: 通道填了就用通道的, 留空回落到默认
-        url = data.get("server_url") or self.default_url
+    def _list_pending(self):
+        """返回待传记录的 .json 文件名, 按 mtime 从旧到新(先补最早攒下的)。"""
         try:
-            payload = {
-                "source": "JNU",
-                "eventType": "4005",
-                "detResult": {},
-                "snapTime": data.get("snapTime", ""),
-                "endTime": data.get("endTime", ""),
-                "base64Data": data.get("base64Data", ""),
-                "base64DataRaw": data.get("base64DataRaw", ""),
-                "invadeFlag": 1,
-            }
+            names = [f for f in os.listdir(self.store_dir) if f.endswith(".json")]
+        except FileNotFoundError:
+            return []
+        def _mtime(n):
+            p = os.path.join(self.store_dir, n)
+            try:
+                return os.path.getmtime(p)
+            except OSError:
+                return 0.0
+        names.sort(key=_mtime)
+        return names
 
-            response = requests.post(url, json=payload, timeout=self.timeout)
-            if response.status_code == 200:
-                print(f"[ServerUploader] upload success: camera_id={data.get('camera_id')} url={url}")
-                return True
-
-            print(f"[ServerUploader] upload failed: status={response.status_code} body={response.text}")
-            return False
-        except requests.exceptions.Timeout:
-            print("[ServerUploader] upload timeout")
-            return False
+    def _safe_unlink(self, path: str):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
         except Exception as e:
-            print(f"[ServerUploader] upload exception: {e}")
-            return False
+            print(f"[Outbox] remove failed {path}: {e}")
+
+    def _delete_record(self, meta: Dict[str, Any], jname: str):
+        # 先删 .json(它一旦消失, 这条就不会被再次列出/补传), 再删图片
+        self._safe_unlink(os.path.join(self.store_dir, jname))
+        for k in ("img", "img_raw"):
+            n = meta.get(k, "")
+            if n:
+                self._safe_unlink(os.path.join(self.store_dir, n))
+
+    def _img_b64(self, fname: str) -> str:
+        if not fname:
+            return ""
+        p = os.path.join(self.store_dir, fname)
+        if not os.path.exists(p):
+            return ""
+        with open(p, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+
+    def _forward_one(self, jname: str) -> str:
+        """补传一条; 返回 'sent' | 'skip' | 'rejected' | 'down'。"""
+        jpath = os.path.join(self.store_dir, jname)
+        try:
+            with open(jpath, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except FileNotFoundError:
+            return "skip"   # 已被删除/淘汰
+        except Exception as e:
+            print(f"[Outbox] 损坏的元数据 {jname}: {e}")
+            return "skip"   # 跳过, 不阻塞其它记录
+
+        try:
+            img_b64 = self._img_b64(meta.get("img", ""))
+            raw_b64 = self._img_b64(meta.get("img_raw", ""))
+        except Exception as e:
+            print(f"[Outbox] 读图失败 {jname}: {e}")
+            return "skip"
+
+        url = meta.get("server_url") or self.default_url
+        payload = {
+            "source": "JNU",
+            "eventType": "4005",
+            "detResult": {},
+            "snapTime": meta.get("snapTime", ""),
+            "endTime": meta.get("endTime", ""),
+            "base64Data": img_b64,
+            "base64DataRaw": raw_b64 or img_b64,
+            "invadeFlag": 1,
+        }
+        try:
+            resp = requests.post(url, json=payload, timeout=self.timeout)
+        except Exception as e:
+            print(f"[Outbox] 平台不可达, 稍后重试 ch={meta.get('camera_id')}: {e}")
+            return "down"
+
+        if resp.status_code == 200:
+            self._delete_record(meta, jname)
+            print(f"[Outbox] 已补传并删除 ch={meta.get('camera_id')} {jname} url={url}")
+            return "sent"
+
+        print(f"[Outbox] 服务器拒绝 status={resp.status_code} ch={meta.get('camera_id')} (下一轮再试)")
+        return "rejected"
+
+    def run(self):
+        print(f"[Outbox] forwarder started, store={self.store_dir}")
+        while not _shutdown_event.is_set():
+            pending = self._list_pending()
+            if not pending:
+                _shutdown_event.wait(self.SCAN_IDLE)
+                continue
+
+            sent = 0
+            down = False
+            for jname in pending:
+                if _shutdown_event.is_set():
+                    break
+                r = self._forward_one(jname)
+                if r == "sent":
+                    sent += 1
+                elif r == "down":
+                    down = True
+                    break   # 平台不可达, 本轮到此为止
+
+            if down:
+                # 平台不可达: 退避后整轮重来(数据都还在本地, 网页可见)
+                _shutdown_event.wait(self.RETRY_WAIT)
+            elif sent == 0:
+                # 一条都没传成功(都被拒/跳过): 别空转, 歇一会再扫
+                _shutdown_event.wait(self.RETRY_WAIT)
+            # sent > 0: 立即重扫, 快速排空积压
+        print("[Outbox] forwarder exiting (shutdown)")
 
 
 class DifyUploader:
@@ -287,20 +384,26 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _shutdown_handler)
     signal.signal(signal.SIGINT, _shutdown_handler)
 
+    # 本地发件箱目录: 与 C++ 记录器约定一致(env ALARM_STORE_DIR 覆盖, 否则 <app>/alarm_store)
+    store_dir = os.environ.get("ALARM_STORE_DIR") or \
+        os.path.abspath(os.path.join(script_dir, "..", "..", "alarm_store"))
+    os.makedirs(store_dir, exist_ok=True)
+
     print("[Sys] Unified uploader started (Multi-Threaded Mode)")
+    print(f"[Sys] 本地告警发件箱: {store_dir}")
 
-    server_uploader = ServerUploader(config)
-    dify_uploader = DifyUploader(config)
-
-    server_queue = config["redis"]["server_queue"]
     dify_queue = config["redis"]["dify_queue"]
 
+    # server 路径: 扫描本地发件箱补传(传成功即删), 不再走 Redis
+    forwarder = OutboxForwarder(config, store_dir)
+    dify_uploader = DifyUploader(config)
+
     t1 = threading.Thread(
-        target=queue_worker,
-        args=(config, server_queue, server_uploader),
-        name="ServerWorker",
+        target=forwarder.run,
+        name="OutboxForwarder",
         daemon=True,
     )
+    # dify 路径: 保持原样(Redis 队列消费)
     t2 = threading.Thread(
         target=queue_worker,
         args=(config, dify_queue, dify_uploader),

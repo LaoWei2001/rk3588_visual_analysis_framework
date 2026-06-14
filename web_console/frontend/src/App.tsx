@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate } from 're
 import AppsPage    from './pages/AppsPage'
 import EditorPage  from './pages/EditorPage'
 import LogsPage    from './pages/LogsPage'
+import RecordsPage from './pages/RecordsPage'
 import LoginPage   from './pages/LoginPage'
 import TerminalPage from './pages/TerminalPage'
 import { destroyAllTerminals } from './pages/terminalSession'
@@ -72,6 +73,7 @@ function AppShell() {
             <Route path="/"                  element={<AppsPage />} />
             <Route path="/editor/:appName"   element={<EditorPage />} />
             <Route path="/logs/:appName"     element={<LogsPage />} />
+            <Route path="/records/:appName"  element={<RecordsPage />} />
             <Route path="/terminal"        element={<TerminalPage />} />
           </Routes>
         </ErrorBoundary>

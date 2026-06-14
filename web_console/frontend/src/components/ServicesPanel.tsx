@@ -65,6 +65,7 @@ export default function ServicesPanel({ apps, onToast }: Props) {
   const [services, setServices] = useState<ServiceInfo[]>([])
   const [busy, setBusy] = useState<Record<string, boolean>>({})
   const [installApp, setInstallApp] = useState('')
+  const [rebindApp, setRebindApp] = useState<Record<string, string>>({})  // 每个服务在下拉里选中的目标 App(点「启动」时才绑定并启动)
   const [logKey, setLogKey] = useState<string | null>(null)
   const [logLines, setLogLines] = useState<string[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -153,6 +154,8 @@ export default function ServicesPanel({ apps, onToast }: Props) {
         const started = s.active_state !== 'inactive' && s.active_state !== 'unknown'
         // 需要走安装/修复：没装，或装了但单元工作目录失效（路径不存在/指向已删的旧目录）
         const needsInstall = !s.installed || !s.path_ok
+        // 停止时下拉默认选中当前绑定的 App；选好后点「启动」才绑定并启动
+        const rebindSel = rebindApp[s.key] ?? s.bound_app ?? (apps[0]?.name ?? '')
         return (
           <div key={s.key} style={row}>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -191,10 +194,21 @@ export default function ServicesPanel({ apps, onToast }: Props) {
                       {isBusy ? '…' : '■ 停止'}
                     </button>
                   ) : (
-                    <button style={btn('#22c55e')} disabled={isBusy}
-                      onClick={() => act(s.key, () => controlService(s.key, 'start'), `${s.label} 已启动`)}>
-                      {isBusy ? '…' : '▶ 启动'}
-                    </button>
+                    <>
+                      {apps.length > 1 && (
+                        <select style={sel} value={rebindSel} disabled={isBusy}
+                          title="选择要绑定的程序包，点「启动」后生效（选了不会立即启动）"
+                          onChange={e => setRebindApp(m => ({ ...m, [s.key]: e.target.value }))}>
+                          {apps.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
+                        </select>
+                      )}
+                      <button style={btn('#22c55e')} disabled={isBusy || !rebindSel}
+                        title="绑定到选中的程序包并启动"
+                        onClick={() => act(s.key, () => installService(s.key, rebindSel),
+                          rebindSel === s.bound_app ? `${s.label} 已启动` : `${s.label} 已绑定到 ${rebindSel} 并启动`)}>
+                        {isBusy ? '…' : '▶ 启动'}
+                      </button>
+                    </>
                   )}
                   <button style={ghost} onClick={() => { setLogKey(s.key); setLogLines([]) }}>≡ 日志</button>
                 </>

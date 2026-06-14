@@ -255,3 +255,29 @@ export const uploadApp = (
 export const deleteApp = (name: string) =>
   api.delete(`/apps/${name}`).then(r => r.data)
 
+// ── 本地告警发件箱(未上报记录: 平台还没收到、暂存在盒子里的) ──────────────────
+export interface AlarmRecord {
+  id: string
+  camera_id: number | null
+  alarm_type: string
+  snapTime: string
+  ts: number
+  has_raw: boolean
+}
+export interface RecordsResp {
+  records: AlarmRecord[]
+  count: number
+  total_bytes: number
+  cap_bytes: number
+}
+
+export const fetchRecords = (name: string, limit = 500) =>
+  api.get<RecordsResp>(`/apps/${name}/records`, { params: { limit } }).then(r => r.data)
+
+// <img> 无法带 Authorization 头，token 走查询参数（后端 auth_middleware 已放行）
+export const recordImageUrl = (name: string, id: string, raw = false): string => {
+  const token = useAuthStore.getState().token ?? ''
+  return `/api/apps/${encodeURIComponent(name)}/records/${encodeURIComponent(id)}/image`
+    + `?raw=${raw ? 1 : 0}&token=${encodeURIComponent(token)}`
+}
+

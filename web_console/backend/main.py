@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from routers import (apps, assets, auth, config_io, logs, ota_config, process,
-                     services, snapshot, stream, terminal, upload_config)
+                     records, services, snapshot, stream, terminal, upload_config)
 from services.auth_service import get_session
 from services.process_manager import recover_processes
 
@@ -73,6 +73,7 @@ app.include_router(config_io.router, prefix="/api")
 app.include_router(assets.router,    prefix="/api")
 app.include_router(process.router,   prefix="/api")
 app.include_router(snapshot.router,  prefix="/api")
+app.include_router(records.router,   prefix="/api")
 app.include_router(stream.router,    prefix="/api")
 app.include_router(upload_config.router, prefix="/api")
 app.include_router(ota_config.router,    prefix="/api")

@@ -380,6 +380,12 @@ export default function AppsPage() {
                   >≡ 日志</button>
 
                   <button
+                    className="action-btn log"
+                    onClick={() => navigate(`/records/${app.name}`)}
+                    title="本地暂存、还没传到平台的告警(断网时攒在盒子里的)"
+                  >🖼 未上报告警</button>
+
+                  <button
                     className="action-btn"
                     style={{ background: '#7f1d1d', color: '#fff' }}
                     disabled={!!busy[app.name]}

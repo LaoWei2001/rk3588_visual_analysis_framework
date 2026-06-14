@@ -17,7 +17,21 @@
 #include <pthread.h>
 #include <queue>
 #include <vector>
+#include <string>
 #include "../third_party/json/cJSON.h"
+
+/* 本地发件箱落盘所需 (POSIX, 板端 Linux 原生可用) */
+#include <cstdlib>     /* getenv, realpath */
+#include <cerrno>
+#include <climits>     /* PATH_MAX */
+#include <sys/time.h>  /* gettimeofday */
+#include <sys/stat.h>  /* mkdir, stat, S_ISREG */
+#include <sys/types.h>
+#include <dirent.h>    /* opendir/readdir */
+#include <unistd.h>    /* unlink */
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 /*======================== 任务结构 ========================*/
 struct AlarmTask
@@ -148,33 +162,200 @@ static int redis_reconnect(void)
     return 1;
 }
 
-static int build_and_push_server(const AlarmTask &task)
+/*======================== 本地告警发件箱 (server 路径: 落盘, 不再走 Redis) ========================
+ * 设计: 报警先无条件落地到本地"发件箱"目录(带框图 + 原图 + .json 元数据),
+ *       由 Python 上报微服务扫描该目录补传到平台, 传成功即删除。
+ *       断网 / 微服务没开时数据留在本地、网页可见; 通了就边传边删。
+ * 上限: 本地占用超过 ALARM_STORE_CAP_BYTES 时, 从最老的记录开始删, 保证新报警记得下。
+ * 注意: Dify 路径仍走 Redis(下方 build_and_push_dify 不变)。 */
+static const long long ALARM_STORE_CAP_BYTES = 100LL * 1024 * 1024; /* 100 MB */
+
+/* 递归创建目录 (mkdir -p)。成功返回 0。 */
+static int mkdir_p(const std::string &dir)
 {
+    std::string cur;
+    if (!dir.empty() && dir[0] == '/')
+        cur = "/";
+    size_t start = 0;
+    while (start < dir.size())
+    {
+        size_t pos = dir.find('/', start);
+        std::string seg = (pos == std::string::npos) ? dir.substr(start) : dir.substr(start, pos - start);
+        if (!seg.empty())
+        {
+            if (cur.empty())     cur = seg;
+            else if (cur == "/") cur += seg;
+            else                 cur += "/" + seg;
+            if (::mkdir(cur.c_str(), 0755) != 0 && errno != EEXIST)
+                return -1;
+        }
+        if (pos == std::string::npos)
+            break;
+        start = pos + 1;
+    }
+    return 0;
+}
+
+/* 取发件箱目录(env ALARM_STORE_DIR, 默认 ./alarm_store), 首次调用创建并打印绝对路径。
+ * 仅由唯一的上传线程调用, 静态初始化无需加锁。 */
+static const std::string &get_store_dir(void)
+{
+    static std::string dir;
+    static bool inited = false;
+    if (!inited)
+    {
+        const char *env = getenv("ALARM_STORE_DIR");
+        dir = (env && env[0]) ? env : "./alarm_store";
+        if (mkdir_p(dir) != 0)
+        {
+            fprintf(stderr, "[alarm_recorder] 无法创建发件箱目录 '%s' (errno=%d), 回退到 ./alarm_store\n",
+                    dir.c_str(), errno);
+            dir = "./alarm_store";
+            mkdir_p(dir);
+        }
+        char abs[PATH_MAX];
+        if (realpath(dir.c_str(), abs))
+            printf("[alarm_recorder] 本地告警发件箱: %s (上限 %lld MB)\n",
+                   abs, ALARM_STORE_CAP_BYTES / (1024 * 1024));
+        else
+            printf("[alarm_recorder] 本地告警发件箱: %s\n", dir.c_str());
+        inited = true;
+    }
+    return dir;
+}
+
+/* 删除一条记录的全部文件(json + 带框图 + 原图), 缺失忽略。 */
+static void delete_record_files(const std::string &dir, const std::string &base)
+{
+    ::unlink((dir + "/" + base + ".json").c_str());
+    ::unlink((dir + "/" + base + ".jpg").c_str());
+    ::unlink((dir + "/" + base + "_raw.jpg").c_str());
+}
+
+/* 发件箱超过上限时, 反复删最老的记录(按 .json 的 mtime), 直到回到上限内。 */
+static void enforce_store_cap(const std::string &dir)
+{
+    for (int guard = 0; guard < 1000000; ++guard)
+    {
+        long long total = 0;
+        std::string oldest_base;
+        time_t oldest_mtime = 0;
+        bool found = false;
+
+        DIR *d = opendir(dir.c_str());
+        if (!d)
+            return;
+        struct dirent *ent;
+        while ((ent = readdir(d)) != NULL)
+        {
+            if (ent->d_name[0] == '.')
+                continue;
+            std::string name = ent->d_name;
+            struct stat st;
+            if (stat((dir + "/" + name).c_str(), &st) != 0 || !S_ISREG(st.st_mode))
+                continue;
+            total += (long long)st.st_size;
+            if (name.size() > 5 && name.compare(name.size() - 5, 5, ".json") == 0)
+            {
+                if (!found || st.st_mtime < oldest_mtime)
+                {
+                    found = true;
+                    oldest_mtime = st.st_mtime;
+                    oldest_base = name.substr(0, name.size() - 5);
+                }
+            }
+        }
+        closedir(d);
+
+        if (total <= ALARM_STORE_CAP_BYTES || !found)
+            return;
+
+        delete_record_files(dir, oldest_base);
+        fprintf(stderr, "[alarm_recorder] 发件箱超过 %lld MB, 删除最老记录: %s\n",
+                ALARM_STORE_CAP_BYTES / (1024 * 1024), oldest_base.c_str());
+    }
+}
+
+/* 把一条 server 告警落地到本地发件箱: 写 带框图 + 原图 + .json 元数据(原子提交)。 */
+static int record_alarm_local(const AlarmTask &task)
+{
+    if (task.img_draw.empty())
+        return 0;
+    const std::string &dir = get_store_dir();
+
+    /* 唯一文件名: ch{cam}_{YYYYMMDD-HHMMSS}-{ms}_{seq} */
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    struct tm tmv;
+    time_t sec = tv.tv_sec;
+    localtime_r(&sec, &tmv);
+    char stamp[24];
+    strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tmv);
+    static unsigned long g_seq = 0; /* 仅上传线程访问, 无需加锁 */
+    unsigned long seq = ++g_seq;
+    char base[160];
+    snprintf(base, sizeof(base), "ch%d_%s-%03ld_%lu",
+             task.camera_id, stamp, (long)(tv.tv_usec / 1000), seq);
+
+    std::string path_draw = dir + "/" + base + ".jpg";
+    std::string path_raw  = dir + "/" + base + "_raw.jpg";
+    std::string path_json = dir + "/" + base + ".json";
+    std::string path_tmp  = path_json + ".tmp";
+
+    std::vector<int> jpg_params = {cv::IMWRITE_JPEG_QUALITY, 90};
+    if (!cv::imwrite(path_draw, task.img_draw, jpg_params))
+    {
+        fprintf(stderr, "[alarm_recorder] 写图失败: %s\n", path_draw.c_str());
+        return 0;
+    }
+    bool have_raw = !task.img_raw.empty() && cv::imwrite(path_raw, task.img_raw, jpg_params);
+
     cJSON *root = cJSON_CreateObject();
     if (!root)
+    {
+        ::unlink(path_draw.c_str());
+        if (have_raw) ::unlink(path_raw.c_str());
         return 0;
-
-    std::string b64_draw = mat_to_base64(task.img_draw);
-    std::string b64_raw = mat_to_base64(task.img_raw);
-
-    cJSON_AddNumberToObject(root, "timestamp", (double)time(NULL));
+    }
     cJSON_AddNumberToObject(root, "camera_id", task.camera_id);
     cJSON_AddStringToObject(root, "alarm_type", task.alarm_type.c_str());
     cJSON_AddStringToObject(root, "snapTime", task.snap_time.c_str());
     cJSON_AddStringToObject(root, "endTime", task.snap_time.c_str());
-    cJSON_AddStringToObject(root, "base64Data", b64_draw.c_str());
-    cJSON_AddStringToObject(root, "base64DataRaw", b64_raw.c_str());
-    cJSON_AddStringToObject(root, "server_url", task.server_url.c_str()); /* 方案2: 地址随消息走 */
+    cJSON_AddStringToObject(root, "server_url", task.server_url.c_str()); /* 方案2: 地址随记录走 */
+    cJSON_AddStringToObject(root, "img", (std::string(base) + ".jpg").c_str());
+    cJSON_AddStringToObject(root, "img_raw", have_raw ? (std::string(base) + "_raw.jpg").c_str() : "");
+    cJSON_AddNumberToObject(root, "ts", (double)time(NULL));
 
     char *json_str = cJSON_PrintUnformatted(root);
     int ok = 0;
     if (json_str)
     {
-        ok = redis_rpush("server_queue", json_str, strlen(json_str));
+        FILE *fp = fopen(path_tmp.c_str(), "wb");
+        if (fp)
+        {
+            fwrite(json_str, 1, strlen(json_str), fp);
+            fclose(fp);
+            if (rename(path_tmp.c_str(), path_json.c_str()) == 0) /* 原子提交: .json 出现即代表整条记录就绪 */
+                ok = 1;
+            else
+                ::unlink(path_tmp.c_str());
+        }
         cJSON_free(json_str);
     }
     cJSON_Delete(root);
-    return ok;
+
+    if (!ok)
+    {
+        ::unlink(path_draw.c_str());
+        if (have_raw) ::unlink(path_raw.c_str());
+        fprintf(stderr, "[alarm_recorder] 写元数据失败, 已回滚: %s\n", base);
+        return 0;
+    }
+
+    enforce_store_cap(dir);
+    printf("[alarm_recorder] 已存本地告警 ch%d type=%s -> %s.jpg\n",
+           task.camera_id, task.alarm_type.c_str(), base);
+    return 1;
 }
 
 static int build_and_push_dify(const DifyTask &task)
@@ -237,8 +418,8 @@ static void *upload_worker_thread(void *arg)
 
         if (has_alarm && !alarm_task.img_draw.empty())
         {
-            if (!build_and_push_server(alarm_task))
-                fprintf(stderr, "[alarm_uploader] WARNING: failed to push alarm for camera %d\n",
+            if (!record_alarm_local(alarm_task))
+                fprintf(stderr, "[alarm_recorder] WARNING: 落盘告警失败 (camera %d)\n",
                         alarm_task.camera_id);
         }
 
