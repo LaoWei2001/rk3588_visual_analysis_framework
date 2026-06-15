@@ -11,15 +11,40 @@
   top: 56px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 80%;
   padding: 8px 20px;
   border-radius: 20px;
   font-size: 13px;
+  line-height: 1.5;
   z-index: 9000;
-  pointer-events: none;
+  pointer-events: none;   /* 整体不挡画布；下方 close 按钮单独重新启用点击 */
   animation: fadeUp 0.2s ease;
 }
 .editor-toast.ok  { background: #14532d; color: #86efac; border: 1px solid #16a34a; }
 .editor-toast.err { background: #7f1d1d; color: #fca5a5; border: 1px solid #ef4444; }
+.editor-toast-close {
+  pointer-events: auto;   /* 父级 pointer-events:none，子级重新启用即可点击关闭 */
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.75;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.editor-toast-close:hover { opacity: 1; }
+
+/* 工具栏「未保存」标记 */
+.tb-dirty {
+  font-size: 12px;
+  font-weight: 600;
+  color: #fbbf24;
+  white-space: nowrap;
+}
 
 @keyframes fadeUp {
   from { transform: translateX(-50%) translateY(6px); opacity: 0; }

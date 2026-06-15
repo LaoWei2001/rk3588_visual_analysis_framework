@@ -418,7 +418,8 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
     : 'crosshair'
 
   return (
-    <div className="roi-overlay" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
+    // 点击空白遮罩不关闭——避免画/编辑到一半误触外侧丢失未保存的区域；只能用 ✕ / 保存 关闭。
+    <div className="roi-overlay">
       <div className="roi-dialog">
         {/* Header */}
         <div className="roi-hdr">

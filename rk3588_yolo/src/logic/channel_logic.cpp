@@ -36,6 +36,150 @@ int ChannelContext::channel_has_logic(int chnId, const char *logicName) const
     return app_ctrl_get_logic_name(chnId) == std::string(logicName) ? 1 : 0;
 }
 
+/*======================== ChannelContext 便捷查询方法实现 ========================
+ * 这些方法原先内联在 channel_logic.h 的结构体定义里, 现统一挪到此处。好处:
+ *   - 头文件回归「纯 API 清单」, 一眼看清 ctx 能干啥;
+ *   - 改任何函数体只需重编本文件, 不再波及 30+ 个 logic_*.cpp (原先内联时全得重编)。
+ * 这些都是每帧级调用, 内部 string 比较 / pointPolygonTest 远重于一次函数调用,
+ * 因此不再跨编译单元内联也无可测量的性能影响。
+ * 注意: 静态成员 point_box_in_poly 与带默认参数的 render_params 在此定义时,
+ *       均不重复 static / 默认实参 (默认实参只写在头文件声明处)。 */
+
+int ChannelContext::has_target(const char *label) const
+{
+    if (!results) return 0;
+    std::string s(label);
+    for (const auto &r : *results)
+        if (r.label == s) return 1;
+    return 0;
+}
+
+int ChannelContext::has_target_in_roi(const char *label) const
+{
+    if (!results) return 0;
+    if (!roi || roi->empty()) return has_target(label);
+    std::string s(label);
+    for (const auto &r : *results)
+    {
+        if (r.label == s)
+        {
+            cv::Point center(r.box.x + r.box.width / 2, r.box.y + r.box.height / 2);
+            if (cv::pointPolygonTest(*roi, center, false) >= 0) return 1;
+        }
+    }
+    return 0;
+}
+
+int ChannelContext::is_in_roi(const cv::Rect &box) const
+{
+    if (!roi || roi->empty()) return 1;
+    cv::Point center(box.x + box.width / 2, box.y + box.height / 2);
+    return (cv::pointPolygonTest(*roi, center, false) >= 0) ? 1 : 0;
+}
+
+int ChannelContext::target_count(const char *label) const
+{
+    if (!results) return 0;
+    std::string s(label);
+    int n = 0;
+    for (const auto &r : *results)
+        if (r.label == s) ++n;
+    return n;
+}
+
+int ChannelContext::roi_count() const
+{
+    return rois ? static_cast<int>(rois->size()) : 0;
+}
+
+const RoiZone *ChannelContext::roi_at(int idx) const
+{
+    return (rois && idx >= 0 && idx < static_cast<int>(rois->size())) ? &(*rois)[idx] : nullptr;
+}
+
+const std::vector<cv::Point> *ChannelContext::roi_polygon_at(int idx) const
+{
+    const RoiZone *z = roi_at(idx);
+    return z ? &z->polygon : nullptr;
+}
+
+const char *ChannelContext::roi_name_at(int idx) const
+{
+    const RoiZone *z = roi_at(idx);
+    return z ? z->name.c_str() : "";
+}
+
+const RoiZone *ChannelContext::roi_by_name(const char *name) const
+{
+    if (!rois || !name) return nullptr;
+    std::string s(name);
+    for (const auto &z : *rois)
+        if (z.name == s) return &z;
+    return nullptr;
+}
+
+int ChannelContext::point_box_in_poly(const std::vector<cv::Point> *poly, const cv::Rect &box)
+{
+    if (!poly || poly->size() < 3) return 1;
+    cv::Point c(box.x + box.width / 2, box.y + box.height / 2);
+    return cv::pointPolygonTest(*poly, c, false) >= 0 ? 1 : 0;
+}
+
+int ChannelContext::is_in_roi_idx(const cv::Rect &box, int idx) const
+{
+    const std::vector<cv::Point> *poly = roi_polygon_at(idx);
+    return (poly && poly->size() >= 3) ? point_box_in_poly(poly, box) : 0;
+}
+
+int ChannelContext::target_count_in_roi(const char *label, int idx) const
+{
+    const std::vector<cv::Point> *poly = roi_polygon_at(idx);
+    if (!results || !poly || poly->size() < 3) return 0;
+    std::string s(label);
+    int n = 0;
+    for (const auto &r : *results)
+        if (r.label == s && point_box_in_poly(poly, r.box)) ++n;
+    return n;
+}
+
+int ChannelContext::target_count_in_roi_named(const char *label, const char *name) const
+{
+    const RoiZone *z = roi_by_name(name);
+    if (!results || !z || z->polygon.size() < 3) return 0;
+    std::string s(label);
+    int n = 0;
+    for (const auto &r : *results)
+        if (r.label == s && point_box_in_poly(&z->polygon, r.box)) ++n;
+    return n;
+}
+
+int ChannelContext::has_target_in_roi_idx(const char *label, int idx) const
+{
+    return target_count_in_roi(label, idx) > 0;
+}
+
+cv::Mat ChannelContext::snapshot() const
+{
+    return frame ? frame->clone() : cv::Mat();
+}
+
+RenderParams ChannelContext::render_params(int64_t result_age_ms) const
+{
+    RenderParams p;
+    p.chnId         = chnId;
+    p.srcWidth      = frame ? frame->cols : 0;
+    p.srcHeight     = frame ? frame->rows : 0;
+    p.inputW        = p.srcWidth;
+    p.inputH        = p.srcHeight;
+    p.disp_fps      = disp_fps;
+    p.infer_fps     = infer_fps;
+    p.result_age_ms = result_age_ms;
+    p.roi_zones     = rois;
+    p.results       = results;
+    p.draw_cmds     = draw_cmds;
+    return p;
+}
+
 /*======================== 绘制辅助函数实现 ========================*/
 void draw_rect(ChannelContext *ctx, const cv::Rect &rect,
                const cv::Scalar &color, int thickness,
@@ -146,13 +290,6 @@ void register_logic(const char *name, ChannelLogicFunc func)
         g_logic_count++;
     }
 }
-
-/* 逻辑注册已改为各 logic 文件自注册(REGISTER_LOGIC), 在 main() 之前即全部就绪。
- * 这两个函数保留空实现, 仅为兼容 analyzer_init/analyzer_deinit 的既有调用。
- * 切勿在此清零 g_logic_count 或清空 g_logic_registry: 静态期的自注册只发生一次,
- * 一旦清空便无法恢复, 会导致 analyzer 重启后所有通道退化为空逻辑。 */
-void channel_logic_init(void) {}
-void channel_logic_deinit(void) {}
 
 ChannelLogicFunc channel_logic_get(const char *name)
 {

@@ -12,7 +12,7 @@
 | `analyzer_internal.h` | 各 .cpp 共享的内部状态（显示队列、推理标志等），不对外暴露 |
 | `frame_inlet.cpp` | FPS 节流决策（是否送推理）、首帧黑图兜底、帧间隔 `dt_ms` 计算 |
 | `rga_convert.cpp` | RGA 硬件格式转换：NV12/NV21 → BGR，DMA-BUF 零拷贝导入 |
-| `frame_pipeline.h / frame_pipeline.cpp` | RGA 硬件缩放：原始帧 → tile 尺寸（显示路径），`commitImgtoDispBufMap` |
+| `frame_pipeline.h` | RGA 转换与显示提交的公共接口声明；实现分散在 `rga_convert.cpp` 与 `display_render.cpp` |
 | `algoProcess.h / algoProcess.cpp` | NPU 推理队列管理：多路任务队列、worker 线程池、帧-结果配对缓冲区 |
 | `algo_engine.cpp / algo_internal.h` | 推理引擎内部实现：模型工厂、RKNN 上下文管理 |
 | `tracker.h / tracker.cpp` | SORT 目标跟踪：IoU 匹配 + 卡尔曼滤波，填入 `AlgoResult::track_id` |
@@ -36,7 +36,7 @@ videoOutHandle()               ← 帧处理总入口（analyzer.cpp）
     ├─ FPS 节流检查（基于 steady_clock）
     │    └─ 未到推理时间 → 只送显示队列，跳过 RGA+推理
     │
-    ├─ RGA 转换（frame_pipeline.cpp）
+    ├─ RGA 转换（rga_convert.cpp）
     │    └─ NV12/NV21 → BGR 640×640，DMA-BUF 零拷贝
     │
     ├─ process_channel_results()    ← 取推理结果 + 调用 logic

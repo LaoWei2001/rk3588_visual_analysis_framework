@@ -113,6 +113,8 @@ export default function EditorPage() {
   const setAppName     = useEditorStore(s => s.setAppName)
   const loadAssets     = useEditorStore(s => s.loadAssets)
   const setGlobalMaxFps = useEditorStore(s => s.setGlobalMaxFps)
+  const dirty          = useEditorStore(s => s.dirty)       // 有未保存改动（也供侧边栏导航拦截）
+  const setDirty       = useEditorStore(s => s.setDirty)
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
@@ -130,6 +132,13 @@ export default function EditorPage() {
   } | null>(null)
   useEffect(() => { nodesRef.current = nodes }, [nodes])
   useEffect(() => { edgesRef.current = edges }, [edges])
+
+  // ── 未保存改动追踪 ──
+  // savedSigRef: 上次「保存/加载」时的画布签名；pendingMarkClean: 下次状态稳定后把当前签名设为干净基线
+  const savedSigRef        = useRef<string>('')
+  const pendingMarkClean   = useRef(true)
+  const dirtyRef           = useRef(false)
+  const toastTimer         = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [saving,         setSaving]        = useState(false)
   const [toast,          setToast]         = useState<{ msg: string; ok: boolean } | null>(null)
@@ -185,6 +194,17 @@ export default function EditorPage() {
   }, [globalSettings.max_fps, setGlobalMaxFps])
 
   useEffect(() => { loadConsole() }, [loadConsole])
+
+  // 有未保存改动时，拦截「关闭标签页 / 刷新 / 浏览器后退」——弹原生确认，防止误触丢失配置
+  useEffect(() => {
+    if (!dirty) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [dirty])
+
+  // 离开编辑器（卸载）时清掉全局 dirty 标志，避免在别的页面残留导航拦截
+  useEffect(() => () => { setDirty(false) }, [setDirty])
 
   useEffect(() => {
     if (!appName) return
@@ -261,12 +281,27 @@ export default function EditorPage() {
     setGlobalSettings(gs)
     // 加载/导入新配置 → 重置撤销历史（每份配置各自独立的历史）
     histRef.current = { stack: [], idx: -1, restoring: false }
+    // 刚加载/导入/新建的配置 = 干净状态：下次状态稳定后把它设为基线（dirty=false）
+    pendingMarkClean.current = true
     setTimeout(() => rfInstance?.fitView({ padding: 0.12, duration: 300 }), 50)
   }
 
+  const dismissToast = () => {
+    if (toastTimer.current) { clearTimeout(toastTimer.current); toastTimer.current = null }
+    setToast(null)
+  }
+
   const showToast = (msg: string, ok = true) => {
+    if (toastTimer.current) { clearTimeout(toastTimer.current); toastTimer.current = null }
     setToast({ msg, ok })
-    setTimeout(() => setToast(null), 3000)
+    // 成功提示 3s 自动消失；失败提示常驻，直到用户点 ✕ 关闭，避免错过「保存失败」等原因
+    if (ok) toastTimer.current = setTimeout(() => { setToast(null); toastTimer.current = null }, 3000)
+  }
+
+  // 把当前画布标记为「已保存」（保存 / 另存成功后调用；此时画布未变，refs 即当前值）
+  const markClean = () => {
+    savedSigRef.current = histSig(makeHistorySnap())
+    if (dirtyRef.current) { dirtyRef.current = false; setDirty(false) }
   }
 
   // ── Auto-save node positions after user drag (debounced 600 ms) ──
@@ -435,6 +470,16 @@ export default function EditorPage() {
   // 防抖记录历史：状态稳定 400ms 后入栈（自然合并连续拖拽/输入）；跳过 restore 自身引发的变更
   useEffect(() => {
     const h = histRef.current
+    // ── 未保存改动判定：与「上次保存/加载」的签名比对（立即更新，含撤销/恢复后）──
+    const curSig = histSig(makeHistorySnap())
+    if (pendingMarkClean.current) {
+      pendingMarkClean.current = false
+      savedSigRef.current = curSig
+      if (dirtyRef.current) { dirtyRef.current = false; setDirty(false) }
+    } else {
+      const nd = curSig !== savedSigRef.current
+      if (nd !== dirtyRef.current) { dirtyRef.current = nd; setDirty(nd) }
+    }
     if (h.restoring) { h.restoring = false; return }
     const timer = setTimeout(() => {
       const snap = makeHistorySnap()
@@ -467,7 +512,11 @@ export default function EditorPage() {
 
   // ── Ctrl + C / X / V / Z / Y 快捷键 ──
   useEffect(() => {
-    const flash = (msg: string) => { setToast({ msg, ok: true }); window.setTimeout(() => setToast(null), 1500) }
+    const flash = (msg: string) => {
+      if (toastTimer.current) clearTimeout(toastTimer.current)
+      setToast({ msg, ok: true })
+      toastTimer.current = setTimeout(() => { setToast(null); toastTimer.current = null }, 1500)
+    }
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return
       // 在输入框/下拉里打字时不抢快捷键
@@ -618,6 +667,7 @@ export default function EditorPage() {
         // 副本/非默认配置：只写该文件（ROI 已内嵌进 config，自带自足，不动 config.json）
         await saveConfigFile(appName, currentFile, result.config)
       }
+      markClean()
       showToast(`保存成功 ✓（${cfgBase(currentFile)}）`)
     } catch (e: unknown) {
       showToast(`保存失败: ${e instanceof Error ? e.message : String(e)}`, false)
@@ -642,6 +692,7 @@ export default function EditorPage() {
     try {
       const r = await saveConfigFile(appName, path, result.config)
       setCurrentFile(r.path)                       // 切到新文件：后续「保存」写到它
+      markClean()                                  // 副本内容 = 当前画布 → 标记为已保存
       showToast(`已另存为 ${fname}，现在编辑的是这份副本`)
       try { setImportFiles(await fetchConfigFiles(appName)) } catch { /* 列表刷新失败不致命 */ }
     } catch (e: unknown) {
@@ -666,6 +717,12 @@ export default function EditorPage() {
     showToast(`已导出 ${fileName}`)
   }
 
+  // 返回程序管理：有未保存改动先确认，避免误点丢失配置
+  const handleBack = () => {
+    if (dirty && !window.confirm('有未保存的改动，确定离开编辑器？未保存的修改将丢失。')) return
+    navigate('/')
+  }
+
   const nodeColor = (n: Node) => {
     if (n.type === 'stream') return '#2563eb'
     if (n.type === 'model')  return '#16a34a'
@@ -676,7 +733,14 @@ export default function EditorPage() {
 
   return (
     <div className="editor-page">
-      {toast && <div className={`editor-toast ${toast.ok ? 'ok' : 'err'}`}>{toast.msg}</div>}
+      {toast && (
+        <div className={`editor-toast ${toast.ok ? 'ok' : 'err'}`}>
+          <span>{toast.msg}</span>
+          {!toast.ok && (
+            <button className="editor-toast-close" onClick={dismissToast} title="关闭">✕</button>
+          )}
+        </div>
+      )}
 
       {showServiceCfg && appName && (
         <ServiceConfigModal appName={appName} onClose={() => setShowServiceCfg(false)} onToast={showToast} />
@@ -707,10 +771,11 @@ export default function EditorPage() {
 
       {/* Toolbar */}
       <div className="editor-toolbar">
-        <button className="tb-btn" onClick={() => navigate('/')}>← 返回</button>
+        <button className="tb-btn" onClick={handleBack}>← 返回</button>
         <span className="tb-title">
           {appName ? `配置: ${appName}` : '流程编辑器'}
           {appName && <span className="tb-file" title={`当前编辑的文件：${currentFile}`}>📄 {cfgBase(currentFile)}</span>}
+          {dirty && <span className="tb-dirty" title="有未保存的改动">● 未保存</span>}
         </span>
         <div className="tb-actions">
           <button className="tb-btn" onClick={() => setShowServiceCfg(true)}>⚙ 服务配置</button>

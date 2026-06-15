@@ -7,7 +7,17 @@
  * - 显示 tile 布局计算
  * - 显示缓冲区写入 (双缓冲)
  *
- * 注意: RGA 部分代码禁止修改内部逻辑, 盒子容易死机!
+ * 实现分布 (本 .h 的声明分散在两个 .cpp 中; 原空壳 frame_pipeline.cpp 已删除):
+ *   rga_convert.cpp    — RGA 硬件转换 + YOLO 输入帧准备
+ *                        (rga_convert_resize / rga_import_src_fd /
+ *                         rga_convert_resize_handle / convertToYoloInput / rgaFmt)
+ *   display_render.cpp — 显示 tile 布局 + framebuffer 提交
+ *                        (tile_x / tile_y / tile_width / tile_height /
+ *                         calcBufMapOffset / commitImgtoDispBufMap)
+ *
+ * 注意: RGA 部分代码禁止修改内部逻辑, 盒子容易死机! 硬性约束 (在 rga_convert.cpp 中):
+ *   opt.core = IM_SCHEDULER_RGA3_CORE0 | IM_SCHEDULER_RGA3_CORE1
+ *   使用 RGA2 或第三核心会硬崩溃, 只能断电恢复。
  */
 #pragma once
 

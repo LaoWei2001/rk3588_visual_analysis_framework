@@ -104,7 +104,6 @@ int analyzer_init(void)
     g_pCtrl->inputH = algorithm_get_input_h();
 
     load_roi_zones_from_config();
-    channel_logic_init();
     global_logic_start_all(g_pCtrl->config.global_logics);
 
     /* 设置各通道初始 logic 名称（热重载时由 config_monitor 更新）*/
@@ -140,7 +139,6 @@ void analyzer_deinit(void)
 
     global_logic_stop_all();
     trackers_deinit();
-    channel_logic_deinit();
 }
 
 /*======================== 显示线程辅助（供 main 调用）========================*/

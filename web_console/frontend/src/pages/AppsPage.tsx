@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
-import { fetchApps, fetchLogTail, startApp, stopApp, streamUrl, uploadApp, deleteApp, AppInfo } from '../api/client'
+import { fetchApps, fetchLogTail, startApp, stopApp, streamUrl, uploadApp, deleteApp, fetchConfig, loadConfigFile, AppInfo } from '../api/client'
 import { useAuthStore } from '../store/authStore'
 import ServicesPanel from '../components/ServicesPanel'
 import './AppsPage.css'
@@ -41,10 +41,24 @@ export default function AppsPage() {
   const logWsRef  = useRef<WebSocket | null>(null)
   const logBoxRef = useRef<HTMLDivElement>(null)
   const fileRef   = useRef<HTMLInputElement>(null)
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [uploading, setUploading] = useState<{ name: string; pct: number } | null>(null)
   const navigate = useNavigate()
 
-  const openView = (name: string) => { setStreamErr(false); setStreamLogs([]); setViewNonce(Date.now()); setViewApp(name) }
+  // 打开实时画面前先检查该程序是否开启了 RTSP 推流——没开则必然黑屏，提前提示而不是让用户等失败。
+  const openView = async (app: AppInfo) => {
+    try {
+      const running = app.config && app.config !== 'config.json' ? `assets/${app.config}` : null
+      const cfg = running ? await loadConfigFile(app.name, running) : await fetchConfig(app.name)
+      const g = (cfg && ((cfg as Record<string, unknown>).global ?? cfg)) as Record<string, unknown> | null
+      // 读到配置且明确未开启才拦截；读不到（异常/旧配置）一律放行，避免误拦正常推流
+      if (g && !Number(g.enable_rtsp ?? 0)) {
+        showToast(`${app.name} 未开启 RTSP 推流，无法显示实时画面。请到「配置 → 全局配置」勾选「RTSP 推流」并重启程序。`, 'err')
+        return
+      }
+    } catch { /* 配置读取失败：不拦截，照常打开（仍会回退到弹窗内的原有提示） */ }
+    setStreamErr(false); setStreamLogs([]); setViewNonce(Date.now()); setViewApp(app.name)
+  }
 
   // Refs for stale-closure-safe access inside setInterval
   const prevRunningRef  = useRef<Set<string>>(new Set())
@@ -118,9 +132,16 @@ export default function AppsPage() {
     return () => { ws.close(); logWsRef.current = null }
   }, [viewApp])
 
+  const dismissToast = () => {
+    if (toastTimer.current) { clearTimeout(toastTimer.current); toastTimer.current = null }
+    setToast(null)
+  }
+
   const showToast = (msg: string, type: 'ok' | 'err' = 'ok') => {
+    if (toastTimer.current) { clearTimeout(toastTimer.current); toastTimer.current = null }
     setToast({ msg, type })
-    setTimeout(() => setToast(null), 3000)
+    // 成功提示 3s 自动消失；错误提示常驻，直到用户点 ✕ 关闭，避免一扭头就错过失败原因
+    if (type === 'ok') toastTimer.current = setTimeout(() => { setToast(null); toastTimer.current = null }, 3000)
   }
 
   const handleStart = async (name: string, config?: string) => {
@@ -193,7 +214,14 @@ export default function AppsPage() {
           style={{ display: 'none' }} onChange={handleUploadFile} />
       </div>
 
-      {toast && <div className={`toast ${toast.type}`}>{toast.msg}</div>}
+      {toast && (
+        <div className={`toast ${toast.type}`}>
+          <span className="toast-msg">{toast.msg}</span>
+          {toast.type === 'err' && (
+            <button className="toast-close" onClick={dismissToast} title="关闭">✕</button>
+          )}
+        </div>
+      )}
       {uploading && (
         <div className="toast ok">⬆ 上传中 {uploading.name} … {uploading.pct}%</div>
       )}
@@ -366,7 +394,7 @@ export default function AppsPage() {
                     className="action-btn view"
                     disabled={app.status !== 'running'}
                     title={app.status === 'running' ? '查看实时画面' : '程序运行后才能查看'}
-                    onClick={() => openView(app.name)}
+                    onClick={() => openView(app)}
                   >👁 实时画面</button>
 
                   <button

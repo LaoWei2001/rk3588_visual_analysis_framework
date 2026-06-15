@@ -130,47 +130,10 @@ struct ChannelContext
     float disp_fps;
 
     /* ===== 便捷查询 (本通道) ===== */
-    int has_target(const char *label) const
-    {
-        if (!results) return 0;
-        std::string s(label);
-        for (const auto &r : *results)
-            if (r.label == s) return 1;
-        return 0;
-    }
-
-    int has_target_in_roi(const char *label) const
-    {
-        if (!results) return 0;
-        if (!roi || roi->empty()) return has_target(label);
-        std::string s(label);
-        for (const auto &r : *results)
-        {
-            if (r.label == s)
-            {
-                cv::Point center(r.box.x + r.box.width / 2, r.box.y + r.box.height / 2);
-                if (cv::pointPolygonTest(*roi, center, false) >= 0) return 1;
-            }
-        }
-        return 0;
-    }
-
-    int is_in_roi(const cv::Rect &box) const
-    {
-        if (!roi || roi->empty()) return 1;
-        cv::Point center(box.x + box.width / 2, box.y + box.height / 2);
-        return (cv::pointPolygonTest(*roi, center, false) >= 0) ? 1 : 0;
-    }
-
-    int target_count(const char *label) const
-    {
-        if (!results) return 0;
-        std::string s(label);
-        int n = 0;
-        for (const auto &r : *results)
-            if (r.label == s) ++n;
-        return n;
-    }
+    int has_target(const char *label) const;          /* results 中是否有 label 类目标 */
+    int has_target_in_roi(const char *label) const;   /* 兼容字段 roi 内是否有 label 目标(无 roi → 同 has_target) */
+    int is_in_roi(const cv::Rect &box) const;          /* 框中心是否落在兼容字段 roi 内(无 roi → 1) */
+    int target_count(const char *label) const;        /* results 中 label 类目标的数量 */
 
     /* ===== 多 ROI 便捷查询 (本通道) =====
      * 一个通道可配置多个 ROI 区域(在网页 ROI 节点上各画一个、各取个名字)。
@@ -178,101 +141,38 @@ struct ChannelContext
      * 所有多边形顶点都是模型输入坐标系, 与检测框同坐标系。 */
 
     /* 本通道有效 ROI 区域数量 */
-    int roi_count() const { return rois ? static_cast<int>(rois->size()) : 0; }
+    int roi_count() const;
 
     /* 第 idx 个区域(越界返回 nullptr) */
-    const RoiZone *roi_at(int idx) const
-    {
-        return (rois && idx >= 0 && idx < static_cast<int>(rois->size())) ? &(*rois)[idx] : nullptr;
-    }
+    const RoiZone *roi_at(int idx) const;
 
     /* 第 idx 个区域的多边形(越界返回 nullptr) */
-    const std::vector<cv::Point> *roi_polygon_at(int idx) const
-    {
-        const RoiZone *z = roi_at(idx);
-        return z ? &z->polygon : nullptr;
-    }
+    const std::vector<cv::Point> *roi_polygon_at(int idx) const;
 
     /* 第 idx 个区域的名字(越界或无名返回 ""，永不为 nullptr) */
-    const char *roi_name_at(int idx) const
-    {
-        const RoiZone *z = roi_at(idx);
-        return z ? z->name.c_str() : "";
-    }
+    const char *roi_name_at(int idx) const;
 
     /* 按名字取区域(找不到返回 nullptr) */
-    const RoiZone *roi_by_name(const char *name) const
-    {
-        if (!rois || !name) return nullptr;
-        std::string s(name);
-        for (const auto &z : *rois)
-            if (z.name == s) return &z;
-        return nullptr;
-    }
+    const RoiZone *roi_by_name(const char *name) const;
 
     /* 某框中心是否落在指定多边形内(多边形不足 3 点 → 视为"全屏", 返回 1) */
-    static int point_box_in_poly(const std::vector<cv::Point> *poly, const cv::Rect &box)
-    {
-        if (!poly || poly->size() < 3) return 1;
-        cv::Point c(box.x + box.width / 2, box.y + box.height / 2);
-        return cv::pointPolygonTest(*poly, c, false) >= 0 ? 1 : 0;
-    }
+    static int point_box_in_poly(const std::vector<cv::Point> *poly, const cv::Rect &box);
 
     /* 某框中心是否落在第 idx 个区域内(区域不存在 → 0) */
-    int is_in_roi_idx(const cv::Rect &box, int idx) const
-    {
-        const std::vector<cv::Point> *poly = roi_polygon_at(idx);
-        return (poly && poly->size() >= 3) ? point_box_in_poly(poly, box) : 0;
-    }
+    int is_in_roi_idx(const cv::Rect &box, int idx) const;
 
     /* 统计第 idx 个区域内某类别目标数量(区域不存在 → 0) */
-    int target_count_in_roi(const char *label, int idx) const
-    {
-        const std::vector<cv::Point> *poly = roi_polygon_at(idx);
-        if (!results || !poly || poly->size() < 3) return 0;
-        std::string s(label);
-        int n = 0;
-        for (const auto &r : *results)
-            if (r.label == s && point_box_in_poly(poly, r.box)) ++n;
-        return n;
-    }
+    int target_count_in_roi(const char *label, int idx) const;
 
     /* 统计名为 name 的区域内某类别目标数量(无此区域 → 0) */
-    int target_count_in_roi_named(const char *label, const char *name) const
-    {
-        const RoiZone *z = roi_by_name(name);
-        if (!results || !z || z->polygon.size() < 3) return 0;
-        std::string s(label);
-        int n = 0;
-        for (const auto &r : *results)
-            if (r.label == s && point_box_in_poly(&z->polygon, r.box)) ++n;
-        return n;
-    }
+    int target_count_in_roi_named(const char *label, const char *name) const;
 
     /* 第 idx 个区域内是否有某类别目标 */
-    int has_target_in_roi_idx(const char *label, int idx) const
-    {
-        return target_count_in_roi(label, idx) > 0;
-    }
+    int has_target_in_roi_idx(const char *label, int idx) const;
 
-    cv::Mat snapshot() const { return frame ? frame->clone() : cv::Mat(); }
+    cv::Mat snapshot() const;
 
-    RenderParams render_params(int64_t result_age_ms = 0) const
-    {
-        RenderParams p;
-        p.chnId         = chnId;
-        p.srcWidth      = frame ? frame->cols : 0;
-        p.srcHeight     = frame ? frame->rows : 0;
-        p.inputW        = p.srcWidth;
-        p.inputH        = p.srcHeight;
-        p.disp_fps      = disp_fps;
-        p.infer_fps     = infer_fps;
-        p.result_age_ms = result_age_ms;
-        p.roi_zones     = rois;
-        p.results       = results;
-        p.draw_cmds     = draw_cmds;
-        return p;
-    }
+    RenderParams render_params(int64_t result_age_ms = 0) const;
 
     /* ===== 跨通道安全取数 (本通道 或 任意其它通道) =====
      *
@@ -326,11 +226,6 @@ struct LogicEntry
     ChannelLogicFunc func;
 };
 
-/* channel_logic_init / deinit: 历史接口, 保留以兼容 analyzer_init/deinit 的调用。
- * 逻辑注册现已改为各 logic 文件「自注册」(见下方 REGISTER_LOGIC), 在 main() 之前完成,
- * 故这两个函数为空实现; 切勿在其中清空注册表, 否则会抹掉静态期已完成的自注册。 */
-void channel_logic_init(void);
-void channel_logic_deinit(void);
 ChannelLogicFunc channel_logic_get(const char *name);
 
 /** @brief 注册一个 logic 到分发表 (同名则覆盖)。一般不直接调用, 用 REGISTER_LOGIC 宏。 */
@@ -344,7 +239,7 @@ void register_logic(const char *name, ChannelLogicFunc func);
  * 原理是构造一个文件作用域的静态对象, 其构造函数调用 register_logic。
  *
  * 好处: 新增一个 logic 只需新增一个 .cpp 文件; 删除一个 logic 只需删掉对应 .cpp 文件,
- *       无需改动 channel_logic.cpp / channel_logic_init() 或任何其它文件 —— 耦合最低。
+ *       无需改动 channel_logic.cpp 或任何其它文件 —— 耦合最低。
  */
 struct LogicRegistrar
 {
