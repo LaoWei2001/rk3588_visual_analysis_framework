@@ -89,6 +89,18 @@ struct RenderParams
     const std::vector<DrawCommand> *draw_cmds = nullptr;
 };
 
+/*======================== 帧时间 (年月日时分秒, 由 ctx->datetime() 拆出) ========================*/
+struct FrameTime
+{
+    int year;    /* 如 2026 */
+    int month;   /* 1~12 */
+    int day;     /* 1~31 */
+    int hour;    /* 0~23 */
+    int minute;  /* 0~59 */
+    int second;  /* 0~59 */
+    int millis;  /* 0~999 */
+};
+
 /*======================== 通道业务上下文 (C-style) ========================*/
 
 /* 前置声明逻辑函数类型 */
@@ -103,7 +115,8 @@ struct ChannelContext
     /* ---- 当帧数据 (指针代替引用, C-style) ---- */
     const cv::Mat *frame;                    /* BGR, 模型输入尺寸 */
     int64_t frame_id;
-    uint64_t timestamp_ms;
+    uint64_t timestamp_ms;                   /* 单调时钟(ms): 只用于算间隔, 不是日历时间 */
+    uint64_t unix_ms = 0;                    /* Unix epoch 毫秒(UTC 基准, 即本帧墙钟; 三源统一): /1000 可得到秒 */
     float dt_ms;
     std::vector<AlgoResult> *results;
 
@@ -129,15 +142,14 @@ struct ChannelContext
     float infer_fps;
     float disp_fps;
 
-    /* ===== 便捷查询 (本通道) ===== */
-    int has_target(const char *label) const;          /* results 中是否有 label 类目标 */
-    int has_target_in_roi(const char *label) const;   /* 兼容字段 roi 内是否有 label 目标(无 roi → 同 has_target) */
-    int is_in_roi(const cv::Rect &box) const;          /* 框中心是否落在兼容字段 roi 内(无 roi → 1) */
-    int target_count(const char *label) const;        /* results 中 label 类目标的数量 */
+    /* ===== 整帧目标查询 (本通道) =====
+     * 只看整帧、不分 ROI。按 ROI 查询(单/多区域统一)用本文件结构体下方的
+     * C 风格自由函数 roi_contains / roi_has_target / roi_count_target(传 ctx 指针)。 */
+    int has_target(const char *label) const;     /* 整帧: 是否有 label 类目标 */
+    int target_count(const char *label) const;   /* 整帧: label 类目标数量 */
 
-    /* ===== 多 ROI 便捷查询 (本通道) =====
-     * 一个通道可配置多个 ROI 区域(在网页 ROI 节点上各画一个、各取个名字)。
-     * 下面这组方法让逻辑能按"序号"或"名字"取到某个区域、并统计该区域内的目标。
+    /* ===== ROI 区域访问 (本通道) =====
+     * 一个通道可配置多个 ROI 区域(网页上各画一个、各取个名字)。下面这组按序号/名字取区域。
      * 所有多边形顶点都是模型输入坐标系, 与检测框同坐标系。 */
 
     /* 本通道有效 ROI 区域数量 */
@@ -158,17 +170,13 @@ struct ChannelContext
     /* 某框中心是否落在指定多边形内(多边形不足 3 点 → 视为"全屏", 返回 1) */
     static int point_box_in_poly(const std::vector<cv::Point> *poly, const cv::Rect &box);
 
-    /* 某框中心是否落在第 idx 个区域内(区域不存在 → 0) */
-    int is_in_roi_idx(const cv::Rect &box, int idx) const;
+    /* 框中心落在第几个区域(取首个命中); 都不在 / 无区域 → -1 */
+    int roi_index_of(const cv::Rect &box) const;
 
-    /* 统计第 idx 个区域内某类别目标数量(区域不存在 → 0) */
-    int target_count_in_roi(const char *label, int idx) const;
-
-    /* 统计名为 name 的区域内某类别目标数量(无此区域 → 0) */
-    int target_count_in_roi_named(const char *label, const char *name) const;
-
-    /* 第 idx 个区域内是否有某类别目标 */
-    int has_target_in_roi_idx(const char *label, int idx) const;
+    /* 本帧墙钟时间(unix_ms 按本地时区格式化) */
+    std::string time_hms() const;   /* "HH:MM:SS" —— 查看时间用这个 */
+    std::string time_str() const;   /* "YYYY-MM-DD HH:MM:SS" —— 上报/记录用 */
+    FrameTime   datetime() const;   /* 拆成年月日时分秒独立 int(见 FrameTime), 不只是字符串 */
 
     cv::Mat snapshot() const;
 
@@ -191,6 +199,20 @@ struct ChannelContext
     std::string get_channel_logic_name(int chnId) const;
     int channel_has_logic(int chnId, const char *logicName) const;
 };
+
+/*======================== ROI 查询 (C 风格自由函数, 传 ctx 指针) ========================
+ * 不用重载/默认参: 用一个 int idx 选区域 —— 单区域、多区域同一个函数。
+ *   idx == ROI_ALL       → 所有区域(并集; 没画区域=整帧, 不设限);
+ *   idx >= 0             → 仅第 idx 个区域;
+ *   其它(ROI_NONE/非法)  → 无此区域, 返回 0。
+ * 按名字查: 先用 roi_find(ctx, "名字") 拿到序号再传入 —— 名字不存在返回 ROI_NONE,
+ *           故绝不会被误当成 ROI_ALL。框中心落在第几个区域用 ctx->roi_index_of(box)。 */
+enum { ROI_ALL = -1, ROI_NONE = -2 };
+
+int roi_contains    (const ChannelContext *ctx, const cv::Rect &box, int idx);
+int roi_has_target  (const ChannelContext *ctx, const char *label,   int idx);
+int roi_count_target(const ChannelContext *ctx, const char *label,   int idx);
+int roi_find        (const ChannelContext *ctx, const char *name);   /* 名字→序号; 找不到=ROI_NONE */
 
 /*======================== 绘制辅助函数 ========================*/
 void draw_rect(ChannelContext *ctx, const cv::Rect &rect,

@@ -263,7 +263,9 @@
   font-size: 13px;
   cursor: pointer;
   transition: all 0.1s;
+  visibility: hidden;            /* 默认隐藏, 鼠标移到该行才显示(与模型/视频文件选择器一致) */
 }
+.import-file-row:hover .import-del-btn { visibility: visible; }
 .import-del-btn:hover { background: #7f1d1d; color: #fff; }
 
 .import-new-btn {

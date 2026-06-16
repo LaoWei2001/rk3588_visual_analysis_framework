@@ -17,6 +17,7 @@
  */
 
 #include "logic_common.h"
+#include <ctime>
 
 /*======================== ChannelContext 跨通道方法实现 ========================*/
 ChannelSnapshot ChannelContext::get_channel_snapshot(int chnId) const
@@ -54,27 +55,72 @@ int ChannelContext::has_target(const char *label) const
     return 0;
 }
 
-int ChannelContext::has_target_in_roi(const char *label) const
+/*======================== ROI 查询自由函数 (C 风格) ========================
+ * 见 channel_logic.h 结构体下方说明: 用一个 int idx 选区域, 单/多区域同一函数, 不用重载。
+ *   idx==ROI_ALL → 所有区域(并集; 无区域=整帧); idx>=0 → 第 idx 区; 其它 → 无此区域=0。 */
+
+int roi_find(const ChannelContext *ctx, const char *name)
 {
-    if (!results) return 0;
-    if (!roi || roi->empty()) return has_target(label);
-    std::string s(label);
-    for (const auto &r : *results)
+    if (!ctx || !ctx->rois || !name) return ROI_NONE;
+    std::string s(name);
+    for (int i = 0; i < static_cast<int>(ctx->rois->size()); ++i)
+        if ((*ctx->rois)[i].name == s) return i;
+    return ROI_NONE;
+}
+
+int roi_contains(const ChannelContext *ctx, const cv::Rect &box, int idx)
+{
+    if (!ctx) return 0;
+    if (idx == ROI_ALL)                            /* 所有区域 */
     {
-        if (r.label == s)
-        {
-            cv::Point center(r.box.x + r.box.width / 2, r.box.y + r.box.height / 2);
-            if (cv::pointPolygonTest(*roi, center, false) >= 0) return 1;
-        }
+        if (!ctx->rois || ctx->rois->empty()) return 1;        /* 没画区域 → 不设限 */
+        return ctx->roi_index_of(box) >= 0 ? 1 : 0;
     }
+    if (idx < 0) return 0;                          /* ROI_NONE / 非法 */
+    const std::vector<cv::Point> *poly = ctx->roi_polygon_at(idx);   /* 指定区域 */
+    return (poly && poly->size() >= 3) ? ChannelContext::point_box_in_poly(poly, box) : 0;
+}
+
+int roi_has_target(const ChannelContext *ctx, const char *label, int idx)
+{
+    if (!ctx || !ctx->results) return 0;
+    if (idx == ROI_ALL)                            /* 所有区域 */
+    {
+        if (!ctx->rois || ctx->rois->empty()) return ctx->has_target(label);   /* 无区域 → 整帧 */
+        std::string s(label);
+        for (const auto &r : *ctx->results)
+            if (r.label == s && ctx->roi_index_of(r.box) >= 0) return 1;
+        return 0;
+    }
+    if (idx < 0) return 0;                          /* ROI_NONE / 非法 */
+    const std::vector<cv::Point> *poly = ctx->roi_polygon_at(idx);   /* 指定区域 */
+    if (!poly || poly->size() < 3) return 0;
+    std::string s(label);
+    for (const auto &r : *ctx->results)
+        if (r.label == s && ChannelContext::point_box_in_poly(poly, r.box)) return 1;
     return 0;
 }
 
-int ChannelContext::is_in_roi(const cv::Rect &box) const
+int roi_count_target(const ChannelContext *ctx, const char *label, int idx)
 {
-    if (!roi || roi->empty()) return 1;
-    cv::Point center(box.x + box.width / 2, box.y + box.height / 2);
-    return (cv::pointPolygonTest(*roi, center, false) >= 0) ? 1 : 0;
+    if (!ctx || !ctx->results) return 0;
+    if (idx == ROI_ALL)                            /* 所有区域(并集, 重叠不重复计) */
+    {
+        if (!ctx->rois || ctx->rois->empty()) return ctx->target_count(label); /* 无区域 → 整帧 */
+        std::string s(label);
+        int n = 0;
+        for (const auto &r : *ctx->results)
+            if (r.label == s && ctx->roi_index_of(r.box) >= 0) ++n;
+        return n;
+    }
+    if (idx < 0) return 0;                          /* ROI_NONE / 非法 */
+    const std::vector<cv::Point> *poly = ctx->roi_polygon_at(idx);   /* 指定区域 */
+    if (!poly || poly->size() < 3) return 0;
+    std::string s(label);
+    int n = 0;
+    for (const auto &r : *ctx->results)
+        if (r.label == s && ChannelContext::point_box_in_poly(poly, r.box)) ++n;
+    return n;
 }
 
 int ChannelContext::target_count(const char *label) const
@@ -125,42 +171,62 @@ int ChannelContext::point_box_in_poly(const std::vector<cv::Point> *poly, const 
     return cv::pointPolygonTest(*poly, c, false) >= 0 ? 1 : 0;
 }
 
-int ChannelContext::is_in_roi_idx(const cv::Rect &box, int idx) const
-{
-    const std::vector<cv::Point> *poly = roi_polygon_at(idx);
-    return (poly && poly->size() >= 3) ? point_box_in_poly(poly, box) : 0;
-}
+/*======================== roi_index_of —— ROI 区域定位辅助 ========================
+ * 给一个框, 返回它中心落在第几个区域(取首个命中)。roi_contains / roi_has_target /
+ * roi_count_target 的"任一区域"分支都建立在它之上。 */
 
-int ChannelContext::target_count_in_roi(const char *label, int idx) const
+int ChannelContext::roi_index_of(const cv::Rect &box) const
 {
-    const std::vector<cv::Point> *poly = roi_polygon_at(idx);
-    if (!results || !poly || poly->size() < 3) return 0;
-    std::string s(label);
-    int n = 0;
-    for (const auto &r : *results)
-        if (r.label == s && point_box_in_poly(poly, r.box)) ++n;
-    return n;
-}
-
-int ChannelContext::target_count_in_roi_named(const char *label, const char *name) const
-{
-    const RoiZone *z = roi_by_name(name);
-    if (!results || !z || z->polygon.size() < 3) return 0;
-    std::string s(label);
-    int n = 0;
-    for (const auto &r : *results)
-        if (r.label == s && point_box_in_poly(&z->polygon, r.box)) ++n;
-    return n;
-}
-
-int ChannelContext::has_target_in_roi_idx(const char *label, int idx) const
-{
-    return target_count_in_roi(label, idx) > 0;
+    if (!rois) return -1;
+    cv::Point c(box.x + box.width / 2, box.y + box.height / 2);
+    for (int i = 0; i < static_cast<int>(rois->size()); ++i)
+    {
+        const std::vector<cv::Point> &poly = (*rois)[i].polygon;
+        if (poly.size() >= 3 && cv::pointPolygonTest(poly, c, false) >= 0) return i;
+    }
+    return -1;
 }
 
 cv::Mat ChannelContext::snapshot() const
 {
     return frame ? frame->clone() : cv::Mat();
+}
+
+/* unix_ms(epoch 毫秒)→ 本地时区时间串。localtime_r 线程安全(logic 在 worker 线程跑)。 */
+std::string ChannelContext::time_hms() const
+{
+    time_t sec = static_cast<time_t>(unix_ms / 1000);
+    struct tm tmv;
+    localtime_r(&sec, &tmv);
+    char buf[16];
+    strftime(buf, sizeof(buf), "%H:%M:%S", &tmv);
+    return buf;
+}
+
+std::string ChannelContext::time_str() const
+{
+    time_t sec = static_cast<time_t>(unix_ms / 1000);
+    struct tm tmv;
+    localtime_r(&sec, &tmv);
+    char buf[24];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tmv);
+    return buf;
+}
+
+FrameTime ChannelContext::datetime() const
+{
+    time_t sec = static_cast<time_t>(unix_ms / 1000);
+    struct tm tmv;
+    localtime_r(&sec, &tmv);
+    FrameTime t;
+    t.year   = tmv.tm_year + 1900;
+    t.month  = tmv.tm_mon + 1;
+    t.day    = tmv.tm_mday;
+    t.hour   = tmv.tm_hour;
+    t.minute = tmv.tm_min;
+    t.second = tmv.tm_sec;
+    t.millis = static_cast<int>(unix_ms % 1000);
+    return t;
 }
 
 RenderParams ChannelContext::render_params(int64_t result_age_ms) const

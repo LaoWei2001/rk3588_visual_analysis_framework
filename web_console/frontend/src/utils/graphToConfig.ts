@@ -151,7 +151,11 @@ export function graphToConfig(
 
     // 上报参数仍由「上报配置」节点提供
     // 方案2: 上报地址每通道独立写进 config.json(空=用上报服务默认值)，随后经 C++ → Redis 消息下发
-    const reportType = resolveReport(logic, reportByLogic)
+    // 报警节点存活以「画布上是否连了报警节点」为准: 连了就按它自己的 report_type 写字段,
+    // 与 logic 是否在 logics.json 声明 report 解耦(否则连到未声明的 logic 上, 保存即丢、刷新即消失)。
+    // 没连报警节点时仍按 logic 声明自动判定(保留"上报型 logic 自动带报警节点"的行为)。
+    const nodeReportType = (r.report_type === 'dify' || r.report_type === 'server') ? r.report_type : null
+    const reportType = (reportNode ? (nodeReportType ?? 'server') : null) ?? resolveReport(logic, reportByLogic)
     if (reportType === 'dify') {
       ch.dify_prompt  = r.dify_prompt  ?? l.dify_prompt ?? ''
       ch.dify_api_url = r.dify_api_url ?? ''

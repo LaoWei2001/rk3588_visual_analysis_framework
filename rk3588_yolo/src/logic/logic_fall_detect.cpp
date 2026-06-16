@@ -124,7 +124,7 @@ static void logic_fall_detect(ChannelContext *ctx)
     {
         if (r.label != "person")
             continue;
-        if (!ctx->is_in_roi(r.box))
+        if (!roi_contains(ctx, r.box, ROI_ALL))
             continue;
 
         ++person_count;

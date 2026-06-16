@@ -99,10 +99,12 @@ cmake --build build
 | `ctx->chnId` | `int` | 当前通道号 |
 | `ctx->frame` | `const cv::Mat *` | 当帧 BGR 图，640×640（模型输入尺寸），上报用这张 |
 | `ctx->frame_id` | `int64_t` | 当帧序号，单调递增 |
-| `ctx->timestamp_ms` | `uint64_t` | 当帧时间戳（毫秒，steady_clock） |
+| `ctx->timestamp_ms` | `uint64_t` | 单调时钟(steady_clock，毫秒)，只用于算间隔，**不是日历时间** |
+| `ctx->unix_ms` | `uint64_t` | 墙上时钟 Unix epoch 毫秒（真实时间，RTSP/USB/文件 三源统一）；配 `time_hms()`/`time_str()`/`datetime()` |
 | `ctx->dt_ms` | `float` | 距上一帧的时间间隔（毫秒），用于积分/计时 |
 | `ctx->results` | `std::vector<AlgoResult> *` | 当帧所有检测框，可修改（如改 `box_color`） |
-| `ctx->roi` | `const std::vector<cv::Point> *` | ROI 多边形顶点，已缩放到 640 坐标系，无 ROI 时为空 |
+| `ctx->roi` | `const std::vector<cv::Point> *` | 兼容字段：第 0 个 ROI 多边形（640 坐标系），无 ROI 时为空 |
+| `ctx->rois` | `const std::vector<RoiZone> *` | 本通道**全部** ROI 区域（多区域，各含名字+多边形）；配 `roi_count`/`roi_by_name`/`roi_polygon_at`/`roi_index_of` 等 |
 | `ctx->config` | `const ChannelConfig *` | 本通道配置（只读），可读自定义参数 |
 | `ctx->draw_cmds` | `std::vector<DrawCommand> *` | 向此 push 绘制指令，框架自动渲染到屏幕和/或上报图 |
 | `ctx->state` | `std::shared_ptr<void> *` | 跨帧持久状态，详见 [1.4 节](#14-跨帧持久状态) |
@@ -113,11 +115,16 @@ cmake --build build
 **内置便捷方法**（免去手动遍历 results）：
 
 ```cpp
-ctx->has_target("person")          // 当帧是否存在指定类别
-ctx->has_target_in_roi("person")   // 当帧是否存在指定类别且在 ROI 内
-ctx->is_in_roi(some_box)           // 某个 cv::Rect 是否在 ROI 内
-ctx->target_count("car")           // 指定类别的目标数量
-ctx->snapshot()                    // 深拷贝当帧（返回 cv::Mat）
+ctx->has_target("person")                           // 整帧是否存在指定类别
+ctx->target_count("car")                            // 整帧指定类别数量
+roi_contains(ctx, some_box, ROI_ALL)                // 框是否在任一 ROI 内（没画区域=整帧）
+roi_has_target(ctx, "person", ROI_ALL)              // 任一 ROI 内是否有该类别
+roi_count_target(ctx, "car", ROI_ALL)               // 所有 ROI 内该类别数量（并集）
+roi_count_target(ctx, "car", 1)                     // 只看第 1 个区域（传序号）
+roi_count_target(ctx, "car", roi_find(ctx, "门口")) // 只看名为"门口"的区域（先 roi_find 取序号）
+ctx->time_hms()                                     // 本帧真实时间 "HH:MM:SS"(三源统一); ctx->unix_ms=epoch 毫秒, ctx->time_str()="YYYY-MM-DD HH:MM:SS"
+ctx->datetime()                                     // 拆成年月日时分秒: FrameTime{year,month,day,hour,minute,second,millis} 各是 int
+ctx->snapshot()                                     // 深拷贝当帧（返回 cv::Mat）
 ```
 
 **跨通道查询**（在通道逻辑内安全取另一路数据）：
@@ -637,7 +644,7 @@ static void logic_smoke_detect(ChannelContext *ctx)
     uint64_t cooldown_ms  = (uint64_t)(ctx->config ? ctx->config->smoke_cooldown_sec : 60) * 1000;
 
     /* ---- 检测当帧 ROI 内是否有烟雾 ---- */
-    bool smoke_now = ctx->has_target_in_roi("smoke");
+    bool smoke_now = roi_has_target(ctx, "smoke", ROI_ALL);
 
     if (smoke_now)
     {
@@ -729,7 +736,7 @@ static void logic_smoke_detect(ChannelContext *ctx)
 REGISTER_LOGIC("logic_smoke_detect", logic_smoke_detect);
 ```
 
-无需改动 `channel_logic.cpp` / `channel_logic_init()`。新增文件后重新 configure 让 CMake 收录：
+无需改动 `channel_logic.cpp`。新增文件后重新 configure 让 CMake 收录：
 `cmake -S . -B build && cmake --build build`。
 
 ### 第四步：配置文件
@@ -792,7 +799,7 @@ REGISTER_LOGIC("logic_smoke_detect", logic_smoke_detect);
 
 **Q：告警上报了但收不到数据？**
 
-1. 用 `redis-cli llen server_queue` 检查队列积压量
+1. server 告警看本地发件箱积压：`ls <App>/alarm_store/*.json`（dify 才看 `redis-cli llen dify_queue`）
 2. 确认 `unified_upload` Python 服务正在运行（`journalctl -u unified_upload -f`）
 3. 检查 `dist/services/upload/config.yaml` 中的 `server.url` 是否可访问
 4. 确认 Redis 服务已启动（`redis-cli ping` 返回 `PONG`）

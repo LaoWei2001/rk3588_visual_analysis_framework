@@ -161,10 +161,14 @@ ch.isStopRequested();     // 是否已请求停止
 
 ### 修改重连等待时间
 
-在 `decChannel.cpp` 的 `reconnect()` 函数中修改 `delay_sec`（当前为固定 1 秒）：
+实时流(RTSP/USB)重连用**阶梯退避**：按已重连次数 `mReconnectCount` 取 `delay_sec` = 1 → 5 → 15 → 30 秒（见 `decChannel.cpp` 的 `reconnect()`；拉到首帧后 `resetReconnectCount()` 自动归零）。改这几档即可调等待：
 
 ```cpp
-int delay_sec = 1;  // RTSP/USB 重连等待秒数
+// decChannel.cpp reconnect()
+if      (mReconnectCount == 0) delay_sec = 1;
+else if (mReconnectCount == 1) delay_sec = 5;
+else if (mReconnectCount == 2) delay_sec = 15;
+else                           delay_sec = 30;
 ```
 
 静默断流超时阈值在 `busListen` 函数中：

@@ -71,7 +71,7 @@ static void logic_roi(ChannelContext *ctx)
 ## 复用提示 / 范式要点
 
 - **染框靠 `r.box_color`，不用自己画框**：框由显示渲染层按 `results` 画，置 `r.box_color = (0,0,255)` 即变红（`box_color[0] >= 0` 才生效）。这与 `logic_custom` / `logic_person_alarm` 一致。
-- **"中心在区域内" 判定**：`cv::pointPolygonTest(*ctx->roi, r.box_center(), false) >= 0`。**先判 `has_roi`**——无 ROI 时不存在"区域内"，不应染红（不要用 `ctx->is_in_roi()`，它在无 ROI 时返回 1）。
+- **"中心在区域内" 判定**：`cv::pointPolygonTest(*ctx->roi, r.box_center(), false) >= 0`。**先判 `has_roi`**——无 ROI 时不存在"区域内"，不应染红（不要用 `roi_contains(ctx, box, ROI_ALL)`，它在无 ROI 时返回 1）。
 - **坐标系**：`ctx->roi` 与 `box` 都是模型 640 空间，文字/点直接用这套坐标画，和画面对齐；别拿源分辨率换算。
 - **画文字/点用 `draw_*`**：它们把指令塞进 `ctx->draw_cmds`，由渲染层统一绘制；`target` 默认 `ALL`（显示+上报图都画），本逻辑不上报，用默认即可。
 - 想区分"框上方标签"和"中心坐标"：本逻辑把坐标画在**中心点**(`c.x+6, c.y+4`)，顶点坐标画在**顶点旁**(`p.x+6, p.y-6`)，互不挤占。

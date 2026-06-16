@@ -163,7 +163,7 @@ int  app_ctrl_get_total_channels(); // 同 app_ctrl_get_chn_nums()
 
 ## 调试打印宏
 
-`system.h` 提供受 `debug_display` 配置开关控制的线程安全打印宏：
+`system.h`（位于 `src/` 根目录，非 `core/`）提供受 `debug_display` 配置开关控制的线程安全打印宏：
 
 ```cpp
 // 在 config.json 的 global 中设置 "debug_display": 1 即可开启

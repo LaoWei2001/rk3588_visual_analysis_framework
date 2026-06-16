@@ -2,7 +2,7 @@
 
 - **上报**：无
 - **可调参数**：无
-- **用到的能力**：多 ROI 访问（`ctx->rois` / `roi_count` / `roi_name_at` / `roi_polygon_at` / `roi_by_name` / `target_count_in_roi` / `target_count_in_roi_named`）、逐区域染色、`pointPolygonTest`
+- **用到的能力**：多 ROI 访问（`ctx->rois` / `roi_count` / `roi_name_at` / `roi_polygon_at` / `roi_by_name` / `roi_count_target`(传序号或名字) / `roi_index_of`）、逐区域染色
 
 ## 做什么
 演示"一个视频流配置多个 ROI 区域"后，逻辑里怎么方便地访问本通道的各个区域：
@@ -37,7 +37,7 @@ static void logic_multi_roi(ChannelContext *ctx)
         const cv::Scalar col = kPalette[i % kNPal];
         draw_polyline(ctx, *poly, col, 2, 1.0, /*closed=*/true);
         const char *nm = ctx->roi_name_at(i);
-        const int persons = ctx->target_count_in_roi("person", i);
+        const int persons = roi_count_target(ctx, "person", i);
         char label[96];
         if (nm && nm[0]) snprintf(label, sizeof(label), "[%d] %s  person=%d", i, nm, persons);
         else             snprintf(label, sizeof(label), "[%d] zone  person=%d", i, persons);
@@ -47,22 +47,17 @@ static void logic_multi_roi(ChannelContext *ctx)
     // 2) 逐检测框: 落在哪个区域就染成该区域色, 否则灰
     if (ctx->results)
         for (auto &r : *ctx->results) {
-            const cv::Point c = r.box_center();
-            int hit = -1;
-            for (int i = 0; i < nroi; ++i) {
-                const std::vector<cv::Point> *poly = ctx->roi_polygon_at(i);
-                if (poly && poly->size() >= 3 && cv::pointPolygonTest(*poly, c, false) >= 0.0) { hit = i; break; }
-            }
+            const int hit = ctx->roi_index_of(r.box);   // 落在第几个区域, 都不在 → -1
             const cv::Scalar col = (hit >= 0) ? kPalette[hit % kNPal] : cv::Scalar(160,160,160);
             r.box_color = col;
-            draw_circle(ctx, c, 3, col, 2);
+            draw_circle(ctx, r.box_center(), 3, col, 2);
         }
 
     // 3) 顶部汇总 + 演示按名字访问
     char summary[64]; snprintf(summary, sizeof(summary), "ROI zones: %d", nroi);
     draw_text(ctx, summary, cv::Point(20,24), cv::Scalar(255,255,255), 0.6, 2);
     if (ctx->roi_by_name("entrance")) {
-        const int n = ctx->target_count_in_roi_named("person", "entrance");
+        const int n = roi_count_target(ctx, "person", roi_find(ctx, "entrance"));
         char t[64]; snprintf(t, sizeof(t), "entrance person=%d", n);
         draw_text(ctx, t, cv::Point(20,48), cv::Scalar(0,255,0), 0.55, 2);
     }
@@ -74,7 +69,7 @@ static void logic_multi_roi(ChannelContext *ctx)
 - logics.json：`{ "name": "logic_multi_roi", "label": "多 ROI 区域示例", "params": [] }`
 - 网页：把该通道「逻辑函数」节点选 `logic_multi_roi`；在「ROI 检测区域」节点点「绘制 ROI 区域」，在弹窗右侧「区域列表」里「＋新增区域」画多个区域并各自命名（如 `entrance`/`exit`）。一个 ROI 节点即可承载该通道的全部区域。
 
-## 多 ROI 访问 API（定义在 `channel_logic.h` 的 `ChannelContext`）
+## 多 ROI API（`ChannelContext` 成员 + `channel_logic.h` 顶层自由函数）
 | 方法 | 含义 |
 |------|------|
 | `ctx->rois` | `const std::vector<RoiZone>*`，本通道全部区域（`RoiZone{ name, polygon }`，polygon 为模型坐标） |
@@ -82,9 +77,9 @@ static void logic_multi_roi(ChannelContext *ctx)
 | `ctx->roi_count()` | 区域数量 |
 | `ctx->roi_at(i)` / `roi_polygon_at(i)` / `roi_name_at(i)` | 按序号取 区域 / 多边形 / 名字 |
 | `ctx->roi_by_name("entrance")` | 按名字取区域 |
-| `ctx->is_in_roi_idx(box, i)` | 框中心是否在第 i 区域内 |
-| `ctx->target_count_in_roi("person", i)` | 第 i 区域内某类别数量 |
-| `ctx->target_count_in_roi_named("person", "entrance")` | 按名字统计 |
+| `roi_contains(ctx, box, idx)` | 框中心是否在 ROI 内（`idx=ROI_ALL` 任一区域；`>=0` 第 i 区） |
+| `roi_count_target(ctx, "person", i)` | 第 i 区域内某类别数量 |
+| `roi_count_target(ctx, "person", roi_find(ctx, "entrance"))` | 按名字统计 |
 
 ## 复用提示
 做"分别统计入口/出口人数""目标从 A 区进入 B 区""不同区域不同阈值/报警"这类需求时，

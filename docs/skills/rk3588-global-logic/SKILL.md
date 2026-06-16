@@ -174,7 +174,7 @@ counter++;
 
 1. 编译装包：`cd rk3588_yolo && ./build.sh <名> && sudo ./install_app.sh <名>`（改了 C++ 必须重编）。
 2. 在 `config.json`/网页里加好 `global_logics` 实例并选中 `global_xxx`，重启程序。
-3. 启动日志能看到 `[GlobalLogic] Thread started: logic=global_xxx ...` 和 `Started N/M instance(s)`；逻辑里的 `printf` 会周期打印；上报的话 `redis-cli lrange server_queue 0 -1` 能看到消息。
+3. 启动日志能看到 `[GlobalLogic] Thread started: logic=global_xxx ...` 和 `Started N/M instance(s)`；逻辑里的 `printf` 会周期打印；上报的话：server 看本地发件箱 `ls <App>/alarm_store/`，dify 看 `redis-cli lrange dify_queue 0 -1`。
 4. **热重载注意**：`global_logics` 改动由 `config_monitor` 重启受影响实例；但通道数量/源地址等仍需重启程序。
 
 ## 常见坑（写之前过一遍）

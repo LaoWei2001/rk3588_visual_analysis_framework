@@ -2,7 +2,7 @@
 
 ## 一、上报：地址跟着每条告警走，不在逻辑里硬编码
 
-项目的上报是**两段式**：C++ 逻辑只把告警 + **本通道地址**塞进 Redis 队列；真正发到哪台服务器由 Python 上报服务按消息里的地址决定。所以**不同通道可发不同服务器**，而你在逻辑里只需把 `ctx->config` 里的地址透传给入队函数。
+项目的上报是**两段式**：C++ 逻辑只把告警 + **本通道地址**非阻塞投递（server 告警落本地发件箱 `alarm_store/`、dify 走 Redis `dify_queue`）；真正发到哪台服务器由 Python 上报服务按记录/消息里的地址决定。所以**不同通道可发不同服务器**，而你在逻辑里只需把 `ctx->config` 里的地址透传给入队函数。
 
 签名见 `rk3588_yolo/src/uploader/alarm_uploader.h`：
 
@@ -79,9 +79,10 @@ REGISTER_LOGIC("logic_xxx", logic_xxx);
 - `report`：`"server"`（用了 alarm_uploader_enqueue）/ `"dify"`（用了 dify_uploader_enqueue）/ 不上报就**不写**这个键。声明了 `report`，网页会提示该逻辑需要连「上报配置」节点。
 - `params`：可调参数清单（见下）。无参数就 `[]`。
 
-> **「上报配置」节点是否生效，完全由这里的 `report` 字段决定**（前端 `resolveReport` 读它，回退内置名单 `SERVER_LOGICS`/`DIFY_LOGICS`）：
-> - 某 logic **没声明 `report`** → 在画布上给它连「上报配置」节点是**无效的**：保存时 `graphToConfig` 不会把 server/dify 地址写进该通道 `config.json`（地址进不去 → 上报回落到服务默认值或根本不发），而且**刷新 / 重开编辑器后那个上报节点会自动消失**——因为 `configToGraph` 只为声明了 `report` 的 logic 重建上报节点。
-> - 判定依据是 **logics.json 的 `report` 声明，不是 C++ 里有没有 `*_enqueue` 代码**：即使你 C++ 写了 `alarm_uploader_enqueue`，只要这里漏了 `"report":"server"`，上报节点照样无效、刷新即清。**要让上报节点可用、地址能落进 config.json，就必须在此声明 `report`。**
+> **「上报配置」节点与 logics.json 的 `report`**（前端 `resolveReport` + 报警节点自身的 `report_type` 共同决定）：
+> - 声明了 `report` 的 logic：选中它时网页会**自动**带出一个对应类型（server/dify）的「上报配置」节点。
+> - 也可以**手动**给任意 logic 连一个「上报配置」节点：只要连上，保存时 `graphToConfig` 就按该节点自己的 `report_type` 把地址写进该通道 `config.json`，刷新后 `configToGraph` 据通道里的上报字段把它重建出来——**与该 logic 是否声明 `report` 无关**（本会话已修复：旧版里，连到未声明 `report` 的 logic 上会"保存即丢、刷新即消失"）。
+> - 仍建议"确实要上报"的 logic 在 logics.json 声明 `report`：既能自动带出节点、也标明意图。最终**是否真的上报，看 C++ 里 logic 有没有调 `*_enqueue`**；logics.json 的 `report` 只影响网页 UI（是否自动带节点），不决定 C++ 是否发。
 
 ## 四、可调参数：三处对齐，缺一不可
 

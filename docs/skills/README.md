@@ -1,6 +1,6 @@
 # RK3588 视觉系统 · 开发/运维知识库索引
 
-这个文件夹是给**后续二次开发**用的参考资料,既可以**直接喂给大模型**当上下文,也可以**给人读**。里面是两个 skill,各自带一篇总览(`SKILL.md`)+ 若干深档(`references/`)。
+这个文件夹是给**后续二次开发**用的参考资料,既可以**直接喂给大模型**当上下文,也可以**给人读**。里面有**三个 skill**(各带 `SKILL.md` 总览 + `references/` 深档)和一份**源码模块说明** `rk3588-src-modules/`(C++ 端各模块的蒸馏深档,从入口 `README.md` 看起)。
 
 **先分清两个 skill 的边界:**
 
@@ -8,6 +8,9 @@
 |:-------------------------- | -------------------------- | --------------------------- |
 | **`rk3588-channel-logic`** | 写 C++ 检测/报警逻辑(`logic_xxx`) | "当检测到 X 就做 Y" 这类**画面规则**都归它 |
 | **`rk3588-console-ops`**   | 部署、网页控制台(前后端)、后台服务、运维、调试   | 除了写检测逻辑,**其它全归它**           |
+| **`rk3588-global-logic`**  | 写**跨通道 / 周期性**的全局逻辑(`global_xxx`) | "通道 A 有人且通道 B 缺货就报警"这类跨路规则 |
+
+> 另有 **`rk3588-src-modules/`**:C++ 端各源码模块(core/config/capturer/analyzer/yolo/logic/player/uploader)的深档,想理解或改底层实现时看它。
 
 ---
 
@@ -43,10 +46,10 @@
 ## 目录地图
 
 ```
-.claude/skills/
+docs/skills/
 ├── README.md  ← 你在这
 │
-├── rk3588-channel-logic/                 写检测/报警逻辑
+├── rk3588-channel-logic/                 写检测/报警逻辑(通道 logic)
 │   ├── SKILL.md                          总览:需求拆解→骨架→接线三件套→验证→坑
 │   └── references/
 │       ├── channelcontext-api.md         ctx 字段 / 辅助函数 / 绘制 / 跨帧状态
@@ -54,14 +57,21 @@
 │       ├── upload-and-wiring.md          上报(方案2)+ 注册 + logics.json 接线
 │       ├── rk3588_yolo_系统说明文档.md     运行时架构(文字详解)
 │       ├── rk3588_yolo_架构图.md          架构图
-│       └── examples/                     10 个真实逻辑(server/hook/dify/custom/roll…)
+│       └── examples/                     真实逻辑示例(server/hook/dify/custom/roll/multi_roi…)
 │
-└── rk3588-console-ops/                   部署 / 控制台 / 服务 / 运维 / 调试
-    ├── SKILL.md                          总览:系统组成、部署、网页功能表、运维速查、文件地图
-    └── references/
-        ├── services-upload-and-ota.md    两个微服务 + systemd 启停配合(网页↔板端)
-        ├── web-console-frontend.md       前端二次开发(架构、加页面/接口、生效流程、坑)
-        └── debugging-playbook.md         调试方法论 + "改了不生效"自查 + 终端实战案例
+├── rk3588-global-logic/                  写跨通道 / 周期性全局逻辑(global_xxx)
+│   └── SKILL.md
+│
+├── rk3588-console-ops/                   部署 / 控制台 / 服务 / 运维 / 调试
+│   ├── SKILL.md                          总览:系统组成、部署、网页功能表、运维速查、文件地图
+│   └── references/
+│       ├── services-upload-and-ota.md    两个微服务 + systemd 启停配合(网页↔板端)
+│       ├── web-console-frontend.md       前端二次开发(架构、加页面/接口、生效流程、坑)
+│       └── debugging-playbook.md         调试方法论 + "改了不生效"自查 + 终端实战案例
+│
+└── rk3588-src-modules/                   C++ 端各源码模块深档(src/ 蒸馏)
+    ├── README.md                         模块地图 + 端到端数据流 + 全局约定 + 扩展路由
+    └── {core,config,capturer,analyzer,yolo,logic,player,uploader}.md
 ```
 
 ---

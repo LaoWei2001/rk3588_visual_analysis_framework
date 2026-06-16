@@ -2,7 +2,7 @@
 
 - **上报**：server（`alarm_uploader_enqueue`，类型 `"fall_detect"` 与 `"wave_sos"`，各自限频）
 - **可调参数**：`fall_ratio_thresh`(float)、`fall_dwell_sec`(float)、`fall_cooldown_sec`(int)、`wave_min_swings`(int)、`wave_window_sec`(float)
-- **用到的能力**：pose 关键点（yolov8_pose，无关键点时退回检测框宽高比）、dwell 持续确认 + cooldown 限频 + 闩锁、ROI 过滤（`ctx->is_in_roi`）、挥手摆动状态机
+- **用到的能力**：pose 关键点（yolov8_pose，无关键点时退回检测框宽高比）、dwell 持续确认 + cooldown 限频 + 闩锁、ROI 过滤（`roi_contains`）、挥手摆动状态机
 
 ## 做什么
 对 ROI 内（无 ROI 则全屏）的每个 `person`：
@@ -42,7 +42,7 @@ static void logic_fall_detect(ChannelContext *ctx)
     bool fall_like=false, hand_raised=false; int person_count=0;
     cv::Rect best_box; cv::Point2f wave_wrist; float best_score=-1;
     for (auto &r : *ctx->results) {
-        if (r.label != "person" || !ctx->is_in_roi(r.box)) continue;
+        if (r.label != "person" || !roi_contains(ctx, r.box, ROI_ALL)) continue;
         ++person_count;
         float box_ratio = r.box.height>0 ? (float)r.box.width/r.box.height : 0;
         if (fall_pose_like(r, ratio_thresh) || box_ratio >= ratio_thresh) { /* 框红+"fall?"，记 best_box */ fall_like=true; }

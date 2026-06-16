@@ -140,6 +140,11 @@ static void invoke_channel_logic(int chnId,
     ctx.frame         = &frame_for_logic;
     ctx.frame_id      = frame_id;
     ctx.timestamp_ms  = timestamp_ms;
+    /* 墙上时钟(epoch ms): RTSP/USB/文件 三源统一在此盖一次, logic 读 ctx->unix_ms / time_hms()
+     * 即得本帧真实时间。这是"处理本帧的时刻", 与采集相差一个管线延迟(对 HH:MM:SS 显示无感)。 */
+    ctx.unix_ms       = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
     ctx.dt_ms         = dt_ms;
     ctx.results       = &current_results;
     ctx.config        = &g_pCtrl->config.channels[chnId];

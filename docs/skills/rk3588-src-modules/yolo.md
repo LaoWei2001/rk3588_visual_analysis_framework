@@ -152,10 +152,10 @@ private:
 };
 ```
 
-2. 在 `algoProcess.cpp` 的模型工厂函数 `create_model()` 中添加新类型的分支：
+2. 在 `algo_engine.cpp` 的模型工厂函数 `create_model()` 中添加新类型的分支（声明在 `algo_internal.h`，`algoProcess.cpp` 只负责调用它）：
 
 ```cpp
-// algoProcess.cpp 的 create_model 函数中
+// algo_engine.cpp 的 create_model 函数中
 if (cfg.model_type == "my_model") {
     return make_unique<MyModel>(cfg.model_path, cfg.label_path,
                                 core_mask, cfg.obj_thresh, cfg.nms_thresh);

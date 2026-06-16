@@ -148,7 +148,7 @@ config_monitor_thread (热重载)
 
 ### 继承机制（通道覆盖全局默认值）
 
-通道配置中值为 `-1` / `""` / 空数组 的字段，在 `load_config()` 结束后会被赋予对应的全局默认值。核心逻辑在 `config.cpp` 中 `apply_channel_defaults()` 函数。
+通道配置中值为 `-1` / `""` / 空数组 的字段，在 `load_config()` 内被赋予对应的全局默认值。该继承逻辑**内联在 `config.cpp` 的 `load_config()` 中**（搜 "通道配置继承全局配置" 代码段），并非独立函数。
 
 ### 流类型（src_type 必填，不再自动推断）
 

@@ -29,7 +29,7 @@ RTSP / 本地文件 / USB  →  GStreamer 硬解  →  RGA 格式转换  →  RK
                                                                   ↓
         屏幕 GTK 显示  ←  叠加渲染  ←  SORT 跟踪 + 业务逻辑（channel/global）
                                                                   ↓
-                                              Redis 异步上报 → Python 微服务
+                              异步上报（server 落盘发件箱 / dify 走 Redis）→ Python 微服务
 ```
 
 设计风格为 **C/pthread**：所有线程在 `main.cpp` 中可循、生命周期显式管理、帧与结果用同一结构体在锁内原子配对。
@@ -40,14 +40,14 @@ RTSP / 本地文件 / USB  →  GStreamer 硬解  →  RGA 格式转换  →  RK
 
 | 目录 | 职责 | 关键文件 | 子文档 |
 |------|------|----------|--------|
-| `capturer/` | GStreamer 多路采集、自动重连 | `decChannel.cpp` | [README](rk3588_yolo/src/capturer/README.md) |
-| `analyzer/` | 推理调度核心：节流、转换、NPU 队列、跟踪、逻辑分发、显示 | `frame_inlet / algo_engine / channel_pipeline / result_dispatch / display_pipeline` | [README](rk3588_yolo/src/analyzer/README.md) |
-| `yolo/` | RKNN 推理引擎（v5/v8-det/pose/seg） | `yolo.cpp / yolov8det.cpp / …` | [README](rk3588_yolo/src/yolo/README.md) |
-| `logic/` | 业务逻辑：单路 channel_logic、跨路 global_logic | `channel_logic.cpp / global_logic.cpp` | [README](rk3588_yolo/src/logic/README.md) |
-| `player/` | GTK3 显示、RGA 缩放、叠加渲染 | `display.cpp` | [README](rk3588_yolo/src/player/README.md) |
-| `uploader/` | 告警异步上报（Redis 生产者-消费者） | `alarm_uploader.cpp` | [README](rk3588_yolo/src/uploader/README.md) |
-| `config/` | JSON 解析、注册表热重载 | `config.cpp / config_registry.cpp` | [README](rk3588_yolo/src/config/README.md) |
-| `core/` | APP_CTRL 全局控制块、通道状态、热监控 | `app_ctrl.cpp` | [README](rk3588_yolo/src/core/README.md) |
+| `capturer/` | GStreamer 多路采集、自动重连 | `decChannel.cpp` | [capturer.md](../../rk3588-src-modules/capturer.md) |
+| `analyzer/` | 推理调度核心：节流、转换、NPU 队列、跟踪、逻辑分发、显示 | `frame_inlet / algo_engine / channel_pipeline / result_dispatch / display_pipeline` | [analyzer.md](../../rk3588-src-modules/analyzer.md) |
+| `yolo/` | RKNN 推理引擎（v5/v8-det/pose/seg） | `yolo.cpp / yolov8det.cpp / …` | [yolo.md](../../rk3588-src-modules/yolo.md) |
+| `logic/` | 业务逻辑：单路 channel_logic、跨路 global_logic | `channel_logic.cpp / global_logic.cpp` | [logic.md](../../rk3588-src-modules/logic.md) |
+| `player/` | GTK3 显示、RGA 缩放、叠加渲染 | `display.cpp` | [player.md](../../rk3588-src-modules/player.md) |
+| `uploader/` | 告警异步上报（Redis 生产者-消费者） | `alarm_uploader.cpp` | [uploader.md](../../rk3588-src-modules/uploader.md) |
+| `config/` | JSON 解析、注册表热重载 | `config.cpp / config_registry.cpp` | [config.md](../../rk3588-src-modules/config.md) |
+| `core/` | APP_CTRL 全局控制块、通道状态、热监控 | `app_ctrl.cpp` | [core.md](../../rk3588-src-modules/core.md) |
 
 ---
 
@@ -222,10 +222,10 @@ RTSP / 本地文件 / USB  →  GStreamer 硬解  →  RGA 格式转换  →  RK
 **循环体**（生产者-消费者）：
 1. `pthread_cond_wait(queue_cv)` 阻塞至队列非空
 2. 出队 `AlarmTask` / `DifyTask`
-3. JPEG 编码 + Base64 → `redis_rpush("server_queue" / "dify_queue")`
+3. server 告警 → `record_alarm_local()` 落盘本地发件箱（带框图.jpg + 原图_raw.jpg + .json，rename 原子提交）；dify → JPEG+Base64 `redis_rpush("dify_queue")`
 4. Redis 断连时自动重连（限流 5s 一次）
 
-**生产者**：logic 中调 `alarm_uploader_enqueue()` / `dify_uploader_enqueue()`，**非阻塞**入队，不阻塞推理线程。**地址随消息走（方案2）**：入队函数带一个**本通道**地址参数（`server_url` / `dify_api_url`+`dify_api_key`，取自 `ctx->config`），`build_and_push_*` 把它写进 Redis 消息体；Python 上报服务按消息里的地址转发——所以不同通道可发往不同服务器，C++ 自身不连业务服务器。详见文末「近期架构增强 A」。
+**生产者**：logic 中调 `alarm_uploader_enqueue()` / `dify_uploader_enqueue()`，**非阻塞**入队，不阻塞推理线程。**地址随消息走（方案2）**：入队函数带一个**本通道**地址参数（`server_url` / `dify_api_url`+`dify_api_key`，取自 `ctx->config`），server 走 `record_alarm_local` 把地址写进发件箱 `.json`、dify 走 `build_and_push_dify` 写进 Redis `dify_queue` 消息体；Python 上报服务按"记录/消息里的地址"转发——所以不同通道可发往不同服务器，C++ 自身不连业务服务器。详见文末「近期架构增强 A」。
 
 **退出**：`g_uploader_running=0` 且队列排空。
 
@@ -359,7 +359,7 @@ raise_fd_limit → app_ctrl_init(创建 config_monitor) → gst_init
 ### RGA 调度核心（不可修改）
 
 ```cpp
-// frame_pipeline.cpp（三处）— 禁止改动
+// rga_convert.cpp（三处 RGA 调用）— 禁止改动
 opt.core = IM_SCHEDULER_RGA3_CORE0 | IM_SCHEDULER_RGA3_CORE1;
 ```
 
@@ -388,7 +388,7 @@ alarm_uploader_enqueue(img_draw, img_raw, chnId, alarm_type, server_url);
 dify_uploader_enqueue(img, prompt, event_id, dify_api_url, dify_api_key);
 ```
 - 地址取自 `ctx->config->server_url` / `dify_api_url` / `dify_api_key`（每通道字段，`config_init.cpp` 用 `REG_C` 注册、随配置热重载；用户在网页「上报配置」节点逐通道填）。
-- `build_and_push_server/dify` 把地址写进 Redis 消息体（`server_queue`/`dify_queue` 仍各一个，按"方式"分而非按"地址"分）。
+- server 走 `record_alarm_local` 把地址写进本地发件箱 `.json`、dify 走 `build_and_push_dify` 把地址写进 Redis `dify_queue` 消息体（按"方式"分而非按"地址"分）。
 - **C++ 不连业务服务器**：真正发到哪台由 Python 上报服务读消息里的地址决定 → 不同通道/程序可发不同服务器，改分发规则只动 Python、不重编译 C++。
 - 涉及文件：`uploader/alarm_uploader.{h,cpp}`、`config/config_init.cpp`、`logic/logic_*.cpp`（各 enqueue 调用点，如 logic_server / logic_hook / logic_dify）。
 
@@ -406,7 +406,7 @@ dify_uploader_enqueue(img, prompt, event_id, dify_api_url, dify_api_key);
 
 ## 9. 二次开发快速入门（添加业务逻辑）
 
-详见 [logic/README.md](rk3588_yolo/src/logic/README.md)。三步接入一个新的 channel_logic：
+详见 [logic.md](../../rk3588-src-modules/logic.md)。三步接入一个新的 channel_logic：
 
 1. 新建独立文件 `src/logic/logic_xxx.cpp`（顶部 `#include "logic_common.h"`）实现函数，并在**文件末尾**自注册：
    ```cpp
@@ -453,7 +453,10 @@ rk3588_yolo/
 │   │   └── config_registry.cpp    注册表 + sync_fields 字段级同步
 │   ├── core/                  全局控制块与工具函数
 │   │   ├── app_ctrl.h / app_ctrl.cpp  APP_CTRL + 通道状态 + snapshot
-│   │   └── utils/                     时间、文件等工具
+│   │   ├── image_utils.*              原始帧 → BGR cv::Mat
+│   │   ├── base64_util.*              告警图 Base64 编码
+│   │   ├── pause_ctrl.*               空格暂停/继续
+│   │   └── constants.h                系统级常量(队列大小等)
 │   ├── logic/                 业务逻辑（二次开发在这里）
 │   │   ├── channel_logic.cpp      框架核心：ChannelContext 方法 / draw_* / 注册分发表
 │   │   ├── logic_common.h         各 logic 共用头集合（逻辑文件一行 #include 它）
@@ -465,10 +468,11 @@ rk3588_yolo/
 │   ├── uploader/              告警异步上报
 │   │   └── alarm_uploader.cpp     JPEG 编码 + Redis RPUSH
 │   ├── yolo/                  RKNN 推理引擎
+│   │   ├── model_base.h           ModelBase 抽象基类
 │   │   ├── yolo.cpp               YOLOv5 实现
 │   │   ├── yolov8det.cpp          YOLOv8-det 实现
-│   │   ├── yolov8pose.cpp         YOLOv8-pose 实现
-│   │   └── yolov5seg.cpp          YOLOv5-seg 实现
+│   │   ├── yolopose.cpp           YOLOv8-pose 实现
+│   │   └── yoloseg.cpp            YOLOv5-seg 实现
 │   └── third_party/           cJSON、gst_opt、rk_mpi 等
 ├── assets/
 │   ├── config.json            运行配置

@@ -27,10 +27,10 @@
 | `App.tsx` | 路由 + 侧边栏外壳(`AppShell`):`<Routes>` 定义页面,`<NavLink>` 定义侧边栏入口,登录守卫 `ProtectedRoute` |
 | `api/client.ts` | **所有后端调用的唯一出口**:axios 实例(baseURL `/api`)、Bearer 注入、401 自动登出;每个接口一个导出函数 + TS 类型 |
 | `store/` | 全局状态(zustand):`authStore`(登录 token,持久化)、`consoleStore`、`editorStore`、`roiStore` |
-| `pages/` | 路由页面:`LoginPage` `AppsPage`(程序管理)`EditorPage`(配置画布)`LogsPage` `TerminalPage` |
+| `pages/` | 路由页面:`LoginPage` `AppsPage`(程序管理)`EditorPage`(配置画布)`LogsPage` `RecordsPage` `TerminalPage` |
 | `pages/terminalSession.ts` | 终端会话单例/注册表(xterm 实例 + WebSocket 常驻,跨路由保活);非 React 组件 |
-| `components/` | 复用组件:`ServicesPanel`(后台服务)`ServiceConfigModal` `NodeConfigPanel`(节点配置面板)`ROIModal` `AssetPicker` `ErrorBoundary` 等 |
-| `nodes/` | 编辑器画布的各类节点(React Flow):`ChannelNode` `LogicNode` `ReportNode` `ModelNode` `ROINode` `StreamNode` `GlobalNode`… |
+| `components/` | 复用组件:`ServicesPanel`(后台服务)`ServiceConfigModal` `NodeConfigPanel`(节点配置面板)`GlobalSettingsPanel`/`GlobalLogicsPanel` `AssetPicker` `NumberField` `ErrorBoundary` 等(ROI 绘制弹窗 `ROIDrawModal` 在 `nodes/ROINode.tsx` 内,不是单独组件) |
+| `nodes/` | 编辑器画布的各类节点(React Flow):`StreamNode` `ModelNode` `ROINode` `LogicNode` `ReportNode`(画布 5 种)+ `GlobalNode` / `GlobalLogicNode` |
 | `utils/configToGraph.ts` / `graphToConfig.ts` | **配置 ↔ 画布的双向转换**:把 `config.json` 还原成画布节点/连线,以及把画布存回 `config.json` |
 
 ## 三、关键约定(照着做就不跑偏)

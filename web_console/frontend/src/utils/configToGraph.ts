@@ -22,6 +22,14 @@ function resolveReport(
   return null
 }
 
+// 通道里若带上报字段(server_url / dify_*) → 说明画布上连过报警节点, 反序列化时据此重建,
+// 与 logic 是否声明 report 解耦(修复: 连到未声明 report 的 logic 上的报警节点, 刷新后消失)。
+function channelReportType(ch: Record<string, unknown>): 'server' | 'dify' | null {
+  if ('dify_prompt' in ch || 'dify_api_url' in ch || 'dify_api_key' in ch) return 'dify'
+  if ('server_url' in ch) return 'server'
+  return null
+}
+
 // 模型节点字段；通道里除这些(及 stream/logic/dify_prompt/server_url)之外的键，一律视为 logic 参数，路由到逻辑节点
 const MODEL_KEYS = new Set([
   'id', 'enable', 'infer_enable', 'npu_core', 'model_type', 'model_path', 'label_path',
@@ -182,7 +190,7 @@ export function configToGraph(
     }
 
     // ── Report node (only for logics that need it) ──
-    const reportType = resolveReport(logic, reportByLogic)
+    const reportType = resolveReport(logic, reportByLogic) ?? channelReportType(ch)
     if (reportType) {
       const reportId   = uid('report')
       const reportData: Record<string, unknown> = {}

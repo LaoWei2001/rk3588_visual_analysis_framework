@@ -148,6 +148,7 @@ export default function EditorPage() {
   const [importFiles,    setImportFiles]   = useState<string[]>([])
   const [showImport,     setShowImport]    = useState(false)
   const [showServiceCfg, setShowServiceCfg] = useState(false)
+  const [leavePrompt,    setLeavePrompt]    = useState(false)   // 未保存退出时的「是否保存配置」弹窗
   // 当前正在编辑/将保存到的配置文件（相对 app 目录）。导入/另存为后会切到对应文件，
   // 之后「保存」写到这里 —— 这样可以在副本上改而不动 config.json。
   const [currentFile,    setCurrentFile]   = useState('assets/config.json')
@@ -654,9 +655,9 @@ export default function EditorPage() {
   }
 
   // ── 保存（写入当前文件 currentFile）──
-  const handleSave = async () => {
+  const handleSave = async (): Promise<boolean> => {
     const result = buildConfig()
-    if (!result || !appName) return
+    if (!result || !appName) return false
     setSaving(true)
     try {
       if (currentFile === 'assets/config.json') {
@@ -669,8 +670,10 @@ export default function EditorPage() {
       }
       markClean()
       showToast(`保存成功 ✓（${cfgBase(currentFile)}）`)
+      return true
     } catch (e: unknown) {
       showToast(`保存失败: ${e instanceof Error ? e.message : String(e)}`, false)
+      return false
     } finally { setSaving(false) }
   }
 
@@ -717,9 +720,9 @@ export default function EditorPage() {
     showToast(`已导出 ${fileName}`)
   }
 
-  // 返回程序管理：有未保存改动先确认，避免误点丢失配置
+  // 返回程序管理：有未保存改动 → 弹「是否保存配置」(保存并离开 / 不保存离开 / 取消)
   const handleBack = () => {
-    if (dirty && !window.confirm('有未保存的改动，确定离开编辑器？未保存的修改将丢失。')) return
+    if (dirty) { setLeavePrompt(true); return }
     navigate('/')
   }
 
@@ -765,6 +768,29 @@ export default function EditorPage() {
                 ))
             }
             <button className="import-new-btn" onClick={handleNewFile}>➕ 新建配置文件</button>
+          </div>
+        </div>
+      )}
+
+      {/* 未保存退出确认: 保存并离开 / 不保存离开 / 取消 */}
+      {leavePrompt && (
+        <div className="import-overlay" onClick={() => setLeavePrompt(false)}>
+          <div className="import-dialog" onClick={e => e.stopPropagation()} style={{ maxWidth: 440 }}>
+            <div className="import-header">
+              有未保存的改动 — 是否保存配置？
+              <button onClick={() => setLeavePrompt(false)}>✕</button>
+            </div>
+            <div style={{ padding: '16px 18px', fontSize: 13, lineHeight: 1.6 }}>
+              画布有未保存的修改。离开前是否保存到 <b>{cfgBase(currentFile)}</b>？
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', padding: '0 16px 16px' }}>
+              <button className="tb-btn" onClick={() => setLeavePrompt(false)}>取消</button>
+              <button className="tb-btn" onClick={() => { setLeavePrompt(false); navigate('/') }}>不保存离开</button>
+              <button className="tb-btn save" disabled={saving}
+                onClick={async () => { setLeavePrompt(false); if (await handleSave()) navigate('/') }}>
+                {saving ? '保存中…' : '保存并离开'}
+              </button>
+            </div>
           </div>
         </div>
       )}

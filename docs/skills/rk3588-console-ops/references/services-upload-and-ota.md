@@ -3,18 +3,19 @@
 `service/` 下有两个 Python 微服务，**与通道逻辑松耦合、只通过文件和 Redis 交接**。写逻辑的人不用改它们，但要知道：你在逻辑里 `alarm_uploader_enqueue` / `dify_uploader_enqueue` 之后，数据就是被它们接走、转发出去的。
 
 ```
-┌─ C++ 主程序 (rk3588_yolo) ─────────────┐
-│  通道逻辑 logic_xxx                      │
-│   ├ alarm_uploader_enqueue(...,server_url) ─┐         （方案2：地址随消息走）
-│   └ dify_uploader_enqueue(...,api_url,key) ─┤
-│            ↓ redis_rpush                     │
+┌─ C++ 主程序 (rk3588_yolo) ───────────────────────────┐
+│  通道逻辑 logic_xxx        （方案2：地址随记录/消息走）   │
+│   ├ alarm_uploader_enqueue(...,server_url) ─┐ server: 写 .jpg+.json 落盘
+│   └ dify_uploader_enqueue(...,api_url,key) ─┤ dify  : redis_rpush
 └──────────────────────────────────────────────┘
-             ↓                                  ↓
-        Redis: server_queue              Redis: dify_queue
-             ↓ BLPOP                           ↓ BLPOP
+       │ server 落盘                      │ dify RPUSH
+       ↓                                  ↓
+  本地发件箱 alarm_store/（磁盘）      Redis: dify_queue
+       ↓ 扫目录                            ↓ BLPOP
 ┌─ 上报服务 unified_upload (main.py) ─────────────────────┐
-│  ServerWorker → POST 到 消息里的 server_url（或 config.yaml 默认）→ 业务服务器
-│  DifyWorker   → 上传图+跑工作流 到 消息里的 dify_api_url/key（或默认）→ Dify
+│  OutboxForwarder → 扫发件箱读图 → POST 到 .json 里的 server_url（或 config.yaml 默认）→ 业务服务器
+│                    成功即删；被拒/断网保留下轮重试（store-and-forward，断网不丢）
+│  DifyUploader    → BLPOP dify_queue → 上传图+跑工作流 到消息里的 dify_api_url/key（或默认）→ Dify
 └──────────────────────────────────────────────────────────┘
 
 ┌─ OTA 服务 ota_agent (ota_agent.py) ── 与上面无关，独立一条线 ─┐
@@ -28,15 +29,15 @@
 
 ## 1. 上报服务 `unified_upload`（`service/upload/main.py`）
 
-**职责**：板级一个、无状态的"转发器"。从 Redis 两个队列取告警，转发到外部。
+**职责**：板级一个的"转发器"。server 告警从**本地发件箱目录**取、Dify 从 **Redis 队列**取，转发到外部。
 
-- **双线程**：`ServerWorker` 消费 `server_queue`、`DifyWorker` 消费 `dify_queue`，各自 `BLPOP` 阻塞取消息。
-- **ServerUploader**：把消息组成业务 payload，`POST` 到地址。地址 = `data.get("server_url") or config.yaml 默认`（方案2：优先用消息自带的每通道地址）。
+- **双线程**：`OutboxForwarder` 扫本地发件箱目录 `alarm_store/`（server 告警）、`DifyUploader`（经通用 `queue_worker`）`BLPOP` 消费 `dify_queue`（Dify 分析）。
+- **OutboxForwarder**（server，store-and-forward）：扫 `alarm_store/` 里 C++ 落盘的 `.json`+`.jpg`，读图转 Base64 组业务 payload `POST`。地址 = 记录里的 `server_url` or config.yaml 默认。**传成功即删本地记录；服务器拒绝(非 200)/断网则保留、下轮重试**——断网期间告警攒在本地不丢，网络恢复后逐条补传。
 - **DifyUploader**：先上传图片文件、再跑 Dify 工作流。地址/密钥 = `data.get("dify_api_url"/"dify_api_key") or 默认`。
-- **配置 `config.yaml`**（同目录）：`server.url`/`dify.api_url`/`dify.api_key`/超时 = **默认/兜底地址**（通道留空时才用）；`redis.host/port/db/server_queue/dify_queue` = 连接与队列名。
-- **关键认知**：真正"发哪台服务器"由**消息自带的地址**决定（C++ 从 `ctx->config->server_url` 取、随告警塞进 Redis 消息）。所以不同通道/程序发不同服务器，靠的是 config.json 里的每通道地址，不是这个服务；这个服务只是照着消息发。
+- **配置 `config.yaml`**（同目录）：`server.url`/`dify.api_url`/`dify.api_key`/超时 = **默认/兜底地址**（通道留空时才用）；`redis.host/port/db/dify_queue` = 连接与 Dify 队列名（config.yaml 里的 `server_queue` 键已废弃不用——server 走本地发件箱）；发件箱目录由环境变量 `ALARM_STORE_DIR` 指定（两侧须一致）。
+- **关键认知**：真正"发哪台服务器"由**记录自带的地址**决定（C++ 从 `ctx->config->server_url` 取、随告警写进发件箱 `.json`）。所以不同通道/程序发不同服务器，靠的是 config.json 里的每通道地址，不是这个服务；这个服务只是照着记录/消息发。
 
-> 对应 C++：`src/uploader/alarm_uploader.cpp` 的 `redis_rpush("server_queue"/"dify_queue", json)`，消息里带 `server_url` / `dify_api_url` / `dify_api_key`。
+> 对应 C++：`src/uploader/alarm_uploader.cpp` 的 `record_alarm_local()`（server 落盘发件箱 `.json`，带 `server_url`）与 `redis_rpush("dify_queue", json)`（dify，带 `dify_api_url`/`dify_api_key`）。
 
 ## 2. OTA 升级服务 `ota_agent`（`service/model_update/ota_agent.py`）
 
@@ -53,11 +54,11 @@
 
 | 它们与谁交接 | 怎么交接 |
 |------------|---------|
-| **C++ 主程序** | 上报服务：经 **Redis 队列**（C++ 生产、Python 消费）。OTA：经**改写 config.json**（C++ 热重载）。都不直接调用。 |
-| **Redis** | 上报服务的消息总线（`server_queue`/`dify_queue`）。OTA 不用 Redis。 |
+| **C++ 主程序** | server 告警：经**本地发件箱目录** `alarm_store/`（C++ 落盘、Python 扫描补传）；Dify：经 **Redis 队列**（C++ 生产、Python 消费）。OTA：经**改写 config.json**（C++ 热重载）。都不直接调用。 |
+| **Redis** | 仅 **Dify 路径**的消息总线（`dify_queue`）；server 告警不走 Redis（走本地发件箱）。OTA 不用 Redis。 |
 | **config.json**（`assets/`） | 每通道**上报地址**在这（方案2，画布「上报配置」节点写）；OTA 升级会改这里的 `model_path/version`。 |
-| **config.yaml**（`services/upload/`） | 上报服务的**默认地址 + Redis + 超时**。 |
-| **ota_config.json**（`services/model_update/`） | OTA 服务的平台地址 + 目标配置名。 |
+| **config.yaml**（源码 `service/upload/`，部署在 `<App>/services/upload/`） | 上报服务的**默认地址 + Redis + 超时**。 |
+| **ota_config.json**（源码 `service/model_update/`，部署在 `<App>/services/model_update/`） | OTA 服务的平台地址 + 目标配置名。 |
 | **网页控制台 · 「服务配置」弹窗** | 写 `config.yaml`（上报默认值）和 `ota_config.json`（OTA 参数）到**对应 App 的 services/ 目录**（后端 `routers/upload_config.py` / `ota_config.py`）。 |
 | **网页控制台 · 「后台服务」面板** | 把这两个服务**安装成 systemd 单元并启停/看健康**（后端 `routers/services.py`）。 |
 | **systemd** | 实际托管这两个 `.py` 的是 `ota_agent.service` / `unified_upload.service`。 |
@@ -71,7 +72,7 @@
 ## 5. 对"写通道逻辑"的你意味着什么
 
 - 你只需在逻辑里 `*_enqueue(...)` 并把地址参数从 `ctx->config->server_url`/`dify_api_url`/`dify_api_key` 取（用户在网页填）。**enqueue 之后的事这两个服务全包了**，你不用碰它们。
-- 想验证有没有发出去：`redis-cli lrange server_queue 0 -1` 看带地址的消息；上报服务日志看转发结果。
+- 想验证有没有发出去：server 看本地发件箱 `ls <App>/alarm_store/`（Python 补传成功后即删）、dify 看 `redis-cli lrange dify_queue 0 -1`；上报服务日志看转发结果。
 - 想改**分发规则**（比如按 `alarm_type` 改发往哪、加重试、加签名）：只动 `service/upload/main.py`，**不用动 C++、不用重编译**——这正是方案2 把"地址当数据、转发逻辑放 Python"的好处。
 - OTA 跟通道逻辑基本无关，除非你的需求涉及"模型自动升级"，那也是平台侧推指令触发，逻辑层无感。
 

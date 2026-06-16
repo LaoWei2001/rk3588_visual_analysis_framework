@@ -6,8 +6,9 @@
  *   ctx->roi_count()                       本通道 ROI 区域数量
  *   ctx->roi_name_at(i) / roi_polygon_at(i)  按序号取区域名 / 多边形
  *   ctx->roi_by_name("entrance")           按名字取区域
- *   ctx->target_count_in_roi("person", i)  统计第 i 个区域内的 person 数量
- *   ctx->target_count_in_roi_named(...)    按名字统计
+ *   roi_count_target(ctx, "person", i)  统计第 i 个区域内的 person 数量
+ *   roi_count_target(ctx, "person", roi_find(ctx,"entrance"))  按名字: 先 roi_find 取序号再传
+ *   ctx->roi_index_of(box)                 框中心落在第几个区域(都不在 → -1)
  *
  * 行为: 逐区域用不同颜色画出多边形 + 标注[序号]名字和该区域 person 数;
  *       每个检测框按"落在哪个区域"染成该区域颜色(不在任何区域=灰);
@@ -50,7 +51,7 @@ static void logic_multi_roi(ChannelContext *ctx)
         draw_polyline(ctx, *poly, col, 2, 1.0, /*closed=*/true);
 
         const char *nm      = ctx->roi_name_at(i);
-        const int   persons = ctx->target_count_in_roi("person", i);
+        const int   persons = roi_count_target(ctx, "person", i);
         char label[96];
         if (nm && nm[0])
             snprintf(label, sizeof(label), "[%d] %s  person=%d", i, nm, persons);
@@ -65,33 +66,22 @@ static void logic_multi_roi(ChannelContext *ctx)
     {
         for (auto &r : *ctx->results)
         {
-            const cv::Point c = r.box_center();
-            int hit = -1;
-            for (int i = 0; i < nroi; ++i)
-            {
-                const std::vector<cv::Point> *poly = ctx->roi_polygon_at(i);
-                if (poly && poly->size() >= 3 &&
-                    cv::pointPolygonTest(*poly, c, false) >= 0.0)
-                {
-                    hit = i;
-                    break;
-                }
-            }
+            const int hit = ctx->roi_index_of(r.box);   /* 落在第几个区域, 都不在 → -1 */
             const cv::Scalar col = (hit >= 0) ? kPalette[hit % kNPal]
                                               : cv::Scalar(160, 160, 160);
             r.box_color = col;
-            draw_circle(ctx, c, 3, col, 2);
+            draw_circle(ctx, r.box_center(), 3, col, 2);
         }
     }
 
-    /* 3) 顶部汇总 + 演示"按名字取区域"(ctx->roi_by_name / target_count_in_roi_named) */
+    /* 3) 顶部汇总 + 演示"按名字取区域"(ctx->roi_by_name / roi_count_target + roi_find) */
     char summary[64];
     snprintf(summary, sizeof(summary), "ROI zones: %d", nroi);
     draw_text(ctx, summary, cv::Point(20, 24), cv::Scalar(255, 255, 255), 0.6, 2);
 
     if (ctx->roi_by_name("entrance"))
     {
-        const int n = ctx->target_count_in_roi_named("person", "entrance");
+        const int n = roi_count_target(ctx, "person", roi_find(ctx, "entrance"));
         char t[64];
         snprintf(t, sizeof(t), "entrance person=%d", n);
         draw_text(ctx, t, cv::Point(20, 48), cv::Scalar(0, 255, 0), 0.55, 2);

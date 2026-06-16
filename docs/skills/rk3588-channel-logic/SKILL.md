@@ -23,7 +23,7 @@ description: >-
 
 针对一个需求，你要给出**一组改动**，全部对齐项目现有约定：
 
-1. **`rk3588_yolo/src/logic/logic_xxx.cpp`（新建独立文件，一个逻辑一个文件）** — 顶部 `#include "logic_common.h"`，实现 `static void logic_xxx(ChannelContext *ctx)`，文件**末尾写一行** `REGISTER_LOGIC("logic_xxx", logic_xxx);` 自注册（在 `main()` 前自动登记，**无需改动 `channel_logic.cpp` 或 `channel_logic_init()`**）。`src/logic` 下的 `.cpp` 由 CMake（`aux_source_directory`）自动收集编译。`channel_logic.cpp` 现在只是框架核心（`ChannelContext` 方法 / `draw_*` / 分发表），不再放具体逻辑。
+1. **`rk3588_yolo/src/logic/logic_xxx.cpp`（新建独立文件，一个逻辑一个文件）** — 顶部 `#include "logic_common.h"`，实现 `static void logic_xxx(ChannelContext *ctx)`，文件**末尾写一行** `REGISTER_LOGIC("logic_xxx", logic_xxx);` 自注册（在 `main()` 前自动登记，**无需改动 `channel_logic.cpp`**）。`src/logic` 下的 `.cpp` 由 CMake（`aux_source_directory`）自动收集编译。`channel_logic.cpp` 现在只是框架核心（`ChannelContext` 方法 / `draw_*` / 分发表），不再放具体逻辑。
 2. **`rk3588_yolo/src/logic/logics.json`** — `channel_logics` 数组加一条声明（`name`/`label`/可选 `report`/`params`），让网页编辑器能选到它、渲染可调参数。
 3. **（仅当需要新的可调参数时）** `rk3588_yolo/src/config/config.h` 的 `ChannelConfig` 加字段 + `rk3588_yolo/src/config/config_init.cpp` 用 `REG_C` 注册。
 4. **收尾说明**给开发者：哪个通道的 `config.json` 里 `"logic"` 要设成 `"logic_xxx"`（或叫他在网页画布的逻辑节点选这个 logic）、要不要连「上报配置」节点、改完怎么编译验证。
@@ -45,7 +45,7 @@ description: >-
 | 维度   | 要确定的                       | 常见取值                                                                            |
 | ---- | -------------------------- | ------------------------------------------------------------------------------- |
 | 目标类别 | 检测哪个/哪些 label              | `"person"` / `"car"` / 自定义模型的类名（**大小写/拼写要和 labels.txt 完全一致**）                   |
-| 区域   | 全屏还是 ROI 内                 | 用 `ctx->has_target_in_roi(label)` 或自己 `pointPolygonTest(*ctx->roi, box_center)` |
+| 区域   | 全屏还是 ROI 内                 | 用 `roi_has_target(ctx, label, ROI_ALL)` 或自己 `pointPolygonTest(*ctx->roi, box_center)` |
 | 触发条件 | 存在 / 计数 / 停留时长 / 越界 / 位置关系 | 停留/越界要用 `ctx->state` 跨帧计时                                                       |
 | 动作   | 画框/文字、报警、上报(server/dify)   | 上报见 `references/upload-and-wiring.md`                                           |
 | 频率   | 上报/报警限频                    | 用 `ctx->timestamp_ms` 做间隔，别每帧都发，必须要设定冷却时间或者其他能够限制连续触发报警的规则。                     |
@@ -95,7 +95,7 @@ static void logic_xxx(ChannelContext *ctx)
 }
 ```
 
-`ctx` 的全部字段与可用辅助函数（`has_target_in_roi`、`draw_*`、`get_channel_snapshot` 等）见 **`references/channelcontext-api.md`**。
+`ctx` 的全部字段与可用辅助函数（`roi_has_target`、`draw_*`、`get_channel_snapshot` 等）见 **`references/channelcontext-api.md`**。
 
 想了解你的逻辑跑在什么样的运行时里（8 类线程、同步原语、**帧与检测框为何保证同帧**、启动/退出时序，以及上报地址/ROI 坐标系等架构要点），看 **`references/rk3588_yolo_系统说明文档.md`**（文字详解）+ **`references/rk3588_yolo_架构图.md`**（图）。写普通逻辑不必读；但要碰 analyzer/capturer/uploader 核心、或排查并发/时序/坐标问题时，先读它们建立全局观。
 
@@ -179,7 +179,7 @@ grep -rn "logic_foo\|FooState" rk3588_yolo/src web_console/frontend/src
 1. 在哪个通道生效：网页画布该通道的「逻辑函数」节点选 `logic_xxx`（或手改 `config.json` 该通道 `"logic": "logic_xxx"`）；若上报，连一个「上报配置」节点并填地址。
 2. 编译装包：`cd rk3588_yolo && ./build.sh <名> && sudo ./install_app.sh <名>`（改了 C++ 必须重编译）。
 3. **ROI 只在程序启动时加载**——改了 ROI 要在「程序管理」停止再启动，不能靠热重载。
-4. 跑起来可以看左上角 overlay / 监看画面验证行为；上报的话 `redis-cli lrange server_queue 0 -1` 能看到带地址的消息。
+4. 跑起来可以看左上角 overlay / 监看画面验证行为；上报的话：server 告警看本地发件箱 `ls <App>/alarm_store/`（Python 补传后即删），dify 看 `redis-cli lrange dify_queue 0 -1`。
 
 ## 常见坑（写之前过一遍）
 

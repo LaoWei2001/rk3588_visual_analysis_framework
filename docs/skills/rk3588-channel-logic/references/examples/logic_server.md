@@ -5,7 +5,7 @@
 - **用到的能力**：方案2 每通道地址、跨帧状态限频、最简上报骨架
 
 ## 做什么
-"有检测结果就上报到 HTTP 服务器"，并按 `report_interval_sec` 限频。一旦本帧有任何检测结果、且距上次上报已达间隔，就把当前帧打包、带上本通道的 `server_url` 推到 `server_queue`，告警类型 `"intrusion"`，再记下本次上报时间。首次（`last_upload_ms==0`）立即上报，之后按间隔冷却。间隔每帧从 `ctx->config->report_interval_sec` 现读，支持网页热重载。
+"有检测结果就上报到 HTTP 服务器"，并按 `report_interval_sec` 限频。一旦本帧有任何检测结果、且距上次上报已达间隔，就把当前帧打包、带上本通道的 `server_url` 落地到本地发件箱（`alarm_store/`，由 Python 上报服务补传到 HTTP 服务器），告警类型 `"intrusion"`，再记下本次上报时间。首次（`last_upload_ms==0`）立即上报，之后按间隔冷却。间隔每帧从 `ctx->config->report_interval_sec` 现读，支持网页热重载。
 
 ## 完整实现
 ```cpp

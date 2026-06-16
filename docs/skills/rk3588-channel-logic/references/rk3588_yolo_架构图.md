@@ -23,8 +23,8 @@
             │ 读写状态            │                    │              │
    ┌────────┴──────┐   ┌─────────┴────────┐   ┌───────┴──────┐  ┌────┴──────┐
    │  capturer/    │   │    analyzer/     │   │   logic/     │  │ uploader/ │
-   │  GStreamer    │──▶│  推理调度核心    │──▶│ channel/     │─▶│ Redis异步 │
-   │  RTSP/文件/USB│帧 │  (见线程拓扑图)  │   │ global logic │  │ 上报      │
+   │  GStreamer    │──▶│  推理调度核心    │──▶│ channel/     │─▶│ 异步上报  │
+   │  RTSP/文件/USB│帧 │  (见线程拓扑图)  │   │ global logic │  │ 发件箱/R  │
    └───────────────┘   └────────┬─────────┘   └──────────────┘  └───────────┘
                                 │                     │
                        ┌────────┴────────┐   ┌────────┴────────┐
@@ -119,8 +119,8 @@ main 线程
  │  wait cv → swap_front        │     ┌───────────────────▼────────┐
  │  commitImgtoDispBufMap:      │     │ ⑧ upload_worker            │
  │   RGA缩放→render_overlays    │     │  wait queue_cv             │
- │   (读共享last_results+卡尔曼  │     │  JPEG编码+base64           │
- │    速度外推)→framebuffer     │     │  Redis RPUSH               │
+ │   (读共享last_results+卡尔曼  │     │  server告警→落盘发件箱      │
+ │    速度外推)→framebuffer     │     │  dify→base64+redis RPUSH   │
  └──────────────────────────────┘     └────────────────────────────┘
 
  ⑦ global_logic（独立轮询，与上面解耦）
@@ -278,8 +278,9 @@ main 线程
 ```
  上报（方案2：地址跟着告警走，C++ 不连业务服务器）
    logic: enqueue(..., ctx->config->server_url / dify_api_url+key)   ← 每通道地址(config.json)
-        → build_and_push_* 把地址写进消息 → redis_rpush(server_queue/dify_queue)（一个队列，消息自带地址）
-        → Python 上报服务 BLPOP → 按"消息里的地址"POST（不同通道发不同服务器）
+        → server: record_alarm_local 把地址写进发件箱 .json（+带框图.jpg/原图_raw.jpg），落地 alarm_store/
+        → dify  : build_and_push_dify 把地址写进消息 → redis_rpush(dify_queue)
+        → Python: OutboxForwarder 扫发件箱补传(成功即删) / DifyUploader BLPOP → 按"地址"POST（不同通道发不同服务器）
 
  ROI（坐标系务必一致，否则判定错位）
    roi_zones.json(归一化0~1) ─load_roi_zones(仅启动一次)─▶ ×模型尺寸 ─▶ roi_for_logic(模型640空间)
