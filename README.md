@@ -2,7 +2,7 @@
 
 在一块 RK3588 上同时接入多路视频（RTSP / 本地文件 / USB），用 NPU 跑 YOLO 检测/分割/姿态，按「每通道一段自行编排的业务逻辑」做入侵、计数、跌倒等视觉分析并支持上报服务器/dify，全程可在网页上拖拽配置、热重载、看实时画面。
 
-（如有任何疑问可随时联系作者Sunny_Wei 1927096839@qq.com）
+如有任何问题可随时联系作者：Sunny_Wei 1927096839@qq.com
 
 ---
 
@@ -15,7 +15,7 @@
 - **模块自由组合**: 视频流模块，yolo模块，逻辑函数模块，告警上报服务自由组合。但需要自行编写的逻辑函数中支持，可参考已有示例。
 - **可视化 Web 控制台**：拖拽配置视频源/模型/ROI/逻辑/上报，生成 `config.json`，一键启动、看实时画面、查日志。
 - **热重载**：阈值、类别、逻辑名、可调参数、模型路径改了即生效，无需重启。
-- **异步上报**：C++主程序只把告警写入 Redis，Python 微服务异步转发到业务服务器 / Dify 工作流, 依靠redis管理消息队列实现了边缘侧与服务器断连时的报警信息存储, 和重连之后的告警信息发送。
+- **异步上报 + 断网不丢**：server 告警由 C++ 落盘到本地「发件箱」目录（`alarm_store/`），Python 微服务扫描补传到业务服务器——**断网时攒在本地、重连后逐条补发、发成功即删**，这条 store-and-forward 链路保证边缘侧与服务器断连期间报警不丢失（落盘方案，断电重启也不丢）；Dify 分析则走 Redis 队列。两条路都非阻塞，不拖慢推理线程。
 
 ---
 
@@ -27,11 +27,11 @@
 ├── rk3588_yolo/           # C++ 主程序（推理引擎 + 解码 + 显示 + 业务逻辑）
 │   ├── build.sh           #   编译打包（板端原生 / Docker 交叉）
 │   ├── install_app.sh     #   把产物装进控制台目录 /opt/ai_apps/
-│   └── src/               #   源码（各模块含 README）
+│   └── src/               #   源码（各模块说明见 docs/skills/rk3588-src-modules/）
 ├── web_console/           # Web 配置控制台（FastAPI 后端 :8080 + React 前端）
 │   └── install.sh
 ├── service/               # Python 微服务
-│   ├── upload/            #   告警上报（消费 Redis 队列 → HTTP / Dify）
+│   ├── upload/            #   告警上报（扫本地发件箱 → HTTP；消费 Redis → Dify）
 │   └── model_update/      #   OTA 模型在线更新
 └── docs/                  # 二次开发文档 / 技能说明 / 开发日志
 ```
@@ -125,10 +125,10 @@ cd rk3588_yolo/dist
 
 ## 上报与微服务（可选）
 
-业务逻辑里调用 `alarm_uploader_enqueue(...)` / `dify_uploader_enqueue(...)` 时，C++ 只把图片+元数据写入 Redis 队列，由 `service/upload` 微服务异步消费：
+业务逻辑里调用 `alarm_uploader_enqueue(...)` / `dify_uploader_enqueue(...)` 时，C++ 非阻塞投递，由 `service/upload` 微服务异步处理：
 
-- `server_queue` → HTTP POST 到业务服务器
-- `dify_queue` → 上传图片 + 触发 Dify 工作流（可在网页填提示词，让大模型做二次核验）
+- **server 告警** → C++ 落盘到本地发件箱 `alarm_store/`（带框图 + 原图 + `.json` 元数据），`OutboxForwarder` 扫描 → HTTP POST 到业务服务器 → **成功即删、断网攒着、重连补发**（不经 Redis，断电重启也不丢）。
+- **dify 分析** → C++ `redis_rpush("dify_queue")` → `DifyUploader` 消费 → 上传图片 + 触发 Dify 工作流（可在网页填提示词，让大模型做二次核验）。
 
 上报地址按通道走（在网页「上报配置」节点填），留空则回落到 `service/upload/config.yaml` 的默认值。微服务由 `deploy.sh` 一并注册为 systemd 服务。
 
@@ -138,7 +138,7 @@ cd rk3588_yolo/dist
 
 - **加一个通道逻辑**：在 `rk3588_yolo/src/logic/` 新建 `logic_xxx.cpp`（顶部 `#include "logic_common.h"`，实现 `static void logic_xxx(ChannelContext*)`，文件末尾 `REGISTER_LOGIC("logic_xxx", logic_xxx);`），重新 `build.sh` 即可。删除功能＝删除该文件。
 - **加可热重载参数**：`config.h` 的 `ChannelConfig` 加字段 + `config_init.cpp` 用 `REG_C` 注册 + `logics.json` 声明，网页自动渲染。
-- **完整指南**：见 `rk3588_yolo/src/logic/README.md` 与 `docs/skills/rk3588-channel-logic/`（含 `ChannelContext` API 速查与每个现成逻辑的真实代码示例）。各源码子目录（`analyzer/` `capturer/` `config/` `core/` `player/` `uploader/` `yolo/`）都带 README。
+- **完整指南**：见 `docs/skills/rk3588-channel-logic/`（含 `ChannelContext` API 速查与每个现成逻辑的真实代码示例）。各源码模块（`analyzer/` `capturer/` `config/` `core/` `logic/` `player/` `uploader/` `yolo/`）的说明文档统一收在 `docs/skills/rk3588-src-modules/`。
 
 ---
 
@@ -151,7 +151,7 @@ cd rk3588_yolo/dist
 - **改了配置不生效**：通道数量、流地址、显示分辨率、`infer_enable` 等需停止再启动；阈值/逻辑名/可调参数支持热重载。
 - **跌倒等姿态逻辑不准**：建议用 `yolov8_pose` 模型（有 17 关键点）。
 
-更多踩坑记录见 development_log.md。
+更多踩坑记录见 `docs/development_log.md`。
 
 ---
 
