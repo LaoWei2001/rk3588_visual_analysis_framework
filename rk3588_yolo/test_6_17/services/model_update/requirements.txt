@@ -1,5 +1,0 @@
-# Third-party dependencies for ota_agent.py
-# Standard library modules (asyncio/json/hashlib/os/threading/uuid/...) do not need pip installation.
-
-requests>=2.31.0,<3.0.0
-websockets>=10.4,<13.0
