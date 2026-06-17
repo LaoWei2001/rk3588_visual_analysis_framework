@@ -57,7 +57,11 @@ def _unit_content(key: str, app_dir: Path) -> str:
         return (
             "[Unit]\n"
             "Description=Edge Box OTA Agent\n"
-            "After=network.target\n\n"
+            "After=network.target\n"
+            # 快速失败达 5 次/120s 即停在 failed，避免无限重启刷上千次
+            # (RestartSec 比 systemd 默认限速窗口还宽，否则默认限速永远触发不了)
+            "StartLimitIntervalSec=120\n"
+            "StartLimitBurst=5\n\n"
             "[Service]\n"
             "Type=simple\n"
             f"WorkingDirectory={app_dir}/services/model_update\n"
@@ -74,7 +78,10 @@ def _unit_content(key: str, app_dir: Path) -> str:
         "[Unit]\n"
         "Description=RK3588 Unified Upload Service\n"
         "After=network-online.target\n"
-        "Wants=network-online.target\n\n"
+        "Wants=network-online.target\n"
+        # 快速失败达 5 次/120s 即停在 failed，避免无限重启刷上千次
+        "StartLimitIntervalSec=120\n"
+        "StartLimitBurst=5\n\n"
         "[Service]\n"
         "Type=simple\n"
         f"WorkingDirectory={app_dir}/services/upload\n"
@@ -181,9 +188,11 @@ async def install_service(key: str, req: InstallReq):
         rl = _run(["systemctl", "daemon-reload"])
         if rl.returncode != 0:
             raise HTTPException(status_code=500, detail=f"daemon-reload 失败: {rl.stderr.strip()}")
-        _run(["systemctl", "enable", unit])          # 开机自启
+        # 默认不开机自启：后台服务由用户在面板手动启动（崩溃循环时才不会一开机就疯狂重启）。
+        # 用 disable 主动清掉历史上 enable 过的自启 → “没手动点就不会自己跑”。
+        _run(["systemctl", "disable", unit])
         _run(["systemctl", "reset-failed", unit])    # 清掉旧单元/失败留下的 failed 终态
-        st = _run(["systemctl", "restart", unit])    # 用新单元直接(重)启动 —— 默认装完即运行
+        st = _run(["systemctl", "restart", unit])    # 用新单元直接(重)启动 —— 点一次跑这一程，重启/关机后不自启
     except PermissionError:
         raise HTTPException(status_code=500, detail="写入 systemd 单元失败：控制台需以 root 运行")
     except HTTPException:

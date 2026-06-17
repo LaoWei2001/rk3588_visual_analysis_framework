@@ -47,6 +47,7 @@ void init_config_fields(AppConfig &cfg)
     REG_C("id", INT, id);
     REG_C("enable", BOOL, enable);
     REG_C("infer_enable", BOOL, infer_enable);
+    REG_C("swap_rb", BOOL, swap_rb);
     REG_C("logic", STRING, logic);
     REG_C("model_type", STRING, model_type);
     REG_C("model_path", STRING, model_path);
@@ -66,6 +67,7 @@ void init_config_fields(AppConfig &cfg)
     // 自定义逻辑中的变量配置区域
     REG_C("radius", INT, radius);
     REG_C("report_interval_sec", INT, report_interval_sec);
+    REG_C("linger_sec", INT, linger_sec);
     REG_C("line_width", INT, line_width);
     REG_C("t_start", FLOAT, t_start);
     REG_C("t_end", FLOAT, t_end);

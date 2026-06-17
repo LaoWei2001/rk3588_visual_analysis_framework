@@ -138,6 +138,8 @@ static void invoke_channel_logic(int chnId,
     ChannelContext ctx;
     ctx.chnId         = chnId;
     ctx.frame         = &frame_for_logic;
+    ctx.src_width     = ch_state.src_w_now;   /* 原始视频分辨率(解码源帧尺寸, 如 1920×1080) */
+    ctx.src_height    = ch_state.src_h_now;
     ctx.frame_id      = frame_id;
     ctx.timestamp_ms  = timestamp_ms;
     /* 墙上时钟(epoch ms): RTSP/USB/文件 三源统一在此盖一次, logic 读 ctx->unix_ms / time_hms()
@@ -163,6 +165,11 @@ static void invoke_channel_logic(int chnId,
      * chn_mtx 只用于最终写回，持锁时间从 ms 级降至 μs 级。*/
     std::vector<DrawCommand> draw_cmds;
     ctx.draw_cmds = &draw_cmds;
+    /* 显示画布(可选): logic 调 ctx->display_canvas() 才会启用并克隆，不调则零开销 */
+    cv::Mat canvas_buf;
+    bool    show_canvas = false;
+    ctx.canvas      = &canvas_buf;
+    ctx.show_canvas = &show_canvas;
     fn(&ctx);
 
     /* 原子写回共享状态：get_channel_snapshot() 在同一把锁内读出，三者必定同帧。*/
@@ -173,6 +180,13 @@ static void invoke_channel_logic(int chnId,
         ch_state.result_frame_seq  = frame_id;
         ch_state.last_result_ts_ms = steady_now_ms();
         ch_state.draw_cmds         = std::move(draw_cmds);
+        /* logic 拦截了整帧 → 存为本通道显示底图；否则清掉，显示回到实时采集帧 */
+        if (show_canvas && !canvas_buf.empty()) {
+            ch_state.logic_display_frame = std::move(canvas_buf);
+            ch_state.logic_display_ts_ms = steady_now_ms();
+        } else {
+            ch_state.logic_display_frame.release();
+        }
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
     }
 }

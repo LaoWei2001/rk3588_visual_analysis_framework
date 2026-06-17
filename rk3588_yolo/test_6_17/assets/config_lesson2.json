@@ -1,0 +1,44 @@
+{
+  "schema_version": 2,
+  "global": {
+    "model_path": "assets/yolov8n.rknn",
+    "label_path": "assets/labels.txt",
+    "enable_display": 1,
+    "disp_width": 640,
+    "disp_height": 640,
+    "tile_rows": 1,
+    "tile_cols": 1,
+    "max_fps": 15,
+    "queue_size": 1,
+    "channel_threads": 1,
+    "npu_cores": 3,
+    "obj_thresh": 0.3,
+    "nms_thresh": 0.45,
+    "detect_classes": [],
+    "tracker_enable": 1,
+    "tracker_iou_thresh": 0.3,
+    "tracker_max_miss": 30,
+    "tracker_min_hits": 3,
+    "performance_display": 1,
+    "enable_pause_key": 0,
+    "enable_rtsp": 1
+  },
+  "channels": [
+    {
+      "id": 0,
+      "enable": true,
+      "infer_enable": false,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/wash1.mp4",
+        "loop": true
+      },
+      "logic": "logic_lesson2",
+      "sop_sequence": "去胶槽1,去胶槽2,IPA槽,纯水槽",
+      "basket_normal_label": "bkt_normal",
+      "basket_abnormal_label": "bkt_abnormal",
+      "sop_shake_amplitude": 15,
+      "sop_shake_min_count": 3
+    }
+  ]
+}

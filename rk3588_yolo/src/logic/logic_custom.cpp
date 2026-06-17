@@ -34,7 +34,7 @@ static void logic_custom(ChannelContext *ctx)
         for (auto &r : *ctx->results)
         {
             const cv::Point box_c = r.box_center();
-            int in_roi = !has_roi || (cv::pointPolygonTest(*ctx->roi, box_c, false) >= 0.0);
+            int in_roi = roi_contains(ctx, r.box, ROI_ALL);   /* 没画 ROI=整帧不设限(算在内) */
 
             if (in_roi)
                 ++in_cnt;

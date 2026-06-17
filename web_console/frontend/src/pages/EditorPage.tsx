@@ -27,6 +27,7 @@ import { useConsoleStore } from '../store/consoleStore'
 import { useEditorStore }  from '../store/editorStore'
 import { graphToConfig }   from '../utils/graphToConfig'
 import { configToGraph }   from '../utils/configToGraph'
+import { setLastConfig }    from '../utils/lastConfig'
 import {
   fetchConfig, fetchROI, saveConfig, saveROI, saveConfigFile, deleteConfigFile,
   fetchConfigFiles, loadConfigFile,
@@ -669,6 +670,7 @@ export default function EditorPage() {
         await saveConfigFile(appName, currentFile, result.config)
       }
       markClean()
+      setLastConfig(appName, cfgBase(currentFile))   // 记住这次保存的配置 → 程序管理页启动下拉默认选它
       showToast(`保存成功 ✓（${cfgBase(currentFile)}）`)
       return true
     } catch (e: unknown) {
@@ -720,10 +722,16 @@ export default function EditorPage() {
     showToast(`已导出 ${fileName}`)
   }
 
+  // 返回程序管理前，记住这次编辑的配置文件 → 该页启动配置下拉自动选中它
+  const leaveToApps = () => {
+    if (appName) setLastConfig(appName, cfgBase(currentFile))
+    navigate('/')
+  }
+
   // 返回程序管理：有未保存改动 → 弹「是否保存配置」(保存并离开 / 不保存离开 / 取消)
   const handleBack = () => {
     if (dirty) { setLeavePrompt(true); return }
-    navigate('/')
+    leaveToApps()
   }
 
   const nodeColor = (n: Node) => {
@@ -785,9 +793,9 @@ export default function EditorPage() {
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', padding: '0 16px 16px' }}>
               <button className="tb-btn" onClick={() => setLeavePrompt(false)}>取消</button>
-              <button className="tb-btn" onClick={() => { setLeavePrompt(false); navigate('/') }}>不保存离开</button>
+              <button className="tb-btn" onClick={() => { setLeavePrompt(false); leaveToApps() }}>不保存离开</button>
               <button className="tb-btn save" disabled={saving}
-                onClick={async () => { setLeavePrompt(false); if (await handleSave()) navigate('/') }}>
+                onClick={async () => { setLeavePrompt(false); if (await handleSave()) leaveToApps() }}>
                 {saving ? '保存中…' : '保存并离开'}
               </button>
             </div>

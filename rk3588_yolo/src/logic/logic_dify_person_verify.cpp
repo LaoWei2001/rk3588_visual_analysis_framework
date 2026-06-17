@@ -39,8 +39,6 @@ static void logic_dify_person_verify(ChannelContext *ctx)
         return;
     }
 
-    int has_roi = (ctx->roi && ctx->roi->size() >= 3);
-
     /* 收集当前帧所有有效的人员 track_id */
     std::set<int> current_person_ids;
     int total_person = 0, no_track = 0, out_roi = 0;
@@ -54,7 +52,7 @@ static void logic_dify_person_verify(ChannelContext *ctx)
             no_track++;
             continue;
         }
-        if (has_roi && cv::pointPolygonTest(*ctx->roi, r.box_center(), false) < 0)
+        if (!roi_contains(ctx, r.box, ROI_ALL))   /* 不在任一 ROI(没画 ROI=整帧不设限) */
         {
             out_roi++;
             continue;
@@ -217,7 +215,7 @@ static void logic_dify_person_verify(ChannelContext *ctx)
     {
         if (r.label != "person" || r.track_id < 0)
             continue;
-        if (has_roi && cv::pointPolygonTest(*ctx->roi, r.box_center(), false) < 0)
+        if (!roi_contains(ctx, r.box, ROI_ALL))   /* 不在任一 ROI(没画 ROI=整帧不设限) */
             continue;
 
         char tid_text[32];

@@ -43,7 +43,7 @@ static void logic_hook(ChannelContext *ctx)
     const cv::Scalar circle_color = (hook_outside || (in_grace && s.alarm_active))
                                         ? cv::Scalar(0, 0, 255)
                                         : cv::Scalar(0, 255, 0);
-    draw_circle(ctx, safe_center, radius, circle_color, 2, DrawCommand::ALL);
+    draw_circle(ctx, safe_center, radius, circle_color, 2);
 
     /* 状态面板 */
     {

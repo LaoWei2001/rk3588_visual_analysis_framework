@@ -25,14 +25,12 @@ static void logic_dify_person_verify(ChannelContext *ctx)
 
     if (s.first) { s.last_upload_ms = ctx->timestamp_ms; s.first = 0; return; }
 
-    int has_roi = (ctx->roi && ctx->roi->size() >= 3);
-
     /* 1) 收集本帧 ROI 内、有 track_id 的 person */
     std::set<int> current_person_ids;
     for (auto &r : *ctx->results) {
         if (r.label != "person") continue;
         if (r.track_id < 0) continue;
-        if (has_roi && cv::pointPolygonTest(*ctx->roi, r.box_center(), false) < 0) continue;
+        if (!roi_contains(ctx, r.box, ROI_ALL)) continue;   // 没画 ROI=整帧不设限
         current_person_ids.insert(r.track_id);
         r.box_color = cv::Scalar(0,0,255);
     }

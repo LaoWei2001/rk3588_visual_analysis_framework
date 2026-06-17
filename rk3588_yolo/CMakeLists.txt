@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.10.2)
 
+# 导出 compile_commands.json：让 VS Code / clangd 的 IntelliSense 用与编译器完全相同的 -I（含 OpenCV），
+# 从根上消除 cv:: 的红波浪线，且永远和真实编译保持一致（不用再往 third_party 拷 opencv2）。
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 STRING(REGEX REPLACE ".*/(.*)" "\\1" CURRENT_FOLDER ${CMAKE_CURRENT_SOURCE_DIR})
 MESSAGE("current project: " ${CURRENT_FOLDER})
 

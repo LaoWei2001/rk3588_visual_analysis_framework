@@ -182,18 +182,30 @@ struct ChannelContext {
 
 ```cpp
 void draw_rect(ChannelContext *ctx, const cv::Rect &rect,
-               cv::Scalar color = {0,255,0}, int thickness = 2);
+               cv::Scalar color = {0,255,0}, int thickness = 2,
+               double alpha = 1.0, DrawCommand::Target target = DrawCommand::ALL);
 
 void draw_circle(ChannelContext *ctx, cv::Point center, int radius,
-                 cv::Scalar color = {0,255,0}, int thickness = 2);
+                 cv::Scalar color = {0,255,0}, int thickness = 2,
+                 double alpha = 1.0, DrawCommand::Target target = DrawCommand::ALL);
 
 void draw_line(ChannelContext *ctx, cv::Point pt1, cv::Point pt2,
                cv::Scalar color = {0,255,0}, int thickness = 2);
 
 void draw_text(ChannelContext *ctx, const string &text, cv::Point pos,
                cv::Scalar color = {255,255,255},
-               double font_scale = 0.6, int thickness = 1);
+               double font_scale = 0.6, int thickness = 1);  // thickness = 加粗级别: <=1 普通, >=2 越粗
+
+void draw_polyline(ChannelContext *ctx, const std::vector<cv::Point> &pts,
+                   cv::Scalar color = {0,255,0}, int thickness = 2,
+                   double alpha = 1.0, bool closed = false);
+
+void draw_poly_filled(ChannelContext *ctx, const std::vector<cv::Point> &pts,
+                      cv::Scalar color = {0,255,0}, double alpha = 0.3);  // 填充多边形(色块)
 ```
+
+> `thickness = -1` 填充矩形/圆；`alpha < 1` 半透明叠加（矩形/圆/折线/填充多边形）。
+> 高亮报警区常用：`draw_rect(ctx, zone, 红, -1, 0.3)` 或 `draw_poly_filled(ctx, *ctx->roi, 红, 0.3)`。
 
 ---
 
@@ -298,15 +310,13 @@ static void logic_my_alarm(ChannelContext *ctx) {
         *ctx->state = std::make_shared<MyState>();
     auto &s = *std::static_pointer_cast<MyState>(*ctx->state);
 
-    // 检测 ROI 内的人（ctx->results / ctx->roi / ctx->frame 都是指针，先解引用）
-    int has_roi = (ctx->roi && ctx->roi->size() >= 3);
+    // 检测 ROI 内的人（ctx->results / ctx->frame 都是指针，先解引用）
     bool found = false;
     for (auto &r : *ctx->results) {
         if (r.label != "person") continue;
 
-        // 检查是否在 ROI 内
-        if (has_roi &&
-            cv::pointPolygonTest(*ctx->roi, r.box_center(), false) < 0)
+        // 检查是否在 ROI 内（没画 ROI = 整帧不设限）
+        if (!roi_contains(ctx, r.box, ROI_ALL))
             continue;
 
         found = true;

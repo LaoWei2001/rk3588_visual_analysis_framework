@@ -9,14 +9,23 @@
 #include "../core/app_ctrl.h"
 #include "../core/pause_ctrl.h"
 #include <mutex>
+#include <vector>
+#include <cstdlib>
+#include <unistd.h>
+#include <dirent.h>
 
-/* 文本绘制出口: 中英文统一用 freetype 渲染(不再回退 Hershey)。font_scale 沿用 putText
- * 语义, 按比例换算成像素高; freetype 不可用时不绘制(已在字体加载处报错)。 */
+/* 文本绘制出口: 中英文统一用 freetype 渲染(不再回退 Hershey)。font_scale 沿用 putText 语义
+ * 按比例换算成像素高; freetype 不可用时不绘制(已在字体加载处报错)。
+ * thickness = 加粗级别(对外即 draw_text 的"粗细"): <=1 普通填充字(默认外观, 与历史一致);
+ *   >=2 在填充字基础上再叠一层同色描边把笔画加粗, 数值越大越粗(上限封顶, 防糊成一团)。
+ * 始终先填充, 保证是实心清晰字; 不会因 thickness>0 变成空心描边字。 */
 static inline void put_text_auto(cv::Mat &img, const std::string &s, cv::Point org,
-                                 double font_scale, const cv::Scalar &color, int /*thickness*/)
+                                 double font_scale, const cv::Scalar &color, int thickness)
 {
     const int fh = std::max(12, (int)std::lround(font_scale * 30.0));
     draw_text_unicode(img, s, org, fh, color, /*filled*/ -1);
+    if (thickness >= 2)
+        draw_text_unicode(img, s, org, fh, color, std::min(thickness - 1, 6));
 }
 
 /*======================== 显示状态 (模块级单例) ========================*/
@@ -128,10 +137,11 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
     {
         const float sx = static_cast<float>(screen_roi.cols) / static_cast<float>(p.inputW);
         const float sy = static_cast<float>(screen_roi.rows) / static_cast<float>(p.inputH);
-        const int   thick = std::max(1, cvRound(2.0 * (sx + sy) * 0.5));
+        const int thick = std::max(1, cvRound(2.0 * (sx + sy) * 0.5));
         for (const auto &zone : *p.roi_zones)
         {
-            if (zone.polygon.size() < 3) continue;
+            if (zone.polygon.size() < 3)
+                continue;
             std::vector<cv::Point> roi;
             roi.reserve(zone.polygon.size());
             for (const auto &pt : zone.polygon)
@@ -149,7 +159,8 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
      * 这里按位置同一比例缩放粗细，效果等同"在模型分辨率上绘制再整体缩放"，
      * 又不打乱 RGA 把原始帧直缩到 tile 的高效路径。 */
     const double draw_scale = (static_cast<double>(scale_x) + static_cast<double>(scale_y)) * 0.5;
-    auto thk = [draw_scale](int t) { return t < 0 ? t : std::max(1, cvRound(t * draw_scale)); };
+    auto thk = [draw_scale](int t)
+    { return t < 0 ? t : std::max(1, cvRound(t * draw_scale)); };
 
     // Segmentation mask
     if (p.results && !p.results->empty())
@@ -180,7 +191,7 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
         {
             float fx = res.box.x * scale_x;
             float fy = res.box.y * scale_y;
-            float fw = res.box.width  * scale_x;
+            float fw = res.box.width * scale_x;
             float fh = res.box.height * scale_y;
 
             if (frames_elapsed > 0.0f && res.track_id >= 0 && res.track_hits >= 3)
@@ -190,16 +201,19 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
             }
 
             cv::Rect box;
-            box.x      = static_cast<int>(fx);
-            box.y      = static_cast<int>(fy);
-            box.width  = static_cast<int>(fw);
+            box.x = static_cast<int>(fx);
+            box.y = static_cast<int>(fy);
+            box.width = static_cast<int>(fw);
             box.height = static_cast<int>(fh);
 
             box.x = std::max(0, box.x);
             box.y = std::max(0, box.y);
-            if (box.x + box.width  > screen_roi.cols) box.width  = screen_roi.cols - box.x;
-            if (box.y + box.height > screen_roi.rows) box.height = screen_roi.rows - box.y;
-            if (box.width <= 0 || box.height <= 0) continue;
+            if (box.x + box.width > screen_roi.cols)
+                box.width = screen_roi.cols - box.x;
+            if (box.y + box.height > screen_roi.rows)
+                box.height = screen_roi.rows - box.y;
+            if (box.width <= 0 || box.height <= 0)
+                continue;
 
             const cv::Scalar color = (res.box_color[0] >= 0) ? res.box_color : cv::Scalar(0, 255, 0);
             cv::rectangle(screen_roi, box, color, thk(2));
@@ -207,7 +221,7 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
             if (res.track_id >= 0)
                 txt = "ID " + std::to_string(res.track_id) + " " + txt;
             put_text_auto(screen_roi, txt, cv::Point(box.x, std::max(20, box.y - 5)),
-                          std::max(0.3, 0.6 * draw_scale), color, thk(2));
+                          std::max(0.3, 0.6 * draw_scale), color, 1);
         }
         draw_pose_overlay(screen_roi, *p.results, scale_x, scale_y);
     }
@@ -226,33 +240,51 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
             {
                 cv::Rect r(static_cast<int>(cmd.rect.x * scale_x),
                            static_cast<int>(cmd.rect.y * scale_y),
-                           static_cast<int>(cmd.rect.width  * scale_x),
+                           static_cast<int>(cmd.rect.width * scale_x),
                            static_cast<int>(cmd.rect.height * scale_y));
-                
+
                 // 边界保护：防止坐标溢出或出现负数宽高等导致 OpenCV crash
                 r.x = std::max(0, r.x);
                 r.y = std::max(0, r.y);
-                if (r.x + r.width > screen_roi.cols) r.width = screen_roi.cols - r.x;
-                if (r.y + r.height > screen_roi.rows) r.height = screen_roi.rows - r.y;
-                
+                if (r.x + r.width > screen_roi.cols)
+                    r.width = screen_roi.cols - r.x;
+                if (r.y + r.height > screen_roi.rows)
+                    r.height = screen_roi.rows - r.y;
+
                 if (r.width > 0 && r.height > 0)
                 {
-                    cv::rectangle(screen_roi, r, cmd.color, thk(cmd.thickness));
+                    if (cmd.alpha < 0.999)
+                    {
+                        const double a = std::max(0.0, std::min(1.0, cmd.alpha));
+                        cv::Mat overlay = screen_roi.clone();
+                        cv::rectangle(overlay, r, cmd.color, thk(cmd.thickness));
+                        cv::addWeighted(overlay, a, screen_roi, 1.0 - a, 0.0, screen_roi);
+                    }
+                    else
+                        cv::rectangle(screen_roi, r, cmd.color, thk(cmd.thickness));
                 }
                 break;
             }
             case DrawCommand::CIRCLE:
+            {
                 /* 当 scale_x != scale_y（非均匀缩放）时，用椭圆代替正圆，
                  * 使屏幕上显示的边界与逻辑判断的欧氏距离边界完全对应。
                  * 均匀缩放时退化为正圆，行为与原来完全一致。 */
-                cv::ellipse(screen_roi,
-                            cv::Point(static_cast<int>(cmd.center.x * scale_x),
-                                      static_cast<int>(cmd.center.y * scale_y)),
-                            cv::Size(static_cast<int>(cmd.radius * scale_x),
-                                     static_cast<int>(cmd.radius * scale_y)),
-                            0, 0, 360,
-                            cmd.color, thk(cmd.thickness));
+                const cv::Point ec(static_cast<int>(cmd.center.x * scale_x),
+                                   static_cast<int>(cmd.center.y * scale_y));
+                const cv::Size  es(static_cast<int>(cmd.radius * scale_x),
+                                   static_cast<int>(cmd.radius * scale_y));
+                if (cmd.alpha < 0.999)
+                {
+                    const double a = std::max(0.0, std::min(1.0, cmd.alpha));
+                    cv::Mat overlay = screen_roi.clone();
+                    cv::ellipse(overlay, ec, es, 0, 0, 360, cmd.color, thk(cmd.thickness));
+                    cv::addWeighted(overlay, a, screen_roi, 1.0 - a, 0.0, screen_roi);
+                }
+                else
+                    cv::ellipse(screen_roi, ec, es, 0, 0, 360, cmd.color, thk(cmd.thickness));
                 break;
+            }
             case DrawCommand::LINE:
                 cv::line(screen_roi,
                          cv::Point(static_cast<int>(cmd.pt1.x * scale_x), static_cast<int>(cmd.pt1.y * scale_y)),
@@ -261,7 +293,8 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
                 break;
             case DrawCommand::POLYLINE:
             {
-                if (cmd.points.size() < 2) break;
+                if (cmd.points.size() < 2)
+                    break;
                 std::vector<cv::Point> pts;
                 pts.reserve(cmd.points.size());
                 for (const auto &q : cmd.points)
@@ -282,22 +315,36 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
                 }
                 break;
             }
+            case DrawCommand::POLY_FILLED:
+            {
+                if (cmd.points.size() < 3)
+                    break;
+                std::vector<cv::Point> pts;
+                pts.reserve(cmd.points.size());
+                for (const auto &q : cmd.points)
+                    pts.emplace_back(static_cast<int>(q.x * scale_x),
+                                     static_cast<int>(q.y * scale_y));
+                if (cmd.alpha < 0.999)
+                {
+                    const double a = std::max(0.0, std::min(1.0, cmd.alpha));
+                    cv::Mat overlay = screen_roi.clone();
+                    cv::fillPoly(overlay, std::vector<std::vector<cv::Point>>{pts}, cmd.color, cv::LINE_AA);
+                    cv::addWeighted(overlay, a, screen_roi, 1.0 - a, 0.0, screen_roi);
+                }
+                else
+                    cv::fillPoly(screen_roi, std::vector<std::vector<cv::Point>>{pts}, cmd.color, cv::LINE_AA);
+                break;
+            }
             case DrawCommand::TEXT:
             {
                 // 自适应文字大小：基于画面缩放比例调整，同时限制一个最小可读字号
                 double adapted_font_scale = cmd.font_scale * ((scale_x + scale_y) * 0.5f);
                 adapted_font_scale = std::max(0.3, adapted_font_scale);
-                
-                // 为了保证文字在变大时依然清晰，可适度按比例增加线条粗细
-                int adapted_thickness = cmd.thickness;
-                if (adapted_font_scale > 1.0) {
-                    adapted_thickness = std::max(cmd.thickness, static_cast<int>(adapted_font_scale));
-                }
 
                 put_text_auto(screen_roi, cmd.text,
                               cv::Point(static_cast<int>(cmd.text_pos.x * scale_x),
                                         static_cast<int>(cmd.text_pos.y * scale_y)),
-                              adapted_font_scale, cmd.color, adapted_thickness);
+                              adapted_font_scale, cmd.color, cmd.thickness);
                 break;
             }
             }
@@ -311,7 +358,7 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
         snprintf(fps_text, sizeof(fps_text), "Ch%d disp %.1f / inf %.1f FPS",
                  p.chnId, p.disp_fps, p.infer_fps);
         put_text_auto(screen_roi, fps_text, cv::Point(10, 15),
-                      0.5, cv::Scalar(255, 0, 0), 2);
+                      0.5, cv::Scalar(255, 0, 0), 1);
     }
 }
 
@@ -377,7 +424,7 @@ static gboolean showWidget(GtkWidget *pImage)
 }
 /*======================== 暂停键: GTK 键盘事件处理 ========================*/
 /* 保存窗口指针和原始标题，用于在暂停/恢复时更新标题栏 */
-static GtkWidget  *g_main_window = nullptr;
+static GtkWidget *g_main_window = nullptr;
 static std::string g_win_title;
 
 /**
@@ -410,8 +457,98 @@ static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer use
     return FALSE;
 }
 
+/* —— 无图形会话(SSH / VS Code Remote / systemd 服务)拉起时，也能连上板端 HDMI 的 X(:0) ——
+ * 现象：这些场景下 shell 没有指向本地 :0 的 DISPLAY、也没有 XAUTHORITY cookie，gtk_init 连不上 X，
+ *       于是“先得在桌面会话/命令行手动跑一次才显示”。下面在 gtk_init 之前自助补齐显示环境：
+ *       DISPLAY 缺省 :0；XAUTHORITY 从正在运行的 Xorg 的 -auth 参数(或常见 cookie 路径)取。
+ *       已设置的一律不动 —— 所以 ssh -X 转发、板端桌面会话、命令行里照常用各自继承的值。 */
+static std::string find_xorg_auth()
+{
+    DIR *d = opendir("/proc");
+    if (!d)
+        return "";
+    std::string result;
+    for (struct dirent *e; (e = readdir(d)) != nullptr;)
+    {
+        if (e->d_name[0] < '1' || e->d_name[0] > '9')
+            continue; /* 只看 pid 目录 */
+        std::string base = std::string("/proc/") + e->d_name;
+
+        char comm[256] = {0};
+        FILE *cf = fopen((base + "/comm").c_str(), "r");
+        if (!cf)
+            continue;
+        bool got = fgets(comm, sizeof(comm), cf) != nullptr;
+        fclose(cf);
+        if (!got)
+            continue;
+        std::string name(comm);
+        if (name.rfind("Xorg", 0) != 0 && name.rfind("X\n", 0) != 0)
+            continue; /* 进程名为 Xorg / X */
+
+        FILE *pf = fopen((base + "/cmdline").c_str(), "rb");
+        if (!pf)
+            continue;
+        std::vector<std::string> args;
+        std::string cur;
+        for (int c; (c = fgetc(pf)) != EOF;)
+        {
+            if (c == 0)
+            {
+                if (!cur.empty())
+                    args.push_back(cur);
+                cur.clear();
+            }
+            else
+                cur.push_back((char)c);
+        }
+        if (!cur.empty())
+            args.push_back(cur);
+        fclose(pf);
+
+        for (size_t i = 0; i + 1 < args.size(); ++i)
+            if (args[i] == "-auth")
+            {
+                result = args[i + 1];
+                break;
+            } /* 取 -auth 后面的 cookie 路径 */
+        if (!result.empty())
+            break;
+    }
+    closedir(d);
+    return result;
+}
+
+static void ensure_x_display_env()
+{
+    if (!getenv("DISPLAY"))
+        setenv("DISPLAY", ":0", 0); /* 缺省连本地 HDMI :0(已设则不动，如 ssh -X 的转发显示) */
+
+    if (getenv("XAUTHORITY"))
+        return; /* 已有 cookie 就用现成的(桌面会话/命令行) */
+
+    std::string auth = find_xorg_auth(); /* 1) 优先从 Xorg 的 -auth 取真实 cookie */
+    if (auth.empty())
+    { /* 2) 兜底常见路径 */
+        const char *cands[] = {
+            "/run/lightdm/root/:0", "/var/run/lightdm/root/:0",
+            "/run/user/0/gdm/Xauthority", "/root/.Xauthority", nullptr};
+        for (int i = 0; cands[i]; ++i)
+            if (access(cands[i], R_OK) == 0)
+            {
+                auth = cands[i];
+                break;
+            }
+    }
+    if (!auth.empty())
+        setenv("XAUTHORITY", auth.c_str(), 1);
+}
+
 static GtkWidget *disp_init(const char *strWinTitle, int32_t width, int32_t height)
 {
+    ensure_x_display_env(); /* 必须在 gtk_init 之前：无图形会话时自助补 DISPLAY/XAUTHORITY */
+    /* 板子没装无障碍(AT-SPI)总线，GTK 会刷一行 dbind-WARNING；关掉无障碍桥，纯净日志、无任何副作用 */
+    setenv("NO_AT_BRIDGE", "1", 0);
     gtk_init(NULL, NULL);
 
     static GtkWidget *pWindow = gtk_window_new(GTK_WINDOW_TOPLEVEL);
@@ -429,7 +566,7 @@ static GtkWidget *disp_init(const char *strWinTitle, int32_t width, int32_t heig
 
         /* 保存窗口指针和标题，供 on_key_press 更新标题栏 */
         g_main_window = pWindow;
-        g_win_title   = strWinTitle ? strWinTitle : "";
+        g_win_title = strWinTitle ? strWinTitle : "";
     }
     else
     {

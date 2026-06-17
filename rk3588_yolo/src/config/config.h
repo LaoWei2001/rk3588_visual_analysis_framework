@@ -47,6 +47,7 @@ struct ChannelConfig
     int id = -1;
     bool enable = true;
     bool infer_enable = true;                /* 是否启用 YOLO 推理。false=传统算法通道:仍解码/显示/逐帧跑 logic, 但不进 NPU, ctx->results 为空、ctx->infer_enabled=0 */
+    bool swap_rb = false;                    /* 仅显示: 1=该通道画面 R/B 互换显示(跳过显示前 BGR→RGB);不影响推理/上报 */
     StreamConfig stream;
     std::string logic = "logic_default";     /* 自定义逻辑名称 (须为已注册的 logic_xxx) */
     std::string model_type = "";             /* 模型类型: "yolov5"/"yolov8_det"/"yolov8_pose"/"yolov5_seg" */
@@ -72,6 +73,7 @@ struct ChannelConfig
     int radius = 1;
     int report_interval_sec = 5;             /* logic_server / logic_dify 上报间隔(秒): 两次上报间的最小冷却 */
     int line_width = 20;                      /* logic_wafer: 擦拭轨迹拓宽的线条宽度(像素), 模拟扫过的面积带 */
+    int linger_sec = 10;
     float t_start = 1.0f;                      /* logic_wafer: 工序开始确认时长(秒) - cleanwiper 需在 wafer 框内持续此久才开始; 滤手短暂进入/反光误检, 期间不画不计 */
     float t_end = 1.0f;                        /* logic_wafer: 工序结束确认时长(秒) - cleanwiper 离开区域/消失持续此久即判定工序结束并结算 */
     float coverage_threshold = 80.0f;         /* logic_wafer: 擦拭覆盖率合格阈值(百分比) */

@@ -97,6 +97,8 @@ struct ChannelState
     std::shared_ptr<void>     logic_state;
     cv::Mat                   last_frame;
     cv::Mat                   last_logic_frame;
+    cv::Mat                   logic_display_frame;          /* logic 经 display_canvas() 自绘的显示底图(640×640 BGR)；空=不覆盖，显示走实时采集帧 */
+    uint64_t                  logic_display_ts_ms = 0;      /* 上面那帧的产生时刻(steady ms)，显示端据此判新鲜度，过期回退实时帧 */
     int64_t                   logic_frame_id   = 0;
     int64_t                   input_frame_seq  = 0;
     uint64_t                  last_logic_ts_ms = 0;

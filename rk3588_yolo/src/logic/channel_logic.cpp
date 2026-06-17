@@ -177,19 +177,29 @@ int ChannelContext::point_box_in_poly(const std::vector<cv::Point> *poly, const 
 
 int ChannelContext::roi_index_of(const cv::Rect &box) const
 {
-    if (!rois) return -1;
+    if (!rois) return ROI_NONE;
     cv::Point c(box.x + box.width / 2, box.y + box.height / 2);
     for (int i = 0; i < static_cast<int>(rois->size()); ++i)
     {
         const std::vector<cv::Point> &poly = (*rois)[i].polygon;
         if (poly.size() >= 3 && cv::pointPolygonTest(poly, c, false) >= 0) return i;
     }
-    return -1;
+    return ROI_NONE;
 }
 
 cv::Mat ChannelContext::snapshot() const
 {
     return frame ? frame->clone() : cv::Mat();
+}
+
+/* 取可写显示画布: 首次调用以当前帧为底克隆一张可写副本，并标记"本帧用它当显示底图"。
+ * 之后随意 cv:: 处理(滤镜/贴图/putText 等)；中文叠加用 draw_text(走 draw_cmds, 会叠在它上面)。 */
+cv::Mat &ChannelContext::display_canvas()
+{
+    if (canvas->empty() && frame && !frame->empty())
+        *canvas = frame->clone();
+    *show_canvas = true;
+    return *canvas;
 }
 
 /* unix_ms(epoch 毫秒)→ 本地时区时间串。localtime_r 线程安全(logic 在 worker 线程跑)。 */
@@ -233,10 +243,8 @@ RenderParams ChannelContext::render_params(int64_t result_age_ms) const
 {
     RenderParams p;
     p.chnId         = chnId;
-    p.srcWidth      = frame ? frame->cols : 0;
-    p.srcHeight     = frame ? frame->rows : 0;
-    p.inputW        = p.srcWidth;
-    p.inputH        = p.srcHeight;
+    p.inputW        = frame ? frame->cols : 0;
+    p.inputH        = frame ? frame->rows : 0;
     p.disp_fps      = disp_fps;
     p.infer_fps     = infer_fps;
     p.result_age_ms = result_age_ms;
@@ -249,7 +257,7 @@ RenderParams ChannelContext::render_params(int64_t result_age_ms) const
 /*======================== 绘制辅助函数实现 ========================*/
 void draw_rect(ChannelContext *ctx, const cv::Rect &rect,
                const cv::Scalar &color, int thickness,
-               DrawCommand::Target target)
+               double alpha, DrawCommand::Target target)
 {
     if (!ctx || !ctx->draw_cmds)
         return;
@@ -258,13 +266,14 @@ void draw_rect(ChannelContext *ctx, const cv::Rect &rect,
     cmd.rect = rect;
     cmd.color = color;
     cmd.thickness = thickness;
+    cmd.alpha = alpha;
     cmd.target = target;
     ctx->draw_cmds->push_back(cmd);
 }
 
 void draw_circle(ChannelContext *ctx, const cv::Point &center, int radius,
                  const cv::Scalar &color, int thickness,
-                 DrawCommand::Target target)
+                 double alpha, DrawCommand::Target target)
 {
     if (!ctx || !ctx->draw_cmds)
         return;
@@ -274,6 +283,7 @@ void draw_circle(ChannelContext *ctx, const cv::Point &center, int radius,
     cmd.radius = radius;
     cmd.color = color;
     cmd.thickness = thickness;
+    cmd.alpha = alpha;
     cmd.target = target;
     ctx->draw_cmds->push_back(cmd);
 }
@@ -325,6 +335,21 @@ void draw_polyline(ChannelContext *ctx, const std::vector<cv::Point> &points,
     cmd.alpha = alpha;
     cmd.color = color;
     cmd.thickness = thickness;
+    cmd.target = target;
+    ctx->draw_cmds->push_back(cmd);
+}
+
+void draw_poly_filled(ChannelContext *ctx, const std::vector<cv::Point> &points,
+                      const cv::Scalar &color, double alpha,
+                      DrawCommand::Target target)
+{
+    if (!ctx || !ctx->draw_cmds || points.size() < 3)
+        return;
+    DrawCommand cmd;
+    cmd.type = DrawCommand::POLY_FILLED;
+    cmd.points = points;
+    cmd.alpha = alpha;
+    cmd.color = color;
     cmd.target = target;
     ctx->draw_cmds->push_back(cmd);
 }

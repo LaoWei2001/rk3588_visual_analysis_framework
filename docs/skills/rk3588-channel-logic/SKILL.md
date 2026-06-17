@@ -45,7 +45,7 @@ description: >-
 | 维度   | 要确定的                       | 常见取值                                                                            |
 | ---- | -------------------------- | ------------------------------------------------------------------------------- |
 | 目标类别 | 检测哪个/哪些 label              | `"person"` / `"car"` / 自定义模型的类名（**大小写/拼写要和 labels.txt 完全一致**）                   |
-| 区域   | 全屏还是 ROI 内                 | 用 `roi_has_target(ctx, label, ROI_ALL)` 或自己 `pointPolygonTest(*ctx->roi, box_center)` |
+| 区域   | 全屏还是 ROI 内                 | 框是否在区域用 `roi_contains(ctx, box, ROI_ALL)`；有无某类别用 `roi_has_target(ctx, label, ROI_ALL)`（没画 ROI=整帧不设限） |
 | 触发条件 | 存在 / 计数 / 停留时长 / 越界 / 位置关系 | 停留/越界要用 `ctx->state` 跨帧计时                                                       |
 | 动作   | 画框/文字、报警、上报(server/dify)   | 上报见 `references/upload-and-wiring.md`                                           |
 | 频率   | 上报/报警限频                    | 用 `ctx->timestamp_ms` 做间隔，别每帧都发，必须要设定冷却时间或者其他能够限制连续触发报警的规则。                     |
@@ -70,12 +70,11 @@ static void logic_xxx(ChannelContext *ctx)
     auto &s = *std::static_pointer_cast<XxxState>(*ctx->state);
 
     // 2) 遍历本帧检测结果，按需求判定（坐标都在模型 640 空间）
-    int has_roi = (ctx->roi && ctx->roi->size() >= 3);
     bool hit = false;
     for (auto &r : *ctx->results) {
         if (r.label != "person") continue;                       // 类别过滤
-        if (has_roi && cv::pointPolygonTest(*ctx->roi, r.box_center(), false) < 0)
-            continue;                                            // ROI 过滤（框中心在区域内）
+        if (!roi_contains(ctx, r.box, ROI_ALL))
+            continue;                          // ROI 过滤（框中心在区域内；没画 ROI=整帧不设限）
         hit = true;
         r.box_color = cv::Scalar(0, 0, 255);                     // 命中的框标红（可选）
     }

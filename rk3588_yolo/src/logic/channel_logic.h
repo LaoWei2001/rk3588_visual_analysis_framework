@@ -27,7 +27,6 @@
 
 /* 前置声明 */
 struct ChannelSnapshot;
-struct RenderParams;
 
 /*======================== ROI 区域 (一个通道可配置多个) ========================*/
 /**
@@ -46,7 +45,7 @@ struct RoiZone
 /*======================== 绘制指令 ========================*/
 struct DrawCommand
 {
-    enum Type { RECT, CIRCLE, LINE, TEXT, POLYLINE } type;
+    enum Type { RECT, CIRCLE, LINE, TEXT, POLYLINE, POLY_FILLED } type;
 
     enum Target : uint8_t
     {
@@ -62,7 +61,7 @@ struct DrawCommand
     cv::Point pt1, pt2;
     std::vector<cv::Point> points;       /* POLYLINE: 折线顶点(模型坐标系) */
     bool   closed = false;               /* POLYLINE: 是否闭合 */
-    double alpha  = 1.0;                  /* 透明度 0~1, <1 半透明叠加(当前 POLYLINE 支持) */
+    double alpha  = 1.0;                  /* 透明度 0~1, <1 半透明叠加(RECT/CIRCLE/POLYLINE/POLY_FILLED 均支持) */
     std::string text;
     cv::Point text_pos;
     double font_scale = 0.6;
@@ -75,7 +74,6 @@ struct DrawCommand
 struct RenderParams
 {
     int     chnId         = 0;
-    int     srcWidth      = 0, srcHeight = 0;
     int     inputW        = 0, inputH    = 0;
     float   disp_fps      = 0.0f;
     float   infer_fps     = 0.0f;
@@ -109,14 +107,19 @@ typedef void (*ChannelLogicFunc)(struct ChannelContext *ctx);
 
 struct ChannelContext
 {
-    /* ---- 标识 ---- */
+    /* ---- 通道号标识 ---- */
     int chnId;
 
-    /* ---- 当帧数据 (指针代替引用, C-style) ---- */
-    const cv::Mat *frame;                    /* BGR, 模型输入尺寸 */
+    /* ---- 当前帧数据 ---- */
+    const cv::Mat *frame;                    /* BGR, 模型输入尺寸(通常 640×640); 检测框/ROI 均在此坐标系 */
+    /* 原始视频分辨率(摄像头/视频源解码出的真实尺寸, 如 1920×1080)。
+     * 与 ctx->frame 的区别: frame 是缩放后的"模型输入尺寸"; 下面这两个才是视频源的真实宽高。
+     * 首帧解码前可能为 0, 逻辑里用前可自行判一下 > 0。 */
+    int src_width  = 0;
+    int src_height = 0;
     int64_t frame_id;
     uint64_t timestamp_ms;                   /* 单调时钟(ms): 只用于算间隔, 不是日历时间 */
-    uint64_t unix_ms = 0;                    /* Unix epoch 毫秒(UTC 基准, 即本帧墙钟; 三源统一): /1000 可得到秒 */
+    uint64_t unix_ms = 0;                    /* Unix epoch 毫秒(UTC 基准, 即本帧墙钟; 三源统一): /1000 得秒; 配 time_hms()/time_str() */
     float dt_ms;
     std::vector<AlgoResult> *results;
 
@@ -131,6 +134,15 @@ struct ChannelContext
 
     /* ---- 绘制指令输出 ---- */
     std::vector<DrawCommand> *draw_cmds;
+
+    /* ---- 显示画布(可选: 从中间拦截整帧) ----
+     * 想"拿到显示画面 → 自由改像素 → 再显示"时调 display_canvas():
+     * 返回一张可写的 640×640 BGR 图(首次调用 = 当前帧副本)，随意 cv:: 处理/贴图/写字；
+     * 调用即表示"本帧用这张图当显示底图"。不调用则显示走原实时采集帧，行为不变。
+     * 注意: 只改"显示"; 推理/上报仍用原始 ctx->frame。draw_cmds(含中文 draw_text)仍叠加在它上面。*/
+    cv::Mat *canvas      = nullptr;   /* 框架提供的画布缓冲(初始空; display_canvas() 首用时克隆 frame) */
+    bool    *show_canvas = nullptr;   /* display_canvas() 置 true → 框架把 canvas 路由到显示 */
+    cv::Mat &display_canvas();        /* 取可写显示画布并标记启用(见上) */
 
     /* ---- 跨帧持久化状态 ---- */
     std::shared_ptr<void> *state;
@@ -170,7 +182,8 @@ struct ChannelContext
     /* 某框中心是否落在指定多边形内(多边形不足 3 点 → 视为"全屏", 返回 1) */
     static int point_box_in_poly(const std::vector<cv::Point> *poly, const cv::Rect &box);
 
-    /* 框中心落在第几个区域(取首个命中); 都不在 / 无区域 → -1 */
+    /* 框中心落在第几个区域(取首个命中); 都不在 / 无区域 → ROI_NONE
+     * (ROI_NONE 而非 -1: 这样把返回值直接回传给 roi_contains 等自由函数也不会被误当成 ROI_ALL) */
     int roi_index_of(const cv::Rect &box) const;
 
     /* 本帧墙钟时间(unix_ms 按本地时区格式化) */
@@ -215,18 +228,24 @@ int roi_count_target(const ChannelContext *ctx, const char *label,   int idx);
 int roi_find        (const ChannelContext *ctx, const char *name);   /* 名字→序号; 找不到=ROI_NONE */
 
 /*======================== 绘制辅助函数 ========================*/
+/* 矩形/圆: thickness=-1(负数) = 填充; alpha<1 = 半透明叠加(目标/画面可透出来, 适合高亮报警区)。
+ * 例: draw_rect(ctx, zone, 红, -1, 0.3)  → 半透明红色块盖住 zone, 区域内的人仍看得见。 */
 void draw_rect(ChannelContext *ctx, const cv::Rect &rect,
                const cv::Scalar &color = cv::Scalar(0, 255, 0), int thickness = 2,
+               double alpha = 1.0,
                DrawCommand::Target target = DrawCommand::ALL);
 
 void draw_circle(ChannelContext *ctx, const cv::Point &center, int radius,
                  const cv::Scalar &color = cv::Scalar(0, 255, 0), int thickness = 2,
+                 double alpha = 1.0,
                  DrawCommand::Target target = DrawCommand::ALL);
 
 void draw_line(ChannelContext *ctx, const cv::Point &pt1, const cv::Point &pt2,
                const cv::Scalar &color = cv::Scalar(0, 255, 0), int thickness = 2,
                DrawCommand::Target target = DrawCommand::ALL);
 
+/* thickness = 加粗级别: <=1 普通填充字(默认外观); >=2 越大越粗(在填充字上叠同色描边来加粗)。
+ * 报警大字想更醒目就调大 thickness, 如 draw_text(ctx,"报警",pos,红,1.0,4)。 */
 void draw_text(ChannelContext *ctx, const char *text, const cv::Point &pos,
                const cv::Scalar &color = cv::Scalar(255, 255, 255),
                double font_scale = 0.6, int thickness = 1,
@@ -238,6 +257,13 @@ void draw_polyline(ChannelContext *ctx, const std::vector<cv::Point> &points,
                    const cv::Scalar &color = cv::Scalar(0, 255, 0), int thickness = 2,
                    double alpha = 1.0, bool closed = false,
                    DrawCommand::Target target = DrawCommand::ALL);
+
+/* 填充多边形(实心色块); alpha<1 半透明叠加 —— 给一块 ROI/区域铺半透明底色高亮最常用。
+ * 顶点为模型输入坐标系(与 ROI/检测框同坐标系); 少于 3 个点不绘制。
+ * 例: draw_poly_filled(ctx, *ctx->roi, 红, 0.3)  → 把不规则 ROI 铺成半透明红。 */
+void draw_poly_filled(ChannelContext *ctx, const std::vector<cv::Point> &points,
+                      const cv::Scalar &color = cv::Scalar(0, 255, 0), double alpha = 0.3,
+                      DrawCommand::Target target = DrawCommand::ALL);
 
 /*======================== 逻辑分发表接口 ========================*/
 #define MAX_LOGIC_FUNCS  32

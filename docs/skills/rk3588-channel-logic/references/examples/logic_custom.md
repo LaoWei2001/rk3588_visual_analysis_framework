@@ -2,7 +2,7 @@
 
 - **上报**：无
 - **可调参数**：无
-- **用到的能力**：ROI 判定、`pointPolygonTest`、逐目标染色/标注、管线信息显示
+- **用到的能力**：ROI 判定（`roi_contains`）、逐目标染色/标注、管线信息显示
 
 ## 做什么
 教学示例：画出 ROI 边界与顶点；对每个检测目标判定中心是否在 ROI 内，IN 染绿 / OUT 染红，并在框上标 `label score IN_ROI/OUT_ROI`；左上显示 ROI 内外计数；底部显示帧号/dt/推理开关。是"怎么用 `ctx` 各字段"的活文档。
@@ -29,7 +29,7 @@ static void logic_custom(ChannelContext *ctx)
     if (ctx->results)
         for (auto &r : *ctx->results) {
             const cv::Point box_c = r.box_center();
-            int in_roi = !has_roi || (cv::pointPolygonTest(*ctx->roi, box_c, false) >= 0.0);
+            int in_roi = roi_contains(ctx, r.box, ROI_ALL);   // 没画 ROI=整帧不设限(算在内)
             in_roi ? ++in_cnt : ++out_cnt;
             r.box_color = in_roi ? cv::Scalar(0,255,0) : cv::Scalar(0,0,255);
             draw_circle(ctx, box_c, 4, r.box_color, 2);

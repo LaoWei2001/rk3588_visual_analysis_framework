@@ -125,6 +125,57 @@ def recover_processes() -> None:
 
 # ── 启动 ─────────────────────────────────────────────────────────────────────
 
+def _discover_xauthority() -> Optional[str]:
+    """找到当前 X 服务器(:0)的鉴权 cookie 文件，供无图形会话的后台进程连显示用；找不到返回 None。"""
+    # 1) 最准：从正在运行的 Xorg / X 进程命令行里取 `-auth <file>`
+    try:
+        pids = subprocess.run(["pgrep", "-x", "Xorg"], capture_output=True, text=True, timeout=3).stdout.split()
+        if not pids:
+            pids = subprocess.run(["pgrep", "-x", "X"], capture_output=True, text=True, timeout=3).stdout.split()
+        for pid in pids:
+            try:
+                toks = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\x00")
+                for i, tok in enumerate(toks):
+                    if tok == b"-auth" and i + 1 < len(toks):
+                        p = toks[i + 1].decode("utf-8", "ignore")
+                        if p and os.path.exists(p):
+                            return p
+            except OSError:
+                continue
+    except Exception:
+        pass
+    # 2) 兜底：常见 cookie 路径
+    candidates = ["/run/lightdm/root/:0", "/var/run/lightdm/root/:0",
+                  "/run/user/0/gdm/Xauthority", "/root/.Xauthority"]
+    try:
+        candidates += [str(p) for p in sorted(Path("/home").glob("*/.Xauthority"))]
+    except OSError:
+        pass
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _setup_display_env(env: dict) -> None:
+    """让后台(systemd, 无图形会话)拉起的程序也能在板端 HDMI 上显示。
+
+    根因：rk3588_yolo 的 GTK 显示靠继承环境里的 DISPLAY+XAUTHORITY 连 :0；命令行启动能从已登录会话
+    继承到这些，而本服务(User=root, multi-user.target)没有 → 冷启动连不上 X，表现为“要先在命令行手动
+    跑一次才显示”。这里补齐 DISPLAY / XAUTHORITY 并尽力放行本地 root。全程 best-effort，失败即退回原行为。
+    """
+    env.setdefault("DISPLAY", ":0")
+    if not (env.get("XAUTHORITY") and os.path.exists(env["XAUTHORITY"])):
+        xauth = _discover_xauthority()
+        if xauth:
+            env["XAUTHORITY"] = xauth
+    # 即便 cookie 不对，也尽力让 X 放行本地 root 客户端（覆盖“X 访问控制开着”的情况）
+    try:
+        subprocess.run(["xhost", "+SI:localuser:root"], env=env, capture_output=True, timeout=3)
+    except Exception:
+        pass
+
+
 def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> int:
     app_dir     = _app_path(app_name)
     binary      = app_dir / BINARY_NAME
@@ -152,9 +203,10 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
     buf.clear()
 
     env = os.environ.copy()
-    # Debug 模式需要 DISPLAY 指向 HDMI 输出（headless systemd 服务无此变量）
-    if mode == "debug" and not env.get("DISPLAY"):
-        env["DISPLAY"] = ":0"
+    # Debug 模式要在板端 HDMI 上显示：补齐 X 显示环境（DISPLAY + XAUTHORITY + 放行本地 root）。
+    # 否则 systemd 服务(无图形会话)拉起的程序连不上 X，表现为“先得在命令行手动跑一次才显示”。
+    if mode == "debug":
+        _setup_display_env(env)
 
     # 用 PIPE 捕获 stdout+stderr，不落盘
     proc = subprocess.Popen(

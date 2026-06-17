@@ -180,6 +180,8 @@ void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt,
     std::vector<AlgoResult>  disp_results;
     std::vector<DrawCommand> disp_draw_cmds;
     int64_t result_age_ms = 0;
+    cv::Mat  logic_disp;                 /* logic 经 display_canvas() 自绘的显示底图(空=无) */
+    bool     logic_disp_fresh = false;
     {
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         disp_results   = g_pCtrl->channels_state[chnId].last_results;
@@ -189,14 +191,16 @@ void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt,
         result_age_ms = static_cast<int64_t>(now_ms)
                         - static_cast<int64_t>(
                               g_pCtrl->channels_state[chnId].last_result_ts_ms);
+        logic_disp = g_pCtrl->channels_state[chnId].logic_display_frame;   /* 浅拷贝(引用计数), O(1) */
+        logic_disp_fresh = !logic_disp.empty()
+            && (static_cast<int64_t>(now_ms)
+                - static_cast<int64_t>(g_pCtrl->channels_state[chnId].logic_display_ts_ms)) < 1000;
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
     }
     result_age_ms = std::max(int64_t(0), std::min(result_age_ms, int64_t(200)));
 
     RenderParams rp;
     rp.chnId         = chnId;
-    rp.srcWidth      = srcWidth;
-    rp.srcHeight     = srcHeight;
     rp.inputW        = g_pCtrl->inputW;
     rp.inputH        = g_pCtrl->inputH;
     rp.disp_fps      = cs.disp_fps;
@@ -205,10 +209,17 @@ void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt,
     rp.roi_zones     = &cs.roi_zones;   /* 多 ROI: 全部区域(模型坐标系), render_overlays 逐个绘制 */
     rp.results       = &disp_results;
     rp.draw_cmds     = &disp_draw_cmds;
+    /* logic 用 display_canvas() 拦截了整帧 → 用它(640×640 BGR)当显示底图(缩放到 tile)，覆盖实时帧。
+     * 仅在新鲜(1s内)生效；陈旧则保留实时帧，防 logic 停更后画面冻结。draw_cmds/检测框照旧叠加其上。*/
+    if (logic_disp_fresh)
+        cv::resize(logic_disp, staging_view, staging_view.size());
     render_overlays(staging_view, rp);
 
-    /* BGR → RGB（GTK 期望 RGB），再 copyTo front tile（持 display_lock 防撕裂）*/
-    cv::cvtColor(staging_view, staging_view, cv::COLOR_BGR2RGB);
+    /* BGR → RGB（GTK 期望 RGB），再 copyTo front tile（持 display_lock 防撕裂）。
+     * 本通道 swap_rb=1 时故意跳过这步：GTK 把 BGR 当 RGB 解析 → 屏幕上 R/B 互换显示
+     * （仅影响显示；推理/上报仍用正常 BGR，不受影响）。 */
+    if (!g_pCtrl->config.channels[chnId].swap_rb)
+        cv::cvtColor(staging_view, staging_view, cv::COLOR_BGR2RGB);
     uint64_t dstOffset = calcBufMapOffset(chnId, SCREEN_BPP);
     cv::Mat  front_roi(tile_h, tile_w, CV_8UC3, pFront + dstOffset, disp_w * SCREEN_BPP);
     display_lock();

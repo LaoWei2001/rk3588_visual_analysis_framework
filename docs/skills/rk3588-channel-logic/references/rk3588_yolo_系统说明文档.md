@@ -393,7 +393,7 @@ dify_uploader_enqueue(img, prompt, event_id, dify_api_url, dify_api_key);
 - 涉及文件：`uploader/alarm_uploader.{h,cpp}`、`config/config_init.cpp`、`logic/logic_*.cpp`（各 enqueue 调用点，如 logic_server / logic_hook / logic_dify）。
 
 ### B. ROI 坐标系与加载（务必遵守，否则判定错位）
-- **逻辑里 `ctx->roi`（即 `roi_for_logic`）在模型输入坐标系（640×640）**，与 `ctx->results[].box` 同坐标系；判定直接 `pointPolygonTest(*ctx->roi, r.box_center())`，**不要拿源分辨率坐标去比**。
+- **逻辑里 `ctx->roi`（即 `roi_for_logic`）在模型输入坐标系（640×640）**，与 `ctx->results[].box` 同坐标系；判定用 `roi_contains(ctx, r.box, ROI_ALL)`（内部按模型坐标算），**不要拿源分辨率坐标去比**。
 - `roi_zones.json` 现存**归一化坐标 0~1**（占画面比例，与视频源/分辨率解耦）；`load_roi_zones()` 加载时 × 模型尺寸落到 640 空间。旧像素格式自动兼容（坐标 >1 视为像素，运行时按 src→model 缩放）。
 - **ROI 只在启动 `load_roi_zones()` 加载一次，不热重载** —— 改 ROI 必须停止再启动。
 - 推理通道源分辨率经 `channels_state[i].src_w_now`（`frame_inlet` 每帧写，`result_dispatch` 取）传给 ROI 缩放，确保推理通道 ROI 不偏（修了"推理通道 src_w 停在 0 → ROI 一直框外"的 bug）。

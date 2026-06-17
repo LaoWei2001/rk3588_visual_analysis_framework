@@ -285,6 +285,6 @@ main 线程
  ROI（坐标系务必一致，否则判定错位）
    roi_zones.json(归一化0~1) ─load_roi_zones(仅启动一次)─▶ ×模型尺寸 ─▶ roi_for_logic(模型640空间)
                                                                     │ 与 ctx->results[].box 同坐标系
-   ctx->roi ◀───────────────────────────────────────────────────────┘  判定: pointPolygonTest(*ctx->roi, box_center)
+   ctx->roi ◀───────────────────────────────────────────────────────┘  判定: roi_contains(ctx, box, ROI_ALL)
    ⚠ 改 ROI 不热重载 → 必须停止再启动；USB 用 stream.usb_width/height 固定采集分辨率(与 fps 解耦)防偏移
 ```

@@ -49,7 +49,7 @@ static void logic_roll(ChannelContext *ctx)
     {
         for (auto &r : *ctx->results)
         {
-            int in_roi = (cv::pointPolygonTest(*ctx->roi, r.box_center(), false) >= 0.0);
+            int in_roi = roi_contains(ctx, r.box, 0);   /* 是否落在测量区(第 0 个 ROI) */
             r.box_color = in_roi ? cv::Scalar(0, 255, 255) : cv::Scalar(120, 120, 120);
         }
     }

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { fetchApps, fetchLogTail, startApp, stopApp, streamUrl, uploadApp, deleteApp, fetchConfig, loadConfigFile, AppInfo } from '../api/client'
 import { useAuthStore } from '../store/authStore'
+import { getLastConfigMap } from '../utils/lastConfig'
 import ServicesPanel from '../components/ServicesPanel'
 import './AppsPage.css'
 
@@ -44,6 +45,8 @@ export default function AppsPage() {
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [uploading, setUploading] = useState<{ name: string; pct: number } | null>(null)
   const navigate = useNavigate()
+  // 编辑器记下的「每个程序最近编辑的配置文件」→ 作启动配置下拉的默认选中（进页面读一次即可）
+  const [lastCfg] = useState<Record<string, string>>(getLastConfigMap)
 
   // 打开实时画面前先检查该程序是否开启了 RTSP 推流——没开则必然黑屏，提前提示而不是让用户等失败。
   const openView = async (app: AppInfo) => {
@@ -314,8 +317,10 @@ export default function AppsPage() {
           {apps.map(app => {
             // 该程序可选的启动配置文件（basename），以及当前选中的那个
             const cfgOpts = app.config_files.map(cfgName)
+            const remembered = lastCfg[app.name]   // 编辑器里最近编辑/保存的那份（若仍存在则优先选它）
             const effCfg  = cfgSel[app.name]
-              ?? (cfgOpts.includes(app.active_config) ? app.active_config
+              ?? (remembered && cfgOpts.includes(remembered) ? remembered
+                  : cfgOpts.includes(app.active_config) ? app.active_config
                   : cfgOpts.includes('config.json')   ? 'config.json'
                   : cfgOpts[0] ?? 'config.json')
             return (

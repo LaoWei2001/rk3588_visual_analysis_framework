@@ -47,7 +47,7 @@ static void logic_multi_roi(ChannelContext *ctx)
     // 2) 逐检测框: 落在哪个区域就染成该区域色, 否则灰
     if (ctx->results)
         for (auto &r : *ctx->results) {
-            const int hit = ctx->roi_index_of(r.box);   // 落在第几个区域, 都不在 → -1
+            const int hit = ctx->roi_index_of(r.box);   // 落在第几个区域, 都不在 → <0(ROI_NONE)
             const cv::Scalar col = (hit >= 0) ? kPalette[hit % kNPal] : cv::Scalar(160,160,160);
             r.box_color = col;
             draw_circle(ctx, r.box_center(), 3, col, 2);
@@ -83,5 +83,5 @@ static void logic_multi_roi(ChannelContext *ctx)
 
 ## 复用提示
 做"分别统计入口/出口人数""目标从 A 区进入 B 区""不同区域不同阈值/报警"这类需求时，
-照这里的范式：先 `ctx->roi_by_name(...)` 或 `ctx->roi_polygon_at(i)` 拿到区域，再 `pointPolygonTest` 判定。
+照这里的范式：先 `roi_find(ctx, 名字)` 拿到区域序号，再 `roi_contains(ctx, box, 序号)` / `roi_count_target(ctx, label, 序号)` 判定或统计（要画区域多边形再用 `ctx->roi_polygon_at(i)`）。
 跨帧计时/报警仍走 `ctx->state`，上报仍走 `*_uploader_enqueue` + `ctx->config->server_url`（见 logic_hook / logic_server）。

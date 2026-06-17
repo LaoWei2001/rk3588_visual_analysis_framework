@@ -25,7 +25,7 @@ static void logic_person_alarm(ChannelContext *ctx)
         {
             if (r.label != "person")
                 continue;
-            if (has_roi && cv::pointPolygonTest(*ctx->roi, r.box_center(), false) < 0)
+            if (!roi_contains(ctx, r.box, ROI_ALL))   /* 不在任一 ROI(没画 ROI=整帧不设限) → 跳过 */
                 continue;
 
             s.person_detected = true;

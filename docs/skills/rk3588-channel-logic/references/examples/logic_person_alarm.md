@@ -2,7 +2,7 @@
 
 - **上报**：无（只在画面显示 ALARM/CLEAR，状态存 `ctx->state` 供其它逻辑读取）
 - **可调参数**：无
-- **用到的能力**：ROI 内人员判定、`pointPolygonTest`、ROI 边界染色
+- **用到的能力**：ROI 内人员判定（`roi_contains`）、ROI 边界染色
 
 ## 做什么
 ROI 内（无 ROI 则全屏）只要有 `person`，左上显示红色 `ALARM: N person(s) detected`、命中框标红、ROI 边界变红；否则显示绿色 `CLEAR`。把 `person_detected/person_count` 记在 `PersonAlarmState`，可被全局逻辑或上报模块读取来决定是否上报。**它本身不上报**——是"判定 + 可视化 + 暴露状态"的纯逻辑。
@@ -24,7 +24,7 @@ static void logic_person_alarm(ChannelContext *ctx)
     if (ctx->results)
         for (auto &r : *ctx->results) {
             if (r.label != "person") continue;
-            if (has_roi && cv::pointPolygonTest(*ctx->roi, r.box_center(), false) < 0) continue;
+            if (!roi_contains(ctx, r.box, ROI_ALL)) continue;   // 没画 ROI=整帧不设限
             s.person_detected = true;
             s.person_count++;
             r.box_color = cv::Scalar(0,0,255);

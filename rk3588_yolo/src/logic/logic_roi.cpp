@@ -40,8 +40,7 @@ static void logic_roi(ChannelContext *ctx)
         for (auto &r : *ctx->results)
         {
             const cv::Point c = r.box_center();
-            const bool inside = has_roi &&
-                                cv::pointPolygonTest(*ctx->roi, c, false) >= 0.0;
+            const bool inside = roi_contains(ctx, r.box, ROI_ALL);   /* 没画 ROI=整帧不设限(算在内) */
 
             if (inside)
                 r.box_color = cv::Scalar(0, 0, 255);             /* 红：中心在区域内 */
