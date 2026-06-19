@@ -48,6 +48,8 @@
 > `src/logic` 下的 `.cpp` 由 CMake (`aux_source_directory`) 自动收集编译，
 > 因此**新增一个逻辑只需新增一个文件、删除一个逻辑只需删掉对应文件**，不牵连任何其它文件。
 > `channel_logic.cpp` 只保留框架核心（`ChannelContext` 方法 / `draw_*` / 分发表），不再放具体逻辑。
+>
+> **逻辑的唯一"身份"是 `REGISTER_LOGIC` 注册的那个字符串**（文件名 / 函数名只是约定，对外不可见）：它必须 == `config.json` 的 `logic`（运行时据此查分发表跑哪个函数）== `logics.json` 的 `name`（网页据 `logics.json` 列出可选逻辑、并据此渲染参数；网页「逻辑名称」只能下拉选、不能手填）。本节只讲"怎么用"，完整的**四名关系 / 网页如何识别 / 名字失配会怎样**见 `rk3588-channel-logic` skill 的 `references/logic-naming-and-registration.md`。
 
 #### 第一步：新建 `src/logic/logic_my_detect.cpp`
 
@@ -97,8 +99,7 @@ cmake --build build
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `ctx->chnId` | `int` | 当前通道号 |
-| `ctx->frame` | `const cv::Mat *` | 当帧 BGR 图，640×640（**模型输入尺寸**），上报用这张 |
-| `ctx->src_width` / `ctx->src_height` | `int` | **原始视频分辨率**（视频源真实尺寸，如 1920×1080）；区别于 `ctx->frame` 的模型输入尺寸。首帧前可能为 0 |
+| `ctx->frame` | `const cv::Mat *` | 当帧 BGR 图，640×640（模型输入尺寸），上报用这张 |
 | `ctx->frame_id` | `int64_t` | 当帧序号，单调递增 |
 | `ctx->timestamp_ms` | `uint64_t` | 单调时钟(steady_clock，毫秒)，只用于算间隔，**不是日历时间** |
 | `ctx->unix_ms` | `uint64_t` | 墙上时钟 Unix epoch 毫秒（真实时间，RTSP/USB/文件 三源统一）；配 `time_hms()`/`time_str()`/`datetime()` |
@@ -215,11 +216,8 @@ static void logic_my(ChannelContext *ctx)
 draw_rect(ctx,
     cv::Rect(x, y, w, h),
     cv::Scalar(0, 255, 0),   // BGR 颜色
-    2);                       // 线宽（-1 = 填充）
-
-// 半透明高亮一块区域（alpha<1，目标/画面能透出来）：
-draw_rect(ctx, cv::Rect(x, y, w, h), cv::Scalar(0, 0, 255), -1, 0.3);
-draw_poly_filled(ctx, *ctx->roi, cv::Scalar(0, 0, 255), 0.3);  // 不规则 ROI 半透明红底
+    2,                        // 线宽
+    DrawCommand::ALL);
 
 draw_circle(ctx, cv::Point(cx, cy), radius,
     cv::Scalar(0, 0, 255), 2);
@@ -303,20 +301,23 @@ pthread_rwlock_unlock(&g_pCtrl->mtx);
 ROI 多边形顶点已由框架自动缩放到 640 坐标系，直接使用即可：
 
 ```cpp
-// 遍历结果，跳过 ROI 外的目标（没画 ROI = 整帧不设限）
+int has_roi = (ctx->roi && ctx->roi->size() >= 3);
+
+// 遍历结果，跳过 ROI 外的目标
 if (ctx->results)
 {
     for (auto &r : *ctx->results)
     {
-        if (!roi_contains(ctx, r.box, ROI_ALL))
+        if (has_roi &&
+            cv::pointPolygonTest(*ctx->roi, r.box_center(), false) < 0)
             continue;  // 目标在 ROI 外
 
         // 处理 ROI 内的目标 ...
     }
 }
 
-// 画 ROI 边框（要顶点就直接用 ctx->roi）
-if (ctx->roi && ctx->roi->size() >= 3)
+// 画 ROI 边框
+if (has_roi)
 {
     for (size_t i = 0; i < ctx->roi->size(); ++i)
     {

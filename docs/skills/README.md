@@ -23,6 +23,7 @@
 | 把"检测到 X 就报警/上报"做成一个逻辑      | `rk3588-channel-logic/SKILL.md`(总览 + 骨架 + 接线 + 验证 + 坑)   |
 | 照着已有的逻辑改，或者参考某个逻辑的编写方式     | `rk3588-channel-logic/references/examples/`(一函数一文件,挑最像的) |
 | 查 `ctx` 有哪些字段、辅助函数、绘制、跨帧状态 | `…/references/channelcontext-api.md`                     |
+| 搞懂 logic 的命名/注册（文件名·函数名·注册串·logics.json 的关系）、网页怎么认出逻辑、名字失配会怎样 | `…/references/logic-naming-and-registration.md` |
 | 给逻辑加一个网页能改的参数(半径/秒数/阈值)    | `…/references/adding-config-parameter.md`(四处对齐 + 热重载)    |
 | 逻辑里上报服务器 / Dify(地址跟通道走)    | `…/references/upload-and-wiring.md`                      |
 | 搞懂运行时(8 类线程、时序、帧与框同帧、坐标系)  | `…/references/rk3588_yolo_系统说明文档.md` + `…_架构图.md`        |
@@ -53,6 +54,7 @@ docs/skills/
 │   ├── SKILL.md                          总览:需求拆解→骨架→接线三件套→验证→坑
 │   └── references/
 │       ├── channelcontext-api.md         ctx 字段 / 辅助函数 / 绘制 / 跨帧状态
+│       ├── logic-naming-and-registration.md  逻辑命名/注册四名关系 + 网页如何识别 + 失配后果
 │       ├── adding-config-parameter.md    加可调参数(代码+热重载+网页可配)
 │       ├── upload-and-wiring.md          上报(方案2)+ 注册 + logics.json 接线
 │       ├── rk3588_yolo_系统说明文档.md     运行时架构(文字详解)

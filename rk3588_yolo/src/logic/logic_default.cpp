@@ -1,6 +1,6 @@
 /**
  * @file logic_default.cpp
- * @brief logic_default —— 空逻辑(不画不报, 透传)。
+ * @brief logic_default —— 空逻辑，对检测结果不做任何处理
  */
 #include "logic_common.h"
 

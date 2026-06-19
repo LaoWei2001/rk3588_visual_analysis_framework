@@ -32,9 +32,6 @@ function fmtUptime(s: number | null): string {
 function statusBadge(s: ServiceInfo): { text: string; color: string } {
   if (!s.installed) return { text: '未安装', color: '#f59e0b' }
   if (!s.path_ok)   return { text: '⚠ 路径失效', color: '#f59e0b' }
-  // SubState=auto-restart 表示 systemd 正按 Restart= 反复拉起(实为崩溃循环)。
-  // 此时 ActiveState 在重启间隙常读到 inactive，只看它会误判“已停止”，必须靠 SubState 识别。
-  if (s.sub_state === 'auto-restart') return { text: '↻ 重启中', color: '#ef4444' }
   switch (s.active_state) {
     case 'active':     return { text: '● 运行中', color: '#22c55e' }
     case 'failed':     return { text: '✕ 故障',   color: '#ef4444' }
@@ -152,13 +149,9 @@ export default function ServicesPanel({ apps, onToast }: Props) {
       {services.map(s => {
         const b = statusBadge(s)
         const isBusy = !!busy[s.key]
-        // "正在运行/正被拉起" → 显示「停止」(让你能摁停)：真在跑(active) / 正在启动(activating) /
-        // systemd 反复自动重启(SubState=auto-restart，崩溃循环)。auto-restart 间隙 ActiveState 常读到
-        // inactive，必须并看 SubState，否则崩溃循环会被误判为“已停止”而错显示「启动」。
-        // 只有真正停了(inactive/failed/未知 且非 auto-restart)才显示「启动」。
-        const looping = s.sub_state === 'auto-restart'
-        const started = looping || s.active_state === 'active'
-                        || s.active_state === 'activating' || s.active_state === 'reloading'
+        // "开着"判定：运行中 / 启动中 / 故障(反复尝试重启) 都算开 → 显示「停止」，
+        // 方便在服务一直起不来、反复重启时摁停下来排查。只有干净 inactive / 未知才显示「启动」。
+        const started = s.active_state !== 'inactive' && s.active_state !== 'unknown'
         // 需要走安装/修复：没装，或装了但单元工作目录失效（路径不存在/指向已删的旧目录）
         const needsInstall = !s.installed || !s.path_ok
         // 停止时下拉默认选中当前绑定的 App；选好后点「启动」才绑定并启动

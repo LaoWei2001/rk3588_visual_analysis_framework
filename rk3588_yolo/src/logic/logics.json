@@ -27,11 +27,6 @@
       "params": []
     },
     {
-      "name": "logic_custom",
-      "label": "自定义示例（ROI 计数）",
-      "params": []
-    },
-    {
       "name": "logic_person_alarm",
       "label": "人员区域告警",
       "params": []
@@ -77,16 +72,6 @@
       "name": "logic_dify_person_verify",
       "label": "人员 Dify 去重核验",
       "report": "dify",
-      "params": []
-    },
-    {
-      "name": "logic_roi",
-      "label": "ROI/坐标可视化",
-      "params": []
-    },
-    {
-      "name": "logic_multi_roi",
-      "label": "多 ROI 区域示例",
       "params": []
     },
     {

@@ -38,7 +38,7 @@
 - **调后端一律走 `api/client.ts`**:在那里加一个导出函数(带 TS 类型),组件里 import 来用。不要在组件里散落裸 `fetch`/`axios`——拦截器的鉴权和 401 处理都在 client 里。
 - **WebSocket 不走 axios**:手动 `new WebSocket`,且 **token 必须走查询参数** `?token=...`(WS 和 `<img>` 流没法带 Authorization 头;后端 `auth_middleware` 对带 `?token=` 的请求放行)。范例见 `pages/terminalSession.ts`、`stream` 的 `streamUrl()`。
 - **状态用 zustand store**:跨组件共享、需要持久化的状态放 `store/`。`authStore` 是范本(`persist` 中间件 → localStorage)。
-- **编辑器是"画布即配置"**:`EditorPage` 用 React Flow 画节点,`configToGraph`/`graphToConfig` 在 `config.json` 和画布之间转换。**逻辑节点的可调参数是数据驱动的**——后端 `/apps/{name}/logics` 透传 App 里的 `logics.json`,`NodeConfigPanel` 的 `LogicForm` 按 `param.type` 自动渲染控件(见 `rk3588-channel-logic` skill 的 `adding-config-parameter.md`)。**给逻辑加参数,前端不用改代码**,加一条 logics.json 声明即可。
+- **编辑器是"画布即配置"**:`EditorPage` 用 React Flow 画节点,`configToGraph`/`graphToConfig` 在 `config.json` 和画布之间转换。**逻辑节点的可调参数是数据驱动的**——后端 `/apps/{name}/logics` 透传 App 里的 `logics.json`,`NodeConfigPanel` 的 `LogicForm` 按 `param.type` 自动渲染控件(见 `rk3588-channel-logic` skill 的 `adding-config-parameter.md`)。**给逻辑加参数,前端不用改代码**,加一条 logics.json 声明即可。**逻辑名称只能从 `logics.json` 下拉选、不提供手填**(`LogicForm` 没有自由文本框)——逻辑的"身份"是 `REGISTER_LOGIC` 注册的字符串,手填一个清单里没有的名字只会让运行时查不到、通道空跑;若某通道现有 `logic` 不在 `logics.json`,下拉会标 `⚠ 不在 logics.json,请重新选择`。命名/注册/识别/失配的完整机制见 `rk3588-channel-logic` skill 的 `references/logic-naming-and-registration.md`。
 
 ## 四、端到端:常见两类改动怎么做
 

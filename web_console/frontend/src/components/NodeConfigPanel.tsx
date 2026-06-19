@@ -414,23 +414,19 @@ function LogicForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
 
   return (
     <div className="ncp-form">
-      <F label="逻辑名称（下拉选择）">
-        <select value={names.includes(logic) ? logic : '__custom__'}
-          onChange={e => { if (e.target.value !== '__custom__') selectLogic(e.target.value) }}>
+      {/* 逻辑名称只能从 logics.json 声明的清单里选，不允许手动输入新名字 ——
+          逻辑的"身份"是 REGISTER_LOGIC 注册的字符串，必须与 logics.json 的 name 一致，
+          手填任意名只会让运行时 channel_logic_get 查不到、通道空跑。详见
+          docs/skills/rk3588-channel-logic/references/logic-naming-and-registration.md */}
+      <F label="逻辑名称（仅可从 logics.json 中选择）">
+        <select value={logic} onChange={e => selectLogic(e.target.value)}>
           {logicDefs.map(x => (
             <option key={x.name} value={x.name}>{x.label ? `${x.label}（${x.name}）` : x.name}</option>
           ))}
-          {!names.includes(logic) && <option value={logic}>{logic}（当前自定义）</option>}
-          <option value="__custom__">— 手动输入 —</option>
+          {!names.includes(logic) && (
+            <option value={logic}>{logic}（⚠ 不在 logics.json，请重新选择）</option>
+          )}
         </select>
-      </F>
-
-      <F label="自定义名称（可直接输入覆盖）">
-        <input
-          value={logic}
-          onChange={e => set('logic', e.target.value)}
-          placeholder="logic_custom_xxx"
-        />
       </F>
 
       {/* 动态渲染该 logic 的可调参数（来自 logics.json） */}

@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { fetchApps, fetchLogTail, startApp, stopApp, streamUrl, uploadApp, deleteApp, fetchConfig, loadConfigFile, AppInfo } from '../api/client'
 import { useAuthStore } from '../store/authStore'
-import { getLastConfigMap } from '../utils/lastConfig'
 import ServicesPanel from '../components/ServicesPanel'
 import './AppsPage.css'
 
@@ -41,12 +40,16 @@ export default function AppsPage() {
   const [viewNonce, setViewNonce]   = useState(0)                     // 每次打开换一个值, 强制刷新视频, 防残留上次的旧帧
   const logWsRef  = useRef<WebSocket | null>(null)
   const logBoxRef = useRef<HTMLDivElement>(null)
+  // 监看日志是否“跟随到底”：在底部(40px 内)=跟随，往上拉=暂停并停在当前位置，拉回底部=自动恢复
+  const logAutoScrollRef = useRef(true)
+  const onStreamLogScroll = () => {
+    const el = logBoxRef.current
+    if (el) logAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+  }
   const fileRef   = useRef<HTMLInputElement>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [uploading, setUploading] = useState<{ name: string; pct: number } | null>(null)
   const navigate = useNavigate()
-  // 编辑器记下的「每个程序最近编辑的配置文件」→ 作启动配置下拉的默认选中（进页面读一次即可）
-  const [lastCfg] = useState<Record<string, string>>(getLastConfigMap)
 
   // 打开实时画面前先检查该程序是否开启了 RTSP 推流——没开则必然黑屏，提前提示而不是让用户等失败。
   const openView = async (app: AppInfo) => {
@@ -116,7 +119,9 @@ export default function AppsPage() {
   useEffect(() => {
     if (!viewApp) return
     const app = viewApp
-    const stick = () => { const el = logBoxRef.current; if (el) el.scrollTop = el.scrollHeight }
+    logAutoScrollRef.current = true   // 每次打开监看默认跟随到底
+    // 只有用户停在底部时才跟随；拉上去看历史就停住，不再被新日志拽回底部
+    const stick = () => { const el = logBoxRef.current; if (el && logAutoScrollRef.current) el.scrollTop = el.scrollHeight }
 
     fetchLogTail(app, 200)
       .then(d => { setStreamLogs(Array.isArray(d.lines) ? d.lines : []); setTimeout(stick, 50) })
@@ -130,7 +135,16 @@ export default function AppsPage() {
       const text = String(e.data)
       if (!text) return                                   // 心跳空帧
       const add = text.split('\n').filter(l => l !== '')
-      if (add.length) { setStreamLogs(prev => [...prev.slice(-1000), ...add]); setTimeout(stick, 10) }
+      if (add.length) {
+        // 跟随到底时维持 1000 行上限；用户拉上去看历史时不裁顶部(放宽到 5000)——
+        // 否则每来一批日志就从顶部裁掉旧行，会把视口里的历史内容往上挤 → 闪烁、看不清。
+        // 滚回底部恢复跟随后，裁剪发生在视口上方且贴底锁定，看不到跳动。
+        setStreamLogs(prev => {
+          const next = [...prev, ...add]
+          return logAutoScrollRef.current ? next.slice(-1000) : next.slice(-5000)
+        })
+        setTimeout(stick, 10)
+      }
     }
     return () => { ws.close(); logWsRef.current = null }
   }, [viewApp])
@@ -291,7 +305,7 @@ export default function AppsPage() {
                   </div>
                 )}
               </div>
-              <div className="stream-logs" ref={logBoxRef}>
+              <div className="stream-logs" ref={logBoxRef} onScroll={onStreamLogScroll}>
                 {streamLogs.length === 0
                   ? <div className="stream-logs-empty">暂无日志…</div>
                   : streamLogs.map((line, i) => (
@@ -317,10 +331,8 @@ export default function AppsPage() {
           {apps.map(app => {
             // 该程序可选的启动配置文件（basename），以及当前选中的那个
             const cfgOpts = app.config_files.map(cfgName)
-            const remembered = lastCfg[app.name]   // 编辑器里最近编辑/保存的那份（若仍存在则优先选它）
             const effCfg  = cfgSel[app.name]
-              ?? (remembered && cfgOpts.includes(remembered) ? remembered
-                  : cfgOpts.includes(app.active_config) ? app.active_config
+              ?? (cfgOpts.includes(app.active_config) ? app.active_config
                   : cfgOpts.includes('config.json')   ? 'config.json'
                   : cfgOpts[0] ?? 'config.json')
             return (

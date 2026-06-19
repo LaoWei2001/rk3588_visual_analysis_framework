@@ -42,7 +42,12 @@ export default function LogsPage() {
       const text = String(e.data)
       if (!text) return  // keepalive empty frame
       const newLines = text.split('\n').filter(l => l !== '')
-      setLines(prev => [...prev.slice(-2000), ...newLines])
+      // 跟随到底时维持 2000 行上限；用户拉上去看历史时不裁顶部(放宽到 5000)——
+      // 否则裁掉顶部旧行会把视口内容往上挤，导致历史信息闪烁、看不清。
+      setLines(prev => {
+        const next = [...prev, ...newLines]
+        return autoScrollRef.current ? next.slice(-2000) : next.slice(-5000)
+      })
       setTimeout(scrollToBottom, 10)
     }
 
@@ -52,8 +57,10 @@ export default function LogsPage() {
   const handleScroll = () => {
     const el = containerRef.current
     if (!el) return
+    // 在底部(40px 内)=跟随；往上拉=暂停并停在当前位置；拉回底部=自动恢复跟随
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-    if (!atBottom && autoScrollRef.current) setAutoScroll(false)
+    autoScrollRef.current = atBottom                              // 立即生效，供下一条日志的 scrollToBottom 判定
+    setAutoScroll(prev => (prev === atBottom ? prev : atBottom))  // 同步「自动滚动」复选框显示
   }
 
   const handleClear = () => setLines([])
