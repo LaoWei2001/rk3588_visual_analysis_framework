@@ -29,6 +29,13 @@ target_include_directories(server_queue_producer_test PRIVATE
     ../../src/third_party/json
 )
 
+# SOURCE_ROOT 宏：指向工程根目录, 用于在代码中自动定位 service/upload/config.yaml,
+# 无需手动传 --config（与 test_dify 保持一致）。
+get_filename_component(_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+target_compile_definitions(server_queue_producer_test PRIVATE
+    SOURCE_ROOT="${_REPO_ROOT}"
+)
+
 target_link_libraries(server_queue_producer_test
     ${OpenCV_LIBS}
     hiredis

@@ -1,17 +1,17 @@
 /**
  * @file server_queue_producer_test.cpp
- * @brief 测试 alarm_uploader_enqueue()：向 Redis server_queue 推送报警数据
+ * @brief 测试 alarm_uploader_enqueue()：把报警(带框图 + 原图)落盘到本地发件箱 alarm_store/
  *
  * 功能：
- *   1. 读取 server_upload/config.yaml 获取 Redis 连接信息
+ *   1. 读取 service/upload/config.yaml 获取 Redis 连接信息
  *   2. 加载（或自动生成）draw / raw 两张测试图片
  *   3. 多次调用 alarm_uploader_enqueue()，模拟视觉程序的真实上报行为
- *   4. 等待内部异步 worker 线程将数据 RPUSH 到 Redis server_queue
+ *   4. 等待内部异步 worker 线程把 带框图 + 原图 + .json 元数据 落盘到本地发件箱 alarm_store/
  *
  * 与实际项目的对应关系：
  *   C++ 侧 alarm_uploader_enqueue()
- *     → Redis server_queue
- *       → Python upload/server_upload/main.py (ServerUploader.upload())
+ *     → 落盘到本地发件箱 alarm_store/（带框图.jpg + 原图_raw.jpg + .json，不经 Redis）
+ *       → Python service/upload/main.py (OutboxForwarder：扫描补传，传成功即删)
  *         → HTTP POST 到业务服务器
  *
  * 用法：
@@ -21,8 +21,8 @@
  * 参数说明（也可在 config.yaml 的 [test] 节配置）：
  *   --image-draw  带标注框的报警截图（可省略，省略时自动生成测试图）
  *   --image-raw   原始未标注图（可省略，省略时自动生成测试图）
- *   --config      server_upload/config.yaml 路径
- *                 默认值: /userdata/rk3588/upload/server_upload/config.yaml
+ *   --config      上报服务 config.yaml 路径
+ *                 默认值: <repo>/service/upload/config.yaml (由 SOURCE_ROOT 编译期自动定位)
  */
 
 #include <chrono>
@@ -45,7 +45,7 @@
 struct Args {
     std::string image_draw_path;
     std::string image_raw_path;
-    std::string config_path  = "/userdata/rk3588/upload/server_upload/config.yaml";
+    std::string config_path  = SOURCE_ROOT "/service/upload/config.yaml";
     std::string alarm_type   = "person_alarm";
     std::string redis_host   = "127.0.0.1";
     std::string server_url;          // 仅用于打印提示，不参与推送
@@ -85,7 +85,7 @@ static bool parse_positive_int(const std::string& raw, int& out) {
 }
 
 /**
- * 从 server_upload/config.yaml 读取以下字段：
+ * 从 service/upload/config.yaml 读取以下字段：
  *   redis.host / redis.port            → Redis 连接
  *   server.url                         → 仅打印提示
  *   test.count / test.camera_id / test.alarm_type  → 可选测试覆盖
@@ -125,7 +125,7 @@ static bool load_config(const std::string& path, Args& args) {
         } else if (section == "server") {
             if (key_raw == "url") args.server_url = val_raw;
         } else if (section == "test") {
-            // 可选测试配置节，不影响 server_upload/config.yaml 的正常使用
+            // 可选测试配置节，不影响 service/upload/config.yaml 的正常使用
             if (key_raw == "count")      { int v = 0; if (parse_positive_int(val_raw, v)) args.count = v; }
             if (key_raw == "camera_id")  { int v = 0; if (std::stoi(val_raw, nullptr) >= 0) args.camera_id = std::stoi(val_raw); }
             if (key_raw == "alarm_type" && !val_raw.empty()) args.alarm_type = val_raw;
@@ -146,7 +146,7 @@ static void print_usage(const char* bin) {
         << "Usage: " << bin << " [options]\n"
         << "  --image-draw <path>    带标注框的报警图（省略则自动生成）\n"
         << "  --image-raw  <path>    原始未标注图（省略则自动生成）\n"
-        << "  --config     <path>    server_upload/config.yaml 路径\n"
+        << "  --config     <path>    上报服务 config.yaml 路径（默认自动定位仓库内配置）\n"
         << "  --help                 显示帮助\n";
 }
 
@@ -237,7 +237,7 @@ int main(int argc, char** argv) {
 
     std::cout
         << "================================================\n"
-        << "  server_queue 生产者测试\n"
+        << "  server 告警落盘测试 (-> alarm_store/)\n"
         << "  config      : " << args.config_path       << "\n"
         << "  redis       : " << args.redis_host << ":" << args.redis_port << "\n"
         << "  server_url  : " << (args.server_url.empty() ? "(未配置)" : args.server_url) << "\n"
@@ -256,19 +256,21 @@ int main(int argc, char** argv) {
     for (int i = 0; i < args.count; ++i) {
         // alarm_uploader_enqueue 是非阻塞的：
         //   - 克隆图像、记录时间戳后入队
-        //   - 实际的 JPEG 编码 + Redis RPUSH 由 upload worker 线程异步完成
+        //   - 实际的 JPEG 编码 + 落盘由 upload worker 线程异步完成
         //
-        // 推送到 Redis server_queue 的 JSON 格式（由 alarm_uploader.cpp 决定）：
+        // 落盘到 alarm_store/ 的 .json 元数据格式（由 alarm_uploader.cpp 决定）：
         //   {
-        //     "timestamp":    <unix time>,
-        //     "camera_id":    <int>,
-        //     "alarm_type":   <string>,
-        //     "snapTime":     "YYYY-MM-DD HH:MM:SS",
-        //     "endTime":      "YYYY-MM-DD HH:MM:SS",
-        //     "base64Data":   <img_draw JPEG base64>,
-        //     "base64DataRaw":<img_raw  JPEG base64>
+        //     "camera_id":  <int>,
+        //     "alarm_type": <string>,
+        //     "snapTime":   "YYYY-MM-DD HH:MM:SS",
+        //     "endTime":    "YYYY-MM-DD HH:MM:SS",
+        //     "server_url": <本通道地址，方案2，留空回落默认>,
+        //     "img":        "<base>.jpg",       // 带框图文件名
+        //     "img_raw":    "<base>_raw.jpg",   // 原图文件名（无原图则为 ""）
+        //     "ts":         <unix time>
         //   }
-        bool ok = alarm_uploader_enqueue(img_draw, img_raw, args.camera_id, args.alarm_type);
+        // 带框/原图随后由 Python(OutboxForwarder) 读成 base64Data / base64DataRaw 再 POST。
+        bool ok = alarm_uploader_enqueue(img_draw, img_raw, args.camera_id, args.alarm_type.c_str());
         std::cout << "[" << (ok ? "OK  " : "FAIL") << "] enqueue #" << (i + 1)
                   << " camera_id=" << args.camera_id
                   << " alarm_type=" << args.alarm_type << "\n";
@@ -278,7 +280,7 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
-    // deinit 会等待 worker 线程将剩余队列全部 RPUSH 到 Redis 后才 join
+    // deinit 会等待 worker 线程把剩余队列全部落盘到 alarm_store/ 后才 join
     // 所以此处无需额外 sleep
     alarm_uploader_deinit();
 

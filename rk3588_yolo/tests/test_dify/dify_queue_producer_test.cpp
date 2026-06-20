@@ -305,7 +305,7 @@ int main(int argc, char** argv) {
     int ok_count = 0;
     for (int i = 0; i < args.count; ++i) {
         std::string event_id = build_event_id(args.event_prefix, i);
-        bool ok = dify_uploader_enqueue(img, args.prompt, event_id);
+        bool ok = dify_uploader_enqueue(img, args.prompt.c_str(), event_id.c_str());
         std::cout << "[" << (ok ? "OK" : "FAIL") << "] enqueue event_id=" << event_id
                   << "\n";
         if (ok) {
