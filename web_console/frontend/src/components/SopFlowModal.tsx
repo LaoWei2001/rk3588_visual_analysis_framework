@@ -6,7 +6,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import SopStepNode from '../nodes/SopStepNode'
-import { type SopFlow, type SopStep, type SopEndMode, DEFAULT_STEP_ENTER, DEFAULT_STEP_DWELL } from '../utils/sopFlow'
+import { type SopFlow, type SopStep, type SopEndMode, DEFAULT_STEP_ENTER, DEFAULT_STEP_DWELL, DEFAULT_STEP_DWELL_MAX } from '../utils/sopFlow'
 import './SopFlowModal.css'
 
 // 「SOP 流程配置」弹窗: 点 SOP 节点上的「配置流程」进来。
@@ -23,7 +23,7 @@ interface Props {
   onClose: () => void
 }
 
-type StepData = { zoneName: string; enter_sec: number; dwell_min_sec: number }
+type StepData = { zoneName: string; enter_sec: number; dwell_min_sec: number; dwell_max_sec: number }
 
 let _sid = 0
 const newId = () => `step-${Date.now()}-${++_sid}`
@@ -72,7 +72,7 @@ function Inner({ availableZones, initial, onSave, onClose }: Props) {
     const ns: Node[] = (initial.steps ?? []).map((s, i) => ({
       id: newId(), type: 'sopStep',
       position: { x: 120 + (i % 5) * 190, y: 80 + Math.floor(i / 5) * 120 },
-      data: { zoneName: s.zoneName, enter_sec: s.enter_sec, dwell_min_sec: s.dwell_min_sec } as StepData,
+      data: { zoneName: s.zoneName, enter_sec: s.enter_sec, dwell_min_sec: s.dwell_min_sec, dwell_max_sec: s.dwell_max_sec } as StepData,
     }))
     setNodes(ns)
     const es: Edge[] = []
@@ -92,7 +92,7 @@ function Inner({ availableZones, initial, onSave, onClose }: Props) {
     const node: Node = {
       id: newId(), type: 'sopStep', selected: true,
       position: { x: 120 + (k % 5) * 190, y: 80 + Math.floor(k / 5) * 120 },
-      data: { zoneName: availableZones[0] ?? '', enter_sec: DEFAULT_STEP_ENTER, dwell_min_sec: DEFAULT_STEP_DWELL } as StepData,
+      data: { zoneName: availableZones[0] ?? '', enter_sec: DEFAULT_STEP_ENTER, dwell_min_sec: DEFAULT_STEP_DWELL, dwell_max_sec: DEFAULT_STEP_DWELL_MAX } as StepData,
     }
     return [...ns.map(n => ({ ...n, selected: false })), node]
   })
@@ -118,6 +118,7 @@ function Inner({ availableZones, initial, onSave, onClose }: Props) {
         zoneName: String(dd.zoneName ?? '').trim(),
         enter_sec: Number(dd.enter_sec ?? DEFAULT_STEP_ENTER),
         dwell_min_sec: Number(dd.dwell_min_sec ?? DEFAULT_STEP_DWELL),
+        dwell_max_sec: Number(dd.dwell_max_sec ?? DEFAULT_STEP_DWELL_MAX),
       }
     }).filter(s => s.zoneName)   // 丢掉没选区域的步骤
     onSave({
@@ -197,7 +198,11 @@ function Inner({ availableZones, initial, onSave, onClose }: Props) {
                   <input type="number" step="0.5" min="0" value={selData.dwell_min_sec ?? 0}
                     onChange={e => updateSel({ dwell_min_sec: Number(e.target.value) })} />
                 </label>
-                <div className="sop-fm-side-hint">参数只作用于该步骤。同一区域的不同步骤可设不同停留。</div>
+                <label className="sop-fm-field">最大停留(s，0=不限)
+                  <input type="number" step="0.5" min="0" value={selData.dwell_max_sec ?? 0}
+                    onChange={e => updateSel({ dwell_max_sec: Number(e.target.value) })} />
+                </label>
+                <div className="sop-fm-side-hint">参数只作用于该步骤。停太短→「停留不足」报警；停太久→「停留超时」报警(最大填 0 = 不限)。</div>
               </>
             ) : (
               <div className="sop-fm-side-empty">点画布上的步骤<br />选区域并单独配置参数</div>

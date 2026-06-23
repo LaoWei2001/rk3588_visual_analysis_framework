@@ -5,6 +5,7 @@ export interface SopStep {
   zoneName: string       // 引用的 ROI 区域名(来自上游 ROI 节点; 可重复 = 多次进入)
   enter_sec: number      // 该步进入区域确认时长(秒)
   dwell_min_sec: number  // 该步要求的最小停留(秒), 0 = 不要求
+  dwell_max_sec: number  // 该步允许的最大停留(秒), 0 = 不限(可忽略)
 }
 
 // 工序结束判定方式: 离场超时 / 进入终点区域
@@ -21,6 +22,7 @@ export interface SopFlow {
 
 export const DEFAULT_STEP_ENTER = 0.5
 export const DEFAULT_STEP_DWELL = 0
+export const DEFAULT_STEP_DWELL_MAX = 0   // 0 = 不限最大停留
 export const DEFAULT_SOP_FLOW: SopFlow = {
   target_label: '', reset_sec: 5, end_mode: 'leave', end_zone: '', steps: [],
 }
@@ -44,6 +46,7 @@ export function sopFlowToConfig(f: SopFlow): Record<string, unknown> {
     path_sequence:  steps.map(s => s.zoneName.trim()).join(','),
     path_enter_list: steps.map(s => Number(s.enter_sec ?? DEFAULT_STEP_ENTER)).join(','),
     path_dwell_list: steps.map(s => Number(s.dwell_min_sec ?? DEFAULT_STEP_DWELL)).join(','),
+    path_dwell_max_list: steps.map(s => Number(s.dwell_max_sec ?? DEFAULT_STEP_DWELL_MAX)).join(','),
   }
 }
 
@@ -52,12 +55,15 @@ export function sopConfigToFlow(ch: Record<string, unknown>): SopFlow {
   const seq    = String(ch.path_sequence ?? '').split(',').map(s => s.trim()).filter(Boolean)
   const enterL = String(ch.path_enter_list ?? '').split(',')
   const dwellL = String(ch.path_dwell_list ?? '').split(',')
+  const maxL   = String(ch.path_dwell_max_list ?? '').split(',')
   const eDflt  = toNum(ch.path_enter_sec, DEFAULT_STEP_ENTER)
   const dDflt  = toNum(ch.path_dwell_min_sec, DEFAULT_STEP_DWELL)
+  const mDflt  = toNum(ch.path_dwell_max_sec, DEFAULT_STEP_DWELL_MAX)
   const steps: SopStep[] = seq.map((zoneName, i) => ({
     zoneName,
     enter_sec:     i < enterL.length ? toNum(enterL[i], eDflt) : eDflt,
     dwell_min_sec: i < dwellL.length ? toNum(dwellL[i], dDflt) : dDflt,
+    dwell_max_sec: i < maxL.length   ? toNum(maxL[i],   mDflt) : mDflt,
   }))
   return {
     target_label: String(ch.path_target_label ?? ''),

@@ -2,8 +2,8 @@
  * @file config_init.cpp
  * @brief 配置字段注册
  */
-#include "config.h"
 #include "config_registry.h"
+#include "config.h"
 
 void init_config_fields(AppConfig &cfg)
 {
@@ -86,6 +86,8 @@ void init_config_fields(AppConfig &cfg)
     REG_C("path_dwell_min_sec", FLOAT, path_dwell_min_sec);
     REG_C("path_enter_list", STRING, path_enter_list);
     REG_C("path_dwell_list", STRING, path_dwell_list);
+    REG_C("path_dwell_max_sec", FLOAT, path_dwell_max_sec);
+    REG_C("path_dwell_max_list", STRING, path_dwell_max_list);
     REG_C("path_reset_sec", FLOAT, path_reset_sec);
     REG_C("path_end_mode", STRING, path_end_mode);
     REG_C("path_end_zone", STRING, path_end_zone);

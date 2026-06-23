@@ -7,11 +7,12 @@ import './nodeStyles.css'
 //   - 左把手 in / 右把手 out: 连成一条链 = 期望经过顺序。
 //   - 同一区域可被多个步骤引用(多次进入), 每步参数各自独立。
 export default function SopStepNode({ id, data, selected }: NodeProps) {
-  const d = data as { zoneName?: string; enter_sec?: number; dwell_min_sec?: number; seq?: number }
+  const d = data as { zoneName?: string; enter_sec?: number; dwell_min_sec?: number; dwell_max_sec?: number; seq?: number }
   const { deleteElements } = useReactFlow()
 
   const name  = d.zoneName?.trim() || '未选区域'
   const dwell = d.dwell_min_sec ?? 0
+  const dmax  = d.dwell_max_sec ?? 0
 
   return (
     <div className={`rf-node rf-node-compact${selected ? ' selected' : ''}`} style={{ minWidth: 156 }}>
@@ -32,6 +33,9 @@ export default function SopStepNode({ id, data, selected }: NodeProps) {
         <span className={`sop-step-param${dwell > 0 ? ' on' : ''}`} title="该步骤要求的最小停留">
           {dwell > 0 ? `停留≥${dwell}s` : '停留不限'}
         </span>
+        {dmax > 0 && (
+          <span className="sop-step-param on" title="该步骤允许的最大停留(超时报警)">停留≤{dmax}s</span>
+        )}
       </div>
 
       <Handle type="source" position={Position.Right} id="out" />

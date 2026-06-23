@@ -1,10 +1,13 @@
 /* ============================================================================
  * @file logic_path_sop.cpp
- * logic_path_sop —— 目标 SOP 路径合规检测 (单目标·按类别·严格顺序; 仅屏幕报警, 不上报)
+ * logic_path_sop —— 目标 SOP 路径合规检测 (单目标·按类别·严格顺序)
  *
- * 目标必须【严格按配置的顺序】依次进入各区域。两类报警(均只在屏幕上红字显示, 不上报服务器):
+ * 目标必须【严格按配置的顺序】依次进入各区域。四类报警(屏幕红字; 连了"上报配置"节点则同时上报):
  *   ① 顺序错误: 目标进入了"设计内区域", 但不是当前期望的下一步 → 即时报警(不必等结束)。
- *   ② 漏掉区域: 工序结束时, 应进区域里还有从没进过的 → 结算报警(必须等工序结束才能判)。
+ *   ② 漏掉区域: 工序结束时, 应当进入区域里还有从没进过的 → 结算报警(必须等工序结束才能判)。
+ *   ③ 停留不足: 离开某步时, 该步停留 < 配置的最小停留 → 报警(每步每轮一次)。
+ *   ④ 停留超时: 在某步停留 > 配置的最大停留(0=不限) → 即时报警(每步每轮一次)。
+ * 上报内容: 两张图 —— 一张叠加了检测框/区域/状态文字(同视频窗口), 一张原始视频帧。
  *
  * 何时算"工序结束"(决定漏检何时结算), 由 path_end_mode 选:
  *   - "leave"  (离场超时): 目标持续检测不到超过 path_reset_sec 秒 → 工序结束。
@@ -16,7 +19,8 @@
  *   path_sequence      步骤序列: 逗号分隔区域名(可重复=多次进入), 顺序=严格期望顺序
  *   path_target_label  目标类别名
  *   path_enter_list    每步进入确认(秒), 与 path_sequence 对齐(空项回退 path_enter_sec)
- *   path_dwell_list    每步最小停留(秒), 与 path_sequence 对齐(空项回退 path_dwell_min_sec; 仅显示提示)
+ *   path_dwell_list    每步最小停留(秒), 与 path_sequence 对齐(空项回退 path_dwell_min_sec; 不足则报警)
+ *   path_dwell_max_list 每步最大停留(秒), 与 path_sequence 对齐(空项回退 path_dwell_max_sec; 0=不限, 超则报警)
  *   path_reset_sec     离场超时(秒): 工序结束确认时长
  *   path_end_mode      "leave" | "endzone"
  *   path_end_zone      终点区域名(endzone 模式)
@@ -82,11 +86,16 @@ struct PathSopState
     std::vector<std::string> visited; /* 进过的区域名(任意顺序; 用于漏检) */
     std::vector<uint64_t> dwell_ms;
     bool order_error = false;        /* 顺序错误(latch) */
-    std::string err_detail;          /* 顺序错误详情: 进了X 应进Y */
+    std::string err_detail;          /* 顺序错误详情: 进了X 应当进入Y */
     bool ended = false;              /* 本轮工序已结束(显示结算) */
     std::vector<std::string> missed; /* 结束时算出的漏掉区域 */
     bool completed = false;          /* 严格按序走完全部步骤 */
     uint64_t last_seen_ms = 0;
+    std::vector<bool> short_done; /* 该步"停留不足"已报(本轮去重) */
+    std::vector<bool> long_done;  /* 该步"停留超时"已报(本轮去重) */
+    bool dwell_short = false;     /* 本轮出现过"停留不足"(显示用 latch) */
+    bool dwell_over = false;      /* 本轮出现过"停留超时"(显示用 latch) */
+    std::string dwell_detail;     /* 最近一次停留违规详情(显示用) */
 };
 
 static void logic_path_sop(ChannelContext *ctx)
@@ -133,7 +142,21 @@ static void logic_path_sop(ChannelContext *ctx)
         dwell_min[i] = std::max(0.0f, d);
     }
 
-    /* 应进区域(去重, 漏检基准) */
+    /* ---- 每步最大停留(0 = 不限, 用户可忽略) ---- */
+    const std::vector<std::string> maxList = path_split_keep(cfg ? cfg->path_dwell_max_list : std::string());
+    const float maxDflt = cfg ? cfg->path_dwell_max_sec : 0.0f;
+    std::vector<float> dwell_max(nseq);
+    for (int i = 0; i < nseq; ++i)
+    {
+        const float mx = (i < (int)maxList.size()) ? path_parse_f(maxList[i], maxDflt) : maxDflt;
+        dwell_max[i] = std::max(0.0f, mx);
+    }
+    if ((int)s.short_done.size() != nseq)
+        s.short_done.assign(nseq, false);
+    if ((int)s.long_done.size() != nseq)
+        s.long_done.assign(nseq, false);
+
+    /* 应当进入区域(去重, 漏检基准) */
     std::vector<std::string> required;
     for (const auto &z : seq)
         if (std::find(required.begin(), required.end(), z) == required.end())
@@ -169,15 +192,28 @@ static void logic_path_sop(ChannelContext *ctx)
         return std::find(s.visited.begin(), s.visited.end(), nm) != s.visited.end();
     };
 
-    /* 上报一次(仅当画布连了"上报配置"节点 → doReport)。SOP 事件稀疏, 不做时间冷却:
-     * 顺序错误本轮 latch 一次、漏检结束时算一次, 各只上报一次; 开新一轮自然解锁、可再报。
-     * server_url 为空 = 用上报服务默认地址。发当时的模型输入帧快照。*/
-    auto report = [&](const char *atype) {
-        if (!ctx->frame || ctx->frame->empty())
+    /* 上报(仅当画布连了"上报配置"节点 → doReport)。SOP 事件稀疏, 不做时间冷却:
+     * 顺序错误本轮 latch 一次、漏检结束算一次、每步停留违规各一次; 开新一轮自然解锁、可再报。
+     * 本帧告警先收集, 等叠加层都画好后, 在函数末尾统一渲染"叠加图 + 原始帧"两张上报。 */
+    std::vector<const char *> alarms;
+    auto raise = [&](const char *atype) { alarms.push_back(atype); };
+    /* 离开某步时判其"最小停留": 不足则报一次(本轮去重) */
+    auto judgeShort = [&](int step) {
+        if (step < 0 || step >= nseq || s.short_done[step])
             return;
-        const char *url = (cfg && !cfg->server_url.empty()) ? cfg->server_url.c_str() : nullptr;
-        /* doReport = 画布是否连了 server 型"上报配置"节点(path_report); false 时 enqueue 内部跳过 */
-        alarm_uploader_enqueue(*ctx->frame, *ctx->frame, ctx->chnId, atype, doReport, url);
+        if (dwell_min[step] <= 0.0f)
+            return;
+        const uint64_t need = (uint64_t)(dwell_min[step] * 1000.0f + 0.5f);
+        if (s.dwell_ms[step] < need)
+        {
+            s.short_done[step] = true;
+            s.dwell_short = true;
+            char d[160];
+            snprintf(d, sizeof(d), "步%d[%s] 停留%.1fs < %.1fs", step + 1, seq[step].c_str(),
+                     s.dwell_ms[step] / 1000.0f, dwell_min[step]);
+            s.dwell_detail = d;
+            raise("sop_dwell_short");
+        }
     };
     auto settle = [&]() { /* 工序结束 → 结算漏检 */
                           s.missed.clear();
@@ -186,7 +222,7 @@ static void logic_path_sop(ChannelContext *ctx)
                                   s.missed.push_back(rq);
                           s.ended = true;
                           if (!s.missed.empty())
-                              report("sop_missed"); /* 漏检: 上报一次 */
+                              raise("sop_missed"); /* 漏检: 上报一次 */
     };
     auto start_round = [&]() { /* 开新一轮 */
                                s.expect = 0;
@@ -200,6 +236,11 @@ static void logic_path_sop(ChannelContext *ctx)
                                s.missed.clear();
                                s.completed = false;
                                std::fill(s.dwell_ms.begin(), s.dwell_ms.end(), 0);
+                               std::fill(s.short_done.begin(), s.short_done.end(), false);
+                               std::fill(s.long_done.begin(), s.long_done.end(), false);
+                               s.dwell_short = false;
+                               s.dwell_over = false;
+                               s.dwell_detail.clear();
     };
 
     const uint64_t now = ctx->timestamp_ms;
@@ -208,7 +249,10 @@ static void logic_path_sop(ChannelContext *ctx)
 
     /* ---- 工序结束①: 离场超时(leave 主判定 / endzone 兜底) ---- */
     if (!s.ended && s.last_seen_ms != 0 && !target && (now - s.last_seen_ms) > end_ms)
+    {
+        judgeShort(s.cur_step); /* 离场结束 → 判最后所在步的最小停留 */
         settle();
+    }
 
     /* ---- 进入防抖 + 严格顺序 + 终点/新一轮 ---- */
     if (target)
@@ -234,6 +278,7 @@ static void logic_path_sop(ChannelContext *ctx)
                 const std::string expectZone = (s.expect < nseq) ? seq[s.expect] : std::string();
                 if (inZone == expectZone) /* 正确的下一步 */
                 {
+                    judgeShort(s.cur_step); /* 离开上一步 → 判其最小停留 */
                     s.cur_step = s.expect;
                     s.expect++;
                     if (s.expect >= nseq)
@@ -246,9 +291,9 @@ static void logic_path_sop(ChannelContext *ctx)
                 {
                     if (!s.order_error)
                     {
-                        s.err_detail =
-                            "进了[" + inZone + "] 应进[" + (expectZone.empty() ? std::string("-") : expectZone) + "]";
-                        report("sop_order_err"); /* 顺序错误: 上报一次(本轮) */
+                        s.err_detail = "进了[" + inZone + "] 应当进入[" +
+                                       (expectZone.empty() ? std::string("-") : expectZone) + "]";
+                        raise("sop_order_err"); /* 顺序错误: 上报一次(本轮) */
                     }
                     s.order_error = true;
                 }
@@ -259,9 +304,26 @@ static void logic_path_sop(ChannelContext *ctx)
         }
     }
 
-    /* 停留计时(显示用): 目标停在"当前步"区域内则累加该步 */
+    /* 停留计时: 目标停在"当前步"区域内则累加该步; 同时判最大停留(0=不限) */
     if (target && !s.ended && s.cur_step >= 0 && s.cur_step < nseq && inZone == seq[s.cur_step])
-        s.dwell_ms[s.cur_step] += (uint64_t)std::max(0.0f, ctx->dt_ms);
+    {
+        const int st = s.cur_step;
+        s.dwell_ms[st] += (uint64_t)std::max(0.0f, ctx->dt_ms);
+        if (dwell_max[st] > 0.0f && !s.long_done[st])
+        {
+            const uint64_t cap = (uint64_t)(dwell_max[st] * 1000.0f + 0.5f);
+            if (s.dwell_ms[st] > cap)
+            {
+                s.long_done[st] = true;
+                s.dwell_over = true;
+                char d[160];
+                snprintf(d, sizeof(d), "步%d[%s] 停留%.1fs > %.1fs", st + 1, seq[st].c_str(), s.dwell_ms[st] / 1000.0f,
+                         dwell_max[st]);
+                s.dwell_detail = d;
+                raise("sop_dwell_over");
+            }
+        }
+    }
 
     /* ===================== 画面绘制 ===================== */
     const cv::Scalar GREEN(0, 238, 0), RED(0, 0, 230), ORANGE(0, 165, 255), GRAY(170, 170, 170), CYAN(255, 255, 0),
@@ -331,7 +393,22 @@ static void logic_path_sop(ChannelContext *ctx)
         draw_text(ctx, line, cv::Point(16, yrow), RED, 0.6, 2);
         yrow += 28;
     }
-    if (s.ended && !s.order_error && s.missed.empty()) /* 合规 */
+    if (s.dwell_over) /* 停留超时(即时) */
+    {
+        draw_text(ctx, "报警: 停留超时!", cv::Point(16, yrow), RED, 0.9, 3);
+        yrow += 34;
+    }
+    if (s.dwell_short) /* 停留不足 */
+    {
+        draw_text(ctx, "报警: 停留不足!", cv::Point(16, yrow), RED, 0.9, 3);
+        yrow += 34;
+    }
+    if ((s.dwell_over || s.dwell_short) && !s.dwell_detail.empty())
+    {
+        draw_text(ctx, s.dwell_detail.c_str(), cv::Point(16, yrow), RED, 0.55, 2);
+        yrow += 26;
+    }
+    if (s.ended && !s.order_error && s.missed.empty() && !s.dwell_short && !s.dwell_over) /* 合规 */
     {
         draw_text(ctx, "工序合规完成", cv::Point(16, yrow), GREEN, 0.8, 2);
         yrow += 32;
@@ -353,7 +430,7 @@ static void logic_path_sop(ChannelContext *ctx)
         yrow += 22;
     }
 
-    /* 逐步骤: 已完成(按序)=绿/橙 / 当前应进=青 / 未到=灰。
+    /* 逐步骤: 已完成(按序)=绿/橙 / 应当进入=青 / 未到=灰。
      * 严格顺序下"是否完成"只看步号(i < expect), 不看区域名是否进过 ——
      * 否则区域重复时(如 区域1 既是第1步又是第3步), 第一次进区域1 会把第3步误标成"已进"。*/
     const int hmax = (ctx->frame ? ctx->frame->rows : 640) - 16;
@@ -378,16 +455,39 @@ static void logic_path_sop(ChannelContext *ctx)
         else if (cur)
         {
             c = CYAN;
-            mk = "当前应进";
+            mk = "应当进入";
         }
         else
         {
             c = GRAY;
             mk = "待经过";
         }
-        snprintf(line, sizeof(line), "%d.%s 停留%.1fs %s", i + 1, seq[i].c_str(), dsec, mk);
+        /* 停留显示「实际/要求」: 配了最大→区间「实际/最小~最大」; 只配最小→「实际/最小」; 都没配→只显示实际 */
+        char dwellStr[64];
+        if (dwell_max[i] > 0.0f)
+            snprintf(dwellStr, sizeof(dwellStr), "停留%.1fs/%.1f~%.1fs", dsec, dwell_min[i], dwell_max[i]);
+        else if (dwell_min[i] > 0.0f)
+            snprintf(dwellStr, sizeof(dwellStr), "停留%.1fs/%.1fs", dsec, dwell_min[i]);
+        else
+            snprintf(dwellStr, sizeof(dwellStr), "停留%.1fs", dsec);
+        snprintf(line, sizeof(line), "%d.%s %s %s", i + 1, seq[i].c_str(), dwellStr, mk);
         draw_text(ctx, line, cv::Point(16, yrow), c, 0.55, 1);
         yrow += 22;
+    }
+
+    /* ===== 上报: 此时各叠加层(框/区域/状态文字)都已画好 =====
+     * 上报两张图: drawn = 克隆帧 + render_overlays 渲染叠加层(同视频窗口);  *ctx->frame = 原始视频帧。
+     * 只在连了"上报配置"节点(doReport)时才渲染+入队, 没连则只屏幕显示、不浪费克隆。 */
+    if (!alarms.empty() && doReport && ctx->frame && !ctx->frame->empty())
+    {
+        cv::Mat drawn = ctx->frame->clone();
+        RenderParams rp = ctx->render_params();
+        rp.show_fps = 0;
+        rp.target_mask = DrawCommand::UPLOAD;
+        render_overlays(drawn, rp);
+        const char *url = (cfg && !cfg->server_url.empty()) ? cfg->server_url.c_str() : nullptr;
+        for (const char *atype : alarms)
+            alarm_uploader_enqueue(drawn, *ctx->frame, ctx->chnId, atype, doReport, url);
     }
 }
 

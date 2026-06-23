@@ -1,0 +1,44 @@
+{
+  "schema_version": 2,
+  "global": {
+    "model_path": "assets/yolov8n.rknn",
+    "label_path": "assets/labels.txt",
+    "enable_display": 0,
+    "disp_width": 1920,
+    "disp_height": 1080,
+    "tile_rows": 2,
+    "tile_cols": 2,
+    "max_fps": 15,
+    "queue_size": 1,
+    "channel_threads": 1,
+    "npu_cores": 3,
+    "obj_thresh": 0.3,
+    "nms_thresh": 0.45,
+    "detect_classes": [],
+    "tracker_enable": 1,
+    "tracker_iou_thresh": 0.3,
+    "tracker_max_miss": 30,
+    "tracker_min_hits": 3,
+    "performance_display": 0,
+    "enable_pause_key": 0,
+    "enable_rtsp": 1
+  },
+  "channels": [
+    {
+      "id": 0,
+      "enable": true,
+      "infer_enable": false,
+      "stream": {
+        "src_type": "rtsp",
+        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
+        "video_enc": "h264"
+      },
+      "logic": "logic_lesson1",
+      "line_width": 20,
+      "t_start": 1,
+      "t_end": 1,
+      "coverage_threshold": 80,
+      "required_actions": ""
+    }
+  ]
+}
