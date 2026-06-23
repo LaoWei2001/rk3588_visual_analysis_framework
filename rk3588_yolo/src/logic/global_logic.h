@@ -6,18 +6,22 @@
  * 通道 logic vs 全局 logic — 选哪个？
  * ============================================================
  *
- * │ 维度             │ 通道 logic (channel_logic)          │ 全局 logic (global_logic)              │
+ * │ 维度             │ 通道 logic (channel_logic)          │ 全局 logic
+ * (global_logic)              │
  * │------------------│-------------------------------------│----------------------------------------│
- * │ 触发时机         │ 每帧推理完成后立即调用              │ 独立线程，按 poll_interval_ms 轮询      │
- * │ 访问的帧数据     │ ctx->frame / ctx->results（当帧）   │ get_channel_snapshot（快照，可能旧几帧）│
- * │ 跨通道协同       │ 需主动 get_channel_snapshot(other)  │ 天然访问所有通道；for_each_channel 遍历 │
- * │ 状态管理         │ ctx->state（本通道专属）             │ gctx->state（本实例专属）              │
- * │ 适用场景         │ 本通道的目标过滤/计时/告警          │ 多路联动、全局计数、汇总上报            │
+ * │ 触发时机         │ 每帧推理完成后立即调用              │ 独立线程，按
+ * poll_interval_ms 轮询      │ │ 访问的帧数据     │ ctx->frame /
+ * ctx->results（当帧）   │ get_channel_snapshot（快照，可能旧几帧）│ │
+ * 跨通道协同       │ 需主动 get_channel_snapshot(other)  │
+ * 天然访问所有通道；for_each_channel 遍历 │ │ 状态管理         │
+ * ctx->state（本通道专属）             │ gctx->state（本实例专属） │ │ 适用场景
+ * │ 本通道的目标过滤/计时/告警          │ 多路联动、全局计数、汇总上报 │
  *
  * 经验法则：
  *   - 只看自己通道的结果 → 用通道 logic
  *   - 需要同时看多路结果或做跨路关联 → 用全局 logic
- *   - 需要每帧都跑的高频逻辑 → 用通道 logic（poll_interval_ms 不能低于推理延迟）
+ *   - 需要每帧都跑的高频逻辑 → 用通道 logic（poll_interval_ms
+ * 不能低于推理延迟）
  *   - 需要后台定期巡检（不关心每帧）→ 用全局 logic
  *
  * ============================================================
@@ -86,7 +90,8 @@
  *         const uint64_t now = gctx->timestamp_ms;
  *         if (now - st.last_alarm_ts > 5000) {
  *             st.last_alarm_ts = now;
- *             printf("[MyGlobal] ALARM: %d persons across all channels\n", total);
+ *             printf("[MyGlobal] ALARM: %d persons across all channels\n",
+ * total);
  *             // alarm_uploader_enqueue(...)  ← 按需接入上报
  *         }
  *     }
@@ -105,7 +110,8 @@
  *   auto &st = *std::static_pointer_cast<MyState>(*gctx->state);
  *
  * 注意事项：
- *   - gctx->state 的所有权由框架持有；logic 函数只写 *gctx->state（不 reset 指针本身）。
+ *   - gctx->state 的所有权由框架持有；logic 函数只写 *gctx->state（不 reset
+ * 指针本身）。
  *   - 框架在 global_logic_stop_all() 时自动释放状态，无需 logic 手动清理。
  *   - 多个全局 logic 实例各自独立 state，互不影响。
  *
@@ -130,11 +136,11 @@
 
 #pragma once
 
-#include <string>
-#include <vector>
 #include <cstdint>
 #include <memory>
 #include <opencv2/opencv.hpp>
+#include <string>
+#include <vector>
 
 struct AlgoResult;
 #include "../config/config.h"
@@ -260,10 +266,16 @@ struct GlobalContext
     }
 
     /** @brief 获取指定通道的推理帧率（EMA 平滑值）。*/
-    float get_channel_infer_fps(int chnId) const { return app_ctrl_get_infer_fps(chnId); }
+    float get_channel_infer_fps(int chnId) const
+    {
+        return app_ctrl_get_infer_fps(chnId);
+    }
 
     /** @brief 获取指定通道的显示帧率（EMA 平滑值）。*/
-    float get_channel_disp_fps(int chnId) const  { return app_ctrl_get_disp_fps(chnId); }
+    float get_channel_disp_fps(int chnId) const
+    {
+        return app_ctrl_get_disp_fps(chnId);
+    }
 
     /**
      * @brief 快速查询指定通道在 max_age_ms 内是否有指定标签的目标。
@@ -310,10 +322,10 @@ struct GlobalContext
      *   });
      * @endcode
      */
-    template <typename Func>
-    void for_each_channel(Func &&fn) const
+    template <typename Func> void for_each_channel(Func &&fn) const
     {
-        if (!channel_ids) return;
+        if (!channel_ids)
+            return;
         for (size_t i = 0; i < channel_ids->size(); ++i)
             fn((*channel_ids)[i], (int)i);
     }
@@ -337,7 +349,7 @@ typedef void (*GlobalLogicFunc)(GlobalContext *gctx);
  * 由 analyzer_init 调用一次；热重载时由 config_monitor 按需重启受影响实例。
  * @return 成功启动的实例数（启动失败的实例跳过，不影响其余实例）
  */
-int  global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs);
+int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs);
 
 /**
  * @brief 停止所有全局逻辑实例（发送退出信号并 join 线程）。
@@ -348,7 +360,8 @@ void global_logic_stop_all(void);
 
 /**
  * @brief 获取当前运行的全局逻辑实例数量（供 main 诊断打印）。*/
-int  global_logic_get_instance_count(void);
+int global_logic_get_instance_count(void);
 
-/** @brief 全局逻辑线程入口（由 global_logic_start_all 内部调用，不需要外部直接使用）。*/
+/** @brief 全局逻辑线程入口（由 global_logic_start_all
+ * 内部调用，不需要外部直接使用）。*/
 void *global_logic_thread_func(void *arg);

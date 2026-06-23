@@ -13,8 +13,8 @@
  */
 
 #include "gst_opt.h"
-#include <gst/video/video-info.h>
 #include <gst/allocators/gstdmabuf.h>
+#include <gst/video/video-info.h>
 #include <string.h>
 
 /**
@@ -23,13 +23,13 @@
  * @sample:     GStreamer appsink 的 GstSample
  * @pFrameDesc: 输出参数，填充宽、高、水平步长、垂直步长、像素格式字符串
  *
- * 返回值：GstSample 内部的 GstBuffer 指针（不增加引用计数，生命周期与 sample 绑定）；
- *         出错时返回 NULL。
+ * 返回值：GstSample 内部的 GstBuffer 指针（不增加引用计数，生命周期与 sample
+ * 绑定）； 出错时返回 NULL。
  *
  * 实现说明：
  *   - 原始实现由灵眸专有 libgst_opt.a 提供，本文件以标准 API 等价替换。
- *   - GStreamer 的格式名称（NV12/NV21/BGR/RGB 等）与 Rockchip RGA 格式名称一致，
- *     直接透传给 imgDesc.fmt 无需转换。
+ *   - GStreamer 的格式名称（NV12/NV21/BGR/RGB 等）与 Rockchip RGA
+ * 格式名称一致， 直接透传给 imgDesc.fmt 无需转换。
  *   - 垂直步长 = UV 平面偏移 / Y 平面行步长（NV12/NV21 适用）；
  *     单平面格式（BGR/RGB）退化为 height。
  */
@@ -58,7 +58,7 @@ GstBuffer *gstopt_sample_get_buffer(GstSample *sample, FrameDesc_t *pFrameDesc)
         return buffer;
     }
 
-    pFrameDesc->width  = (gint)GST_VIDEO_INFO_WIDTH(&vinfo);
+    pFrameDesc->width = (gint)GST_VIDEO_INFO_WIDTH(&vinfo);
     pFrameDesc->height = (gint)GST_VIDEO_INFO_HEIGHT(&vinfo);
 
     /*
@@ -101,8 +101,7 @@ GstBuffer *gstopt_sample_get_buffer(GstSample *sample, FrameDesc_t *pFrameDesc)
         pFrameDesc->horStride = (gint)GST_VIDEO_INFO_PLANE_STRIDE(&vinfo, 0);
         if (GST_VIDEO_INFO_N_PLANES(&vinfo) >= 2 && pFrameDesc->horStride > 0)
         {
-            pFrameDesc->verStride = (gint)(
-                GST_VIDEO_INFO_PLANE_OFFSET(&vinfo, 1) / (gsize)pFrameDesc->horStride);
+            pFrameDesc->verStride = (gint)(GST_VIDEO_INFO_PLANE_OFFSET(&vinfo, 1) / (gsize)pFrameDesc->horStride);
         }
         else
         {

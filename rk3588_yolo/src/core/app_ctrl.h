@@ -17,15 +17,15 @@
 
 #pragma once
 
-#include <vector>
-#include <string>
+#include "../config/config.h"
+#include "../logic/channel_logic.h"
+#include "../player/display.h"
 #include <cstdint>
 #include <map>
 #include <opencv2/opencv.hpp>
 #include <pthread.h>
-#include "../config/config.h"
-#include "../logic/channel_logic.h"
-#include "../player/display.h"
+#include <string>
+#include <vector>
 
 class DecChannel; /* 前置声明, 底层 C++ 类型 */
 
@@ -83,12 +83,15 @@ struct ChannelState
     int64_t result_frame_seq = 0; /* last_results/last_logic_frame 对应的帧序号, 用于校验帧-结果匹配 */
     uint64_t last_result_ts_ms = 0;
     /* 多 ROI 区域 (一个通道可配置多个)。
-     * roi_zones      : 各区域 名字+多边形(模型输入坐标系) —— logic(ctx->rois) 与 显示 都用它。
-     * roi_zones_raw  : 各区域原始像素顶点, 仅"旧像素格式"需要(源分辨率变化时据此重算 roi_zones);
-     *                  归一化加载时直接写入 roi_zones、此表留空。索引与 roi_zones 一一对应。 */
+     * roi_zones      : 各区域 名字+多边形(模型输入坐标系) —— logic(ctx->rois) 与
+     * 显示 都用它。 roi_zones_raw  : 各区域原始像素顶点,
+     * 仅"旧像素格式"需要(源分辨率变化时据此重算 roi_zones);
+     *                  归一化加载时直接写入 roi_zones、此表留空。索引与 roi_zones
+     * 一一对应。 */
     std::vector<RoiZone> roi_zones;
     std::vector<std::vector<cv::Point>> roi_zones_raw;
-    bool roi_model_space = false; /* true=归一化加载(roi_zones 顶点已是模型坐标, 无需按源分辨率缩放) */
+    bool roi_model_space = false; /* true=归一化加载(roi_zones 顶点已是模型坐标,
+                                     无需按源分辨率缩放) */
     int last_src_w = 0;
     int last_src_h = 0;
     int src_w_now = 0; /* 当前解码源分辨率(frame_inlet 每帧写); 供推理通道 ROI 缩放用 */
@@ -98,7 +101,8 @@ struct ChannelState
     std::shared_ptr<void> logic_state;
     cv::Mat last_frame;
     cv::Mat last_logic_frame;
-    cv::Mat logic_display_frame;      /* logic 经 display_canvas() 自绘的显示底图(640×640 BGR)；空=不覆盖，显示走实时采集帧 */
+    cv::Mat logic_display_frame;      /* logic 经 display_canvas() 自绘的显示底图(640×640
+                                         BGR)；空=不覆盖，显示走实时采集帧 */
     uint64_t logic_display_ts_ms = 0; /* 上面那帧的产生时刻(steady ms)，显示端据此判新鲜度，过期回退实时帧 */
     int64_t logic_frame_id = 0;
     int64_t input_frame_seq = 0;
@@ -228,7 +232,8 @@ extern "C"
         int c = app_ctrl_get_tile_cols();
         int n = app_ctrl_get_chn_nums();
         int req = (n + c - 1) / c;
-        return g_pCtrl->config.tile_rows > 0 ? (g_pCtrl->config.tile_rows > req ? g_pCtrl->config.tile_rows : req) : req;
+        return g_pCtrl->config.tile_rows > 0 ? (g_pCtrl->config.tile_rows > req ? g_pCtrl->config.tile_rows : req)
+                                             : req;
     }
     static inline int app_ctrl_get_max_fps(void)
     {

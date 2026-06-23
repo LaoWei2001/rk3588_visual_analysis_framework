@@ -19,16 +19,15 @@ static void logic_lesson10(ChannelContext *ctx)
         return;
 
     // ───── 参数 ─────
-    const int linger_sec = (ctx->config && ctx->config->linger_sec > 0)
-                               ? ctx->config->linger_sec
-                               : 10; // ★遗留时间(秒)：网页/config 可改、热重载
-    const bool BG_FREEZE = true;     // ★学完背景后冻结：遗留物会一直保持前景，不会被"学进背景"而消失(关键修复)
-    const double LEARN_INIT = 0.05;  // 热身期学"空场景"的速率(快点把背景学好)
-    const double VAR_THRESH = 16.0;  // MOG2 前景灵敏度
-    const int MOTION_THRESH = 25;    // 帧差阈值：判"当前是否在动"
-    const double DECAY = 3.0;        // 候选消失时 dwell 的衰减倍率(>1：消失比累计快，容忍短暂噪点闪烁)
-    const double MIN_AREA = 500.0;   // 遗留物最小面积，滤掉小噪点
-    const int WARMUP = 40;           // 前 N 帧学背景(此间场景须保持空)，之后才开始判定
+    const int linger_sec = (ctx->config && ctx->config->linger_sec > 0) ? ctx->config->linger_sec
+                                                                        : 10; // ★遗留时间(秒)：网页/config 可改、热重载
+    const bool BG_FREEZE = true; // ★学完背景后冻结：遗留物会一直保持前景，不会被"学进背景"而消失(关键修复)
+    const double LEARN_INIT = 0.05; // 热身期学"空场景"的速率(快点把背景学好)
+    const double VAR_THRESH = 16.0; // MOG2 前景灵敏度
+    const int MOTION_THRESH = 25;   // 帧差阈值：判"当前是否在动"
+    const double DECAY = 3.0; // 候选消失时 dwell 的衰减倍率(>1：消失比累计快，容忍短暂噪点闪烁)
+    const double MIN_AREA = 500.0; // 遗留物最小面积，滤掉小噪点
+    const int WARMUP = 40;         // 前 N 帧学背景(此间场景须保持空)，之后才开始判定
 
     // ───── 状态 ─────
     if (!*ctx->state)
@@ -45,14 +44,14 @@ static void logic_lesson10(ChannelContext *ctx)
     cv::GaussianBlur(gray, gray, cv::Size(5, 5), 0);
 
     // 1) 前景(MOG2) → 去阴影 → 开运算去噪
-    //    学背景速率：热身期快速学空场景；之后冻结(0) → 静止的遗留物会一直被当成前景，
+    //    学背景速率：热身期快速学空场景；之后冻结(0) →
+    //    静止的遗留物会一直被当成前景，
     //    不会像之前那样几秒就被"学进背景"导致黄色消失、永远到不了红。
     double lr = (s.frames < WARMUP) ? LEARN_INIT : (BG_FREEZE ? 0.0 : 0.0008);
     cv::Mat fg;
     s.mog2->apply(*ctx->frame, fg, lr);
     cv::threshold(fg, fg, 200, 255, cv::THRESH_BINARY);
-    cv::morphologyEx(fg, fg, cv::MORPH_OPEN,
-                     cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3)));
+    cv::morphologyEx(fg, fg, cv::MORPH_OPEN, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3)));
     ++s.frames;
 
     // 累加器 / 上一帧 初始化
@@ -78,9 +77,10 @@ static void logic_lesson10(ChannelContext *ctx)
         dt = 0.04;
     cv::Mat not_static;
     cv::bitwise_not(static_fg, not_static);
-    cv::add(s.dwell, cv::Scalar(dt), s.dwell, static_fg);               // 候选: +dt
-    cv::subtract(s.dwell, cv::Scalar(dt * DECAY), s.dwell, not_static); // 非候选: 衰减
-    cv::threshold(s.dwell, s.dwell, 0.0, 0.0, cv::THRESH_TOZERO);       // 负数夹回 0
+    cv::add(s.dwell, cv::Scalar(dt), s.dwell, static_fg); // 候选: +dt
+    cv::subtract(s.dwell, cv::Scalar(dt * DECAY), s.dwell,
+                 not_static);                                     // 非候选: 衰减
+    cv::threshold(s.dwell, s.dwell, 0.0, 0.0, cv::THRESH_TOZERO); // 负数夹回 0
 
     // 5) dwell ≥ linger_sec → 遗留物掩码
     cv::Mat abandoned;
@@ -99,8 +99,7 @@ static void logic_lesson10(ChannelContext *ctx)
     {
         char w[64];
         snprintf(w, sizeof(w), "bg-model: learning %d/%d", s.frames, WARMUP);
-        cv::putText(vis, w, cv::Point(20, 32), cv::FONT_HERSHEY_SIMPLEX, 0.7,
-                    cv::Scalar(0, 255, 255), 2);
+        cv::putText(vis, w, cv::Point(20, 32), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
         s.prev_gray = gray.clone();
         return;
     }
@@ -114,10 +113,11 @@ static void logic_lesson10(ChannelContext *ctx)
         if (cv::contourArea(c) < MIN_AREA)
             continue;
         cv::Rect box = cv::boundingRect(c);
-        // 想排除"站着不动的人"：若该通道也跑了 YOLO，可在此判断 box 是否与某个 person 框重叠并 continue。
+        // 想排除"站着不动的人"：若该通道也跑了 YOLO，可在此判断 box 是否与某个
+        // person 框重叠并 continue。
         cv::rectangle(vis, box, cv::Scalar(0, 0, 255), 3);
-        cv::putText(vis, "LEFT OBJECT", cv::Point(box.x, std::max(20, box.y - 6)),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 2);
+        cv::putText(vis, "LEFT OBJECT", cv::Point(box.x, std::max(20, box.y - 6)), cv::FONT_HERSHEY_SIMPLEX, 0.6,
+                    cv::Scalar(0, 0, 255), 2);
         ++n;
     }
 
@@ -126,12 +126,15 @@ static void logic_lesson10(ChannelContext *ctx)
     cv::putText(vis, txt, cv::Point(20, 32), cv::FONT_HERSHEY_SIMPLEX, 0.7,
                 n > 0 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0), 2);
 
-    // 有遗留物就上报(可选；需网页给该通道连「上报配置」节点填地址)：
-    //   if (n > 0) alarm_uploader_enqueue(vis, *ctx->frame, ctx->chnId, "abandoned_object");
+    // 有遗留物就上报(可选；连了「上报配置」节点才真正发——把 report_enabled(ctx)
+    // 作为参数传入)：
+    //   if (n > 0) alarm_uploader_enqueue(vis, *ctx->frame, ctx->chnId,
+    //   "abandoned_object", report_enabled(ctx));
 
     // 8) 更新"上一帧"
     s.prev_gray = gray.clone();
 }
 
-// 每一个实现逻辑函数的logic_xxx.cpp文件最底部都必须添加这一行, 完成自行编写的逻辑的注册。
+// 每一个实现逻辑函数的logic_xxx.cpp文件最底部都必须添加这一行,
+// 完成自行编写的逻辑的注册。
 REGISTER_LOGIC("logic_lesson10", logic_lesson10);

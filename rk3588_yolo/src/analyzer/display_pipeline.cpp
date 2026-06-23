@@ -26,14 +26,14 @@
  *   front 槽由本线程独占，commitImgtoDispBufMap 期间无需持锁。
  */
 
-#include <pthread.h>
 #include "analyzer_internal.h"
 #include "frame_pipeline.h"
+#include <pthread.h>
 
 extern "C" void *display_worker_thread(void *arg)
 {
-    const int  chnId = (int)(intptr_t)arg;
-    DispQueue &dq    = g_disp_queues[chnId];
+    const int chnId = (int)(intptr_t)arg;
+    DispQueue &dq = g_disp_queues[chnId];
 
     while (g_pCtrl && g_pCtrl->isRunning)
     {
@@ -48,8 +48,8 @@ extern "C" void *display_worker_thread(void *arg)
                 pthread_mutex_unlock(&dq.mtx);
                 break;
             }
-            task = dq.task;                  /* 仅拷贝元数据（6 个整数，约 24 B）*/
-            dq.pool.swap_front_if_dirty();   /* mid↔front 整数交换，将最新帧切为 front */
+            task = dq.task;                /* 仅拷贝元数据（6 个整数，约 24 B）*/
+            dq.pool.swap_front_if_dirty(); /* mid↔front 整数交换，将最新帧切为 front */
             dq.has_task = 0;
             pthread_mutex_unlock(&dq.mtx);
         }
@@ -61,10 +61,7 @@ extern "C" void *display_worker_thread(void *arg)
          *
          * overlay 在 commitImgtoDispBufMap 内读取共享 last_results，
          * 按 result_age_ms 做卡尔曼速度外推绘制框（实时平滑预览）。*/
-        commitImgtoDispBufMap(task.chnId,
-                              dq.pool.front_buf(),
-                              task.srcFmt,
-                              task.srcWidth,  task.srcHeight,
+        commitImgtoDispBufMap(task.chnId, dq.pool.front_buf(), task.srcFmt, task.srcWidth, task.srcHeight,
                               task.srcHStride, task.srcVStride);
     }
 

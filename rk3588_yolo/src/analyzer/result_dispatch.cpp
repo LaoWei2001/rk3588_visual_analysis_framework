@@ -10,18 +10,19 @@
  *   → process_channel_results → invoke_channel_logic → alarm_uploader_enqueue
  *
  * 帧匹配保证（此文件不涉及）：
- *   algorithm_take_results 在同一把锁下原子取出 640 输入图 (infer_frame) 与检测框，
- *   二者必定来自同一 frame_seq。process_channel_results 将此匹配的对传给 logic。
+ *   algorithm_take_results 在同一把锁下原子取出 640 输入图 (infer_frame)
+ * 与检测框， 二者必定来自同一 frame_seq。process_channel_results
+ * 将此匹配的对传给 logic。
  */
 
 #include <cstdio>
-#include <vector>
-#include <pthread.h>
 #include <opencv2/opencv.hpp>
+#include <pthread.h>
+#include <vector>
 
-#include "system.h"
-#include "analyzer_internal.h"
 #include "algoProcess.h"
+#include "analyzer_internal.h"
+#include "system.h"
 
 /* 帧匹配诊断日志节流（每通道约 2 秒一次，由 debug_display 开关控制）*/
 static uint64_t g_sync_dbg_last_ms[MAX_CHANNEL_NUM] = {0};
@@ -35,25 +36,28 @@ extern "C" void *dispatch_worker_thread(void *arg)
     {
         /* 阻塞等待 NPU 完成通知（100ms 超时，防止退出时卡住）*/
         const int ready = algorithm_wait_result(chnId, 100);
-        if (!g_dispatch_running) break;
-        if (!ready) continue;
+        if (!g_dispatch_running)
+            break;
+        if (!ready)
+            continue;
 
         /* 原子取出检测框与产生它的 640 输入图（同一把锁、同一 seq）*/
         std::vector<AlgoResult> current_results;
-        cv::Mat   infer_frame;
-        int64_t   result_frame_id = 0;
+        cv::Mat infer_frame;
+        int64_t result_frame_id = 0;
         const int has_new = algorithm_take_results(chnId, current_results, infer_frame, result_frame_id);
-        if (!has_new) continue;
+        if (!has_new)
+            continue;
 
         /* 读最新解码帧信息（供 process_channel_results 兜底 + 诊断日志）*/
         ChannelRawFrame raw;
         int64_t input_seq_now = 0;
         {
             pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-            raw.width           = g_pCtrl->channels_state[chnId].src_w_now;
-            raw.height          = g_pCtrl->channels_state[chnId].src_h_now;
+            raw.width = g_pCtrl->channels_state[chnId].src_w_now;
+            raw.height = g_pCtrl->channels_state[chnId].src_h_now;
             raw.model_input_mat = g_pCtrl->channels_state[chnId].last_frame;
-            input_seq_now       = g_pCtrl->channels_state[chnId].input_frame_seq;
+            input_seq_now = g_pCtrl->channels_state[chnId].input_frame_seq;
             pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
         }
 
@@ -68,12 +72,10 @@ extern "C" void *dispatch_worker_thread(void *arg)
         if (dbg_now - g_sync_dbg_last_ms[chnId] >= SYNC_DBG_WINDOW_MS)
         {
             g_sync_dbg_last_ms[chnId] = dbg_now;
-            DBG_PRINT("[FrameSync][ch%02d] result_seq=%lld input_seq=%lld lag=%lld results=%zu\n",
-                      chnId,
-                      (long long)result_frame_id,
-                      (long long)input_seq_now,
-                      (long long)(input_seq_now - result_frame_id),
-                      current_results.size());
+            DBG_PRINT("[FrameSync][ch%02d] result_seq=%lld input_seq=%lld lag=%lld "
+                      "results=%zu\n",
+                      chnId, (long long)result_frame_id, (long long)input_seq_now,
+                      (long long)(input_seq_now - result_frame_id), current_results.size());
         }
     }
 

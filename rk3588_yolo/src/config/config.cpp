@@ -3,15 +3,15 @@
  * @brief JSON 配置解析与热加载
  */
 #include "config.h"
+#include "../third_party/json/cJSON.h"
 #include "config_registry.h"
 #include "config_validator.h"
 #include <algorithm>
 #include <cctype>
 #include <fstream>
-#include <sstream>
 #include <set>
+#include <sstream>
 #include <sys/stat.h>
-#include "../third_party/json/cJSON.h"
 
 void init_config_fields(AppConfig &cfg);
 
@@ -26,8 +26,7 @@ std::string to_lower_copy(const std::string &value)
 {
     std::string out = value;
     std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c)
-                   { return static_cast<char>(std::tolower(c)); });
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return out;
 }
 
@@ -53,14 +52,16 @@ bool is_supported_src_type(const std::string &src_type)
 bool is_channel_infer_enabled(const ChannelConfig &ch_cfg)
 {
     /* 推理开启需同时满足：用户开关 infer_enable=true 且配置了模型(路径+类型)。
-     * infer_enable=false → 传统算法通道：跳过 NPU 推理，但仍解码/显示/逐帧跑 logic。 */
+     * infer_enable=false → 传统算法通道：跳过 NPU 推理，但仍解码/显示/逐帧跑
+     * logic。 */
     return ch_cfg.infer_enable && !ch_cfg.model_path.empty() && !ch_cfg.model_type.empty();
 }
 } // namespace config_utils
 
 bool load_config(const std::string &path, AppConfig &cfg)
 {
-    // 保存热重载标记（在 init_config_fields 之前，因为后面 cfg.config_path 会被覆盖）
+    // 保存热重载标记（在 init_config_fields 之前，因为后面 cfg.config_path
+    // 会被覆盖）
     bool is_hotreload = (cfg.config_path == "HOTRELOAD");
 
     static bool initialized = false;
@@ -178,10 +179,9 @@ bool load_config(const std::string &path, AppConfig &cfg)
 
             if (gl_cfg.enable)
             {
-                printf("[Config] global_logic[%zu] enabled: logic=%s poll=%dms channels=%zu\n",
-                       cfg.global_logics.size() - 1,
-                       gl_cfg.logic.c_str(),
-                       gl_cfg.poll_interval_ms,
+                printf("[Config] global_logic[%zu] enabled: logic=%s poll=%dms "
+                       "channels=%zu\n",
+                       cfg.global_logics.size() - 1, gl_cfg.logic.c_str(), gl_cfg.poll_interval_ms,
                        gl_cfg.channels.size());
             }
         }
@@ -266,7 +266,8 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 cJSON *zone = nullptr;
                 cJSON_ArrayForEach(zone, rz)
                 {
-                    if (!cJSON_IsObject(zone)) continue;
+                    if (!cJSON_IsObject(zone))
+                        continue;
                     RoiZoneConfig zc;
                     cJSON *nm = cJSON_GetObjectItemCaseSensitive(zone, "name");
                     if (cJSON_IsString(nm) && nm->valuestring)
@@ -314,7 +315,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
         // 如果模型路径存在但模型类型是空的, 就分配全局设置的模型类型
         if (!ch.model_path.empty() && ch.model_type.empty())
             ch.model_type = cfg.model_type;
-        
+
         // 如果模型路径存在但标签是空的, 就分配全局设置的标签
         if (!ch.model_path.empty() && ch.label_path.empty())
             ch.label_path = cfg.label_path;
@@ -328,8 +329,9 @@ bool load_config(const std::string &path, AppConfig &cfg)
             ch.detect_classes = cfg.detect_classes;
         if (ch.max_fps <= 0)
             ch.max_fps = (cfg.max_fps > 0) ? cfg.max_fps : 30;
-        // 注意不要级联 playback_fps！ playback_fps = -1 对于实时流（RTSP/USB）表示不节流！
-        // file 类型的播放器已在 decChannel.cpp 内部专门处理了 <=0 回落逻辑。
+        // 注意不要级联 playback_fps！ playback_fps = -1
+        // 对于实时流（RTSP/USB）表示不节流！ file 类型的播放器已在 decChannel.cpp
+        // 内部专门处理了 <=0 回落逻辑。
 
         if (ch.tracker_enable == -1)
         {
@@ -382,7 +384,10 @@ bool load_config(const std::string &path, AppConfig &cfg)
         ch.stream.src_type = config_utils::normalize_src_type(ch.stream);
         if (ch.stream.src_type.empty())
         {
-            fprintf(stderr, "[Config] channel %d 缺少 stream.src_type（必填: rtsp/file/usb，已取消自动推断）\n", ch.id);
+            fprintf(stderr,
+                    "[Config] channel %d 缺少 stream.src_type（必填: "
+                    "rtsp/file/usb，已取消自动推断）\n",
+                    ch.id);
             cJSON_Delete(root);
             return false;
         }
@@ -401,15 +406,16 @@ bool load_config(const std::string &path, AppConfig &cfg)
             return false;
         }
 
-        if (ch.stream.src_type == "usb" && !stream_location.empty() && !config_utils::starts_with(stream_location, "/dev/video"))
+        if (ch.stream.src_type == "usb" && !stream_location.empty() &&
+            !config_utils::starts_with(stream_location, "/dev/video"))
         {
             fprintf(stderr, "[Config] channel %d invalid usb device: %s\n", ch.id, stream_location.c_str());
             cJSON_Delete(root);
             return false;
         }
 
-        if (ch.stream.src_type == "rtsp" && !ch.stream.video_enc.empty() &&
-            ch.stream.video_enc != "h264" && ch.stream.video_enc != "h265")
+        if (ch.stream.src_type == "rtsp" && !ch.stream.video_enc.empty() && ch.stream.video_enc != "h264" &&
+            ch.stream.video_enc != "h265")
         {
             fprintf(stderr, "[Config] channel %d invalid video_enc\n", ch.id);
             cJSON_Delete(root);
@@ -424,8 +430,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
     }
 
     std::sort(cfg.channels.begin(), cfg.channels.end(),
-              [](const ChannelConfig &a, const ChannelConfig &b)
-              { return a.id < b.id; });
+              [](const ChannelConfig &a, const ChannelConfig &b) { return a.id < b.id; });
 
     if (cfg.channels.empty())
     {
@@ -498,4 +503,3 @@ uint64_t config_get_mtime(const std::string &path)
         return 0;
     return static_cast<uint64_t>(st.st_mtime);
 }
-

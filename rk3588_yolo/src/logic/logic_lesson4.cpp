@@ -15,5 +15,6 @@ static void logic_lesson4(ChannelContext *ctx)
     }
 }
 
-// 每一个实现逻辑函数的logic_xxx.cpp文件最底部都必须添加这一行, 完成自行编写的逻辑的注册。
+// 每一个实现逻辑函数的logic_xxx.cpp文件最底部都必须添加这一行,
+// 完成自行编写的逻辑的注册。
 REGISTER_LOGIC("logic_lesson4", logic_lesson4);

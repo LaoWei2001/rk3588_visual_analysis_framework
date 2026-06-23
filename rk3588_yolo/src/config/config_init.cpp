@@ -2,8 +2,8 @@
  * @file config_init.cpp
  * @brief 配置字段注册
  */
-#include "config_registry.h"
 #include "config.h"
+#include "config_registry.h"
 
 void init_config_fields(AppConfig &cfg)
 {
@@ -80,6 +80,16 @@ void init_config_fields(AppConfig &cfg)
     REG_C("sop_shake_min_count", INT, sop_shake_min_count);
     REG_C("sop_enter_sec", FLOAT, sop_enter_sec);
     REG_C("sop_dir_sec", FLOAT, sop_dir_sec);
+    REG_C("path_sequence", STRING, path_sequence);
+    REG_C("path_target_label", STRING, path_target_label);
+    REG_C("path_enter_sec", FLOAT, path_enter_sec);
+    REG_C("path_dwell_min_sec", FLOAT, path_dwell_min_sec);
+    REG_C("path_enter_list", STRING, path_enter_list);
+    REG_C("path_dwell_list", STRING, path_dwell_list);
+    REG_C("path_reset_sec", FLOAT, path_reset_sec);
+    REG_C("path_end_mode", STRING, path_end_mode);
+    REG_C("path_end_zone", STRING, path_end_zone);
+    REG_C("path_report", BOOL, path_report);
     REG_C("fall_ratio_thresh", FLOAT, fall_ratio_thresh);
     REG_C("fall_dwell_sec", FLOAT, fall_dwell_sec);
     REG_C("fall_cooldown_sec", INT, fall_cooldown_sec);
@@ -87,6 +97,8 @@ void init_config_fields(AppConfig &cfg)
     REG_C("wave_window_sec", FLOAT, wave_window_sec);
     REG_C("dify_prompt", STRING, dify_prompt);
 
+    // 上报总开关 (画布连了"上报配置"节点才为 true; 各上报类 logic 上报前先判它)
+    REG_C("report_enable", BOOL, report_enable);
     // 上报地址 (方案2: 每通道独立, 空 = 用上报服务默认值)
     REG_C("server_url", STRING, server_url);
     REG_C("dify_api_url", STRING, dify_api_url);

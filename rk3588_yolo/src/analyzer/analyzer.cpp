@@ -7,7 +7,8 @@
  *        g_disp_queues   — 显示单槽队列（frame_inlet + display_pipeline 共用）
  *        g_dispatch_running — dispatch_worker_thread 退出信号
  *        g_process_mtx   — 同通道 process_channel_results 串行锁
- *   2. load_roi_zones_from_config()  — 从 ChannelConfig 加载 ROI 多边形到各通道状态
+ *   2. load_roi_zones_from_config()  — 从 ChannelConfig 加载 ROI
+ * 多边形到各通道状态
  *   3. analyzer_init / analyzer_deinit — 模块启动 / 关闭
  *   4. analyzer_wake_display_threads / analyzer_destroy_display_queues
  *        供 main 在线程退出前调用
@@ -16,25 +17,25 @@
  *
  * 各路径实现已拆分到独立文件（均通过 analyzer_internal.h 共享状态）:
  *   frame_inlet.cpp       — videoOutHandle + FPS 节流 + RGA 转换 + 统计
- *   channel_pipeline.cpp  — 跟踪器 + process_channel_results + invoke_channel_logic
- *   result_dispatch.cpp   — dispatch_worker_thread
+ *   channel_pipeline.cpp  — 跟踪器 + process_channel_results +
+ * invoke_channel_logic result_dispatch.cpp   — dispatch_worker_thread
  *   display_pipeline.cpp  — display_worker_thread
  */
 
-#include <cstdio>
-#include <string>
-#include <vector>
-#include <utility>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <pthread.h>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include "system.h"
-#include "analyzer.h"
-#include "analyzer_internal.h" /* DispTask/DispQueue 定义、extern 声明、时间辅助 */
-#include "algoProcess.h"
 #include "../logic/channel_logic.h"
 #include "../logic/global_logic.h"
+#include "algoProcess.h"
+#include "analyzer.h"
+#include "analyzer_internal.h" /* DispTask/DispQueue 定义、extern 声明、时间辅助 */
+#include "system.h"
 
 /*======================== 共享 extern 变量定义 ========================*/
 /* 声明在 analyzer_internal.h（extern），此处给出唯一定义。 */
@@ -46,14 +47,17 @@ pthread_mutex_t g_process_mtx[MAX_CHANNEL_NUM];
 /*======================== ROI 加载 ========================*/
 
 /**
- * @brief 从 AppConfig.channels[i].roi_zones/roi_polygon 加载 ROI 区域到 ChannelState。
+ * @brief 从 AppConfig.channels[i].roi_zones/roi_polygon 加载 ROI 区域到
+ * ChannelState。
  *
- * 坐标全部为归一化 (0~1), 直接 × 模型尺寸 → 模型坐标系。不再依赖外部 roi_zones.json 文件。
+ * 坐标全部为归一化 (0~1), 直接 × 模型尺寸 → 模型坐标系。不再依赖外部
+ * roi_zones.json 文件。
  */
 void load_roi_zones_from_config(void)
 {
     const int mw = g_pCtrl->inputW, mh = g_pCtrl->inputH;
-    if (mw <= 0 || mh <= 0) return;
+    if (mw <= 0 || mh <= 0)
+        return;
 
     const int n = app_ctrl_get_chn_nums();
     for (int ch = 0; ch < n && ch < MAX_CHANNEL_NUM; ++ch)
@@ -62,18 +66,17 @@ void load_roi_zones_from_config(void)
         auto &state = g_pCtrl->channels_state[ch];
         state.roi_zones.clear();
         state.roi_zones_raw.clear();
-        state.roi_model_space = true;   /* config.json 坐标均为归一化 */
+        state.roi_model_space = true; /* config.json 坐标均为归一化 */
         state.last_src_w = 0;
         state.last_src_h = 0;
 
-        auto add_zone = [&](const std::string &name,
-                            const std::vector<std::pair<double, double>> &poly) {
-            if (poly.size() < 3) return;
+        auto add_zone = [&](const std::string &name, const std::vector<std::pair<double, double>> &poly) {
+            if (poly.size() < 3)
+                return;
             RoiZone zone;
             zone.name = name;
             for (const auto &pt : poly)
-                zone.polygon.emplace_back((int)(pt.first * mw + 0.5),
-                                          (int)(pt.second * mh + 0.5));
+                zone.polygon.emplace_back((int)(pt.first * mw + 0.5), (int)(pt.second * mh + 0.5));
             state.roi_zones.push_back(std::move(zone));
         };
 
@@ -133,7 +136,8 @@ int analyzer_init(void)
 
 void analyzer_deinit(void)
 {
-    /* 通知 dispatch_worker_thread 退出（algorithm_deinit 会 signal 所有等待的 worker）*/
+    /* 通知 dispatch_worker_thread 退出（algorithm_deinit 会 signal 所有等待的
+     * worker）*/
     g_dispatch_running = 0;
     algorithm_deinit();
 
@@ -141,10 +145,12 @@ void analyzer_deinit(void)
     trackers_deinit();
 }
 
-/*======================== 显示线程辅助（供 main 调用）========================*/
+/*======================== 显示线程辅助（供 main
+ * 调用）========================*/
 
 /**
- * @brief 广播所有显示队列条件变量，使阻塞中的 display_worker_thread 能检测到退出信号。
+ * @brief 广播所有显示队列条件变量，使阻塞中的 display_worker_thread
+ * 能检测到退出信号。
  *
  * main 在设置 g_pCtrl->isRunning = 0 之后调用，防止线程永久阻塞在
  * pthread_cond_wait 而无法退出。
@@ -195,7 +201,7 @@ void analyzer_channel_offline(int chnId)
         ch.result_frame_seq = 0;
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
     }
-    feed_stats_reset(chnId);           /* 重置 FPS 节流计时，避免重连后偏移错乱 */
+    feed_stats_reset(chnId); /* 重置 FPS 节流计时，避免重连后偏移错乱 */
     /* 持 g_process_mtx 后再 reset tracker，与 dispatch_worker_thread 中的
      * tracker->update() 互斥，防止两线程并发访问 KalmanFilter 矩阵导致
      * "One or more matrix operands are empty" 崩溃。
@@ -204,8 +210,7 @@ void analyzer_channel_offline(int chnId)
     pthread_mutex_lock(&g_process_mtx[chnId]);
     analyzer_reset_tracker_ids(chnId);
     pthread_mutex_unlock(&g_process_mtx[chnId]);
-    printf("[Analyzer] ch%d went OFFLINE at %llums (logic_state reset)\n",
-           chnId, (unsigned long long)ts);
+    printf("[Analyzer] ch%d went OFFLINE at %llums (logic_state reset)\n", chnId, (unsigned long long)ts);
 }
 
 void analyzer_channel_online(int chnId)
@@ -235,8 +240,7 @@ void analyzer_channel_online(int chnId)
     pthread_mutex_lock(&g_process_mtx[chnId]);
     analyzer_reset_tracker_ids(chnId);
     pthread_mutex_unlock(&g_process_mtx[chnId]);
-    printf("[Analyzer] ch%d came ONLINE at %llums (logic_state reset)\n",
-           chnId, (unsigned long long)ts);
+    printf("[Analyzer] ch%d came ONLINE at %llums (logic_state reset)\n", chnId, (unsigned long long)ts);
 }
 
 int analyzer_is_channel_online(int chnId)
@@ -253,7 +257,8 @@ ChannelHealth analyzer_get_channel_health(int chnId, int stale_ms, int dead_ms)
 {
     if (!g_pCtrl || chnId < 0 || chnId >= MAX_CHANNEL_NUM)
         return CH_HEALTH_DEAD;
-    /* last_infer_ts_ms 由 videoOutHandle 写，仅当 will_infer=1 时更新，无锁读可接受 */
+    /* last_infer_ts_ms 由 videoOutHandle 写，仅当 will_infer=1
+     * 时更新，无锁读可接受 */
     const uint64_t last_ts = g_pCtrl->channels_state[chnId].last_infer_ts_ms;
     if (last_ts == 0)
         return CH_HEALTH_DEAD; /* 从未推理过 */
@@ -265,7 +270,8 @@ ChannelHealth analyzer_get_channel_health(int chnId, int stale_ms, int dead_ms)
     return CH_HEALTH_HEALTHY;
 }
 
-/*======================== 线程数量 / 通道号查询（供 main 创建线程）========================*/
+/*======================== 线程数量 / 通道号查询（供 main
+ * 创建线程）========================*/
 
 /**
  * @brief 返回需要创建的显示线程数量（= 活跃通道数）。

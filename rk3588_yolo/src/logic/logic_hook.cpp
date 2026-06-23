@@ -1,7 +1,7 @@
 /**
  * @file logic_hook.cpp
- * @brief logic_hook —— 吊钩安全圈检测: 钩子出圈持续一段时间报警, 回圈冷却后复位。
- *        跨帧状态见 logic_tools.h 的 HookState。
+ * @brief logic_hook —— 吊钩安全圈检测: 钩子出圈持续一段时间报警,
+ * 回圈冷却后复位。 跨帧状态见 logic_tools.h 的 HookState。
  */
 #include "logic_common.h"
 
@@ -40,9 +40,8 @@ static void logic_hook(ChannelContext *ctx)
 
     int in_grace = !found_hook && (ctx->timestamp_ms - s.last_found_ms <= no_detect_grace_ms);
 
-    const cv::Scalar circle_color = (hook_outside || (in_grace && s.alarm_active))
-                                        ? cv::Scalar(0, 0, 255)
-                                        : cv::Scalar(0, 255, 0);
+    const cv::Scalar circle_color =
+        (hook_outside || (in_grace && s.alarm_active)) ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0);
     draw_circle(ctx, safe_center, radius, circle_color, 2);
 
     /* 状态面板 */
@@ -119,6 +118,7 @@ static void logic_hook(ChannelContext *ctx)
                 rp.target_mask = DrawCommand::UPLOAD;
                 render_overlays(upload_img, rp);
                 alarm_uploader_enqueue(upload_img, *ctx->frame, ctx->chnId, "hook_tilt",
+                                       report_enabled(ctx), /* 连了"上报配置"节点才真正发 */
                                        ctx->config ? ctx->config->server_url.c_str() : nullptr);
             }
             s.alarm_sent_latch = true;

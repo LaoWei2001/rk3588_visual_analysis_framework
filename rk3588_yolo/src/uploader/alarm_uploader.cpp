@@ -9,26 +9,26 @@
 
 #include "alarm_uploader.h"
 #include "../core/base64_util.h"
-#include <hiredis/hiredis.h>
-#include <opencv2/imgcodecs.hpp>
-#include <ctime>
+#include "../third_party/json/cJSON.h"
 #include <cstdio>
 #include <cstring>
+#include <ctime>
+#include <hiredis/hiredis.h>
+#include <opencv2/imgcodecs.hpp>
 #include <pthread.h>
 #include <queue>
-#include <vector>
 #include <string>
-#include "../third_party/json/cJSON.h"
+#include <vector>
 
 /* 本地发件箱落盘所需 (POSIX, 板端 Linux 原生可用) */
-#include <cstdlib>     /* getenv, realpath */
 #include <cerrno>
-#include <climits>     /* PATH_MAX */
-#include <sys/time.h>  /* gettimeofday */
-#include <sys/stat.h>  /* mkdir, stat, S_ISREG */
+#include <climits>    /* PATH_MAX */
+#include <cstdlib>    /* getenv, realpath */
+#include <dirent.h>   /* opendir/readdir */
+#include <sys/stat.h> /* mkdir, stat, S_ISREG */
+#include <sys/time.h> /* gettimeofday */
 #include <sys/types.h>
-#include <dirent.h>    /* opendir/readdir */
-#include <unistd.h>    /* unlink */
+#include <unistd.h> /* unlink */
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
@@ -107,16 +107,14 @@ static int redis_rpush(const char *queue_name, const char *json_payload, size_t 
         }
     }
 
-    redisReply *reply = (redisReply *)redisCommand(g_redis_ctx, "RPUSH %s %b",
-                                                   queue_name, json_payload, len);
+    redisReply *reply = (redisReply *)redisCommand(g_redis_ctx, "RPUSH %s %b", queue_name, json_payload, len);
     if (!reply)
     {
         /* 命令失败 (连接断开等), 尝试重连后重试一次 */
         fprintf(stderr, "[alarm_uploader] RPUSH failed, attempting reconnect...\n");
         if (redis_reconnect())
         {
-            reply = (redisReply *)redisCommand(g_redis_ctx, "RPUSH %s %b",
-                                               queue_name, json_payload, len);
+            reply = (redisReply *)redisCommand(g_redis_ctx, "RPUSH %s %b", queue_name, json_payload, len);
         }
     }
 
@@ -157,16 +155,16 @@ static int redis_reconnect(void)
         return 0;
     }
 
-    printf("[alarm_uploader] Redis reconnected successfully to %s:%d\n",
-           g_redis_host.c_str(), g_redis_port);
+    printf("[alarm_uploader] Redis reconnected successfully to %s:%d\n", g_redis_host.c_str(), g_redis_port);
     return 1;
 }
 
-/*======================== 本地告警发件箱 (server 路径: 落盘, 不再走 Redis) ========================
- * 设计: 报警先无条件落地到本地"发件箱"目录(带框图 + 原图 + .json 元数据),
- *       由 Python 上报微服务扫描该目录补传到平台, 传成功即删除。
- *       断网 / 微服务没开时数据留在本地、网页可见; 通了就边传边删。
- * 上限: 本地占用超过 ALARM_STORE_CAP_BYTES 时, 从最老的记录开始删, 保证新报警记得下。
+/*======================== 本地告警发件箱 (server 路径: 落盘, 不再走 Redis)
+ * ======================== 设计: 报警先无条件落地到本地"发件箱"目录(带框图 +
+ * 原图 + .json 元数据), 由 Python 上报微服务扫描该目录补传到平台,
+ * 传成功即删除。 断网 / 微服务没开时数据留在本地、网页可见; 通了就边传边删。
+ * 上限: 本地占用超过 ALARM_STORE_CAP_BYTES 时, 从最老的记录开始删,
+ * 保证新报警记得下。
  * 注意: Dify 路径仍走 Redis(下方 build_and_push_dify 不变)。 */
 static const long long ALARM_STORE_CAP_BYTES = 100LL * 1024 * 1024; /* 100 MB */
 
@@ -183,9 +181,12 @@ static int mkdir_p(const std::string &dir)
         std::string seg = (pos == std::string::npos) ? dir.substr(start) : dir.substr(start, pos - start);
         if (!seg.empty())
         {
-            if (cur.empty())     cur = seg;
-            else if (cur == "/") cur += seg;
-            else                 cur += "/" + seg;
+            if (cur.empty())
+                cur = seg;
+            else if (cur == "/")
+                cur += seg;
+            else
+                cur += "/" + seg;
             if (::mkdir(cur.c_str(), 0755) != 0 && errno != EEXIST)
                 return -1;
         }
@@ -196,8 +197,8 @@ static int mkdir_p(const std::string &dir)
     return 0;
 }
 
-/* 取发件箱目录(env ALARM_STORE_DIR, 默认 ./alarm_store), 首次调用创建并打印绝对路径。
- * 仅由唯一的上传线程调用, 静态初始化无需加锁。 */
+/* 取发件箱目录(env ALARM_STORE_DIR, 默认 ./alarm_store),
+ * 首次调用创建并打印绝对路径。 仅由唯一的上传线程调用, 静态初始化无需加锁。 */
 static const std::string &get_store_dir(void)
 {
     static std::string dir;
@@ -208,15 +209,16 @@ static const std::string &get_store_dir(void)
         dir = (env && env[0]) ? env : "./alarm_store";
         if (mkdir_p(dir) != 0)
         {
-            fprintf(stderr, "[alarm_recorder] 无法创建发件箱目录 '%s' (errno=%d), 回退到 ./alarm_store\n",
+            fprintf(stderr,
+                    "[alarm_recorder] 无法创建发件箱目录 '%s' (errno=%d), 回退到 "
+                    "./alarm_store\n",
                     dir.c_str(), errno);
             dir = "./alarm_store";
             mkdir_p(dir);
         }
         char abs[PATH_MAX];
         if (realpath(dir.c_str(), abs))
-            printf("[alarm_recorder] 本地告警发件箱: %s (上限 %lld MB)\n",
-                   abs, ALARM_STORE_CAP_BYTES / (1024 * 1024));
+            printf("[alarm_recorder] 本地告警发件箱: %s (上限 %lld MB)\n", abs, ALARM_STORE_CAP_BYTES / (1024 * 1024));
         else
             printf("[alarm_recorder] 本地告警发件箱: %s\n", dir.c_str());
         inited = true;
@@ -276,7 +278,8 @@ static void enforce_store_cap(const std::string &dir)
     }
 }
 
-/* 把一条 server 告警落地到本地发件箱: 写 带框图 + 原图 + .json 元数据(原子提交)。 */
+/* 把一条 server 告警落地到本地发件箱: 写 带框图 + 原图 + .json
+ * 元数据(原子提交)。 */
 static int record_alarm_local(const AlarmTask &task)
 {
     if (task.img_draw.empty())
@@ -294,13 +297,12 @@ static int record_alarm_local(const AlarmTask &task)
     static unsigned long g_seq = 0; /* 仅上传线程访问, 无需加锁 */
     unsigned long seq = ++g_seq;
     char base[160];
-    snprintf(base, sizeof(base), "ch%d_%s-%03ld_%lu",
-             task.camera_id, stamp, (long)(tv.tv_usec / 1000), seq);
+    snprintf(base, sizeof(base), "ch%d_%s-%03ld_%lu", task.camera_id, stamp, (long)(tv.tv_usec / 1000), seq);
 
     std::string path_draw = dir + "/" + base + ".jpg";
-    std::string path_raw  = dir + "/" + base + "_raw.jpg";
+    std::string path_raw = dir + "/" + base + "_raw.jpg";
     std::string path_json = dir + "/" + base + ".json";
-    std::string path_tmp  = path_json + ".tmp";
+    std::string path_tmp = path_json + ".tmp";
 
     std::vector<int> jpg_params = {cv::IMWRITE_JPEG_QUALITY, 90};
     if (!cv::imwrite(path_draw, task.img_draw, jpg_params))
@@ -314,7 +316,8 @@ static int record_alarm_local(const AlarmTask &task)
     if (!root)
     {
         ::unlink(path_draw.c_str());
-        if (have_raw) ::unlink(path_raw.c_str());
+        if (have_raw)
+            ::unlink(path_raw.c_str());
         return 0;
     }
     cJSON_AddNumberToObject(root, "camera_id", task.camera_id);
@@ -347,14 +350,14 @@ static int record_alarm_local(const AlarmTask &task)
     if (!ok)
     {
         ::unlink(path_draw.c_str());
-        if (have_raw) ::unlink(path_raw.c_str());
+        if (have_raw)
+            ::unlink(path_raw.c_str());
         fprintf(stderr, "[alarm_recorder] 写元数据失败, 已回滚: %s\n", base);
         return 0;
     }
 
     enforce_store_cap(dir);
-    printf("[alarm_recorder] 已存本地告警 ch%d type=%s -> %s.jpg\n",
-           task.camera_id, task.alarm_type.c_str(), base);
+    printf("[alarm_recorder] 已存本地告警 ch%d type=%s -> %s.jpg\n", task.camera_id, task.alarm_type.c_str(), base);
     return 1;
 }
 
@@ -419,15 +422,13 @@ static void *upload_worker_thread(void *arg)
         if (has_alarm && !alarm_task.img_draw.empty())
         {
             if (!record_alarm_local(alarm_task))
-                fprintf(stderr, "[alarm_recorder] WARNING: 落盘告警失败 (camera %d)\n",
-                        alarm_task.camera_id);
+                fprintf(stderr, "[alarm_recorder] WARNING: 落盘告警失败 (camera %d)\n", alarm_task.camera_id);
         }
 
         if (has_dify && !dify_task.img.empty())
         {
             if (!build_and_push_dify(dify_task))
-                fprintf(stderr, "[alarm_uploader] WARNING: failed to push dify task %s\n",
-                        dify_task.event_id.c_str());
+                fprintf(stderr, "[alarm_uploader] WARNING: failed to push dify task %s\n", dify_task.event_id.c_str());
         }
     }
 
@@ -504,10 +505,13 @@ void alarm_uploader_deinit(void)
     pthread_mutex_unlock(&g_redis_mtx);
 }
 
-int alarm_uploader_enqueue(const cv::Mat &img_draw, const cv::Mat &img_raw,
-                           int camera_id, const char *alarm_type, const char *server_url)
+int alarm_uploader_enqueue(const cv::Mat &img_draw, const cv::Mat &img_raw, int camera_id, const char *alarm_type,
+                           bool report_enable, const char *server_url)
 {
     static constexpr size_t MAX_QUEUE_SIZE = 32;
+
+    if (!report_enable) /* 画布没连"上报配置"节点 → 不上报 */
+        return 0;
 
     AlarmTask task;
     task.img_draw = img_draw.clone();
@@ -529,11 +533,13 @@ int alarm_uploader_enqueue(const cv::Mat &img_draw, const cv::Mat &img_raw,
     return 1;
 }
 
-int dify_uploader_enqueue(const cv::Mat &img, const char *prompt, const char *event_id,
+int dify_uploader_enqueue(const cv::Mat &img, const char *prompt, const char *event_id, bool report_enable,
                           const char *dify_api_url, const char *dify_api_key)
 {
     static constexpr size_t MAX_DIFY_QUEUE = 16;
 
+    if (!report_enable) /* 画布没连"上报配置"节点 → 不上报 */
+        return 0;
     if (img.empty())
         return 0;
 

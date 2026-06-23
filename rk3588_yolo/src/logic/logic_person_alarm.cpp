@@ -25,7 +25,7 @@ static void logic_person_alarm(ChannelContext *ctx)
         {
             if (r.label != "person")
                 continue;
-            if (!roi_contains(ctx, r.box, ROI_ALL))   /* 不在任一 ROI(没画 ROI=整帧不设限) → 跳过 */
+            if (!roi_contains(ctx, r.box, ROI_ALL)) /* 不在任一 ROI(没画 ROI=整帧不设限) → 跳过 */
                 continue;
 
             s.person_detected = true;
@@ -34,8 +34,7 @@ static void logic_person_alarm(ChannelContext *ctx)
             r.box_color = cv::Scalar(0, 0, 255);
             char label[64];
             snprintf(label, sizeof(label), "person %.2f", r.score);
-            draw_text(ctx, label, cv::Point(r.box.x, std::max(20, r.box.y - 8)),
-                      cv::Scalar(0, 0, 255), 0.5, 1);
+            draw_text(ctx, label, cv::Point(r.box.x, std::max(20, r.box.y - 8)), cv::Scalar(0, 0, 255), 0.5, 1);
         }
     }
 

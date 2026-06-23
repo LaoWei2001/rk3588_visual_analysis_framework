@@ -23,11 +23,15 @@
  *
  * 1. config_monitor_thread  — 配置文件热加载监控 (main 直接 pthread_create)
  * 2. fd_monitor_thread      — fd 使用量监控 (main 直接 pthread_create)
- * 3. capture_bus_thread[N]  — GStreamer bus 监听 + 重连 (DecChannel::init 内部创建, 底层)
- * 4. display_worker[N]      — 异步显示 RGA + framebuffer (main 直接 pthread_create)
- * 5. dispatch_worker[N]     — NPU 结果分发 + channel_logic (main 直接 pthread_create)
+ * 3. capture_bus_thread[N]  — GStreamer bus 监听 + 重连 (DecChannel::init
+ * 内部创建, 底层)
+ * 4. display_worker[N]      — 异步显示 RGA + framebuffer (main 直接
+ * pthread_create)
+ * 5. dispatch_worker[N]     — NPU 结果分发 + channel_logic (main 直接
+ * pthread_create)
  * 6. infer_worker[N]        — NPU 推理 worker (algorithm_init 内部创建, 底层)
- * 7. global_logic[N]        — 跨通道全局逻辑轮询 (global_logic_start_all 内部创建)
+ * 7. global_logic[N]        — 跨通道全局逻辑轮询 (global_logic_start_all
+ * 内部创建)
  * 8. upload_worker          — Redis 报警异步上传 (alarm_uploader_init 内部创建)
  *
  * === 同步模型 ===
@@ -39,28 +43,28 @@
  * 信号 → isRunning=0 → 唤醒所有等待线程 → 逆序 join → 释放资源
  */
 
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cerrno>
-#include <csignal>
 #include <dirent.h>
-#include <sys/resource.h>
-#include <unistd.h>
 #include <glib-unix.h>
 #include <pthread.h>
-#include <algorithm>
-#include <chrono>
+#include <sys/resource.h>
+#include <unistd.h>
 
-#include "system.h"
+#include "analyzer/analyzer.h"
+#include "capturer/decChannel.h"
 #include "config/config.h"
 #include "core/app_ctrl.h"
 #include "core/pause_ctrl.h"
-#include "capturer/decChannel.h"
-#include "analyzer/analyzer.h"
 #include "logic/global_logic.h"
 #include "player/display.h"
 #include "player/rtsp_streamer.h"
+#include "system.h"
 #include "uploader/alarm_uploader.h"
 
 /* config_monitor_thread_func — 由 app_ctrl.cpp 导出 (C++ mangling) */
@@ -105,8 +109,7 @@ static void raise_fd_limit_or_warn(void)
     rlim_t want = 65536;
     if (rl.rlim_cur >= want)
     {
-        printf("[Main] RLIMIT_NOFILE already %lu (>= %lu), keep\n",
-               (unsigned long)rl.rlim_cur, (unsigned long)want);
+        printf("[Main] RLIMIT_NOFILE already %lu (>= %lu), keep\n", (unsigned long)rl.rlim_cur, (unsigned long)want);
         return;
     }
     struct rlimit nrl = rl;
@@ -125,9 +128,8 @@ static void raise_fd_limit_or_warn(void)
             return;
         }
     }
-    printf("[Main] RLIMIT_NOFILE raised: soft %lu -> %lu, hard %lu -> %lu\n",
-           (unsigned long)rl.rlim_cur, (unsigned long)nrl.rlim_cur,
-           (unsigned long)rl.rlim_max, (unsigned long)nrl.rlim_max);
+    printf("[Main] RLIMIT_NOFILE raised: soft %lu -> %lu, hard %lu -> %lu\n", (unsigned long)rl.rlim_cur,
+           (unsigned long)nrl.rlim_cur, (unsigned long)rl.rlim_max, (unsigned long)nrl.rlim_max);
 }
 
 static int count_self_fds(void)
@@ -176,8 +178,8 @@ static void *fd_monitor_thread_func(void *arg)
         int fd_count = count_self_fds();
         struct rlimit rl;
         getrlimit(RLIMIT_NOFILE, &rl);
-        printf("[Perf] fd_in_use=%d soft_limit=%lu hard_limit=%lu\n",
-               fd_count, (unsigned long)rl.rlim_cur, (unsigned long)rl.rlim_max);
+        printf("[Perf] fd_in_use=%d soft_limit=%lu hard_limit=%lu\n", fd_count, (unsigned long)rl.rlim_cur,
+               (unsigned long)rl.rlim_max);
     }
     return nullptr;
 }
@@ -272,27 +274,23 @@ int main(int argc, char **argv)
      * ================================================================== */
 
     /* ---- 7a. 配置热加载监控线程 ---- */
-    if (pthread_create(&g_pCtrl->config_monitor_tid, nullptr,
-                       config_monitor_thread_func, nullptr) != 0)
+    if (pthread_create(&g_pCtrl->config_monitor_tid, nullptr, config_monitor_thread_func, nullptr) != 0)
     {
         fprintf(stderr, "[FATAL] pthread_create config_monitor failed\n");
         analyzer_deinit();
         app_ctrl_deinit();
         return -4;
     }
-    printf("[Main] config_monitor_thread created (tid=%lu)\n",
-           (unsigned long)g_pCtrl->config_monitor_tid);
+    printf("[Main] config_monitor_thread created (tid=%lu)\n", (unsigned long)g_pCtrl->config_monitor_tid);
 
     /* ---- 7b. fd 监控线程 ---- */
-    if (pthread_create(&g_pCtrl->fd_monitor_tid, nullptr,
-                       fd_monitor_thread_func, nullptr) != 0)
+    if (pthread_create(&g_pCtrl->fd_monitor_tid, nullptr, fd_monitor_thread_func, nullptr) != 0)
     {
         fprintf(stderr, "[WARNING] pthread_create fd_monitor failed, continuing\n");
         g_pCtrl->fd_monitor_exit = 1;
     }
     else
-        printf("[Main] fd_monitor_thread created (tid=%lu)\n",
-               (unsigned long)g_pCtrl->fd_monitor_tid);
+        printf("[Main] fd_monitor_thread created (tid=%lu)\n", (unsigned long)g_pCtrl->fd_monitor_tid);
 
     /* ---- 7c. 采集器 + bus 监听线程 (底层, DecChannel 内部 pthread_create) ----
      * busListen 线程在 DecChannel::init() → createVideoDecChannel() 中创建,
@@ -304,13 +302,13 @@ int main(int argc, char **argv)
         SrcCfg_t srcCfg;
         srcCfg.srcType = config_utils::normalize_src_type(chCfg.stream);
         srcCfg.location = config_utils::resolve_stream_location(chCfg.stream, srcCfg.srcType);
-        srcCfg.videoEncType = chCfg.stream.video_enc.empty() ? "h264" : config_utils::to_lower_copy(chCfg.stream.video_enc);
+        srcCfg.videoEncType =
+            chCfg.stream.video_enc.empty() ? "h264" : config_utils::to_lower_copy(chCfg.stream.video_enc);
         srcCfg.loop = chCfg.stream.loop;
 
         if (srcCfg.location.empty())
         {
-            fprintf(stderr, "[Main] channel %d has empty stream location (src_type=%s)\n",
-                    i, srcCfg.srcType.c_str());
+            fprintf(stderr, "[Main] channel %d has empty stream location (src_type=%s)\n", i, srcCfg.srcType.c_str());
             continue;
         }
 
@@ -325,8 +323,8 @@ int main(int argc, char **argv)
             auto otherLocation = config_utils::resolve_stream_location(otherCfg.stream, otherSrcType);
             if (srcCfg.srcType == otherSrcType && srcCfg.location == otherLocation)
             {
-                fprintf(stderr, "[Main] channel %d shares stream (%s: %s) with channel %d\n",
-                        i, srcCfg.srcType.c_str(), srcCfg.location.c_str(), j);
+                fprintf(stderr, "[Main] channel %d shares stream (%s: %s) with channel %d\n", i, srcCfg.srcType.c_str(),
+                        srcCfg.location.c_str(), j);
                 g_pCtrl->capturers[j]->addTargetChannel(i);
                 shared = 1;
                 break;
@@ -345,8 +343,7 @@ int main(int argc, char **argv)
         int ret = ch->init();
         if (ret != 0)
         {
-            fprintf(stderr, "[Main] channel %d init failed (code=%d), url=%s\n",
-                    i, ret, chCfg.stream.url.c_str());
+            fprintf(stderr, "[Main] channel %d init failed (code=%d), url=%s\n", i, ret, chCfg.stream.url.c_str());
             delete ch;
             continue;
         }
@@ -363,14 +360,11 @@ int main(int argc, char **argv)
         for (int i = 0; i < g_display_thread_count; ++i)
         {
             int chnId = analyzer_get_display_chn_id(i);
-            int ret = pthread_create(&g_display_tids[i], nullptr,
-                                     display_worker_thread, (void *)(intptr_t)chnId);
+            int ret = pthread_create(&g_display_tids[i], nullptr, display_worker_thread, (void *)(intptr_t)chnId);
             if (ret != 0)
-                fprintf(stderr, "[Main] pthread_create display_worker[ch%d] failed: %s\n",
-                        chnId, strerror(ret));
+                fprintf(stderr, "[Main] pthread_create display_worker[ch%d] failed: %s\n", chnId, strerror(ret));
             else
-                printf("[Main] display_worker[ch%d] created (tid=%lu)\n",
-                       chnId, (unsigned long)g_display_tids[i]);
+                printf("[Main] display_worker[ch%d] created (tid=%lu)\n", chnId, (unsigned long)g_display_tids[i]);
         }
     }
 
@@ -382,36 +376,37 @@ int main(int argc, char **argv)
         for (int i = 0; i < g_dispatch_thread_count; ++i)
         {
             int chnId = analyzer_get_dispatch_chn_id(i);
-            int ret = pthread_create(&g_dispatch_tids[i], nullptr,
-                                     dispatch_worker_thread, (void *)(intptr_t)chnId);
+            int ret = pthread_create(&g_dispatch_tids[i], nullptr, dispatch_worker_thread, (void *)(intptr_t)chnId);
             if (ret != 0)
-                fprintf(stderr, "[Main] pthread_create dispatch_worker[ch%d] failed: %s\n",
-                        chnId, strerror(ret));
+                fprintf(stderr, "[Main] pthread_create dispatch_worker[ch%d] failed: %s\n", chnId, strerror(ret));
             else
-                printf("[Main] dispatch_worker[ch%d] created (tid=%lu)\n",
-                       chnId, (unsigned long)g_dispatch_tids[i]);
+                printf("[Main] dispatch_worker[ch%d] created (tid=%lu)\n", chnId, (unsigned long)g_dispatch_tids[i]);
         }
     }
 
     /* ---- 7f. 推理 worker 线程 (底层, algorithm_init 内部 pthread_create) ----
      * 每个模型实例一个 worker 线程.
      * 线程数 = sum(每个推理通道的 threads 参数), 通常 = 推理通道数 * 1. */
-    printf("[Main] infer_workers created by algorithm_init (pthread, see algoProcess.cpp)\n");
+    printf("[Main] infer_workers created by algorithm_init (pthread, see "
+           "algoProcess.cpp)\n");
 
     /* ---- 7g. 全局逻辑线程 (global_logic_start_all 内部创建) ----
      * 每个 GlobalLogicConfig 实例一个独立线程.
      * 已在 analyzer_init → global_logic_start_all 中创建. */
-    printf("[Main] global_logic threads created by global_logic_start_all (%d instance(s))\n",
+    printf("[Main] global_logic threads created by global_logic_start_all (%d "
+           "instance(s))\n",
            global_logic_get_instance_count());
 
     /* ---- 7h. Redis 报警上传线程 ---- */
     if (!alarm_uploader_init("127.0.0.1", 6379))
-        fprintf(stderr, "[Main] WARNING: Redis not reachable at startup, upload worker will retry\n");
+        fprintf(stderr, "[Main] WARNING: Redis not reachable at startup, upload "
+                        "worker will retry\n");
     printf("[Main] upload_worker created (via alarm_uploader_init)\n");
 
     /* ---- 7i. RTSP 推流服务 (enable_rtsp 时启动) ----
-     * 内部起独立 GMainContext + loop 线程 + feeder 线程, 推送与显示屏一致的拼接画面;
-     * 与 GTK 显示互不干扰, 无显示器时也能工作. 未启用则为空操作. */
+     * 内部起独立 GMainContext + loop 线程 + feeder 线程,
+     * 推送与显示屏一致的拼接画面; 与 GTK 显示互不干扰, 无显示器时也能工作.
+     * 未启用则为空操作. */
     if (rtsp_streamer_init() != 0)
         fprintf(stderr, "[Main] WARNING: RTSP streamer init failed, continuing without RTSP\n");
 
@@ -467,7 +462,8 @@ int main(int argc, char **argv)
     }
 
     /* 步骤 3: 停推理引擎 → join dispatch 线程 */
-    analyzer_deinit(); /* stop infer workers, global_logic, trackers, channel_logic */
+    analyzer_deinit(); /* stop infer workers, global_logic, trackers,
+                          channel_logic */
     printf("[Main] Joining %d dispatch thread(s)...\n", g_dispatch_thread_count);
     for (int i = 0; i < g_dispatch_thread_count; ++i)
         pthread_join(g_dispatch_tids[i], nullptr);
@@ -476,7 +472,8 @@ int main(int argc, char **argv)
 
     /* 步骤 4: join display 线程 (在销毁其队列同步原语之前) */
     printf("[Main] Joining %d display thread(s)...\n", g_display_thread_count);
-    analyzer_wake_display_threads(); /* 唤醒所有阻塞在 pthread_cond_wait 的 display 线程 */
+    analyzer_wake_display_threads(); /* 唤醒所有阻塞在 pthread_cond_wait 的
+                                        display 线程 */
     for (int i = 0; i < g_display_thread_count; ++i)
         pthread_join(g_display_tids[i], nullptr);
     delete[] g_display_tids;

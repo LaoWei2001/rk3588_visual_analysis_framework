@@ -139,6 +139,55 @@
       ]
     },
     {
+      "name": "logic_path_sop",
+      "label": "目标路径/顺序/停留检测(SOP编排)",
+      "params": [
+        {
+          "key": "path_sequence",
+          "type": "string",
+          "label": "设计路径(区域名,逗号分隔)",
+          "default": "",
+          "placeholder": "区域1,区域2,区域3",
+          "help": "目标应依次经过的区域名; 每个名字必须与本通道一个 ROI 区域名完全一致。顺序即期望经过顺序。一般由「SOP 路径编排」画布自动生成"
+        },
+        {
+          "key": "path_target_label",
+          "type": "string",
+          "label": "目标类别名",
+          "default": "",
+          "placeholder": "person",
+          "help": "要跟踪的目标类别(labels.txt 里的类名); 取整帧该类置信度最高的一个为目标"
+        },
+        {
+          "key": "path_enter_sec",
+          "type": "float",
+          "label": "进入确认·默认(秒)",
+          "default": 0.5,
+          "min": 0,
+          "max": 10,
+          "help": "进入区域确认时长的【默认】值; 每步可在「SOP 路径编排」画布里单独配置(path_enter_list), 单独配置优先。0=立即进入"
+        },
+        {
+          "key": "path_dwell_min_sec",
+          "type": "float",
+          "label": "最小停留·默认(秒)",
+          "default": 0.0,
+          "min": 0,
+          "max": 600,
+          "help": "每区域最小停留的【默认】值; 每步可在「SOP 路径编排」画布里单独配置(path_dwell_list), 单独配置优先。0=不要求"
+        },
+        {
+          "key": "path_reset_sec",
+          "type": "float",
+          "label": "离场复位(秒)",
+          "default": 5.0,
+          "min": 0,
+          "max": 600,
+          "help": "目标离场(画面里检测不到)超过此秒数即清空本轮、重新开始一轮路径检测"
+        }
+      ]
+    },
+    {
       "name": "logic_wafer2",
       "label": "晶圆轨迹分段可视化(py移植)",
       "params": []

@@ -20,8 +20,7 @@ static void logic_dify(ChannelContext *ctx)
     auto &s = *std::static_pointer_cast<DifyState>(*ctx->state);
 
     /* 上报间隔(秒)→ms：每帧从 ctx->config 现读以支持热重载 */
-    const uint64_t interval_ms =
-        (uint64_t)std::max(1, ctx->config ? ctx->config->report_interval_sec : 5) * 1000ULL;
+    const uint64_t interval_ms = (uint64_t)std::max(1, ctx->config ? ctx->config->report_interval_sec : 5) * 1000ULL;
 
     if (s.first)
     {
@@ -35,17 +34,18 @@ static void logic_dify(ChannelContext *ctx)
     if (!ctx->frame || ctx->frame->empty())
         return;
 
-    const char *prompt = (ctx->config && !ctx->config->dify_prompt.empty())
-                             ? ctx->config->dify_prompt.c_str()
-                             : "无提示词";
+    const char *prompt =
+        (ctx->config && !ctx->config->dify_prompt.empty()) ? ctx->config->dify_prompt.c_str() : "无提示词";
 
     char event_id[64];
-    snprintf(event_id, sizeof(event_id), "ch%d_f%lld_t%llu",
-             ctx->chnId, (long long)ctx->frame_id, (unsigned long long)ctx->timestamp_ms);
+    snprintf(event_id, sizeof(event_id), "ch%d_f%lld_t%llu", ctx->chnId, (long long)ctx->frame_id,
+             (unsigned long long)ctx->timestamp_ms);
 
-    const char *dify_url = (ctx->config && !ctx->config->dify_api_url.empty()) ? ctx->config->dify_api_url.c_str() : nullptr;
-    const char *dify_key = (ctx->config && !ctx->config->dify_api_key.empty()) ? ctx->config->dify_api_key.c_str() : nullptr;
-    dify_uploader_enqueue(*ctx->frame, prompt, event_id, dify_url, dify_key);
+    const char *dify_url =
+        (ctx->config && !ctx->config->dify_api_url.empty()) ? ctx->config->dify_api_url.c_str() : nullptr;
+    const char *dify_key =
+        (ctx->config && !ctx->config->dify_api_key.empty()) ? ctx->config->dify_api_key.c_str() : nullptr;
+    dify_uploader_enqueue(*ctx->frame, prompt, event_id, report_enabled(ctx), dify_url, dify_key);
 
     s.last_upload_ms = ctx->timestamp_ms;
 }

@@ -13,116 +13,116 @@
 #include "tracker.h"
 #include "../yolo/yolo_utils.h"
 
-#include <opencv2/video/tracking.hpp>
+#include <algorithm>
 #include <cmath>
 #include <limits>
-#include <algorithm>
-#include <vector>
 #include <numeric>
+#include <opencv2/video/tracking.hpp>
+#include <vector>
 
 /* ==================== 匈牙利算法 (Kuhn-Munkres) ==================== */
 namespace
 {
 
-    /**
-     * @brief 匈牙利算法求最小代价分配
-     * @param cost_matrix NxM 代价矩阵 (N=行=轨迹, M=列=检测)
-     * @param assignment  输出: assignment[row] = 分配的列, -1 表示未分配
-     *
-     * 实现 O(n^3) 的标准 Kuhn-Munkres 算法。
-     * 支持非方阵: 内部填充到 max(N,M) x max(N,M)。
-     */
-    static void hungarian_solve(const std::vector<std::vector<float>> &cost_matrix,
-                                std::vector<int> &assignment)
+/**
+ * @brief 匈牙利算法求最小代价分配
+ * @param cost_matrix NxM 代价矩阵 (N=行=轨迹, M=列=检测)
+ * @param assignment  输出: assignment[row] = 分配的列, -1 表示未分配
+ *
+ * 实现 O(n^3) 的标准 Kuhn-Munkres 算法。
+ * 支持非方阵: 内部填充到 max(N,M) x max(N,M)。
+ */
+static void hungarian_solve(const std::vector<std::vector<float>> &cost_matrix, std::vector<int> &assignment)
+{
+    int N = static_cast<int>(cost_matrix.size());
+    if (N == 0)
     {
-        int N = static_cast<int>(cost_matrix.size());
-        if (N == 0)
-        {
-            assignment.clear();
-            return;
-        }
-        int M = static_cast<int>(cost_matrix[0].size());
-        if (M == 0)
-        {
-            assignment.assign(N, -1);
-            return;
-        }
-
-        int n = std::max(N, M);
-        const float BIG = 1e9f;
-
-        /* 填充为方阵 */
-        std::vector<std::vector<float>> C(n + 1, std::vector<float>(n + 1, 0.0f));
-        for (int i = 1; i <= N; ++i)
-            for (int j = 1; j <= M; ++j)
-                C[i][j] = cost_matrix[i - 1][j - 1];
-
-        /* 匈牙利算法 (1-indexed) */
-        std::vector<float> u(n + 1, 0), v(n + 1, 0);
-        std::vector<int> p(n + 1, 0), way(n + 1, 0);
-
-        for (int i = 1; i <= n; ++i)
-        {
-            p[0] = i;
-            int j0 = 0;
-            std::vector<float> minv(n + 1, BIG);
-            std::vector<bool> used(n + 1, false);
-            do
-            {
-                used[j0] = true;
-                int i0 = p[j0], j1 = 0;
-                float delta = BIG;
-                for (int j = 1; j <= n; ++j)
-                {
-                    if (!used[j])
-                    {
-                        float cur = C[i0][j] - u[i0] - v[j];
-                        if (cur < minv[j])
-                        {
-                            minv[j] = cur;
-                            way[j] = j0;
-                        }
-                        if (minv[j] < delta)
-                        {
-                            delta = minv[j];
-                            j1 = j;
-                        }
-                    }
-                }
-                for (int j = 0; j <= n; ++j)
-                {
-                    if (used[j])
-                    {
-                        u[p[j]] += delta;
-                        v[j] -= delta;
-                    }
-                    else
-                    {
-                        minv[j] -= delta;
-                    }
-                }
-                j0 = j1;
-            } while (p[j0] != 0);
-
-            do
-            {
-                int j1 = way[j0];
-                p[j0] = p[j1];
-                j0 = j1;
-            } while (j0);
-        }
-
-        assignment.assign(N, -1);
-        for (int j = 1; j <= n; ++j)
-        {
-            if (p[j] > 0 && p[j] <= N && j <= M)
-                assignment[p[j] - 1] = j - 1;
-        }
+        assignment.clear();
+        return;
     }
+    int M = static_cast<int>(cost_matrix[0].size());
+    if (M == 0)
+    {
+        assignment.assign(N, -1);
+        return;
+    }
+
+    int n = std::max(N, M);
+    const float BIG = 1e9f;
+
+    /* 填充为方阵 */
+    std::vector<std::vector<float>> C(n + 1, std::vector<float>(n + 1, 0.0f));
+    for (int i = 1; i <= N; ++i)
+        for (int j = 1; j <= M; ++j)
+            C[i][j] = cost_matrix[i - 1][j - 1];
+
+    /* 匈牙利算法 (1-indexed) */
+    std::vector<float> u(n + 1, 0), v(n + 1, 0);
+    std::vector<int> p(n + 1, 0), way(n + 1, 0);
+
+    for (int i = 1; i <= n; ++i)
+    {
+        p[0] = i;
+        int j0 = 0;
+        std::vector<float> minv(n + 1, BIG);
+        std::vector<bool> used(n + 1, false);
+        do
+        {
+            used[j0] = true;
+            int i0 = p[j0], j1 = 0;
+            float delta = BIG;
+            for (int j = 1; j <= n; ++j)
+            {
+                if (!used[j])
+                {
+                    float cur = C[i0][j] - u[i0] - v[j];
+                    if (cur < minv[j])
+                    {
+                        minv[j] = cur;
+                        way[j] = j0;
+                    }
+                    if (minv[j] < delta)
+                    {
+                        delta = minv[j];
+                        j1 = j;
+                    }
+                }
+            }
+            for (int j = 0; j <= n; ++j)
+            {
+                if (used[j])
+                {
+                    u[p[j]] += delta;
+                    v[j] -= delta;
+                }
+                else
+                {
+                    minv[j] -= delta;
+                }
+            }
+            j0 = j1;
+        } while (p[j0] != 0);
+
+        do
+        {
+            int j1 = way[j0];
+            p[j0] = p[j1];
+            j0 = j1;
+        } while (j0);
+    }
+
+    assignment.assign(N, -1);
+    for (int j = 1; j <= n; ++j)
+    {
+        if (p[j] > 0 && p[j] <= N && j <= M)
+            assignment[p[j] - 1] = j - 1;
+    }
+}
 
 } /* anonymous namespace */
 
-/* IoU 计算使用 yolo_utils.h 中的 compute_iou(cv::Rect_<float>, cv::Rect_<float>) */
+/* IoU 计算使用 yolo_utils.h 中的 compute_iou(cv::Rect_<float>,
+ * cv::Rect_<float>) */
 using ::compute_iou;
 
 /* ==================== 框 ↔ 状态转换 ==================== */
@@ -268,11 +268,8 @@ struct Tracker::Impl
         {
             for (size_t j = 0; j < D; ++j)
             {
-                cv::Rect_<float> det_box(
-                    static_cast<float>(dets[j].box.x),
-                    static_cast<float>(dets[j].box.y),
-                    static_cast<float>(dets[j].box.width),
-                    static_cast<float>(dets[j].box.height));
+                cv::Rect_<float> det_box(static_cast<float>(dets[j].box.x), static_cast<float>(dets[j].box.y),
+                                         static_cast<float>(dets[j].box.width), static_cast<float>(dets[j].box.height));
                 float iou = compute_iou(tracks[i].last_box, det_box);
                 cost[i][j] = 1.0f - iou;
             }
@@ -346,8 +343,8 @@ struct Tracker::Impl
              * 同时写入速度和命中数，供显示层做前向外推补偿管线延迟。*/
             /* dets[j].box 保持原始 YOLO 检测框不变，确保业务逻辑取到的坐标
              * 与修改前完全一致。仅写入速度和命中数供显示层前向外推使用。*/
-            dets[j].vx  = est.at<float>(4); // vcx: 像素/推理帧
-            dets[j].vy  = est.at<float>(5); // vcy: 像素/推理帧
+            dets[j].vx = est.at<float>(4); // vcx: 像素/推理帧
+            dets[j].vy = est.at<float>(5); // vcy: 像素/推理帧
             dets[j].track_hits = tr.hits;
         }
 
@@ -390,17 +387,14 @@ struct Tracker::Impl
     /** 删除丢失过久的轨迹 */
     void prune()
     {
-        tracks.erase(
-            std::remove_if(tracks.begin(), tracks.end(),
-                           [this](const TrackEntry &t)
-                           { return t.miss > tracker_max_miss; }),
-            tracks.end());
+        tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
+                                    [this](const TrackEntry &t) { return t.miss > tracker_max_miss; }),
+                     tracks.end());
     }
 };
 
 /* ==================== Tracker 公有接口 ==================== */
-Tracker::Tracker(float tracker_iou_thresh, int tracker_max_miss, int tracker_min_hits)
-    : impl_(std::make_unique<Impl>())
+Tracker::Tracker(float tracker_iou_thresh, int tracker_max_miss, int tracker_min_hits) : impl_(std::make_unique<Impl>())
 {
     impl_->tracker_iou_thresh = tracker_iou_thresh;
     impl_->tracker_max_miss = tracker_max_miss;

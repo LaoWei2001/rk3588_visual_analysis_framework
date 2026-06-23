@@ -2,9 +2,10 @@
  * @file logic_fall_detect.cpp
  * logic_fall_detect —— 人员跌倒检测
  *
- * 优先使用 yolov8_pose 的人体关键点判断人体是否接近横躺；如果当前模型没有关键点,
- * 则退回到 person 检测框宽高比(width / height)判断。满足条件持续 fall_dwell_sec
- * 后报警, 并按 fall_cooldown_sec 限频上报服务器。
+ * 优先使用 yolov8_pose
+ * 的人体关键点判断人体是否接近横躺；如果当前模型没有关键点, 则退回到 person
+ * 检测框宽高比(width / height)判断。满足条件持续 fall_dwell_sec 后报警, 并按
+ * fall_cooldown_sec 限频上报服务器。
  */
 #include "logic_common.h"
 
@@ -61,8 +62,8 @@ static bool wave_pose_candidate(const AlgoResult &r, cv::Point2f *wrist_out)
     };
 
     const int pairs[2][3] = {
-        {5, 7, 9},   /* left shoulder, elbow, wrist */
-        {6, 8, 10},  /* right shoulder, elbow, wrist */
+        {5, 7, 9},  /* left shoulder, elbow, wrist */
+        {6, 8, 10}, /* right shoulder, elbow, wrist */
     };
 
     cv::Point2f best_wrist;
@@ -107,11 +108,16 @@ static void logic_fall_detect(ChannelContext *ctx)
     int cooldown_sec = ctx->config ? ctx->config->fall_cooldown_sec : 10;
     int wave_min_swings = ctx->config ? ctx->config->wave_min_swings : 2;
     float wave_window_sec = ctx->config ? ctx->config->wave_window_sec : 2.0f;
-    if (ratio_thresh <= 0.1f) ratio_thresh = 1.25f;
-    if (dwell_sec < 0.0f) dwell_sec = 0.0f;
-    if (cooldown_sec < 1) cooldown_sec = 1;
-    if (wave_min_swings < 1) wave_min_swings = 1;
-    if (wave_window_sec < 0.2f) wave_window_sec = 0.2f;
+    if (ratio_thresh <= 0.1f)
+        ratio_thresh = 1.25f;
+    if (dwell_sec < 0.0f)
+        dwell_sec = 0.0f;
+    if (cooldown_sec < 1)
+        cooldown_sec = 1;
+    if (wave_min_swings < 1)
+        wave_min_swings = 1;
+    if (wave_window_sec < 0.2f)
+        wave_window_sec = 0.2f;
 
     bool fall_like = false;
     bool hand_raised = false;
@@ -137,8 +143,7 @@ static void logic_fall_detect(ChannelContext *ctx)
         {
             r.box_color = cv::Scalar(0, 0, 255);
             draw_rect(ctx, r.box, cv::Scalar(0, 0, 255), 2);
-            draw_text(ctx, "fall?", cv::Point(r.box.x, std::max(20, r.box.y - 8)),
-                      cv::Scalar(0, 0, 255), 0.55, 2);
+            draw_text(ctx, "fall?", cv::Point(r.box.x, std::max(20, r.box.y - 8)), cv::Scalar(0, 0, 255), 0.55, 2);
             if (r.score > best_score)
             {
                 best_score = r.score;
@@ -195,10 +200,8 @@ static void logic_fall_detect(ChannelContext *ctx)
 
         wave_alarm = s.wave_swings >= wave_min_swings;
         char wave_msg[128];
-        snprintf(wave_msg, sizeof(wave_msg), "Wave SOS: %d/%d %.1fs",
-                 s.wave_swings, wave_min_swings, elapsed_sec);
-        draw_text(ctx, wave_msg, cv::Point(20, 60),
-                  wave_alarm ? cv::Scalar(255, 0, 255) : cv::Scalar(255, 128, 255),
+        snprintf(wave_msg, sizeof(wave_msg), "Wave SOS: %d/%d %.1fs", s.wave_swings, wave_min_swings, elapsed_sec);
+        draw_text(ctx, wave_msg, cv::Point(20, 60), wave_alarm ? cv::Scalar(255, 0, 255) : cv::Scalar(255, 128, 255),
                   0.62, 2);
     }
     else
@@ -227,13 +230,13 @@ static void logic_fall_detect(ChannelContext *ctx)
                 draw_rect(ctx, best_box, cv::Scalar(0, 0, 255), 3);
 
             uint64_t cooldown_ms = (uint64_t)cooldown_sec * 1000ULL;
-            if (!s.alarm_latched &&
-                ctx->timestamp_ms - s.last_upload_ms >= cooldown_ms &&
-                ctx->frame && !ctx->frame->empty())
+            if (!s.alarm_latched && ctx->timestamp_ms - s.last_upload_ms >= cooldown_ms && ctx->frame &&
+                !ctx->frame->empty())
             {
-                const char *url = (ctx->config && !ctx->config->server_url.empty())
-                                      ? ctx->config->server_url.c_str() : nullptr;
-                alarm_uploader_enqueue(*ctx->frame, *ctx->frame, ctx->chnId, "fall_detect", url);
+                const char *url =
+                    (ctx->config && !ctx->config->server_url.empty()) ? ctx->config->server_url.c_str() : nullptr;
+                alarm_uploader_enqueue(*ctx->frame, *ctx->frame, ctx->chnId, "fall_detect", report_enabled(ctx),
+                                       url); /* 连了"上报配置"节点才真正发 */
                 s.last_upload_ms = ctx->timestamp_ms;
                 s.alarm_latched = true;
             }
@@ -259,13 +262,13 @@ static void logic_fall_detect(ChannelContext *ctx)
         draw_text(ctx, "ALARM: WAVE SOS", cv::Point(20, 90), cv::Scalar(255, 0, 255), 0.75, 2);
 
         uint64_t cooldown_ms = (uint64_t)cooldown_sec * 1000ULL;
-        if (!s.wave_latched &&
-            ctx->timestamp_ms - s.last_wave_upload_ms >= cooldown_ms &&
-            ctx->frame && !ctx->frame->empty())
+        if (!s.wave_latched && ctx->timestamp_ms - s.last_wave_upload_ms >= cooldown_ms && ctx->frame &&
+            !ctx->frame->empty())
         {
-            const char *url = (ctx->config && !ctx->config->server_url.empty())
-                                  ? ctx->config->server_url.c_str() : nullptr;
-            alarm_uploader_enqueue(*ctx->frame, *ctx->frame, ctx->chnId, "wave_sos", url);
+            const char *url =
+                (ctx->config && !ctx->config->server_url.empty()) ? ctx->config->server_url.c_str() : nullptr;
+            alarm_uploader_enqueue(*ctx->frame, *ctx->frame, ctx->chnId, "wave_sos", report_enabled(ctx),
+                                   url); /* 连了"上报配置"节点才真正发 */
             s.last_wave_upload_ms = ctx->timestamp_ms;
             s.wave_latched = true;
         }

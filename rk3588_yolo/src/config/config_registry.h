@@ -4,11 +4,11 @@
  */
 #pragma once
 
-#include <string>
+#include "../third_party/json/cJSON.h"
 #include <cstddef>
 #include <functional>
+#include <string>
 #include <vector>
-#include "../third_party/json/cJSON.h"
 
 enum class ConfigType
 {
@@ -25,26 +25,30 @@ struct ConfigField
     ConfigType type;
     size_t offset;
 
-    ConfigField(const char *k, ConfigType t, size_t off)
-        : key(k), type(t), offset(off) {}
+    ConfigField(const char *k, ConfigType t, size_t off) : key(k), type(t), offset(off)
+    {
+    }
 };
 
 class ConfigRegistry
 {
-public:
+  public:
     void add_global(const char *key, ConfigType type, size_t offset);
     void add_channel(const char *key, ConfigType type, size_t offset);
     bool parse_global(cJSON *obj, void *base);
     bool parse_channel(cJSON *obj, void *base);
     bool sync_fields(void *dst, const void *src, bool is_global) const;
-    void add_reload_callback(std::function<void()> cb) { callbacks.push_back(cb); }
+    void add_reload_callback(std::function<void()> cb)
+    {
+        callbacks.push_back(cb);
+    }
     void trigger_reload()
     {
         for (auto &cb : callbacks)
             cb();
     }
 
-private:
+  private:
     std::vector<ConfigField> global_fields;
     std::vector<ConfigField> channel_fields;
     std::vector<std::function<void()>> callbacks;

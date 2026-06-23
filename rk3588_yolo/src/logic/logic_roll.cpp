@@ -28,9 +28,8 @@ static void logic_roll(ChannelContext *ctx)
     double ratio = 0.0;
     cv::Mat occupancy_mask;
     int bg_hue = 0;
-    if (!logic_roll_compute_occupancy(*ctx->frame, *ctx->roi,
-                                      sat_min, val_min, hue_tol, min_area,
-                                      ratio, occupancy_mask, bg_hue))
+    if (!logic_roll_compute_occupancy(*ctx->frame, *ctx->roi, sat_min, val_min, hue_tol, min_area, ratio,
+                                      occupancy_mask, bg_hue))
     {
         draw_text(ctx, "roll: occupancy compute failed", cv::Point(20, 30), cv::Scalar(0, 0, 255), 0.6, 2);
         return;
@@ -49,7 +48,7 @@ static void logic_roll(ChannelContext *ctx)
     {
         for (auto &r : *ctx->results)
         {
-            int in_roi = roi_contains(ctx, r.box, 0);   /* 是否落在测量区(第 0 个 ROI) */
+            int in_roi = roi_contains(ctx, r.box, 0); /* 是否落在测量区(第 0 个 ROI) */
             r.box_color = in_roi ? cv::Scalar(0, 255, 255) : cv::Scalar(120, 120, 120);
         }
     }
@@ -68,8 +67,8 @@ static void logic_roll(ChannelContext *ctx)
     }
 
     char info1[180];
-    snprintf(info1, sizeof(info1), "Roll occupancy: %.2f%% (th=%.2f%%) bg_hue=%d %s",
-             ratio * 100.0, threshold * 100.0, bg_hue, alarm ? "ALARM" : "OK");
+    snprintf(info1, sizeof(info1), "Roll occupancy: %.2f%% (th=%.2f%%) bg_hue=%d %s", ratio * 100.0, threshold * 100.0,
+             bg_hue, alarm ? "ALARM" : "OK");
     draw_text(ctx, info1, cv::Point(20, 30), alarm ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0), 0.62, 2);
 
     char info2[180];

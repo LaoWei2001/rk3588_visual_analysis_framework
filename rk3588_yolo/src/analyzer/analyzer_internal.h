@@ -6,41 +6,41 @@
  * 外部模块请使用 analyzer.h。
  *
  * 各文件职责速查:
- *   channel_pipeline.cpp  — 跟踪器 + invoke_channel_logic + process_channel_results
- *   display_pipeline.cpp  — display_worker_thread
+ *   channel_pipeline.cpp  — 跟踪器 + invoke_channel_logic +
+ * process_channel_results display_pipeline.cpp  — display_worker_thread
  *   frame_inlet.cpp       — videoOutHandle + FPS 节流 + RGA 转换
  *   result_dispatch.cpp   — dispatch_worker_thread
  *   analyzer.cpp          — 共享状态定义 + init/deinit + main 查询接口
  */
 #pragma once
 
-#include <chrono>
-#include <cstdint>
-#include <cstdlib>      /* malloc / free */
-#include <vector>
-#include <pthread.h>
-#include <opencv2/opencv.hpp>
 #include "../config/config.h"
 #include "../core/app_ctrl.h"
 #include "algoProcess.h"
+#include <chrono>
+#include <cstdint>
+#include <cstdlib> /* malloc / free */
+#include <opencv2/opencv.hpp>
+#include <pthread.h>
+#include <vector>
 
-/*======================== 时间辅助 (各文件直接使用, 无链接冲突) ========================*/
+/*======================== 时间辅助 (各文件直接使用, 无链接冲突)
+ * ========================*/
 
 static inline uint64_t steady_now_ms(void)
 {
     auto now = std::chrono::steady_clock::now();
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
 }
 
 static inline uint64_t steady_now_us(void)
 {
     auto now = std::chrono::steady_clock::now();
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count());
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count());
 }
 
-/*======================== 三槽显示帧池（DispFramePool）========================*/
+/*========================
+ * 三槽显示帧池（DispFramePool）========================*/
 
 /**
  * @brief Triple-buffer 帧池：将帧像素拷贝从 mutex 保护区移到锁外。
@@ -57,8 +57,9 @@ static inline uint64_t steady_now_us(void)
  * 三个槽各司其职，角色在 back/mid/front 之间循环轮转：
  *
  *   slots[back_idx]   — 生产者当前写入槽（producer 独占，无需持锁访问）
- *   slots[mid_idx]    — 最新就绪帧（handoff 槽，publish/swap 时持 DispQueue::mtx）
- *   slots[front_idx]  — 消费者当前读取槽（consumer 独占，无需持锁访问）
+ *   slots[mid_idx]    — 最新就绪帧（handoff 槽，publish/swap 时持
+ * DispQueue::mtx） slots[front_idx]  — 消费者当前读取槽（consumer
+ * 独占，无需持锁访问）
  *
  * 不变量：back_idx、mid_idx、front_idx 三者始终两两不等。
  *
@@ -93,22 +94,24 @@ struct DispFramePool
      *  实际分辨率更大时 back_buf() 会自动一次性扩容。*/
     static constexpr size_t INIT_BYTES = static_cast<size_t>(1920) * 1088 * 3 / 2;
 
-    struct Slot {
-        uint8_t *data     = nullptr;
-        size_t   capacity = 0;
+    struct Slot
+    {
+        uint8_t *data = nullptr;
+        size_t capacity = 0;
     };
 
     Slot slots[3];
-    int  back_idx  = 0;       /* 生产者写入槽 */
-    int  mid_idx   = 1;       /* 最新就绪槽   */
-    int  front_idx = 2;       /* 消费者读取槽 */
+    int back_idx = 0;  /* 生产者写入槽 */
+    int mid_idx = 1;   /* 最新就绪槽   */
+    int front_idx = 2; /* 消费者读取槽 */
     bool mid_dirty = false;
 
     /** 预分配三槽内存，由 analyzer_init 调用一次。*/
     void init()
     {
-        for (auto &s : slots) {
-            s.data     = static_cast<uint8_t *>(malloc(INIT_BYTES));
+        for (auto &s : slots)
+        {
+            s.data = static_cast<uint8_t *>(malloc(INIT_BYTES));
             s.capacity = s.data ? INIT_BYTES : 0;
         }
     }
@@ -116,9 +119,10 @@ struct DispFramePool
     /** 释放三槽内存，由 analyzer_destroy_display_queues 调用。*/
     void deinit()
     {
-        for (auto &s : slots) {
+        for (auto &s : slots)
+        {
             free(s.data);
-            s.data     = nullptr;
+            s.data = nullptr;
             s.capacity = 0;
         }
     }
@@ -133,9 +137,10 @@ struct DispFramePool
     uint8_t *back_buf(size_t needed)
     {
         Slot &s = slots[back_idx];
-        if (needed > s.capacity) {
+        if (needed > s.capacity)
+        {
             free(s.data);
-            s.data     = static_cast<uint8_t *>(malloc(needed));
+            s.data = static_cast<uint8_t *>(malloc(needed));
             s.capacity = s.data ? needed : 0;
         }
         return s.data;
@@ -149,9 +154,9 @@ struct DispFramePool
     void publish()
     {
         const int tmp = back_idx;
-        back_idx      = mid_idx;
-        mid_idx       = tmp;
-        mid_dirty     = true;
+        back_idx = mid_idx;
+        mid_idx = tmp;
+        mid_dirty = true;
     }
 
     /**
@@ -162,11 +167,12 @@ struct DispFramePool
      */
     bool swap_front_if_dirty()
     {
-        if (!mid_dirty) return false;
+        if (!mid_dirty)
+            return false;
         const int tmp = mid_idx;
-        mid_idx       = front_idx;
-        front_idx     = tmp;
-        mid_dirty     = false;
+        mid_idx = front_idx;
+        front_idx = tmp;
+        mid_dirty = false;
         return true;
     }
 
@@ -175,10 +181,14 @@ struct DispFramePool
      *
      * 消费者独占 front 槽，调用者无需持锁。
      */
-    const uint8_t *front_buf() const { return slots[front_idx].data; }
+    const uint8_t *front_buf() const
+    {
+        return slots[front_idx].data;
+    }
 };
 
-/*======================== 显示任务与队列 (frame_inlet + display_pipeline 共用) ========================*/
+/*======================== 显示任务与队列 (frame_inlet + display_pipeline 共用)
+ * ========================*/
 
 /**
  * @brief 显示任务（仅元数据）。
@@ -188,10 +198,10 @@ struct DispFramePool
  */
 struct DispTask
 {
-    int chnId      = -1;
-    int srcFmt     = 0;
-    int srcWidth   = 0;
-    int srcHeight  = 0;
+    int chnId = -1;
+    int srcFmt = 0;
+    int srcWidth = 0;
+    int srcHeight = 0;
     int srcHStride = 0;
     int srcVStride = 0;
 };
@@ -207,20 +217,22 @@ struct DispTask
 struct DispQueue
 {
     pthread_mutex_t mtx;
-    pthread_cond_t  cv;
-    int             has_task = 0;
-    DispTask        task;       /* 元数据：6 个整数 */
-    DispFramePool   pool;       /* 帧像素：三槽预分配缓冲 */
+    pthread_cond_t cv;
+    int has_task = 0;
+    DispTask task;      /* 元数据：6 个整数 */
+    DispFramePool pool; /* 帧像素：三槽预分配缓冲 */
 };
 
 /* 定义在 analyzer.cpp，frame_inlet 和 display_pipeline 共同访问 */
 extern DispQueue g_disp_queues[MAX_CHANNEL_NUM];
 
-/*======================== 分发线程运行标志 (定义在 analyzer.cpp) ========================*/
+/*======================== 分发线程运行标志 (定义在 analyzer.cpp)
+ * ========================*/
 
 extern volatile int g_dispatch_running;
 
-/*======================== 通道结果处理串行锁 (定义在 analyzer.cpp) ========================*/
+/*======================== 通道结果处理串行锁 (定义在 analyzer.cpp)
+ * ========================*/
 /*
  * 防止同一通道的 process_channel_results 被两条路径并发调用：
  *   - 非推理通道：由 videoOutHandle (appsink 回调线程) 直接调用
@@ -229,7 +241,8 @@ extern volatile int g_dispatch_running;
  */
 extern pthread_mutex_t g_process_mtx[MAX_CHANNEL_NUM];
 
-/*======================== 帧入口统计重置 (实现在 frame_inlet.cpp) ========================*/
+/*======================== 帧入口统计重置 (实现在 frame_inlet.cpp)
+ * ========================*/
 
 /**
  * @brief 重置指定通道的 FPS 节流计时器。
@@ -239,16 +252,15 @@ extern pthread_mutex_t g_process_mtx[MAX_CHANNEL_NUM];
  */
 void feed_stats_reset(int chnId);
 
-/*======================== 通道结果处理 (实现在 channel_pipeline.cpp) ========================*/
+/*======================== 通道结果处理 (实现在 channel_pipeline.cpp)
+ * ========================*/
 
-std::vector<AlgoResult> process_channel_results(
-    int chnId,
-    const ChannelRawFrame &raw_frame,
-    std::vector<AlgoResult> *new_results  = nullptr,
-    cv::Mat                 *infer_frame  = nullptr,
-    int64_t                  result_frame_id = 0);
+std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame &raw_frame,
+                                                std::vector<AlgoResult> *new_results = nullptr,
+                                                cv::Mat *infer_frame = nullptr, int64_t result_frame_id = 0);
 
-/*======================== 跟踪器生命周期 (实现在 channel_pipeline.cpp) ========================*/
+/*======================== 跟踪器生命周期 (实现在 channel_pipeline.cpp)
+ * ========================*/
 
 void trackers_init(void);
 void trackers_deinit(void);

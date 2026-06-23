@@ -1,26 +1,28 @@
-#include <string>
-#include <cstdio>
-#include <cmath>
-#include <opencv2/opencv.hpp>
-#include "system.h"
-#include <gtk/gtk.h>
 #include "display.h"
-#include "text_overlay.h"
 #include "../core/app_ctrl.h"
 #include "../core/pause_ctrl.h"
-#include <mutex>
-#include <vector>
+#include "system.h"
+#include "text_overlay.h"
+#include <cmath>
+#include <cstdio>
 #include <cstdlib>
-#include <unistd.h>
 #include <dirent.h>
+#include <gtk/gtk.h>
+#include <mutex>
+#include <opencv2/opencv.hpp>
+#include <string>
+#include <unistd.h>
+#include <vector>
 
-/* 文本绘制出口: 中英文统一用 freetype 渲染(不再回退 Hershey)。font_scale 沿用 putText 语义
- * 按比例换算成像素高; freetype 不可用时不绘制(已在字体加载处报错)。
- * thickness = 加粗级别(对外即 draw_text 的"粗细"): <=1 普通填充字(默认外观, 与历史一致);
- *   >=2 在填充字基础上再叠一层同色描边把笔画加粗, 数值越大越粗(上限封顶, 防糊成一团)。
- * 始终先填充, 保证是实心清晰字; 不会因 thickness>0 变成空心描边字。 */
-static inline void put_text_auto(cv::Mat &img, const std::string &s, cv::Point org,
-                                 double font_scale, const cv::Scalar &color, int thickness)
+/* 文本绘制出口: 中英文统一用 freetype 渲染(不再回退 Hershey)。font_scale 沿用
+ * putText 语义 按比例换算成像素高; freetype
+ * 不可用时不绘制(已在字体加载处报错)。 thickness = 加粗级别(对外即 draw_text
+ * 的"粗细"): <=1 普通填充字(默认外观, 与历史一致);
+ *   >=2 在填充字基础上再叠一层同色描边把笔画加粗, 数值越大越粗(上限封顶,
+ * 防糊成一团)。 始终先填充, 保证是实心清晰字; 不会因 thickness>0
+ * 变成空心描边字。 */
+static inline void put_text_auto(cv::Mat &img, const std::string &s, cv::Point org, double font_scale,
+                                 const cv::Scalar &color, int thickness)
 {
     const int fh = std::max(12, (int)std::lround(font_scale * 30.0));
     draw_text_unicode(img, s, org, fh, color, /*filled*/ -1);
@@ -40,14 +42,10 @@ struct DisplayState
 static DisplayState g_disp;
 
 // Yolo-Pose skeleton connections (1-based indices from model definition).
-static const int kPoseSkeleton[38] = {
-    16, 14, 14, 12, 17, 15, 15, 13, 12, 13,
-    6, 12, 7, 13, 6, 7, 6, 8, 7, 9,
-    8, 10, 9, 11, 2, 3, 1, 2, 1, 3,
-    2, 4, 3, 5, 4, 6, 5, 7};
+static const int kPoseSkeleton[38] = {16, 14, 14, 12, 17, 15, 15, 13, 12, 13, 6, 12, 7, 13, 6, 7, 6, 8, 7,
+                                      9,  8,  10, 9,  11, 2,  3,  1,  2,  1,  3, 2,  4, 3,  5, 4, 6, 5, 7};
 
-static void draw_segmentation_overlay(cv::Mat &screen_roi,
-                                      const std::vector<AlgoResult> &results)
+static void draw_segmentation_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult> &results)
 {
     const cv::Mat *seg_mask = nullptr;
     for (const auto &res : results)
@@ -61,8 +59,11 @@ static void draw_segmentation_overlay(cv::Mat &screen_roi,
     if (!seg_mask || seg_mask->empty())
         return;
 
-    static const unsigned char class_colors[][3] = {
-        {255, 56, 56}, {255, 157, 151}, {255, 112, 31}, {255, 178, 29}, {207, 210, 49}, {72, 249, 10}, {146, 204, 23}, {61, 219, 134}, {26, 147, 52}, {0, 212, 187}, {44, 153, 168}, {0, 194, 255}, {52, 69, 147}, {100, 115, 255}, {0, 24, 236}, {132, 56, 255}, {82, 0, 133}, {203, 56, 255}, {255, 149, 200}, {255, 55, 199}};
+    static const unsigned char class_colors[][3] = {{255, 56, 56},  {255, 157, 151}, {255, 112, 31},  {255, 178, 29},
+                                                    {207, 210, 49}, {72, 249, 10},   {146, 204, 23},  {61, 219, 134},
+                                                    {26, 147, 52},  {0, 212, 187},   {44, 153, 168},  {0, 194, 255},
+                                                    {52, 69, 147},  {100, 115, 255}, {0, 24, 236},    {132, 56, 255},
+                                                    {82, 0, 133},   {203, 56, 255},  {255, 149, 200}, {255, 55, 199}};
     const float alpha = 0.5f;
 
     cv::Mat resized_mask;
@@ -80,7 +81,8 @@ static void draw_segmentation_overlay(cv::Mat &screen_roi,
             if (cls_id_plus_1 == 0)
                 continue;
             const int color_idx = (cls_id_plus_1 - 1) % 20;
-            // class_colors 定义为 RGB 顺序；screen_roi 统一使用 BGR，ch0=B ch1=G ch2=R
+            // class_colors 定义为 RGB 顺序；screen_roi 统一使用 BGR，ch0=B ch1=G
+            // ch2=R
             const float r = class_colors[color_idx][0];
             const float g = class_colors[color_idx][1];
             const float b = class_colors[color_idx][2];
@@ -92,10 +94,7 @@ static void draw_segmentation_overlay(cv::Mat &screen_roi,
     }
 }
 
-static void draw_pose_overlay(cv::Mat &screen_roi,
-                              const std::vector<AlgoResult> &results,
-                              float scale_x,
-                              float scale_y)
+static void draw_pose_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult> &results, float scale_x, float scale_y)
 {
     for (const auto &res : results)
     {
@@ -132,7 +131,8 @@ static void draw_pose_overlay(cv::Mat &screen_roi,
 
 void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
 {
-    // ROI 区域(可多个)：顶点均为模型输入坐标系(同检测框)，统一按 inputW/inputH 缩放到当前窗口后逐个画。
+    // ROI 区域(可多个)：顶点均为模型输入坐标系(同检测框)，统一按 inputW/inputH
+    // 缩放到当前窗口后逐个画。
     if (p.roi_zones && !p.roi_zones->empty() && p.inputW > 0 && p.inputH > 0)
     {
         const float sx = static_cast<float>(screen_roi.cols) / static_cast<float>(p.inputW);
@@ -159,8 +159,7 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
      * 这里按位置同一比例缩放粗细，效果等同"在模型分辨率上绘制再整体缩放"，
      * 又不打乱 RGA 把原始帧直缩到 tile 的高效路径。 */
     const double draw_scale = (static_cast<double>(scale_x) + static_cast<double>(scale_y)) * 0.5;
-    auto thk = [draw_scale](int t)
-    { return t < 0 ? t : std::max(1, cvRound(t * draw_scale)); };
+    auto thk = [draw_scale](int t) { return t < 0 ? t : std::max(1, cvRound(t * draw_scale)); };
 
     // Segmentation mask
     if (p.results && !p.results->empty())
@@ -173,7 +172,8 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
          *
          * 原理：result_age_ms = 当前帧距上次 NPU 推理结果的毫秒数（即管线延迟）。
          * infer_fps = 推理帧率，用于把 Kalman 速度（像素/推理帧）换算成 像素/秒。
-         * frames_elapsed = result_age_ms × infer_fps / 1000 ≈ 经过了几个推理帧间隔。
+         * frames_elapsed = result_age_ms × infer_fps / 1000 ≈
+         * 经过了几个推理帧间隔。
          *
          * 安全限制：
          *  - 只对 confirmed 轨迹 (track_id >= 0, track_hits >= 3) 外推，速度可信
@@ -220,8 +220,8 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
             std::string txt = res.label;
             if (res.track_id >= 0)
                 txt = "ID " + std::to_string(res.track_id) + " " + txt;
-            put_text_auto(screen_roi, txt, cv::Point(box.x, std::max(20, box.y - 5)),
-                          std::max(0.3, 0.6 * draw_scale), color, 1);
+            put_text_auto(screen_roi, txt, cv::Point(box.x, std::max(20, box.y - 5)), std::max(0.3, 0.6 * draw_scale),
+                          color, 1);
         }
         draw_pose_overlay(screen_roi, *p.results, scale_x, scale_y);
     }
@@ -236,12 +236,9 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
                 continue;
             switch (cmd.type)
             {
-            case DrawCommand::RECT:
-            {
-                cv::Rect r(static_cast<int>(cmd.rect.x * scale_x),
-                           static_cast<int>(cmd.rect.y * scale_y),
-                           static_cast<int>(cmd.rect.width * scale_x),
-                           static_cast<int>(cmd.rect.height * scale_y));
+            case DrawCommand::RECT: {
+                cv::Rect r(static_cast<int>(cmd.rect.x * scale_x), static_cast<int>(cmd.rect.y * scale_y),
+                           static_cast<int>(cmd.rect.width * scale_x), static_cast<int>(cmd.rect.height * scale_y));
 
                 // 边界保护：防止坐标溢出或出现负数宽高等导致 OpenCV crash
                 r.x = std::max(0, r.x);
@@ -265,15 +262,12 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
                 }
                 break;
             }
-            case DrawCommand::CIRCLE:
-            {
+            case DrawCommand::CIRCLE: {
                 /* 当 scale_x != scale_y（非均匀缩放）时，用椭圆代替正圆，
                  * 使屏幕上显示的边界与逻辑判断的欧氏距离边界完全对应。
                  * 均匀缩放时退化为正圆，行为与原来完全一致。 */
-                const cv::Point ec(static_cast<int>(cmd.center.x * scale_x),
-                                   static_cast<int>(cmd.center.y * scale_y));
-                const cv::Size  es(static_cast<int>(cmd.radius * scale_x),
-                                   static_cast<int>(cmd.radius * scale_y));
+                const cv::Point ec(static_cast<int>(cmd.center.x * scale_x), static_cast<int>(cmd.center.y * scale_y));
+                const cv::Size es(static_cast<int>(cmd.radius * scale_x), static_cast<int>(cmd.radius * scale_y));
                 if (cmd.alpha < 0.999)
                 {
                     const double a = std::max(0.0, std::min(1.0, cmd.alpha));
@@ -291,15 +285,13 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
                          cv::Point(static_cast<int>(cmd.pt2.x * scale_x), static_cast<int>(cmd.pt2.y * scale_y)),
                          cmd.color, thk(cmd.thickness));
                 break;
-            case DrawCommand::POLYLINE:
-            {
+            case DrawCommand::POLYLINE: {
                 if (cmd.points.size() < 2)
                     break;
                 std::vector<cv::Point> pts;
                 pts.reserve(cmd.points.size());
                 for (const auto &q : cmd.points)
-                    pts.emplace_back(static_cast<int>(q.x * scale_x),
-                                     static_cast<int>(q.y * scale_y));
+                    pts.emplace_back(static_cast<int>(q.x * scale_x), static_cast<int>(q.y * scale_y));
                 if (cmd.alpha < 0.999)
                 {
                     /* 半透明：折线画到副本再整体融合；自交叠处只画一次，不会越叠越暗。
@@ -315,15 +307,13 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
                 }
                 break;
             }
-            case DrawCommand::POLY_FILLED:
-            {
+            case DrawCommand::POLY_FILLED: {
                 if (cmd.points.size() < 3)
                     break;
                 std::vector<cv::Point> pts;
                 pts.reserve(cmd.points.size());
                 for (const auto &q : cmd.points)
-                    pts.emplace_back(static_cast<int>(q.x * scale_x),
-                                     static_cast<int>(q.y * scale_y));
+                    pts.emplace_back(static_cast<int>(q.x * scale_x), static_cast<int>(q.y * scale_y));
                 if (cmd.alpha < 0.999)
                 {
                     const double a = std::max(0.0, std::min(1.0, cmd.alpha));
@@ -335,16 +325,15 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
                     cv::fillPoly(screen_roi, std::vector<std::vector<cv::Point>>{pts}, cmd.color, cv::LINE_AA);
                 break;
             }
-            case DrawCommand::TEXT:
-            {
+            case DrawCommand::TEXT: {
                 // 自适应文字大小：基于画面缩放比例调整，同时限制一个最小可读字号
                 double adapted_font_scale = cmd.font_scale * ((scale_x + scale_y) * 0.5f);
                 adapted_font_scale = std::max(0.3, adapted_font_scale);
 
-                put_text_auto(screen_roi, cmd.text,
-                              cv::Point(static_cast<int>(cmd.text_pos.x * scale_x),
-                                        static_cast<int>(cmd.text_pos.y * scale_y)),
-                              adapted_font_scale, cmd.color, cmd.thickness);
+                put_text_auto(
+                    screen_roi, cmd.text,
+                    cv::Point(static_cast<int>(cmd.text_pos.x * scale_x), static_cast<int>(cmd.text_pos.y * scale_y)),
+                    adapted_font_scale, cmd.color, cmd.thickness);
                 break;
             }
             }
@@ -355,10 +344,8 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
     if (g_pCtrl && g_pCtrl->config.performance_display && p.show_fps)
     {
         char fps_text[80];
-        snprintf(fps_text, sizeof(fps_text), "Ch%d disp %.1f / inf %.1f FPS",
-                 p.chnId, p.disp_fps, p.infer_fps);
-        put_text_auto(screen_roi, fps_text, cv::Point(10, 15),
-                      0.5, cv::Scalar(255, 0, 0), 1);
+        snprintf(fps_text, sizeof(fps_text), "Ch%d disp %.1f / inf %.1f FPS", p.chnId, p.disp_fps, p.infer_fps);
+        put_text_auto(screen_roi, fps_text, cv::Point(10, 15), 0.5, cv::Scalar(255, 0, 0), 1);
     }
 }
 
@@ -392,11 +379,23 @@ char **dispBufferMap(Display_t *dispDesc)
 
     return &g_disp.front;
 }
-static void display_lock_impl() { g_disp.mutex.lock(); }
-static void display_unlock_impl() { g_disp.mutex.unlock(); }
+static void display_lock_impl()
+{
+    g_disp.mutex.lock();
+}
+static void display_unlock_impl()
+{
+    g_disp.mutex.unlock();
+}
 
-void display_lock() { display_lock_impl(); }
-void display_unlock() { display_unlock_impl(); }
+void display_lock()
+{
+    display_lock_impl();
+}
+void display_unlock()
+{
+    display_unlock_impl();
+}
 
 static gboolean showWidget(GtkWidget *pImage)
 {
@@ -407,7 +406,8 @@ static gboolean showWidget(GtkWidget *pImage)
         return G_SOURCE_REMOVE;
     }
 
-    /* Render from front buffer, which always contains the latest completely written frame */
+    /* Render from front buffer, which always contains the latest completely
+     * written frame */
     char *pBuf = g_disp.front;
     if (NULL == pBuf)
     {
@@ -415,7 +415,8 @@ static gboolean showWidget(GtkWidget *pImage)
     }
 
     display_lock();
-    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data((guchar *)pBuf, GDK_COLORSPACE_RGB, FALSE, 8, g_disp.desc->width, g_disp.desc->height, 3 * g_disp.desc->width, NULL, NULL);
+    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data((guchar *)pBuf, GDK_COLORSPACE_RGB, FALSE, 8, g_disp.desc->width,
+                                                 g_disp.desc->height, 3 * g_disp.desc->width, NULL, NULL);
     gtk_image_set_from_pixbuf(GTK_IMAGE(pImage), pixbuf);
     g_object_unref(pixbuf);
     display_unlock();
@@ -457,11 +458,13 @@ static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer use
     return FALSE;
 }
 
-/* —— 无图形会话(SSH / VS Code Remote / systemd 服务)拉起时，也能连上板端 HDMI 的 X(:0) ——
- * 现象：这些场景下 shell 没有指向本地 :0 的 DISPLAY、也没有 XAUTHORITY cookie，gtk_init 连不上 X，
- *       于是“先得在桌面会话/命令行手动跑一次才显示”。下面在 gtk_init 之前自助补齐显示环境：
- *       DISPLAY 缺省 :0；XAUTHORITY 从正在运行的 Xorg 的 -auth 参数(或常见 cookie 路径)取。
- *       已设置的一律不动 —— 所以 ssh -X 转发、板端桌面会话、命令行里照常用各自继承的值。 */
+/* —— 无图形会话(SSH / VS Code Remote / systemd 服务)拉起时，也能连上板端 HDMI
+ * 的 X(:0) —— 现象：这些场景下 shell 没有指向本地 :0 的 DISPLAY、也没有
+ * XAUTHORITY cookie，gtk_init 连不上 X，
+ *       于是“先得在桌面会话/命令行手动跑一次才显示”。下面在 gtk_init
+ * 之前自助补齐显示环境： DISPLAY 缺省 :0；XAUTHORITY 从正在运行的 Xorg 的 -auth
+ * 参数(或常见 cookie 路径)取。 已设置的一律不动 —— 所以 ssh -X
+ * 转发、板端桌面会话、命令行里照常用各自继承的值。 */
 static std::string find_xorg_auth()
 {
     DIR *d = opendir("/proc");
@@ -530,9 +533,8 @@ static void ensure_x_display_env()
     std::string auth = find_xorg_auth(); /* 1) 优先从 Xorg 的 -auth 取真实 cookie */
     if (auth.empty())
     { /* 2) 兜底常见路径 */
-        const char *cands[] = {
-            "/run/lightdm/root/:0", "/var/run/lightdm/root/:0",
-            "/run/user/0/gdm/Xauthority", "/root/.Xauthority", nullptr};
+        const char *cands[] = {"/run/lightdm/root/:0", "/var/run/lightdm/root/:0", "/run/user/0/gdm/Xauthority",
+                               "/root/.Xauthority", nullptr};
         for (int i = 0; cands[i]; ++i)
             if (access(cands[i], R_OK) == 0)
             {
@@ -546,8 +548,10 @@ static void ensure_x_display_env()
 
 static GtkWidget *disp_init(const char *strWinTitle, int32_t width, int32_t height)
 {
-    ensure_x_display_env(); /* 必须在 gtk_init 之前：无图形会话时自助补 DISPLAY/XAUTHORITY */
-    /* 板子没装无障碍(AT-SPI)总线，GTK 会刷一行 dbind-WARNING；关掉无障碍桥，纯净日志、无任何副作用 */
+    ensure_x_display_env(); /* 必须在 gtk_init 之前：无图形会话时自助补
+                               DISPLAY/XAUTHORITY */
+    /* 板子没装无障碍(AT-SPI)总线，GTK 会刷一行
+     * dbind-WARNING；关掉无障碍桥，纯净日志、无任何副作用 */
     setenv("NO_AT_BRIDGE", "1", 0);
     gtk_init(NULL, NULL);
 

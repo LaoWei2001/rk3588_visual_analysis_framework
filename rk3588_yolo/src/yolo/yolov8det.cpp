@@ -1,14 +1,14 @@
 #include "yolov8det.h"
 #include <algorithm>
-#include <cstring>
 #include <chrono>
-#include <fstream>
 #include <cmath>
-#include <set>
+#include <cstring>
+#include <fstream>
 #include <rga/im2d.h>
+#include <set>
 
-YoloV8Det::YoloV8Det(const std::string &model_path, const std::string &label_path, int core_mask,
-                     float obj_thresh, float nms_thresh)
+YoloV8Det::YoloV8Det(const std::string &model_path, const std::string &label_path, int core_mask, float obj_thresh,
+                     float nms_thresh)
 {
     obj_thresh_ = obj_thresh;
     nms_thresh_ = nms_thresh;
@@ -126,7 +126,8 @@ void YoloV8Det::query_model_info()
         num_classes_ = labels_.empty() ? 80 : (int)labels_.size();
     }
 
-    printf("[YoloV8Det] model %dx%d, classes=%d, quant=%d, outputs=%d\n", model_w_, model_h_, num_classes_, is_quant_, io_num_out_);
+    printf("[YoloV8Det] model %dx%d, classes=%d, quant=%d, outputs=%d\n", model_w_, model_h_, num_classes_, is_quant_,
+           io_num_out_);
 
     /* 预分配热路径缓存 */
     rknn_outputs_cache_.resize(io_num_out_);
@@ -171,12 +172,13 @@ bool YoloV8Det::init_zero_copy_input()
     printf("[YoloV8Det] zero-copy input enabled, mem=%u bytes, fd=%d\n", alloc_size, in_mem_->fd);
 
     im_handle_param_t rga_dst_param{};
-    rga_dst_param.width  = static_cast<uint32_t>(model_w_);
+    rga_dst_param.width = static_cast<uint32_t>(model_w_);
     rga_dst_param.height = static_cast<uint32_t>(model_h_);
     rga_dst_param.format = RK_FORMAT_RGB_888;
     input_rga_handle_ = static_cast<int>(importbuffer_fd(in_mem_->fd, &rga_dst_param));
     if (input_rga_handle_ == 0)
-        printf("[YoloV8Det] Warning: RGA dst handle cache failed, will import per-frame\n");
+        printf("[YoloV8Det] Warning: RGA dst handle cache failed, will import "
+               "per-frame\n");
     else
         printf("[YoloV8Det] RGA dst handle cached (handle=%d)\n", input_rga_handle_);
 
@@ -229,18 +231,18 @@ void YoloV8Det::compute_dfl(float *tensor, int dfl_len, float *box)
     }
 }
 
-int YoloV8Det::process_i8(int8_t *box_tensor, int32_t box_zp, float box_scale,
-                          int8_t *score_tensor, int32_t score_zp, float score_scale,
-                          int8_t *score_sum_tensor, int32_t score_sum_zp, float score_sum_scale,
-                          int grid_h, int grid_w, int stride, int dfl_len, int class_num,
-                          std::vector<float> &boxes, std::vector<float> &objProbs, std::vector<int> &classId, float threshold)
+int YoloV8Det::process_i8(int8_t *box_tensor, int32_t box_zp, float box_scale, int8_t *score_tensor, int32_t score_zp,
+                          float score_scale, int8_t *score_sum_tensor, int32_t score_sum_zp, float score_sum_scale,
+                          int grid_h, int grid_w, int stride, int dfl_len, int class_num, std::vector<float> &boxes,
+                          std::vector<float> &objProbs, std::vector<int> &classId, float threshold)
 {
     int validCount = 0;
     int grid_len = grid_h * grid_w;
     int8_t score_thres_i8 = (int8_t)((threshold / score_scale) + score_zp);
 
     // [Cache-Friendly Optimization]
-    // Sequential memory access across NCHW memory layout to avoid severe L1/L2 Cache-Thrashing
+    // Sequential memory access across NCHW memory layout to avoid severe L1/L2
+    // Cache-Thrashing
     std::vector<int8_t> max_scores(grid_len, -128);
     std::vector<int> max_class_ids(grid_len, -1);
 
@@ -295,15 +297,16 @@ int YoloV8Det::process_i8(int8_t *box_tensor, int32_t box_zp, float box_scale,
     return validCount;
 }
 
-int YoloV8Det::process_fp32(float *box_tensor, float *score_tensor, float *score_sum_tensor,
-                            int grid_h, int grid_w, int stride, int dfl_len, int class_num,
-                            std::vector<float> &boxes, std::vector<float> &objProbs, std::vector<int> &classId, float threshold)
+int YoloV8Det::process_fp32(float *box_tensor, float *score_tensor, float *score_sum_tensor, int grid_h, int grid_w,
+                            int stride, int dfl_len, int class_num, std::vector<float> &boxes,
+                            std::vector<float> &objProbs, std::vector<int> &classId, float threshold)
 {
     int validCount = 0;
     int grid_len = grid_h * grid_w;
 
     // [Cache-Friendly Optimization]
-    // Sequential memory access across NCHW memory layout to avoid severe L1/L2 Cache-Thrashing
+    // Sequential memory access across NCHW memory layout to avoid severe L1/L2
+    // Cache-Thrashing
     std::vector<float> max_scores(grid_len, -1.0f);
     std::vector<int> max_class_ids(grid_len, -1);
 
@@ -462,8 +465,8 @@ int YoloV8Det::post_process(rknn_output *outputs, LetterBoxInfo &lb, std::vector
             float *score_tensor = (float *)outputs[i * 3 + 1].buf;
             float *score_sum_tensor = nullptr;
 
-            validCount += process_fp32(box_tensor, score_tensor, score_sum_tensor, grid_h, grid_w,
-                                       stride_arr[i], dfl_len, num_classes_, filterBoxes, objProbs, classId, obj_thresh_);
+            validCount += process_fp32(box_tensor, score_tensor, score_sum_tensor, grid_h, grid_w, stride_arr[i],
+                                       dfl_len, num_classes_, filterBoxes, objProbs, classId, obj_thresh_);
         }
     }
 

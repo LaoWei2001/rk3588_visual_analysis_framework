@@ -3,7 +3,8 @@
 #include <opencv2/opencv.hpp>
 
 /**
- * @brief Unified fallback for converting raw frames (NV12/NV21/RGB/BGR) to standard BGR Mat
+ * @brief Unified fallback for converting raw frames (NV12/NV21/RGB/BGR) to
+ * standard BGR Mat
  * @param pSrcData Raw image data
  * @param srcW Valid width
  * @param srcH Valid height

@@ -11,13 +11,13 @@
  */
 #pragma once
 
-#include <vector>
-#include <memory>
 #include "algoProcess.h"
+#include <memory>
+#include <vector>
 
 class Tracker
 {
-public:
+  public:
     /**
      * @param tracker_iou_thresh  IoU 匹配阈值 (0~1), 低于此值视为不匹配
      * @param tracker_max_miss    连续丢失帧数上限, 超过则删除轨迹
@@ -39,7 +39,7 @@ public:
     Tracker(const Tracker &) = delete;
     Tracker &operator=(const Tracker &) = delete;
 
-private:
+  private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

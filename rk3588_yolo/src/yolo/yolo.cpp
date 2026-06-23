@@ -1,16 +1,14 @@
 #include "yolo.h"
 #include <algorithm>
-#include <cstring>
 #include <chrono>
+#include <cstring>
 #include <rga/im2d.h>
 
 static const float ANCHORS[3][3][2] = {
-    {{10, 13}, {16, 30}, {33, 23}},
-    {{30, 61}, {62, 45}, {59, 119}},
-    {{116, 90}, {156, 198}, {373, 326}}};
+    {{10, 13}, {16, 30}, {33, 23}}, {{30, 61}, {62, 45}, {59, 119}}, {{116, 90}, {156, 198}, {373, 326}}};
 
-YOLO::YOLO(const std::string &model_path, const std::string &label_path, int core_mask,
-           float obj_thresh, float nms_thresh)
+YOLO::YOLO(const std::string &model_path, const std::string &label_path, int core_mask, float obj_thresh,
+           float nms_thresh)
 {
     obj_thresh_ = obj_thresh;
     nms_thresh_ = nms_thresh;
@@ -151,7 +149,7 @@ bool YOLO::init_zero_copy_input()
      * 的 ioctl 开销. 参数与 worker 调用 rga_convert_resize_handle 时一致:
      * stride_w = model_w_, stride_h = model_h_, format = RK_FORMAT_RGB_888. */
     im_handle_param_t rga_dst_param{};
-    rga_dst_param.width  = static_cast<uint32_t>(model_w_);
+    rga_dst_param.width = static_cast<uint32_t>(model_w_);
     rga_dst_param.height = static_cast<uint32_t>(model_h_);
     rga_dst_param.format = RK_FORMAT_RGB_888;
     input_rga_handle_ = static_cast<int>(importbuffer_fd(in_mem_->fd, &rga_dst_param));
@@ -189,12 +187,14 @@ cv::Mat YOLO::preprocess(cv::Mat &img, LetterBoxInfo &lb)
     return canvas;
 }
 
-void YOLO::post_process(void *feat, int out_idx, int feat_h, int feat_w,
-                        LetterBoxInfo &lb, std::vector<AlgoResult> &results)
+void YOLO::post_process(void *feat, int out_idx, int feat_h, int feat_w, LetterBoxInfo &lb,
+                        std::vector<AlgoResult> &results)
 {
     int output_start = 0;
-    if (io_num_out_ > 3) output_start = io_num_out_ - 3;
-    if (out_idx < output_start) return;
+    if (io_num_out_ > 3)
+        output_start = io_num_out_ - 3;
+    if (out_idx < output_start)
+        return;
     int a_idx = out_idx - output_start;
 
     int grid_h = feat_h;
@@ -216,8 +216,8 @@ void YOLO::post_process(void *feat, int out_idx, int feat_h, int feat_w,
     float scale = out_attrs_[out_idx].scale;
 
     // 量化工具函数使用 yolo_utils.h 中的全局 inline 版本
-    using ::qnt_f32_to_affine;
     using ::deqnt_affine_to_f32;
+    using ::qnt_f32_to_affine;
 
     int8_t thres_i8 = is_quant_ ? qnt_f32_to_affine(threshold, zp, scale) : 0;
 
@@ -232,38 +232,47 @@ void YOLO::post_process(void *feat, int out_idx, int feat_h, int feat_w,
 
                 if (is_quant_)
                 {
-                    int8_t* in_ptr;
+                    int8_t *in_ptr;
                     if (anchor_last_layout)
                     {
                         int offset = ((a * grid_h + i) * grid_w + j) * prop_box;
-                        in_ptr = (int8_t*)feat + offset;
+                        in_ptr = (int8_t *)feat + offset;
                     }
                     else
                     {
                         int offset = (prop_box * a) * grid_len + i * grid_w + j;
-                        in_ptr = (int8_t*)feat + offset;
+                        in_ptr = (int8_t *)feat + offset;
                     }
 
                     int8_t box_conf_i8 = anchor_last_layout ? in_ptr[4] : in_ptr[4 * grid_len];
-                    if (box_conf_i8 < thres_i8) continue;
+                    if (box_conf_i8 < thres_i8)
+                        continue;
 
                     int8_t max_prob_i8 = anchor_last_layout ? in_ptr[5] : in_ptr[5 * grid_len];
                     for (int k = 1; k < num_classes_; ++k)
                     {
                         int8_t prob = anchor_last_layout ? in_ptr[5 + k] : in_ptr[(5 + k) * grid_len];
-                        if (prob > max_prob_i8) { maxClassId = k; max_prob_i8 = prob; }
+                        if (prob > max_prob_i8)
+                        {
+                            maxClassId = k;
+                            max_prob_i8 = prob;
+                        }
                     }
-                    if (max_prob_i8 <= thres_i8) continue;
+                    if (max_prob_i8 <= thres_i8)
+                        continue;
 
                     box_confidence = deqnt_affine_to_f32(box_conf_i8, zp, scale);
                     maxClassProbs = deqnt_affine_to_f32(max_prob_i8, zp, scale);
 
-                    if (anchor_last_layout) {
+                    if (anchor_last_layout)
+                    {
                         box_x = deqnt_affine_to_f32(in_ptr[0], zp, scale) * 2.0f - 0.5f;
                         box_y = deqnt_affine_to_f32(in_ptr[1], zp, scale) * 2.0f - 0.5f;
                         box_w = deqnt_affine_to_f32(in_ptr[2], zp, scale) * 2.0f;
                         box_h = deqnt_affine_to_f32(in_ptr[3], zp, scale) * 2.0f;
-                    } else {
+                    }
+                    else
+                    {
                         box_x = deqnt_affine_to_f32(in_ptr[0], zp, scale) * 2.0f - 0.5f;
                         box_y = deqnt_affine_to_f32(in_ptr[grid_len], zp, scale) * 2.0f - 0.5f;
                         box_w = deqnt_affine_to_f32(in_ptr[2 * grid_len], zp, scale) * 2.0f;
@@ -272,35 +281,44 @@ void YOLO::post_process(void *feat, int out_idx, int feat_h, int feat_w,
                 }
                 else
                 {
-                    float* in_ptr;
+                    float *in_ptr;
                     if (anchor_last_layout)
                     {
                         int offset = ((a * grid_h + i) * grid_w + j) * prop_box;
-                        in_ptr = (float*)feat + offset;
+                        in_ptr = (float *)feat + offset;
                     }
                     else
                     {
                         int offset = (prop_box * a) * grid_len + i * grid_w + j;
-                        in_ptr = (float*)feat + offset;
+                        in_ptr = (float *)feat + offset;
                     }
 
                     box_confidence = anchor_last_layout ? in_ptr[4] : in_ptr[4 * grid_len];
-                    if (box_confidence < threshold) continue;
+                    if (box_confidence < threshold)
+                        continue;
 
                     maxClassProbs = anchor_last_layout ? in_ptr[5] : in_ptr[5 * grid_len];
                     for (int k = 1; k < num_classes_; ++k)
                     {
                         float prob = anchor_last_layout ? in_ptr[5 + k] : in_ptr[(5 + k) * grid_len];
-                        if (prob > maxClassProbs) { maxClassId = k; maxClassProbs = prob; }
+                        if (prob > maxClassProbs)
+                        {
+                            maxClassId = k;
+                            maxClassProbs = prob;
+                        }
                     }
-                    if (maxClassProbs <= threshold) continue;
+                    if (maxClassProbs <= threshold)
+                        continue;
 
-                    if (anchor_last_layout) {
+                    if (anchor_last_layout)
+                    {
                         box_x = in_ptr[0] * 2.0f - 0.5f;
                         box_y = in_ptr[1] * 2.0f - 0.5f;
                         box_w = in_ptr[2] * 2.0f;
                         box_h = in_ptr[3] * 2.0f;
-                    } else {
+                    }
+                    else
+                    {
                         box_x = in_ptr[0] * 2.0f - 0.5f;
                         box_y = in_ptr[grid_len] * 2.0f - 0.5f;
                         box_w = in_ptr[2 * grid_len] * 2.0f;
@@ -374,7 +392,8 @@ bool YOLO::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat 
     candidates_cache_.clear();
     for (int i = 0; i < io_num_out_; i++)
     {
-        post_process(rknn_outputs_cache_[i].buf, i, out_attrs_[i].dims[2], out_attrs_[i].dims[3], lb, candidates_cache_);
+        post_process(rknn_outputs_cache_[i].buf, i, out_attrs_[i].dims[2], out_attrs_[i].dims[3], lb,
+                     candidates_cache_);
     }
     auto t3 = std::chrono::steady_clock::now();
 
@@ -414,9 +433,9 @@ bool YOLO::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *perf)
         return false;
 
     candidates_cache_.clear();
-    LetterBoxInfo lb; 
-    /* 零拷贝时，RGA 会将画面等比缩放并居中(或者填满)，我们需要告诉后处理当时的 padding。
-     * 目前 RGA 是直接 stretch 到 640x640，所以 ratio=1.0, dw=0, dh=0. 
+    LetterBoxInfo lb;
+    /* 零拷贝时，RGA 会将画面等比缩放并居中(或者填满)，我们需要告诉后处理当时的
+     * padding。 目前 RGA 是直接 stretch 到 640x640，所以 ratio=1.0, dw=0, dh=0.
      * 如果 RGA 做了 letterbox，需要把这些参数作为参数传入 infer_zero_copy。
      * 这里为了简化且兼容现有 RGA stretch 的行为，直接使用全屏 ratio. */
     lb.ratio = 1.0f;
@@ -425,7 +444,8 @@ bool YOLO::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *perf)
 
     for (int i = 0; i < io_num_out_; i++)
     {
-        post_process(rknn_outputs_cache_[i].buf, i, out_attrs_[i].dims[2], out_attrs_[i].dims[3], lb, candidates_cache_);
+        post_process(rknn_outputs_cache_[i].buf, i, out_attrs_[i].dims[2], out_attrs_[i].dims[3], lb,
+                     candidates_cache_);
     }
     auto t3 = std::chrono::steady_clock::now();
 

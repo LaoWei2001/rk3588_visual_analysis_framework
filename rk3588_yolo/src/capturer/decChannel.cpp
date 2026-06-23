@@ -1,21 +1,21 @@
-#include <string>
-#include <chrono>
-#include <thread>
-#include <cerrno>
-#include <cstring>
-#include <fcntl.h>
-#include <unistd.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netdb.h>
-#include "system.h"
-#include "system_opt.h"
-#include "gst_opt.h"
 #include "decChannel.h"
 #include "../analyzer/analyzer.h"
 #include "../core/app_ctrl.h"
 #include "../core/pause_ctrl.h"
+#include "gst_opt.h"
+#include "system.h"
+#include "system_opt.h"
+#include <cerrno>
+#include <chrono>
+#include <cstring>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <string>
+#include <sys/socket.h>
+#include <thread>
+#include <unistd.h>
 
 /* ==================== RTSP TCP 预探测 ====================
  * 在创建 mppvideodec 之前先快速确认 RTSP 端口能不能连上.
@@ -52,7 +52,9 @@ static bool probe_rtsp_tcp(const std::string &rtsp_url, int timeout_ms = 2000)
     if (host.empty())
         return true; /* 解析不出 host, 不拦截 */
 
-    struct addrinfo hints{};
+    struct addrinfo hints
+    {
+    };
     struct addrinfo *res = nullptr;
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
@@ -98,7 +100,8 @@ static bool probe_rtsp_tcp(const std::string &rtsp_url, int timeout_ms = 2000)
 /* bus 消息监听使用 gst_bus_timed_pop_filtered 主动轮询,
  * 不使用 gst_bus_add_signal_watch + g_signal_connect:
  * 后者每次重连都向默认 GMainContext 累积一个 GSource（持有一对 wakeup pipe fd）
- * 而无人 detach, 多路长时间运行后必然触发 fd 耗尽。主动轮询完全等价且零泄漏。 */
+ * 而无人 detach, 多路长时间运行后必然触发 fd 耗尽。主动轮询完全等价且零泄漏。
+ */
 
 /* RTSP: pad-added 连接 rtspsrc 视频 pad 到解码链路 */
 static void rtsp_pad_added(GstElement *src, GstPad *new_pad, GstChannel_t *data)
@@ -162,8 +165,7 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
         return GST_FLOW_OK;
 
     data->last_sample_seen_us = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
             .count());
 
     /* 收到帧说明连接成功，重置重连计数器。
@@ -240,7 +242,8 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
     GstBuffer *buffer = gstopt_sample_get_buffer(sample, &stFrameDesc);
     if (!buffer)
     {
-        g_printerr("[DecChannel] WARNING: gstopt_sample_get_buffer returned null, drop one frame and continue\n");
+        g_printerr("[DecChannel] WARNING: gstopt_sample_get_buffer returned null, "
+                   "drop one frame and continue\n");
         gst_sample_unref(sample);
         return GST_FLOW_OK;
     }
@@ -264,7 +267,8 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
     }
     else
     {
-        g_printerr("[DecChannel] WARNING: gst_buffer_map failed, drop one frame and continue\n");
+        g_printerr("[DecChannel] WARNING: gst_buffer_map failed, drop one frame "
+                   "and continue\n");
     }
     gst_sample_unref(sample);
     return GST_FLOW_OK;
@@ -287,8 +291,7 @@ static void *busListen(void *para)
          * 后返回 NULL bus, 进而触发 GST_IS_BUS 断言失败。*/
         if (!pPipeLine || !GST_IS_PIPELINE(pPipeLine))
         {
-            g_printerr("[Ch%d] busListen: invalid pipeline pointer, exit thread\n",
-                       pThis ? pThis->channelId() : -1);
+            g_printerr("[Ch%d] busListen: invalid pipeline pointer, exit thread\n", pThis ? pThis->channelId() : -1);
             break;
         }
 
@@ -325,10 +328,9 @@ static void *busListen(void *para)
 
             if (!msg)
             {
-                uint64_t now_us = static_cast<uint64_t>(
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        std::chrono::steady_clock::now().time_since_epoch())
-                        .count());
+                uint64_t now_us = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                            std::chrono::steady_clock::now().time_since_epoch())
+                                                            .count());
 
                 /* ---- 文件源暂停/恢复: 让 GStreamer pipeline 真正停在当前位置 ----
                  *
@@ -387,10 +389,9 @@ static void *busListen(void *para)
                     if (last_us > 0 && now_us > last_us + stall_threshold_us)
                     {
                         const char *src_type = pThis->mGstChn.is_file ? "file" : "live";
-                        g_printerr("[Ch%d] WARNING: [%s] no new sample for %.2fs (threshold %.0fs), force reconnect pipeline\n",
-                                   pThis->channelId(),
-                                   src_type,
-                                   static_cast<double>(now_us - last_us) / 1000000.0,
+                        g_printerr("[Ch%d] WARNING: [%s] no new sample for %.2fs "
+                                   "(threshold %.0fs), force reconnect pipeline\n",
+                                   pThis->channelId(), src_type, static_cast<double>(now_us - last_us) / 1000000.0,
                                    static_cast<double>(stall_threshold_us) / 1000000.0);
                         terminate = TRUE;
                         need_reconnect = TRUE;
@@ -403,28 +404,24 @@ static void *busListen(void *para)
 
             switch (GST_MESSAGE_TYPE(msg))
             {
-            case GST_MESSAGE_WARNING:
-            {
+            case GST_MESSAGE_WARNING: {
                 GError *warn;
                 gchar *dbg;
                 gst_message_parse_warning(msg, &warn, &dbg);
-                g_printerr("[Ch%d] Warning from %s: %s\n",
-                           pThis ? pThis->channelId() : -1,
-                           GST_OBJECT_NAME(msg->src), warn->message);
+                g_printerr("[Ch%d] Warning from %s: %s\n", pThis ? pThis->channelId() : -1, GST_OBJECT_NAME(msg->src),
+                           warn->message);
                 if (dbg)
                     g_printerr("  Debug: %s\n", dbg);
                 g_clear_error(&warn);
                 g_free(dbg);
                 break;
             }
-            case GST_MESSAGE_ERROR:
-            {
+            case GST_MESSAGE_ERROR: {
                 GError *err;
                 gchar *dbg;
                 gst_message_parse_error(msg, &err, &dbg);
-                g_printerr("[Ch%d] Error from %s: %s\n",
-                           pThis ? pThis->channelId() : -1,
-                           GST_OBJECT_NAME(msg->src), err->message);
+                g_printerr("[Ch%d] Error from %s: %s\n", pThis ? pThis->channelId() : -1, GST_OBJECT_NAME(msg->src),
+                           err->message);
                 if (dbg)
                     g_printerr("  Debug: %s\n", dbg);
                 g_clear_error(&err);
@@ -444,10 +441,8 @@ static void *busListen(void *para)
                 {
                     GstState o, n, p;
                     gst_message_parse_state_changed(msg, &o, &n, &p);
-                    g_print("[Ch%d] Pipeline: %s -> %s\n",
-                            pThis ? pThis->channelId() : -1,
-                            gst_element_state_get_name(o),
-                            gst_element_state_get_name(n));
+                    g_print("[Ch%d] Pipeline: %s -> %s\n", pThis ? pThis->channelId() : -1,
+                            gst_element_state_get_name(o), gst_element_state_get_name(n));
                 }
                 break;
             default:
@@ -479,8 +474,7 @@ static void *busListen(void *para)
         /* 仅在运行中才重连 */
         if (need_reconnect && pThis && g_pCtrl && g_pCtrl->isRunning)
         {
-            g_printerr("[Ch%d] Reconnect triggered, reason=%s\n",
-                       pThis->channelId(), reconnect_reason);
+            g_printerr("[Ch%d] Reconnect triggered, reason=%s\n", pThis->channelId(), reconnect_reason);
 
             // 【修复点 1】本地单次播放的视频，播完立刻退出线程，绝对不重试！
             if (pThis->mGstChn.is_file && !pThis->isLoop())
@@ -502,8 +496,9 @@ static void *busListen(void *para)
             for (int cid : pThis->mGstChn.chnIds)
                 analyzer_channel_offline(cid);
 
-            // 【修复点 2】RTSP掉线等需要重连的情况，必须用 while 死等，绝不把 NULL 漏给上层！
-            // 同时检测 mStopRequested，以便流地址热切换时 stop() 能快速中断此循环。
+            // 【修复点 2】RTSP掉线等需要重连的情况，必须用 while 死等，绝不把 NULL
+            // 漏给上层！ 同时检测 mStopRequested，以便流地址热切换时 stop()
+            // 能快速中断此循环。
             while (g_pCtrl && g_pCtrl->isRunning && !pThis->isStopRequested())
             {
                 pThis->reconnect();
@@ -538,14 +533,9 @@ static void *busListen(void *para)
 
 /* ==================== 构造 / 析构 ==================== */
 
-DecChannel::DecChannel(int chnId, const SrcCfg_t &cfg) : bObjIsInited(false),
-                                                         mReconnectCount(0),
-                                                         mRecoverOkCount(0),
-                                                         mRecoverFailCount(0),
-                                                         mIsFileSrc(cfg.srcType == "file"),
-                                                         mIsUsbSrc(cfg.srcType == "usb"),
-                                                         mLoop(cfg.loop),
-                                                         mCfg(cfg)
+DecChannel::DecChannel(int chnId, const SrcCfg_t &cfg)
+    : bObjIsInited(false), mReconnectCount(0), mRecoverOkCount(0), mRecoverFailCount(0),
+      mIsFileSrc(cfg.srcType == "file"), mIsUsbSrc(cfg.srcType == "usb"), mLoop(cfg.loop), mCfg(cfg)
 {
     mGstChn.pipeline = nullptr;
     mGstChn.source = nullptr;
@@ -560,8 +550,7 @@ DecChannel::DecChannel(int chnId, const SrcCfg_t &cfg) : bObjIsInited(false),
     mGstChn.is_file = mIsFileSrc;
     mGstChn.last_frame_time_us = 0;
     mGstChn.last_sample_seen_us = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
             .count());
 }
 
@@ -607,8 +596,10 @@ void DecChannel::stop()
     }
 
     /* 第二轮: mppvideodec 偶发死锁场景, 再补一次 NULL 状态并等待 5 秒.
-     * 此时 mGstChn.pipeline 可能已经被 busListen 自己置 NULL — 不再访问, 避免野指针. */
-    g_printerr("[DecChannel ch%d] bus thread did not exit in 3s, retry NULL state and wait 5s more\n",
+     * 此时 mGstChn.pipeline 可能已经被 busListen 自己置 NULL — 不再访问,
+     * 避免野指针. */
+    g_printerr("[DecChannel ch%d] bus thread did not exit in 3s, retry NULL "
+               "state and wait 5s more\n",
                channelId());
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += 5;
@@ -626,7 +617,8 @@ void DecChannel::stop()
      * OS 会回收所有线程及其资源, 比 detach 让线程游离继续访问 GStreamer
      * 对象更安全。这里只打印告警, 函数返回, 让 main 继续走完析构, 最终 exit. */
     g_printerr("[DecChannel ch%d] CRITICAL: bus thread still alive after 8s total wait, "
-               "leaving it for process-exit reaper (no detach to avoid use-after-free)\n",
+               "leaving it for process-exit reaper (no detach to avoid "
+               "use-after-free)\n",
                channelId());
     mGstChn.pipeline = NULL;
     bObjIsInited = false;
@@ -666,7 +658,8 @@ int DecChannel::createVideoDecChannel(bool start_thread)
      * 掉帧、重启进程无效、必须重启设备才能恢复的根因之一. */
     if (!probe_rtsp_tcp(mCfg.location, 2000))
     {
-        g_printerr("[DecChannel ch%d] RTSP TCP probe failed for %s, skip pipeline build this round\n",
+        g_printerr("[DecChannel ch%d] RTSP TCP probe failed for %s, skip pipeline "
+                   "build this round\n",
                    channelId(), mCfg.location.c_str());
         return -1;
     }
@@ -705,29 +698,22 @@ int DecChannel::createVideoDecChannel(bool start_thread)
     g_object_set(mGstChn.vSink, "max-buffers", 2, "drop", TRUE, NULL);
     g_signal_connect(mGstChn.vSink, "new-sample", G_CALLBACK(new_sample), &mGstChn);
 
-    gst_bin_add_many(GST_BIN(mGstChn.pipeline),
-                     mGstChn.source, mGstChn.h26xRTPDepay, mGstChn.h26xParse,
-                     mGstChn.vDec, mGstChn.vSink, NULL);
+    gst_bin_add_many(GST_BIN(mGstChn.pipeline), mGstChn.source, mGstChn.h26xRTPDepay, mGstChn.h26xParse, mGstChn.vDec,
+                     mGstChn.vSink, NULL);
 
-    if (!gst_element_link_many(mGstChn.h26xRTPDepay, mGstChn.h26xParse,
-                               mGstChn.vDec, mGstChn.vSink, NULL))
+    if (!gst_element_link_many(mGstChn.h26xRTPDepay, mGstChn.h26xParse, mGstChn.vDec, mGstChn.vSink, NULL))
     {
         g_printerr("[DecChannel] Failed to link RTSP video elements\n");
         release_failed_pipeline(mGstChn);
         return -1;
     }
 
-    g_object_set(mGstChn.source,
-                 "location", mCfg.location.c_str(),
-                 "latency", 100,
-                 "protocols", 0x04,
-                 NULL);
+    g_object_set(mGstChn.source, "location", mCfg.location.c_str(), "latency", 100, "protocols", 0x04, NULL);
     g_signal_connect(mGstChn.source, "pad-added", G_CALLBACK(rtsp_pad_added), &mGstChn);
 
     g_object_set_data(G_OBJECT(mGstChn.pipeline), "dec_channel_ptr", this);
     mGstChn.last_sample_seen_us = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
             .count());
 
     GstStateChangeReturn ret = gst_element_set_state(mGstChn.pipeline, GST_STATE_PLAYING);
@@ -779,12 +765,12 @@ int DecChannel::createFileDecChannel(bool start_thread)
 
     /*
      * decodebin 内部自动创建解码器链路（qtdemux -> h264parse -> mppvideodec）。
-     * 其 src pad 解码后输出 video/x-raw (NV12)，通过 pad-added 回调连接到 appsink。
+     * 其 src pad 解码后输出 video/x-raw (NV12)，通过 pad-added 回调连接到
+     * appsink。
      */
     g_signal_connect(mGstChn.decoder, "pad-added", G_CALLBACK(file_pad_added), &mGstChn);
 
-    gst_bin_add_many(GST_BIN(mGstChn.pipeline),
-                     mGstChn.source, mGstChn.decoder, mGstChn.vSink, NULL);
+    gst_bin_add_many(GST_BIN(mGstChn.pipeline), mGstChn.source, mGstChn.decoder, mGstChn.vSink, NULL);
 
     /* 静态连接: filesrc -> decodebin */
     if (!gst_element_link(mGstChn.source, mGstChn.decoder))
@@ -796,8 +782,7 @@ int DecChannel::createFileDecChannel(bool start_thread)
 
     g_object_set_data(G_OBJECT(mGstChn.pipeline), "dec_channel_ptr", this);
     mGstChn.last_sample_seen_us = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
             .count());
 
     /* decodebin 需要先 PAUSED 完成 typefinding，再切 PLAYING */
@@ -849,8 +834,8 @@ int DecChannel::createFileDecChannel(bool start_thread)
         bObjIsInited = true;
     }
 
-    g_print("[DecChannel ch%d] File pipeline started: %s (loop=%s)\n",
-            channelId(), mCfg.location.c_str(), mLoop ? "yes" : "no");
+    g_print("[DecChannel ch%d] File pipeline started: %s (loop=%s)\n", channelId(), mCfg.location.c_str(),
+            mLoop ? "yes" : "no");
     return bObjIsInited ? 0 : -1;
 }
 
@@ -864,8 +849,7 @@ int DecChannel::createUsbDecChannel(bool start_thread)
     mGstChn.capsFilter = gst_element_factory_make("capsfilter", "caps_filter");
     mGstChn.vSink = gst_element_factory_make("appsink", "vSink");
 
-    if (!mGstChn.pipeline || !mGstChn.source || !mGstChn.converter ||
-        !mGstChn.capsFilter || !mGstChn.vSink)
+    if (!mGstChn.pipeline || !mGstChn.source || !mGstChn.converter || !mGstChn.capsFilter || !mGstChn.vSink)
     {
         g_printerr("[DecChannel] Failed to create USB pipeline elements\n");
         release_failed_pipeline(mGstChn);
@@ -901,8 +885,9 @@ int DecChannel::createUsbDecChannel(bool start_thread)
     if (explicit_w > 0 && explicit_h > 0)
     {
         /* 方案B: 显式 USB 采集分辨率(来自 config: stream.usb_width/height) ——
-         * 与 ROI 抓帧用的分辨率一致、不随 max_fps 变，从而"画的区域 == 逻辑/显示拿到的区域"。
-         * 帧率仍按分辨率选相机支持的离散档；推理处理帧率由 max_fps 在推理层节流，互不影响。*/
+         * 与 ROI 抓帧用的分辨率一致、不随 max_fps 变，从而"画的区域 ==
+         * 逻辑/显示拿到的区域"。 帧率仍按分辨率选相机支持的离散档；推理处理帧率由
+         * max_fps 在推理层节流，互不影响。*/
         preferred_width = explicit_w;
         preferred_height = explicit_h;
         if (explicit_w <= 640)
@@ -941,31 +926,17 @@ int DecChannel::createUsbDecChannel(bool start_thread)
 
     GstCaps *preferred_caps = gst_caps_new_empty();
     gst_caps_append_structure(preferred_caps,
-                              gst_structure_new("video/x-raw",
-                                                "format", G_TYPE_STRING, "NV12",
-                                                "width", G_TYPE_INT, preferred_width,
-                                                "height", G_TYPE_INT, preferred_height,
-                                                "framerate", GST_TYPE_FRACTION, capture_fps, 1,
-                                                NULL));
+                              gst_structure_new("video/x-raw", "format", G_TYPE_STRING, "NV12", "width", G_TYPE_INT,
+                                                preferred_width, "height", G_TYPE_INT, preferred_height, "framerate",
+                                                GST_TYPE_FRACTION, capture_fps, 1, NULL));
     /* 后备档位：优先可跑起来，再由推理层 max_fps 做节流 */
-    gst_caps_append_structure(preferred_caps,
-                              gst_structure_new("video/x-raw",
-                                                "format", G_TYPE_STRING, "NV12",
-                                                "width", G_TYPE_INT, 1280,
-                                                "height", G_TYPE_INT, 720,
-                                                "framerate", GST_TYPE_FRACTION, 15, 1,
-                                                NULL));
-    gst_caps_append_structure(preferred_caps,
-                              gst_structure_new("video/x-raw",
-                                                "format", G_TYPE_STRING, "NV12",
-                                                "width", G_TYPE_INT, 640,
-                                                "height", G_TYPE_INT, 480,
-                                                "framerate", GST_TYPE_FRACTION, 30, 1,
-                                                NULL));
-    gst_caps_append_structure(preferred_caps,
-                              gst_structure_new("video/x-raw",
-                                                "format", G_TYPE_STRING, "NV12",
-                                                NULL));
+    gst_caps_append_structure(preferred_caps, gst_structure_new("video/x-raw", "format", G_TYPE_STRING, "NV12", "width",
+                                                                G_TYPE_INT, 1280, "height", G_TYPE_INT, 720,
+                                                                "framerate", GST_TYPE_FRACTION, 15, 1, NULL));
+    gst_caps_append_structure(preferred_caps, gst_structure_new("video/x-raw", "format", G_TYPE_STRING, "NV12", "width",
+                                                                G_TYPE_INT, 640, "height", G_TYPE_INT, 480, "framerate",
+                                                                GST_TYPE_FRACTION, 30, 1, NULL));
+    gst_caps_append_structure(preferred_caps, gst_structure_new("video/x-raw", "format", G_TYPE_STRING, "NV12", NULL));
     g_object_set(mGstChn.capsFilter, "caps", preferred_caps, NULL);
     gst_caps_unref(preferred_caps);
 
@@ -974,8 +945,7 @@ int DecChannel::createUsbDecChannel(bool start_thread)
     g_object_set(mGstChn.vSink, "max-buffers", 2, "drop", TRUE, NULL);
     g_signal_connect(mGstChn.vSink, "new-sample", G_CALLBACK(new_sample), &mGstChn);
 
-    gst_bin_add_many(GST_BIN(mGstChn.pipeline),
-                     mGstChn.source, mGstChn.converter, mGstChn.capsFilter, mGstChn.vSink,
+    gst_bin_add_many(GST_BIN(mGstChn.pipeline), mGstChn.source, mGstChn.converter, mGstChn.capsFilter, mGstChn.vSink,
                      NULL);
 
     if (!gst_element_link_many(mGstChn.source, mGstChn.converter, mGstChn.capsFilter, mGstChn.vSink, NULL))
@@ -987,22 +957,21 @@ int DecChannel::createUsbDecChannel(bool start_thread)
 
     g_object_set_data(G_OBJECT(mGstChn.pipeline), "dec_channel_ptr", this);
     mGstChn.last_sample_seen_us = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
             .count());
 
-    g_print("[DecChannel ch%d] USB preferred caps: NV12 %dx%d @ %dfps (target infer=%dfps)\n",
+    g_print("[DecChannel ch%d] USB preferred caps: NV12 %dx%d @ %dfps (target "
+            "infer=%dfps)\n",
             channelId(), preferred_width, preferred_height, capture_fps, desired_fps);
 
     GstStateChangeReturn ret = gst_element_set_state(mGstChn.pipeline, GST_STATE_PLAYING);
     if (ret == GST_STATE_CHANGE_FAILURE)
     {
-        g_printerr("[DecChannel] Failed to set USB pipeline with preferred caps, fallback to device default\n");
+        g_printerr("[DecChannel] Failed to set USB pipeline with preferred caps, "
+                   "fallback to device default\n");
         gst_element_set_state(mGstChn.pipeline, GST_STATE_NULL);
 
-        GstCaps *fallback_caps = gst_caps_new_simple("video/x-raw",
-                                                     "format", G_TYPE_STRING, "NV12",
-                                                     NULL);
+        GstCaps *fallback_caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, "NV12", NULL);
         g_object_set(mGstChn.capsFilter, "caps", fallback_caps, NULL);
         gst_caps_unref(fallback_caps);
 
@@ -1055,8 +1024,7 @@ void DecChannel::reconnect()
         auto t0 = std::chrono::steady_clock::now();
         for (int attempt = 1; attempt <= kMaxRetry; ++attempt)
         {
-            g_print("[Ch%d] File loop: restarting from beginning (attempt %d/%d)\n",
-                    channelId(), attempt, kMaxRetry);
+            g_print("[Ch%d] File loop: restarting from beginning (attempt %d/%d)\n", channelId(), attempt, kMaxRetry);
             bObjIsInited = false;
             mGstChn.pipeline = NULL;
             /* 复用当前 bus 线程，避免重复创建监听线程导致竞态和卡死 */
@@ -1072,14 +1040,14 @@ void DecChannel::reconnect()
         if (ok)
         {
             ++mRecoverOkCount;
-            g_print("[Ch%d] File loop restart successful in %lldms (ok=%d, fail=%d)\n",
-                    channelId(), elapsed_ms, mRecoverOkCount, mRecoverFailCount);
+            g_print("[Ch%d] File loop restart successful in %lldms (ok=%d, fail=%d)\n", channelId(), elapsed_ms,
+                    mRecoverOkCount, mRecoverFailCount);
         }
         else
         {
             ++mRecoverFailCount;
-            g_printerr("[Ch%d] File loop restart failed after %lldms (ok=%d, fail=%d)\n",
-                       channelId(), elapsed_ms, mRecoverOkCount, mRecoverFailCount);
+            g_printerr("[Ch%d] File loop restart failed after %lldms (ok=%d, fail=%d)\n", channelId(), elapsed_ms,
+                       mRecoverOkCount, mRecoverFailCount);
         }
         return;
     }
@@ -1117,8 +1085,8 @@ void DecChannel::reconnect()
         delay_sec = 30;
 
     const char *live_src_name = mIsUsbSrc ? "USB" : "RTSP";
-    g_print("[Ch%d] %s reconnecting in %d seconds (attempt #%d, backoff)...\n",
-            channelId(), live_src_name, delay_sec, mReconnectCount + 1);
+    g_print("[Ch%d] %s reconnecting in %d seconds (attempt #%d, backoff)...\n", channelId(), live_src_name, delay_sec,
+            mReconnectCount + 1);
 
     for (int i = 0; i < delay_sec * 10; ++i)
     {
@@ -1146,14 +1114,12 @@ void DecChannel::reconnect()
 
     if (init(false) == 0)
     {
-        g_print("[Ch%d] %s reconnect successful (pipeline created)\n",
-                channelId(), live_src_name);
+        g_print("[Ch%d] %s reconnect successful (pipeline created)\n", channelId(), live_src_name);
         // 不立即重置计数器，等管道真正运行后再重置
     }
     else
     {
-        g_printerr("[Ch%d] %s reconnect failed, will keep retrying\n",
-                   channelId(), live_src_name);
+        g_printerr("[Ch%d] %s reconnect failed, will keep retrying\n", channelId(), live_src_name);
         /* 防御: 即使 create*DecChannel 内部已经 unref+置空, 这里再兜底一次,
          * 确保 busListen 拿到 mGstChn.pipeline 时不会是野指针. */
         mGstChn.pipeline = NULL;

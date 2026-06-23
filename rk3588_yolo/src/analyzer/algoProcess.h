@@ -1,8 +1,8 @@
 #pragma once
-#include <vector>
-#include <string>
-#include <opencv2/opencv.hpp>
 #include "../config/config.h"
+#include <opencv2/opencv.hpp>
+#include <string>
+#include <vector>
 
 struct AlgoResult
 {
@@ -44,11 +44,13 @@ struct AlgoResult
     /* Model specific optional fields */
     std::vector<cv::Point2f> keypoints; // for pose estimation
     std::string text_result;            // for OCR
-    cv::Mat boxMask;                    // for segmentation (mask of the whole image with class ids, or object specific mask)
+    cv::Mat boxMask;                    // for segmentation (mask of the whole image with class ids,
+                                        // or object specific mask)
 };
 
 int algorithm_init(const AppConfig &cfg);
-int algorithm_process_mat(int chnId, cv::Mat &&frame, int fd = -1, int srcW = 0, int srcH = 0, int srcFmt = 0, int srcStrH = 0, int srcStrV = 0, int64_t frame_seq = 0);
+int algorithm_process_mat(int chnId, cv::Mat &&frame, int fd = -1, int srcW = 0, int srcH = 0, int srcFmt = 0,
+                          int srcStrH = 0, int srcStrV = 0, int64_t frame_seq = 0);
 void algorithm_deinit();
 /*
  * out_frame 是产出 out 这批检测结果时使用的 yolo 输入帧 (BGR, inputW×inputH)。
@@ -69,6 +71,7 @@ void algorithm_reload_channel_model(int chnId, const ChannelConfig &new_cfg);
  * 用于层次二分发器线程: NPU 完成后立即唤醒而不等待下一帧解码回调。
  * @param chnId   通道号
  * @param timeout_ms 最长等待毫秒数
- * @return true 若结果就绪 (不代表 has_new 仍为 true, 取决于竞争), false 超时/关机
+ * @return true 若结果就绪 (不代表 has_new 仍为 true, 取决于竞争), false
+ * 超时/关机
  */
 bool algorithm_wait_result(int chnId, int timeout_ms);

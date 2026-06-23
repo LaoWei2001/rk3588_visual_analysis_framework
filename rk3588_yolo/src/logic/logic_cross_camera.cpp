@@ -39,14 +39,14 @@ static void logic_cross_camera(ChannelContext *ctx)
             has_car = 1;
     }
 
-    /* snap.frame 与 snap.results 同帧 (snap.frame_seq 为帧号), 这里把 seq/age 一并显示,
-     * 直观证明跨通道拿到的"画面 + 框"来自同一时刻。 */
+    /* snap.frame 与 snap.results 同帧 (snap.frame_seq 为帧号), 这里把 seq/age
+     * 一并显示, 直观证明跨通道拿到的"画面 + 框"来自同一时刻。 */
     char info1[128], info2[128], info3[128];
     snprintf(info1, sizeof(info1), "Target CH: %d | Logic: %s", target_chn, logic_name.c_str());
-    snprintf(info2, sizeof(info2), "Target FPS: D=%.1f I=%.1f | seq=%lld age=%lldms",
-             snap.disp_fps, snap.infer_fps, (long long)snap.frame_seq, (long long)snap.result_age_ms);
-    snprintf(info3, sizeof(info3), "Target Obj: Person=%d Car=%s Total=%zu",
-             person_cnt, has_car ? "YES" : "NO", snap.results.size());
+    snprintf(info2, sizeof(info2), "Target FPS: D=%.1f I=%.1f | seq=%lld age=%lldms", snap.disp_fps, snap.infer_fps,
+             (long long)snap.frame_seq, (long long)snap.result_age_ms);
+    snprintf(info3, sizeof(info3), "Target Obj: Person=%d Car=%s Total=%zu", person_cnt, has_car ? "YES" : "NO",
+             snap.results.size());
 
     int base_y = 30;
     draw_text(ctx, "[Cross Camera Demo]", cv::Point(20, base_y), cv::Scalar(0, 255, 255), 0.6, 2);

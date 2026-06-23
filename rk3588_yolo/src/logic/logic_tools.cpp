@@ -74,14 +74,8 @@ static cv::Mat remove_small_components(const cv::Mat &mask_u8, int min_area)
 }
 } // namespace
 
-bool logic_roll_compute_occupancy(const cv::Mat &bgr,
-                                  const std::vector<cv::Point> &roi_points,
-                                  int sat_min,
-                                  int val_min,
-                                  int hue_tol,
-                                  int min_area,
-                                  double &ratio,
-                                  cv::Mat &occupancy_mask,
+bool logic_roll_compute_occupancy(const cv::Mat &bgr, const std::vector<cv::Point> &roi_points, int sat_min,
+                                  int val_min, int hue_tol, int min_area, double &ratio, cv::Mat &occupancy_mask,
                                   int &bg_hue)
 {
     ratio = 0.0;

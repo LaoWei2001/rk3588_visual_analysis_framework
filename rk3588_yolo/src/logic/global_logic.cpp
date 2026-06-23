@@ -7,24 +7,24 @@
  */
 
 #include "global_logic.h"
-#include "logic_tools.h"
 #include "../core/app_ctrl.h"
 #include "../core/pause_ctrl.h"
-#include <cstdio>
+#include "logic_tools.h"
 #include <algorithm>
 #include <chrono>
-#include <unistd.h>
+#include <cstdio>
 #include <pthread.h>
+#include <unistd.h>
 
 /*======================== 单个实例的线程上下文 ========================*/
 struct GlobalLogicThread
 {
     GlobalLogicConfig config;
-    pthread_t          tid;
-    volatile int       running;
-    volatile int       stop_requested;
+    pthread_t tid;
+    volatile int running;
+    volatile int stop_requested;
     std::shared_ptr<void> state;
-    int64_t            tick_id;
+    int64_t tick_id;
 
     std::vector<std::vector<AlgoResult>> results_cache;
     std::vector<int> channel_ids;
@@ -34,12 +34,16 @@ struct GlobalLogicThread
     GlobalLogicFunc func;
 };
 
-static std::vector<GlobalLogicThread*> g_threads;
+static std::vector<GlobalLogicThread *> g_threads;
 static pthread_mutex_t g_threads_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 /*======================== 全局逻辑分发表 ========================*/
 #define MAX_GLOBAL_LOGICS 16
-static struct { const char *name; GlobalLogicFunc func; } g_logic_map[MAX_GLOBAL_LOGICS];
+static struct
+{
+    const char *name;
+    GlobalLogicFunc func;
+} g_logic_map[MAX_GLOBAL_LOGICS];
 static int g_logic_map_count = 0;
 
 static void global_example(GlobalContext *gctx);
@@ -61,7 +65,8 @@ static void global_logic_register(void)
     register_global_logic("global_example", global_example);
     register_global_logic("global_default", global_default);
 
-    /* 新增 global logic: 在此处添加 register_global_logic("global_xxx", global_xxx); 即可 */
+    /* 新增 global logic: 在此处添加 register_global_logic("global_xxx",
+     * global_xxx); 即可 */
 }
 
 static GlobalLogicFunc global_logic_resolve(const char *name)
@@ -76,18 +81,18 @@ static GlobalLogicFunc global_logic_resolve(const char *name)
 static uint64_t steady_now_ms(void)
 {
     auto now = std::chrono::steady_clock::now();
-    return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()).count();
+    return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 }
 
 /*======================== 全局逻辑线程入口 (pthread) ========================*/
 void *global_logic_thread_func(void *arg)
 {
     GlobalLogicThread *t = (GlobalLogicThread *)arg;
-    if (!t) return nullptr;
+    if (!t)
+        return nullptr;
 
-    printf("[GlobalLogic] Thread started: logic=%s poll=%dms channels=",
-           t->config.logic.c_str(), t->config.poll_interval_ms);
+    printf("[GlobalLogic] Thread started: logic=%s poll=%dms channels=", t->config.logic.c_str(),
+           t->config.poll_interval_ms);
     if (t->config.channels.empty())
         printf("ALL\n");
     else
@@ -119,7 +124,8 @@ void *global_logic_thread_func(void *arg)
         pthread_rwlock_rdlock(&ctrl->mtx);
         for (int ch : t->channel_ids)
         {
-            if (ch < 0 || ch >= app_ctrl_get_chn_nums()) continue;
+            if (ch < 0 || ch >= app_ctrl_get_chn_nums())
+                continue;
             max_infer_fps = std::max(max_infer_fps, std::max(1, ctrl->config.channels[ch].max_fps));
         }
         pthread_rwlock_unlock(&ctrl->mtx);
@@ -127,7 +133,8 @@ void *global_logic_thread_func(void *arg)
         int realtime_poll_ms = std::max(10, 500 / max_infer_fps);
         if (poll_ms > realtime_poll_ms)
         {
-            printf("[GlobalLogic] poll interval auto-adjust: cfg=%dms -> %dms (max_infer_fps=%d)\n",
+            printf("[GlobalLogic] poll interval auto-adjust: cfg=%dms -> %dms "
+                   "(max_infer_fps=%d)\n",
                    poll_ms, realtime_poll_ms, max_infer_fps);
             poll_ms = realtime_poll_ms;
         }
@@ -136,7 +143,8 @@ void *global_logic_thread_func(void *arg)
     while (t->running)
     {
         pause_ctrl::wait_if_paused();
-        if (!t->running) break;
+        if (!t->running)
+            break;
 
         uint64_t tick_begin_ms = steady_now_ms();
 
@@ -161,18 +169,20 @@ void *global_logic_thread_func(void *arg)
             }
         }
 
-        t->gctx.config              = &t->config;
-        t->gctx.state               = &t->state;
-        t->gctx.timestamp_ms        = steady_now_ms();
-        t->gctx.tick_id             = ++t->tick_id;
-        t->gctx.channel_ids         = &t->channel_ids;
-        t->gctx.has_new_infer       = has_new_infer;
+        t->gctx.config = &t->config;
+        t->gctx.state = &t->state;
+        t->gctx.timestamp_ms = steady_now_ms();
+        t->gctx.tick_id = ++t->tick_id;
+        t->gctx.channel_ids = &t->channel_ids;
+        t->gctx.has_new_infer = has_new_infer;
         t->gctx.latest_infer_channel = latest_infer_channel;
-        t->gctx.latest_infer_ts_ms  = latest_infer_ts_ms;
+        t->gctx.latest_infer_ts_ms = latest_infer_ts_ms;
 
-        if (t->func) t->func(&t->gctx);
+        if (t->func)
+            t->func(&t->gctx);
 
-        if (t->stop_requested) break;
+        if (t->stop_requested)
+            break;
 
         uint64_t elapsed_ms = steady_now_ms() - tick_begin_ms;
         if (elapsed_ms < (uint64_t)poll_ms)
@@ -195,13 +205,13 @@ int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs)
     for (size_t i = 0; i < cfgs.size(); ++i)
     {
         const GlobalLogicConfig &cfg = cfgs[i];
-        if (!cfg.enable) continue;
+        if (!cfg.enable)
+            continue;
 
         GlobalLogicFunc fn = global_logic_resolve(cfg.logic.c_str());
         if (fn == global_default && strcmp(cfg.logic.c_str(), "global_default") != 0)
         {
-            printf("[GlobalLogic][%zu] WARNING: logic '%s' not found, skipping\n",
-                   i, cfg.logic.c_str());
+            printf("[GlobalLogic][%zu] WARNING: logic '%s' not found, skipping\n", i, cfg.logic.c_str());
             continue;
         }
 
@@ -215,8 +225,7 @@ int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs)
         int ret = pthread_create(&t->tid, nullptr, global_logic_thread_func, t);
         if (ret != 0)
         {
-            fprintf(stderr, "[GlobalLogic] pthread_create failed for %s: %s\n",
-                    cfg.logic.c_str(), strerror(ret));
+            fprintf(stderr, "[GlobalLogic] pthread_create failed for %s: %s\n", cfg.logic.c_str(), strerror(ret));
             delete t;
             continue;
         }
@@ -237,8 +246,10 @@ void global_logic_stop_all(void)
 
     for (GlobalLogicThread *t : g_threads)
     {
-        if (!t) continue;
-        if (!t->running) continue;
+        if (!t)
+            continue;
+        if (!t->running)
+            continue;
         t->stop_requested = 1;
         t->running = 0;
         pthread_join(t->tid, nullptr);
@@ -270,7 +281,8 @@ struct GlobalAlarmState
 
 static void global_example(GlobalContext *gctx)
 {
-    if (!gctx) return;
+    if (!gctx)
+        return;
 
     if (!(*gctx->state))
         *gctx->state = std::make_shared<GlobalAlarmState>();
@@ -285,8 +297,7 @@ static void global_example(GlobalContext *gctx)
     };
     std::vector<ChAlarmInfo> alarm_infos;
 
-    gctx->for_each_channel([&](int chnId, int)
-    {
+    gctx->for_each_channel([&](int chnId, int) {
         ChAlarmInfo info = {chnId, 0, 0};
         if (gctx->channel_has_logic(chnId, "logic_person_alarm"))
         {
@@ -307,7 +318,11 @@ static void global_example(GlobalContext *gctx)
     int alarming_channel_count = 0, total_persons = 0;
     for (const auto &info : alarm_infos)
     {
-        if (info.person_detected) { alarming_channel_count++; total_persons += info.person_count; }
+        if (info.person_detected)
+        {
+            alarming_channel_count++;
+            total_persons += info.person_count;
+        }
     }
 
     if (alarming_channel_count >= 2 && !gl_state.multi_alarm_sent)
@@ -317,51 +332,55 @@ static void global_example(GlobalContext *gctx)
         for (const auto &info : alarm_infos)
         {
             if (info.person_detected)
-                offset += snprintf(detail + offset, sizeof(detail) - offset,
-                                   "CH%d(%d) ", info.chnId, info.person_count);
+                offset +=
+                    snprintf(detail + offset, sizeof(detail) - offset, "CH%d(%d) ", info.chnId, info.person_count);
         }
 
         gl_state.multi_alarm_sent = 1;
         gl_state.last_alarm_sent_ms = gctx->timestamp_ms;
 
-        /* 示例只打印; 需要真正上报时在此接 alarm_uploader_enqueue (范式见 global_logic.h 头部示例) */
-        printf("[GlobalLogic][global_example] MULTI-ZONE ALARM: channels=%d persons=%d | %s\n",
+        /* 示例只打印; 需要真正上报时在此接 alarm_uploader_enqueue (范式见
+         * global_logic.h 头部示例) */
+        printf("[GlobalLogic][global_example] MULTI-ZONE ALARM: channels=%d "
+               "persons=%d | %s\n",
                alarming_channel_count, total_persons, detail);
     }
 
     if (gl_state.multi_alarm_sent)
     {
-        if (gctx->timestamp_ms - gl_state.last_alarm_sent_ms >=
-            (uint64_t)gl_state.alarm_cooldown_ms)
+        if (gctx->timestamp_ms - gl_state.last_alarm_sent_ms >= (uint64_t)gl_state.alarm_cooldown_ms)
             gl_state.multi_alarm_sent = 0;
     }
 
     if (gl_state.tick_count % 50 == 0)
     {
-        printf("\n[GlobalLogic][global_example] tick=%lld | %zu channels | alarming=%d | total_persons=%d | alarm_latched=%s\n",
-               (long long)gl_state.tick_count, alarm_infos.size(),
-               alarming_channel_count, total_persons,
+        printf("\n[GlobalLogic][global_example] tick=%lld | %zu channels | "
+               "alarming=%d | total_persons=%d | alarm_latched=%s\n",
+               (long long)gl_state.tick_count, alarm_infos.size(), alarming_channel_count, total_persons,
                gl_state.multi_alarm_sent ? "YES" : "NO");
         for (const auto &info : alarm_infos)
-            printf("  CH%d: %s (%d person)\n", info.chnId,
-                   info.person_detected ? "ALARM" : "CLEAR", info.person_count);
+            printf("  CH%d: %s (%d person)\n", info.chnId, info.person_detected ? "ALARM" : "CLEAR", info.person_count);
         fflush(stdout);
     }
 }
 
 static void global_default(GlobalContext *gctx)
 {
-    if (!gctx) return;
-    if (gctx->tick_id % 30 != 0) return;
+    if (!gctx)
+        return;
+    if (gctx->tick_id % 30 != 0)
+        return;
 
     printf("\n==== [global_default] tick=%lld ====\n", (long long)gctx->tick_id);
 
-    gctx->for_each_channel([&](int chnId, int)
-    {
+    gctx->for_each_channel([&](int chnId, int) {
         auto snap = gctx->get_channel_snapshot(chnId);
-        if (snap.frame.empty()) return;
-        if (snap.result_age_ms > 500) return;
-        if (!snap.has_results) return;
+        if (snap.frame.empty())
+            return;
+        if (snap.result_age_ms > 500)
+            return;
+        if (!snap.has_results)
+            return;
 
         std::string logic_name = gctx->get_channel_logic_name(chnId);
 
@@ -369,31 +388,31 @@ static void global_default(GlobalContext *gctx)
         {
             auto st = std::static_pointer_cast<HookState>(snap.logic_state);
             if (st)
-                printf("  CH%d [logic_hook] alarm_active=%d latch=%d frame=%dx%d age=%lldms\n",
-                       chnId, st->alarm_active, st->alarm_sent_latch,
-                       snap.frame.cols, snap.frame.rows, (long long)snap.result_age_ms);
+                printf("  CH%d [logic_hook] alarm_active=%d latch=%d frame=%dx%d "
+                       "age=%lldms\n",
+                       chnId, st->alarm_active, st->alarm_sent_latch, snap.frame.cols, snap.frame.rows,
+                       (long long)snap.result_age_ms);
         }
         else if (logic_name == "logic_person_alarm")
         {
             auto st = std::static_pointer_cast<PersonAlarmState>(snap.logic_state);
             if (st)
-                printf("  CH%d [person_alarm] detected=%d count=%d frame=%dx%d age=%lldms\n",
-                       chnId, st->person_detected, st->person_count,
-                       snap.frame.cols, snap.frame.rows, (long long)snap.result_age_ms);
+                printf("  CH%d [person_alarm] detected=%d count=%d frame=%dx%d "
+                       "age=%lldms\n",
+                       chnId, st->person_detected, st->person_count, snap.frame.cols, snap.frame.rows,
+                       (long long)snap.result_age_ms);
         }
         else
         {
-            printf("  CH%d [%s] results=%zu frame=%dx%d age=%lldms\n",
-                   chnId, logic_name.c_str(), snap.results.size(),
+            printf("  CH%d [%s] results=%zu frame=%dx%d age=%lldms\n", chnId, logic_name.c_str(), snap.results.size(),
                    snap.frame.cols, snap.frame.rows, (long long)snap.result_age_ms);
         }
 
         for (size_t r = 0; r < snap.results.size() && r < 3; ++r)
         {
             const auto &det = snap.results[r];
-            printf("    [%zu] %s  score=%.2f  box=(%d,%d %dx%d)\n",
-                   r, det.label.c_str(), det.score,
-                   det.box.x, det.box.y, det.box.width, det.box.height);
+            printf("    [%zu] %s  score=%.2f  box=(%d,%d %dx%d)\n", r, det.label.c_str(), det.score, det.box.x,
+                   det.box.y, det.box.width, det.box.height);
         }
     });
 }

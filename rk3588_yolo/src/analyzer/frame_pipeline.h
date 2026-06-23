@@ -10,14 +10,13 @@
  * 实现分布 (本 .h 的声明分散在两个 .cpp 中; 原空壳 frame_pipeline.cpp 已删除):
  *   rga_convert.cpp    — RGA 硬件转换 + YOLO 输入帧准备
  *                        (rga_convert_resize / rga_import_src_fd /
- *                         rga_convert_resize_handle / convertToYoloInput / rgaFmt)
- *   display_render.cpp — 显示 tile 布局 + framebuffer 提交
- *                        (tile_x / tile_y / tile_width / tile_height /
- *                         calcBufMapOffset / commitImgtoDispBufMap)
+ *                         rga_convert_resize_handle / convertToYoloInput /
+ * rgaFmt) display_render.cpp — 显示 tile 布局 + framebuffer 提交 (tile_x /
+ * tile_y / tile_width / tile_height / calcBufMapOffset / commitImgtoDispBufMap)
  *
- * 注意: RGA 部分代码禁止修改内部逻辑, 盒子容易死机! 硬性约束 (在 rga_convert.cpp 中):
- *   opt.core = IM_SCHEDULER_RGA3_CORE0 | IM_SCHEDULER_RGA3_CORE1
- *   使用 RGA2 或第三核心会硬崩溃, 只能断电恢复。
+ * 注意: RGA 部分代码禁止修改内部逻辑, 盒子容易死机! 硬性约束 (在
+ * rga_convert.cpp 中): opt.core = IM_SCHEDULER_RGA3_CORE0 |
+ * IM_SCHEDULER_RGA3_CORE1 使用 RGA2 或第三核心会硬崩溃, 只能断电恢复。
  */
 #pragma once
 
@@ -55,11 +54,11 @@ bool rga_convert_resize(int chnId, const RgaImage &src_img, const RgaImage &dst_
 struct RgaImportedBuffer
 {
     rga_buffer_handle_t handle = 0;
-    int width = 0;        // visible width
-    int height = 0;       // visible height
-    int stride_w = 0;     // hor stride
-    int stride_h = 0;     // ver stride
-    int format = 0;       // RK_FORMAT_*
+    int width = 0;    // visible width
+    int height = 0;   // visible height
+    int stride_w = 0; // hor stride
+    int stride_h = 0; // ver stride
+    int format = 0;   // RK_FORMAT_*
 
     RgaImportedBuffer() = default;
     RgaImportedBuffer(const RgaImportedBuffer &) = delete;
@@ -68,26 +67,29 @@ struct RgaImportedBuffer
 };
 
 /**
- * @brief 在 FD 仍然有效时立即调用, 返回 shared_ptr; 失败时返回 nullptr (调用方走软件回退).
+ * @brief 在 FD 仍然有效时立即调用, 返回 shared_ptr; 失败时返回 nullptr
+ * (调用方走软件回退).
  */
 std::shared_ptr<RgaImportedBuffer> rga_import_src_fd(int fd, int w, int h, int stride_w, int stride_h, int fmt);
 
 /**
  * @brief 用已 import 的 src handle 走 RGA.
  *        src: 入队时 import 的稳定 handle.
- *        dst: 优先用 cached_dst_handle (模型初始化时一次性 import, 零 ioctl 开销);
- *             若 cached_dst_handle == 0 则退回每帧 importbuffer_fd 路径 (兜底安全).
- * @param cached_dst_handle  模型预缓存的 RGA handle (rga_buffer_handle_t), 0 = 不使用缓存
+ *        dst: 优先用 cached_dst_handle (模型初始化时一次性 import, 零 ioctl
+ * 开销); 若 cached_dst_handle == 0 则退回每帧 importbuffer_fd 路径 (兜底安全).
+ * @param cached_dst_handle  模型预缓存的 RGA handle (rga_buffer_handle_t), 0 =
+ * 不使用缓存
  */
-bool rga_convert_resize_handle(int chnId, const RgaImportedBuffer &src,
-                               int dst_fd, int dst_w, int dst_h, int dst_stride_w, int dst_stride_h, int dst_fmt,
-                               int cached_dst_handle = 0);
+bool rga_convert_resize_handle(int chnId, const RgaImportedBuffer &src, int dst_fd, int dst_w, int dst_h,
+                               int dst_stride_w, int dst_stride_h, int dst_fmt, int cached_dst_handle = 0);
 
 /*======================== 格式字符串 → RK_FORMAT ========================*/
 int rgaFmt(const char *strFmt);
 
-/*======================== Yolo 输入转换 (RGA 优先, 软件回退) ========================*/
-bool convertToYoloInput(int chnId, void *pSrcData, int src_fd, int srcW, int srcH, int srcStrH, int srcStrV, int srcFmt, cv::Mat &out);
+/*======================== Yolo 输入转换 (RGA 优先, 软件回退)
+ * ========================*/
+bool convertToYoloInput(int chnId, void *pSrcData, int src_fd, int srcW, int srcH, int srcStrH, int srcStrV, int srcFmt,
+                        cv::Mat &out);
 
 /*======================== 显示 tile 布局 ========================*/
 int tile_x(int chnId);
@@ -97,5 +99,5 @@ int tile_height(int chnId);
 uint64_t calcBufMapOffset(int chnId, int bytesPerPixel);
 
 /*======================== 显示缓冲区提交 ========================*/
-void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt,
-                           int srcWidth, int srcHeight, int srcHStride, int srcVStride);
+void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt, int srcWidth, int srcHeight, int srcHStride,
+                           int srcVStride);

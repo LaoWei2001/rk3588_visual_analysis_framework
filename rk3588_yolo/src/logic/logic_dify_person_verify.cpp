@@ -8,7 +8,8 @@
  * 去重策略:
  *   - 每帧收集当前画面中所有 person 的 track_id (需 track_id >= 0).
  *   - 新出现的 track_id 触发 Dify 上报; 已在 reported_ids 中的跳过.
- *   - track_id 连续丢失 MISS_FRAME_MAX 帧后才从 reported_ids 清除 (容忍短暂遮挡/漏检).
+ *   - track_id 连续丢失 MISS_FRAME_MAX 帧后才从 reported_ids 清除
+ * (容忍短暂遮挡/漏检).
  *   - 两次上报之间至少间隔 MIN_INTERVAL_MS.
  *
  * 跨帧状态见 logic_tools.h 的 DifyPersonVerifyState。
@@ -52,7 +53,7 @@ static void logic_dify_person_verify(ChannelContext *ctx)
             no_track++;
             continue;
         }
-        if (!roi_contains(ctx, r.box, ROI_ALL))   /* 不在任一 ROI(没画 ROI=整帧不设限) */
+        if (!roi_contains(ctx, r.box, ROI_ALL)) /* 不在任一 ROI(没画 ROI=整帧不设限) */
         {
             out_roi++;
             continue;
@@ -102,13 +103,12 @@ static void logic_dify_person_verify(ChannelContext *ctx)
     /* ---- 上报至 Dify ---- */
     if (has_new_person && (ctx->timestamp_ms - s.last_upload_ms >= MIN_INTERVAL_MS))
     {
-        const char *prompt = (ctx->config && !ctx->config->dify_prompt.empty())
-                                 ? ctx->config->dify_prompt.c_str()
-                                 : "person detected, please verify";
+        const char *prompt = (ctx->config && !ctx->config->dify_prompt.empty()) ? ctx->config->dify_prompt.c_str()
+                                                                                : "person detected, please verify";
 
         char event_id[128];
-        snprintf(event_id, sizeof(event_id), "ch%d_f%lld_t%llu_person",
-                 ctx->chnId, (long long)ctx->frame_id, (unsigned long long)ctx->timestamp_ms);
+        snprintf(event_id, sizeof(event_id), "ch%d_f%lld_t%llu_person", ctx->chnId, (long long)ctx->frame_id,
+                 (unsigned long long)ctx->timestamp_ms);
 
         /* 克隆帧并在上面绘制所有目标框 + id/类别/置信度 */
         cv::Mat upload_img = ctx->frame->clone();
@@ -170,16 +170,17 @@ static void logic_dify_person_verify(ChannelContext *ctx)
             cv::rectangle(overlay, cv::Rect(0, 0, roi.cols, roi.rows), color, -1);
             cv::addWeighted(overlay, 0.5, roi, 0.5, 0, roi);
 
-            draw_text_unicode(upload_img, label_text,
-                              cv::Point(txt_x + 2, txt_y - 4),
+            draw_text_unicode(upload_img, label_text, cv::Point(txt_x + 2, txt_y - 4),
                               /*px*/ 14, cv::Scalar(255, 255, 255), /*filled*/ -1);
         }
 
-        printf("[DifyPersonVerify] ch=%d UPLOAD: new_tid=%d frame=%lld ts=%llu\n",
-               ctx->chnId, new_tid, (long long)ctx->frame_id, (unsigned long long)ctx->timestamp_ms);
-        const char *dify_url = (ctx->config && !ctx->config->dify_api_url.empty()) ? ctx->config->dify_api_url.c_str() : nullptr;
-        const char *dify_key = (ctx->config && !ctx->config->dify_api_key.empty()) ? ctx->config->dify_api_key.c_str() : nullptr;
-        dify_uploader_enqueue(upload_img, prompt, event_id, dify_url, dify_key);
+        printf("[DifyPersonVerify] ch=%d UPLOAD: new_tid=%d frame=%lld ts=%llu\n", ctx->chnId, new_tid,
+               (long long)ctx->frame_id, (unsigned long long)ctx->timestamp_ms);
+        const char *dify_url =
+            (ctx->config && !ctx->config->dify_api_url.empty()) ? ctx->config->dify_api_url.c_str() : nullptr;
+        const char *dify_key =
+            (ctx->config && !ctx->config->dify_api_key.empty()) ? ctx->config->dify_api_key.c_str() : nullptr;
+        dify_uploader_enqueue(upload_img, prompt, event_id, report_enabled(ctx), dify_url, dify_key);
         s.last_upload_ms = ctx->timestamp_ms;
 
         /* 把当前所有可见 track_id 都标记为已上报, 防止同一帧多人轮流触发 */
@@ -193,36 +194,32 @@ static void logic_dify_person_verify(ChannelContext *ctx)
     /* ---- 定期调试打印 ---- */
     if (ctx->timestamp_ms - s.last_dbg_ms >= DBG_INTERVAL_MS)
     {
-        printf("[DifyPersonVerify] ch=%d frame=%lld | total_person=%d no_track=%d out_roi=%d | "
+        printf("[DifyPersonVerify] ch=%d frame=%lld | total_person=%d no_track=%d "
+               "out_roi=%d | "
                "tracked=%zu reported=%zu miss=%zu | last_up=%llu\n",
-               ctx->chnId, (long long)ctx->frame_id,
-               total_person, no_track, out_roi,
-               current_person_ids.size(), s.reported_ids.size(), s.miss_frames.size(),
-               (unsigned long long)s.last_upload_ms);
+               ctx->chnId, (long long)ctx->frame_id, total_person, no_track, out_roi, current_person_ids.size(),
+               s.reported_ids.size(), s.miss_frames.size(), (unsigned long long)s.last_upload_ms);
         s.last_dbg_ms = ctx->timestamp_ms;
     }
 
     /* ---- 状态绘制 ---- */
     char status[128];
-    snprintf(status, sizeof(status), "DifyVerify: %zu person(s) | rep:%zu",
-             current_person_ids.size(), s.reported_ids.size());
+    snprintf(status, sizeof(status), "DifyVerify: %zu person(s) | rep:%zu", current_person_ids.size(),
+             s.reported_ids.size());
     draw_text(ctx, status, cv::Point(20, 30),
-              current_person_ids.empty() ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255),
-              0.6, 2);
+              current_person_ids.empty() ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255), 0.6, 2);
 
     /* 为每个检测到的人员绘制 track_id */
     for (auto &r : *ctx->results)
     {
         if (r.label != "person" || r.track_id < 0)
             continue;
-        if (!roi_contains(ctx, r.box, ROI_ALL))   /* 不在任一 ROI(没画 ROI=整帧不设限) */
+        if (!roi_contains(ctx, r.box, ROI_ALL)) /* 不在任一 ROI(没画 ROI=整帧不设限) */
             continue;
 
         char tid_text[32];
         snprintf(tid_text, sizeof(tid_text), "id:%d", r.track_id);
-        draw_text(ctx, tid_text,
-                  cv::Point(r.box.x, std::max(20, r.box.y - 8)),
-                  cv::Scalar(0, 255, 255), 0.45, 1);
+        draw_text(ctx, tid_text, cv::Point(r.box.x, std::max(20, r.box.y - 8)), cv::Scalar(0, 255, 255), 0.45, 1);
     }
 }
 

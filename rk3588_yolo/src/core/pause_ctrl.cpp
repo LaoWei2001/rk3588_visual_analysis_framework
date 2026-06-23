@@ -7,24 +7,25 @@
  *   g_paused 为 atomic<bool>，toggle() / wait_if_paused() 对其的读写均在锁内，
  *   保证 cond_var 不会丢失通知。
  *
- *   g_force_resume 为退出标志，signal_handler 或主线程调用 resume_all() 后置 true，
- *   所有阻塞中的 wait_if_paused() 立即返回，程序可以安全退出。
+ *   g_force_resume 为退出标志，signal_handler 或主线程调用 resume_all() 后置
+ * true， 所有阻塞中的 wait_if_paused() 立即返回，程序可以安全退出。
  */
 #include "pause_ctrl.h"
-#include <mutex>
 #include <condition_variable>
 #include <cstdio>
+#include <mutex>
 
-namespace pause_ctrl {
+namespace pause_ctrl
+{
 
 /*======================== 公开原子标志 ========================*/
 std::atomic<bool> g_enabled{false};
 
 /*======================== 内部状态 ========================*/
-static std::mutex              g_mtx;
+static std::mutex g_mtx;
 static std::condition_variable g_cv;
-static std::atomic<bool>       g_paused{false};
-static std::atomic<bool>       g_force_resume{false};
+static std::atomic<bool> g_paused{false};
+static std::atomic<bool> g_force_resume{false};
 
 /*======================== 接口实现 ========================*/
 
@@ -70,10 +71,8 @@ void wait_if_paused()
 
     /* 进入阻塞等待 */
     std::unique_lock<std::mutex> lk(g_mtx);
-    g_cv.wait(lk, [] {
-        return !g_paused.load(std::memory_order_relaxed) ||
-               g_force_resume.load(std::memory_order_relaxed);
-    });
+    g_cv.wait(
+        lk, [] { return !g_paused.load(std::memory_order_relaxed) || g_force_resume.load(std::memory_order_relaxed); });
 }
 
 void resume_all()
@@ -86,8 +85,7 @@ void resume_all()
 
 bool is_paused()
 {
-    return g_enabled.load(std::memory_order_relaxed) &&
-           g_paused.load(std::memory_order_relaxed);
+    return g_enabled.load(std::memory_order_relaxed) && g_paused.load(std::memory_order_relaxed);
 }
 
 } // namespace pause_ctrl

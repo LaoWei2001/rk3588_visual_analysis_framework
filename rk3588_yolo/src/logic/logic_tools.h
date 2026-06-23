@@ -10,22 +10,23 @@
 
 #pragma once
 
-#include <opencv2/opencv.hpp>
 #include <cstdint>
-#include <set>
 #include <map>
+#include <opencv2/opencv.hpp>
+#include <set>
 
-/*======================== HookState — 吊钩安全圈检测状态 ========================*/
+/*======================== HookState — 吊钩安全圈检测状态
+ * ========================*/
 
 struct HookState
 {
     /* ---- 核心状态机 ---- */
-    bool     alarm_active         = false; // 钩子正在圈外（出圈计时中）
-    bool     alarm_sent_latch     = false; // 已发送报警（锁存，防重复上报）
-    bool     alarm_reset_counting = false; // 正在圈内冷却倒计时
-    uint64_t alarm_start_ms       = 0;     // 本次出圈开始时刻
-    uint64_t alarm_reset_start_ms = 0;     // 本次进圈冷却开始时刻
-    uint64_t last_found_ms        = 0;     // 最后一次检测到目标的时间戳（用于漏检宽限期）
+    bool alarm_active = false;         // 钩子正在圈外（出圈计时中）
+    bool alarm_sent_latch = false;     // 已发送报警（锁存，防重复上报）
+    bool alarm_reset_counting = false; // 正在圈内冷却倒计时
+    uint64_t alarm_start_ms = 0;       // 本次出圈开始时刻
+    uint64_t alarm_reset_start_ms = 0; // 本次进圈冷却开始时刻
+    uint64_t last_found_ms = 0;        // 最后一次检测到目标的时间戳（用于漏检宽限期）
 
     /* ---- 显示用累计时间（语义见注释）----
      *
@@ -40,10 +41,11 @@ struct HookState
      *   - 冷却完成后归零（连同 disp_outside_sec 一起重置）
      */
     float disp_outside_sec = 0.0f;
-    float disp_inside_sec  = 0.0f;
+    float disp_inside_sec = 0.0f;
 };
 
-/*======================== PersonAlarmState — 人员检测报警状态 ========================*/
+/*======================== PersonAlarmState — 人员检测报警状态
+ * ========================*/
 
 /**
  * 由 logic_person_alarm (channel_logic) 写入,
@@ -55,7 +57,8 @@ struct PersonAlarmState
     int person_count = 0;
 };
 
-/*======================== DifyPersonVerifyState — 人员Dify二次核验状态 ========================*/
+/*======================== DifyPersonVerifyState — 人员Dify二次核验状态
+ * ========================*/
 
 /**
  * 由 logic_dify_person_verify 使用。
@@ -63,14 +66,15 @@ struct PersonAlarmState
  */
 struct DifyPersonVerifyState
 {
-    std::set<int> reported_ids;             // 已上报过Dify的 track_id 集合
-    std::map<int, int> miss_frames;         // 每个 track_id 连续丢失的帧数, 超过阈值才清除
-    uint64_t last_upload_ms = 0;            // 最近一次上报时间戳
-    uint64_t last_dbg_ms = 0;               // 调试打印节流
-    int first = 1;                          // 首帧跳过(避免初始化误报)
+    std::set<int> reported_ids;     // 已上报过Dify的 track_id 集合
+    std::map<int, int> miss_frames; // 每个 track_id 连续丢失的帧数, 超过阈值才清除
+    uint64_t last_upload_ms = 0;    // 最近一次上报时间戳
+    uint64_t last_dbg_ms = 0;       // 调试打印节流
+    int first = 1;                  // 首帧跳过(避免初始化误报)
 };
 
-/*======================== logic_roll_compute_occupancy ========================*/
+/*======================== logic_roll_compute_occupancy
+ * ========================*/
 
 /**
  * @brief 基于 HSV 色彩空间的物料占用率检测
@@ -89,12 +93,6 @@ struct DifyPersonVerifyState
  * @param[out] bg_hue 检测到的背景主色调 (0~180)
  * @return true 成功, false 失败 (输入无效)
  */
-bool logic_roll_compute_occupancy(const cv::Mat &bgr,
-                                  const std::vector<cv::Point> &roi_points,
-                                  int sat_min,
-                                  int val_min,
-                                  int hue_tol,
-                                  int min_area,
-                                  double &ratio,
-                                  cv::Mat &occupancy_mask,
+bool logic_roll_compute_occupancy(const cv::Mat &bgr, const std::vector<cv::Point> &roi_points, int sat_min,
+                                  int val_min, int hue_tol, int min_area, double &ratio, cv::Mat &occupancy_mask,
                                   int &bg_hue);
