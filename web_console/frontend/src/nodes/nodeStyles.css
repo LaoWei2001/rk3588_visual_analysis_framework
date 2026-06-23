@@ -30,6 +30,27 @@
 .header-roi     { background: linear-gradient(90deg,#7c2d12,#ea580c); color:#fed7aa; }
 .header-logic   { background: linear-gradient(90deg,#581c87,#9333ea); color:#f3e8ff; }
 .header-report  { background: linear-gradient(90deg,#7f1d1d,#dc2626); color:#fee2e2; }
+.header-sop     { background: linear-gradient(90deg,#155e75,#06b6d4); color:#cffafe; }
+
+/* ── SOP 步骤节点(SOP 流程弹窗内的子画布用) ── */
+.sop-step-idx {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #06b6d4; color: #06222a; font-size: 11px; font-weight: 700;
+}
+.sop-step-del {
+  margin-left: auto; background: none; border: none; color: #9ca3af;
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 0 2px;
+}
+.sop-step-del:hover { color: #ef4444; }
+.sop-step-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sop-step-name.unset { color: #f87171; }
+.sop-step-foot { display: flex; gap: 6px; padding: 4px 8px 6px; border-top: 1px solid #232838; }
+.sop-step-param {
+  font-size: 10px; color: #94a3b8; background: #1a1f2e;
+  border: 1px solid #313850; border-radius: 4px; padding: 0 5px; line-height: 16px;
+}
+.sop-step-param.on { color: #67e8f9; border-color: rgba(6,182,212,0.5); background: rgba(6,182,212,0.12); }
 
 /* ── Body ── */
 .rf-node-body {

@@ -30,6 +30,7 @@ static void logic_server(ChannelContext *ctx)
         return;
 
     alarm_uploader_enqueue(*ctx->frame, *ctx->frame, ctx->chnId, "intrusion",
+                           ctx->config->report_enable,   // 连了「上报配置」节点才真正发
                            ctx->config ? ctx->config->server_url.c_str() : nullptr);
     s.last_upload_ms = ctx->timestamp_ms;
 }

@@ -33,6 +33,7 @@ const NODE_TITLES: Record<string, [string, string]> = {
   model:  ['🧠', 'YOLO推理节点'],
   roi:    ['◆', 'ROI区域节点'],
   logic:  ['⚡', '逻辑函数节点'],
+  sop:    ['🧭', 'SOP流程节点'],
   report: ['📡', '上报配置节点'],
 }
 
@@ -41,6 +42,7 @@ const HEADER_CLASS: Record<string, string> = {
   model:  'header-model',
   roi:    'header-roi',
   logic:  'header-logic',
+  sop:    'header-sop',
   report: 'header-report',
 }
 
@@ -69,6 +71,7 @@ export default function NodeConfigPanel({ node, onUpdate }: Props) {
         {node.type === 'stream' && <StreamForm  node={node} onUpdate={onUpdate} />}
         {node.type === 'model'  && <ModelForm   node={node} onUpdate={onUpdate} />}
         {node.type === 'logic'  && <LogicForm   node={node} onUpdate={onUpdate} />}
+        {node.type === 'sop'    && <SopInfo     node={node} />}
         {node.type === 'report' && <ReportForm  node={node} onUpdate={onUpdate} />}
         {node.type === 'roi'    && <ROIInfo     node={node} />}
       </div>
@@ -588,6 +591,39 @@ function ROIInfo({ node }: { node: Node }) {
       <div className="ncp-hint" style={{ marginTop: 10 }}>
         在画布的 ROI 节点上点「绘制/编辑 ROI 区域」，可在同一张画面上画多个区域并各自命名。
         逻辑里用 ctx-&gt;rois / ctx-&gt;roi_by_name(...) 调用各区域。
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SOP 流程信息 — 具体步骤在画布的 SOP 节点上点「配置流程」编辑(区域来自上游 ROI 节点)
+// ─────────────────────────────────────────────────────────────────────────────
+function SopInfo({ node }: { node: Node }) {
+  const d     = node.data as { target_label?: string; steps?: { zoneName?: string }[] }
+  const steps = d.steps ?? []
+
+  return (
+    <div className="ncp-form">
+      <div className="node-field">
+        <label>目标类别</label>
+        <div className={`ncp-roi-status ${d.target_label?.trim() ? 'active' : ''}`}>
+          {d.target_label?.trim() || '（未设置）'}
+        </div>
+      </div>
+      <div className="node-field">
+        <label>步骤（{steps.length}）</label>
+        {steps.length > 0 ? (
+          <ul className="ncp-roi-zone-ul">
+            {steps.map((s, i) => <li key={i}>{i + 1}. {s.zoneName?.trim() || '未选区域'}</li>)}
+          </ul>
+        ) : (
+          <div className="ncp-roi-status">还没有步骤</div>
+        )}
+      </div>
+      <div className="ncp-hint" style={{ marginTop: 10 }}>
+        在画布的 SOP 节点上点「⚙ 配置流程」编排步骤(选区域 + 每步独立参数)；
+        区域沿用上游连接的「ROI 区域」节点。
       </div>
     </div>
   )

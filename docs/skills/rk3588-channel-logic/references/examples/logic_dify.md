@@ -43,7 +43,7 @@ static void logic_dify(ChannelContext *ctx)
 
     const char *dify_url = (ctx->config && !ctx->config->dify_api_url.empty()) ? ctx->config->dify_api_url.c_str() : nullptr;
     const char *dify_key = (ctx->config && !ctx->config->dify_api_key.empty()) ? ctx->config->dify_api_key.c_str() : nullptr;
-    dify_uploader_enqueue(*ctx->frame, prompt, event_id, dify_url, dify_key);
+    dify_uploader_enqueue(*ctx->frame, prompt, event_id, ctx->config->report_enable, dify_url, dify_key);
 
     s.last_upload_ms = ctx->timestamp_ms;
 }

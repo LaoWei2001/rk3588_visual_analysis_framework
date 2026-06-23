@@ -50,6 +50,19 @@ def scan_apps() -> List[Dict[str, Any]]:
 
         status_info = get_status(entry.name)
 
+        # 未上报告警数 = 本地发件箱里 .json 元数据文件数(与 records.py 的 count 同口径)。
+        # 只数文件、不解析内容 → 很轻; 上报微服务补传成功后会删除, 故这里是"还没传上去"的条数。
+        # ALARM_STORE_DIR 为全局覆盖(与 records.py 一致), 否则用 <app>/alarm_store。
+        store = Path(os.environ["ALARM_STORE_DIR"]) if os.environ.get("ALARM_STORE_DIR") \
+            else entry / "alarm_store"
+        unreported = 0
+        if store.is_dir():
+            try:
+                unreported = sum(1 for f in store.iterdir()
+                                 if f.suffix == ".json" and f.is_file())
+            except OSError:
+                unreported = 0
+
         apps.append({
             "name": entry.name,
             "path": str(entry),
@@ -60,6 +73,7 @@ def scan_apps() -> List[Dict[str, Any]]:
             "videos": videos,
             "config_files": config_files,
             "active_config": active_config,
+            "unreported": unreported,
             **status_info,
         })
 

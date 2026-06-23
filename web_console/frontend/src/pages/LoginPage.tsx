@@ -14,8 +14,8 @@ export default function LoginPage() {
   const [error,      setError]      = useState('')
   const [loading,    setLoading]    = useState(false)
   const [logoFailed, setLogoFailed] = useState(false)
-  // Bust cache so replacing logo.png takes effect immediately
-  const logoSrc = useRef(`/logo.png?t=${Date.now()}`).current
+  // 每次打开随机取一张(frontend/logos/ 里的图片或 GIF; 空则回退 logo.png)；?t= 触发每次重新随机
+  const logoSrc = useRef(`/logo/random?t=${Date.now()}`).current
 
   useEffect(() => {
     if (token) navigate('/', { replace: true })

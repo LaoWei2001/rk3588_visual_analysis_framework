@@ -20,21 +20,15 @@
   align-items: center;
   gap: 10px;
 }
-
-.terminal-header-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.terminal-title {
-  font-size: 14px;
-  font-weight: 600;
+/* 按钮文字横排，别被 flex 挤成逐字竖排（中文可在任意字间换行） */
+.terminal-header-left .tb-btn {
+  white-space: nowrap;
 }
 
 .terminal-select-label {
   font-size: 11px;
   color: var(--text2);
+  white-space: nowrap;   /* 四个字横排，别被挤成竖排 */
 }
 
 .terminal-select {

@@ -8,21 +8,30 @@
 
 ```cpp
 // HTTP 服务器上报：img_draw=带框图, img_raw=原图(可相同), camera_id=ctx->chnId,
-// alarm_type=告警类型字符串, server_url=本通道地址(nullptr/空=用上报服务默认值)
+// alarm_type=告警类型字符串,
+// report_enable=是否真的发(画布连了「上报配置」节点才 true; false 时函数内部直接跳过),
+// server_url=本通道地址(nullptr/空=用上报服务默认值)
 int alarm_uploader_enqueue(const cv::Mat &img_draw, const cv::Mat &img_raw,
-                           int camera_id, const char *alarm_type,
+                           int camera_id, const char *alarm_type, bool report_enable,
                            const char *server_url = nullptr);
 
-// Dify 上报：prompt=提示词, event_id=事件唯一标识, dify_api_url/key=本通道 Dify 地址与密钥
+// Dify 上报：prompt=提示词, event_id=事件唯一标识,
+// report_enable=同上, dify_api_url/key=本通道 Dify 地址与密钥
 int dify_uploader_enqueue(const cv::Mat &img, const char *prompt, const char *event_id,
+                          bool report_enable,
                           const char *dify_api_url = nullptr, const char *dify_api_key = nullptr);
 ```
+
+### 上报开关：画布连了「上报配置」节点才上报（必做）
+是否上报由**画布上有没有连「上报配置」节点**决定，不由 logic 自己说了算——这样这个节点才是真正的开关，而非摆设。节点存在 → `graphToConfig` 写 `config.json` 该通道 `report_enable: true`。**调上报函数时直接把 `ctx->config->report_enable` 作为 `report_enable` 参数传进去即可**：函数内部见它为 false 会直接跳过，不用你再写 `if`。（`ctx->config` 在 logic 运行期间恒非空——它是 `&channels[chnId]`，可放心解引用。）
 
 ### server 上报标准写法
 ```cpp
 const char *url = (ctx->config && !ctx->config->server_url.empty())
                       ? ctx->config->server_url.c_str() : nullptr;
-alarm_uploader_enqueue(*ctx->frame, *ctx->frame, ctx->chnId, "intrusion", url);
+// 第 5 个参数 ctx->config->report_enable: 没连「上报配置」节点就为 false → 内部不发
+alarm_uploader_enqueue(*ctx->frame, *ctx->frame, ctx->chnId, "intrusion",
+                       ctx->config->report_enable, url);
 ```
 
 ### dify 上报标准写法
@@ -36,7 +45,7 @@ const char *dkey = (ctx->config && !ctx->config->dify_api_key.empty())
 char event_id[64];
 snprintf(event_id, sizeof(event_id), "ch%d_f%lld_t%llu",
          ctx->chnId, (long long)ctx->frame_id, (unsigned long long)ctx->timestamp_ms);
-dify_uploader_enqueue(*ctx->frame, prompt, event_id, durl, dkey);
+dify_uploader_enqueue(*ctx->frame, prompt, event_id, ctx->config->report_enable, durl, dkey);
 ```
 
 ### 上报图带框
@@ -46,7 +55,7 @@ cv::Mat upload_img = ctx->frame->clone();
 RenderParams rp = ctx->render_params();
 rp.target_mask = DrawCommand::UPLOAD;
 render_overlays(upload_img, rp);
-alarm_uploader_enqueue(upload_img, *ctx->frame, ctx->chnId, "xxx", url);
+alarm_uploader_enqueue(upload_img, *ctx->frame, ctx->chnId, "xxx", ctx->config->report_enable, url);
 ```
 
 ### 限频（必做）
@@ -55,6 +64,7 @@ alarm_uploader_enqueue(upload_img, *ctx->frame, ctx->chnId, "xxx", url);
 ### `ctx->config` 里现成的上报相关字段
 | 字段 | 类型 | 用途 |
 |------|------|------|
+| `report_enable` | bool | **上报总开关**：画布连了「上报配置」节点才为 true。直接作为上报函数的 `report_enable` 参数传入（`ctx->config->report_enable`） |
 | `server_url` | string | HTTP 上报地址（每通道，网页「上报配置」节点填） |
 | `dify_api_url` | string | Dify 地址 |
 | `dify_api_key` | string | Dify 密钥 |
@@ -76,13 +86,16 @@ REGISTER_LOGIC("logic_xxx", logic_xxx);
 ```
 - `name`：必须与 `REGISTER_LOGIC` 里的名字、config.json 里 `"logic"` 的值完全一致。
 - `label`：网页下拉里显示的中文名。
-- `report`：`"server"`（用了 alarm_uploader_enqueue）/ `"dify"`（用了 dify_uploader_enqueue）/ 不上报就**不写**这个键。声明了 `report`，网页会提示该逻辑需要连「上报配置」节点。
+- `report`：`"server"` / `"dify"` / 不写。**仅作标注意图**（说明这个 logic 设计上会上报），网页据它在节点上把上报类型默认成 server/dify。**它不再自动带出节点、也不决定是否上报**。
 - `params`：可调参数清单（见下）。无参数就 `[]`。
 
-> **「上报配置」节点与 logics.json 的 `report`**（前端 `resolveReport` + 报警节点自身的 `report_type` 共同决定）：
-> - 声明了 `report` 的 logic：选中它时网页会**自动**带出一个对应类型（server/dify）的「上报配置」节点。
-> - 也可以**手动**给任意 logic 连一个「上报配置」节点：只要连上，保存时 `graphToConfig` 就按该节点自己的 `report_type` 把地址写进该通道 `config.json`，刷新后 `configToGraph` 据通道里的上报字段把它重建出来——**与该 logic 是否声明 `report` 无关**（本会话已修复：旧版里，连到未声明 `report` 的 logic 上会"保存即丢、刷新即消失"）。
-> - 仍建议"确实要上报"的 logic 在 logics.json 声明 `report`：既能自动带出节点、也标明意图。最终**是否真的上报，看 C++ 里 logic 有没有调 `*_enqueue`**；logics.json 的 `report` 只影响网页 UI（是否自动带节点），不决定 C++ 是否发。
+> **「上报配置」节点 = 上报的唯一开关**（本会话重构）：
+> - **连了**「上报配置」节点 → 保存时 `graphToConfig` 写该通道 `report_enable: true`（并按节点的 `report_type` 写地址）→ C++ `ctx->config->report_enable` 为真 → logic 才上报。
+> - **没连** → `report_enable: false` → `ctx->config->report_enable` 为假 → 即使 logic 里有上报代码也不发。这样节点是真开关，不是摆设。
+> - 与 logic 是否在 logics.json 声明 `report` **完全无关**：声明了也不会"没连也报"，没声明也能手动连节点来报。
+> - 刷新/重载：`configToGraph` 据通道里的 `report_enable` 把节点重建出来（老配置无此字段时，回退看通道有没有 `server_url`/`dify_*` 上报字段）。
+> - **内置上报类 logic（server/dify/hook/fall_detect/dify_person_verify）都已按此 gate**；你**自己写的 logic 把 `ctx->config->report_enable` 作为上报函数的 `report_enable` 参数传入即可**（false 时函数内部跳过），否则不受节点控制。
+> - 迁移提醒：旧 `config.json` 没有 `report_enable` 字段，C++ 默认 false → 升级后**需在网页重新打开配置并保存一次**（旧的上报通道会因带有 `server_url` 等字段而自动重建出节点），节点写入 `report_enable: true` 后才恢复上报。
 
 ## 四、可调参数：三处对齐，缺一不可
 

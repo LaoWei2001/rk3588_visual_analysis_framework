@@ -19,9 +19,11 @@ const confirmLeaveIfDirty = (): boolean =>
   window.confirm('编辑器有未保存的改动，确定离开？未保存的修改将丢失。')
 
 // ── Sidebar logo: image on top, text below; no fallback if image missing ──
+// 每次打开随机取一张(frontend/logos/ 里的图片或 GIF; 空则回退 logo.png)。
+// ?t=<nonce> 让每次进入都重新向后端请求 → 重新随机；GIF 由 <img> 原生播放。
 function SidebarLogo() {
   const [failed, setFailed] = useState(false)
-  const src = useRef(`/logo.png?t=${Date.now()}`).current
+  const src = useRef(`/logo/random?t=${Date.now()}`).current
   return (
     <div className="logo">
       {!failed && (
@@ -67,7 +69,7 @@ function AppShell() {
         </NavLink>
 
         <NavLink to="/terminal" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
-          <span className="nav-icon">▤</span> 终端
+          <span className="nav-icon">▤</span> 终端命令行
         </NavLink>
 
         {/* Bottom: user info + logout */}

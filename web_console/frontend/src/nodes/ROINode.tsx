@@ -277,10 +277,12 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
       ctx.moveTo(draft[0][0], draft[0][1])
       for (let k = 1; k < draft.length; k++) ctx.lineTo(draft[k][0], draft[k][1])
       if (hover) ctx.lineTo(hover[0], hover[1])
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke()
+      // 绘制过程中用红色(白色在白底画面上看不见)；完成后的各区域仍按 ZONE_COLORS 五颜六色上色
+      ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 2; ctx.stroke()
       draft.forEach(([x, y], k) => {
         ctx.beginPath(); ctx.arc(x, y, k === 0 ? 7 : 4, 0, Math.PI * 2)
-        ctx.fillStyle = k === 0 ? '#ef4444' : '#fff'; ctx.fill()
+        ctx.fillStyle = '#ef4444'; ctx.fill()
+        if (k === 0) { ctx.strokeStyle = '#7f1d1d'; ctx.lineWidth = 1.5; ctx.stroke() }  // 首点深红描边, 标出闭合点
       })
       // 靠近首点的闭合提示
       if (draft.length >= 3 && hover) {

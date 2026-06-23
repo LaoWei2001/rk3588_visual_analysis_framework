@@ -59,12 +59,12 @@ static void logic_fall_detect(ChannelContext *ctx)
     if (fall_like) {
         if (s.fall_start_ms==0) s.fall_start_ms = ctx->timestamp_ms;
         float elapsed = (ctx->timestamp_ms - s.fall_start_ms)/1000.0f;
-        if (elapsed >= dwell_sec) { /* 画 ALARM；若 !latched 且距上次 >= cooldown 且有帧 → alarm_uploader_enqueue(... "fall_detect" ...)，置 latched */ }
+        if (elapsed >= dwell_sec) { /* 画 ALARM；若 !latched 且距上次 >= cooldown 且有帧 → alarm_uploader_enqueue(... "fall_detect", ctx->config->report_enable, url)，置 latched */ }
         else { /* 画 "Fall suspicious x/ys" */ }
     } else { s.fall_start_ms=0; s.alarm_latched=false; /* 画 "Fall: CLEAR person:N" */ }
 
-    // 5) 挥手报警：cooldown + 闩锁上报 "wave_sos"
-    if (wave_alarm) { /* 画 "ALARM: WAVE SOS"；同样的 cooldown+latch → alarm_uploader_enqueue(... "wave_sos" ...) */ }
+    // 5) 挥手报警：cooldown + 闩锁上报 "wave_sos"（ctx->config->report_enable 作为参数传入）
+    if (wave_alarm) { /* 画 "ALARM: WAVE SOS"；cooldown+latch → alarm_uploader_enqueue(... "wave_sos", ctx->config->report_enable, url) */ }
 }
 ```
 

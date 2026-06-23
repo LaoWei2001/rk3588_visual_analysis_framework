@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { fetchApps, fetchLogTail, startApp, stopApp, streamUrl, uploadApp, deleteApp, fetchConfig, loadConfigFile, AppInfo } from '../api/client'
+import { loadLastConfig } from '../utils/lastConfig'
 import { useAuthStore } from '../store/authStore'
 import ServicesPanel from '../components/ServicesPanel'
 import './AppsPage.css'
@@ -36,8 +37,12 @@ export default function AppsPage() {
   const [crashInfo, setCrashInfo] = useState<{ name: string; lines: string[] } | null>(null)
   const [viewApp, setViewApp]       = useState<string | null>(null)   // 正在监看的 App
   const [streamErr, setStreamErr]   = useState(false)
+  const [streamLoading, setStreamLoading] = useState(true)           // 视频首帧到达前显示加载动画
   const [streamLogs, setStreamLogs] = useState<string[]>([])          // 监看弹窗右侧的滚动日志
   const [viewNonce, setViewNonce]   = useState(0)                     // 每次打开换一个值, 强制刷新视频, 防残留上次的旧帧
+  const streamRetryRef   = useRef(0)                                  // 流未就绪(刚启动)时的自动重试计数
+  const streamRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const streamLoadingRef = useRef(true)                               // 供卡死看门狗读「当前是否仍在加载」(避免闭包取旧值)
   const logWsRef  = useRef<WebSocket | null>(null)
   const logBoxRef = useRef<HTMLDivElement>(null)
   // 监看日志是否“跟随到底”：在底部(40px 内)=跟随，往上拉=暂停并停在当前位置，拉回底部=自动恢复
@@ -63,7 +68,30 @@ export default function AppsPage() {
         return
       }
     } catch { /* 配置读取失败：不拦截，照常打开（仍会回退到弹窗内的原有提示） */ }
-    setStreamErr(false); setStreamLogs([]); setViewNonce(Date.now()); setViewApp(app.name)
+    setStreamErr(false); setStreamLoading(true); streamRetryRef.current = 0
+    setStreamLogs([]); setViewNonce(Date.now()); setViewApp(app.name)
+  }
+
+  // 视频流自动重试: 程序刚启动时 RTSP 服务/首帧还没就绪, 直接拉流会失败或卡住。
+  // 不再直接判失败黑屏, 而是换 nonce 重新拉流, 直到出帧(onLoad)或超过重试上限,
+  // 这样画面会自己加载出来, 不用退出再进入。
+  const STREAM_MAX_RETRY = 25     // 重试上限(到顶才显示错误提示)
+  const STREAM_STALL_MS  = 4000   // 4s 内既没出首帧也没报错 = 卡住(常见于"刚启动就极快点进"), 换条连接重连
+
+  // 安排下一次重连: onError(连接被拒, 隔 1.5s) 与卡死看门狗(立即) 共用; 超过上限则放弃并提示
+  const scheduleStreamRetry = (delay: number) => {
+    if (streamRetryTimer.current) clearTimeout(streamRetryTimer.current)
+    if (streamRetryRef.current >= STREAM_MAX_RETRY) { setStreamLoading(false); setStreamErr(true); return }
+    streamRetryRef.current += 1
+    setStreamLoading(true)
+    streamRetryTimer.current = setTimeout(() => setViewNonce(Date.now()), delay)
+  }
+  const onStreamLoad  = () => { streamRetryRef.current = 0; setStreamLoading(false) }
+  const onStreamError = () => scheduleStreamRetry(1500)
+  // 错误提示里的「重试」: 重置计数并重新开始拉流
+  const retryStream = () => {
+    streamRetryRef.current = 0
+    setStreamErr(false); setStreamLoading(true); setViewNonce(Date.now())
   }
 
   // Refs for stale-closure-safe access inside setInterval
@@ -73,6 +101,8 @@ export default function AppsPage() {
 
   // Keep busyRef in sync with busy state
   useEffect(() => { busyRef.current = busy }, [busy])
+  // Keep streamLoadingRef in sync so the stall watchdog reads the live value
+  useEffect(() => { streamLoadingRef.current = streamLoading }, [streamLoading])
 
   const load = async () => {
     try {
@@ -148,6 +178,22 @@ export default function AppsPage() {
     }
     return () => { ws.close(); logWsRef.current = null }
   }, [viewApp])
+
+  // 关弹窗/切换 App 时清掉待执行的重试定时器, 避免泄漏或对已关闭的弹窗刷流
+  useEffect(() => () => {
+    if (streamRetryTimer.current) { clearTimeout(streamRetryTimer.current); streamRetryTimer.current = null }
+  }, [viewApp])
+
+  // 卡死看门狗: 后端可能连上了 RTSP 但迟迟不出首帧, <img> 既不触发 onLoad 也不触发 onError,
+  // 画面就会一直转圈("程序刚启动就极快点进"最容易撞上)。每次发起拉流(viewNonce 变)后等
+  // STREAM_STALL_MS, 若仍在加载就换条连接重连 —— 后端单飞机制会顺带杀掉那条卡住的旧流。
+  useEffect(() => {
+    if (!viewApp || streamErr) return
+    const t = setTimeout(() => {
+      if (streamLoadingRef.current) scheduleStreamRetry(0)
+    }, STREAM_STALL_MS)
+    return () => clearTimeout(t)
+  }, [viewApp, viewNonce, streamErr]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const dismissToast = () => {
     if (toastTimer.current) { clearTimeout(toastTimer.current); toastTimer.current = null }
@@ -282,8 +328,8 @@ export default function AppsPage() {
 
       {/* Live stream dialog */}
       {viewApp && (
-        <div className="stream-overlay" onClick={() => setViewApp(null)}>
-          <div className="stream-dialog" onClick={e => e.stopPropagation()}>
+        <div className="stream-overlay">
+          <div className="stream-dialog">
             <div className="stream-header">
               <span>👁 {viewApp} · 实时画面</span>
               <button onClick={() => setViewApp(null)}>✕</button>
@@ -291,17 +337,29 @@ export default function AppsPage() {
             <div className="stream-body">
               <div className="stream-video">
                 {!streamErr ? (
-                  <img
-                    className="stream-img"
-                    src={`${streamUrl(viewApp)}&t=${viewNonce}`}
-                    alt="实时画面"
-                    onError={() => setStreamErr(true)}
-                  />
+                  <>
+                    <img
+                      className="stream-img"
+                      style={streamLoading ? { visibility: 'hidden' } : undefined}
+                      src={`${streamUrl(viewApp)}&t=${viewNonce}`}
+                      alt="实时画面"
+                      onLoad={onStreamLoad}
+                      onError={onStreamError}
+                    />
+                    {streamLoading && (
+                      <div className="stream-loading">
+                        <div className="stream-spinner" />
+                        <span>正在加载视频…</span>
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div className="stream-hint">
                     无法获取视频流。请确认：<br />
                     ① 程序正在运行（监看仅在运行时可用）；<br />
                     ② 已在「配置 → 全局配置」勾选 <b>RTSP 推流</b> 并重启程序。
+                    <br />
+                    <button className="stream-retry-btn" onClick={retryStream}>重试</button>
                   </div>
                 )}
               </div>
@@ -331,9 +389,12 @@ export default function AppsPage() {
           {apps.map(app => {
             // 该程序可选的启动配置文件（basename），以及当前选中的那个
             const cfgOpts = app.config_files.map(cfgName)
+            // 优先级：本次手动选择 > 编辑器里最后保存的配置 > 上次启动配置 > config.json > 第一个
+            const lastCfg = loadLastConfig(app.name)
             const effCfg  = cfgSel[app.name]
-              ?? (cfgOpts.includes(app.active_config) ? app.active_config
-                  : cfgOpts.includes('config.json')   ? 'config.json'
+              ?? (lastCfg && cfgOpts.includes(lastCfg) ? lastCfg
+                  : cfgOpts.includes(app.active_config) ? app.active_config
+                  : cfgOpts.includes('config.json')     ? 'config.json'
                   : cfgOpts[0] ?? 'config.json')
             return (
             <div key={app.name} className={`app-card ${app.status}`}>
@@ -428,7 +489,7 @@ export default function AppsPage() {
                     className="action-btn log"
                     onClick={() => navigate(`/records/${app.name}`)}
                     title="本地暂存、还没传到平台的告警(断网时攒在盒子里的)"
-                  >🖼 未上报告警</button>
+                  >🖼 未上报告警{(app.unreported ?? 0) > 0 ? `（${app.unreported}条）` : ''}</button>
 
                   <button
                     className="action-btn"

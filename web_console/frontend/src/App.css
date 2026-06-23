@@ -7,12 +7,23 @@
 .sidebar {
   width: 180px;
   flex-shrink: 0;
-  background: var(--surface);
+  background: var(--surface);   /* 回退：不支持毛玻璃时的实底 */
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   padding: 12px 8px;
   gap: 4px;
+}
+
+/* 亚克力侧边栏：仅在浏览器支持 backdrop-filter 时启用，半透明 + 背后模糊 */
+@supports ((-webkit-backdrop-filter: blur(2px)) or (backdrop-filter: blur(2px))) {
+  .sidebar {
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    border-right-color: var(--glass-border);
+    box-shadow: var(--glass-highlight);
+  }
 }
 
 .logo {
@@ -28,8 +39,8 @@
 .logo-text { font-size: 13px; font-weight: 600; color: var(--text); }
 
 .sidebar-logo-img {
-  width: 52px;
-  height: 52px;
+  width: 72px;
+  height: 72px;
   border-radius: 12px;
   object-fit: contain;
 }

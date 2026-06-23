@@ -54,6 +54,14 @@ for imgfile in logo.png img.png; do
     fi
 done
 
+# 随机 logo 目录：用户把图片/GIF 放进 frontend/logos/，每次打开网页随机取一张。
+# 用 -n（no-clobber）合并：重装时【保留】板子上已放的图片，只补缺失的文件
+# （首装时播种 logo.png + README；之后你在板子上加的图不会被覆盖）。
+if [ -d "$SCRIPT_DIR/frontend/logos" ]; then
+    cp -rn "$SCRIPT_DIR/frontend/logos" "$INSTALL_DIR/frontend/"
+    echo "    已准备随机 logo 目录: $INSTALL_DIR/frontend/logos/  (把图片/GIF 放这里)"
+fi
+
 # 3. 安装 systemd 服务
 echo "[3/4] 安装 systemd 服务..."
 cp "$SCRIPT_DIR/rk3588-console.service" /etc/systemd/system/

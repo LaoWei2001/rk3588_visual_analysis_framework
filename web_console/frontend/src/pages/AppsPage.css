@@ -87,6 +87,17 @@
 .app-card.running { border-color: #166534; }
 .app-card:hover { border-color: var(--accent); }
 
+/* 亚克力程序卡片：背后的点阵渐变会透过来、被柔化，立体感更强 */
+@supports ((-webkit-backdrop-filter: blur(2px)) or (backdrop-filter: blur(2px))) {
+  .app-card {
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    border-color: var(--glass-border);
+    box-shadow: var(--glass-highlight);
+  }
+}
+
 .card-top {
   display: flex;
   align-items: center;
@@ -297,7 +308,7 @@
 }
 
 .stream-dialog {
-  background: #14161f;
+  background: #14161f;   /* 回退实底 */
   border: 1px solid var(--accent);
   border-radius: 10px;
   width: min(1320px, 96vw);
@@ -305,6 +316,21 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* 亚克力弹窗：弹窗本体半透明 + 模糊；遮罩也模糊一下背后的页面，整体更有"材质"感 */
+@supports ((-webkit-backdrop-filter: blur(2px)) or (backdrop-filter: blur(2px))) {
+  .stream-overlay {
+    background: rgba(0, 0, 0, 0.45);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+  }
+  .stream-dialog {
+    background: rgba(20, 22, 31, 0.72);   /* 比侧边栏稍实一点，里面有视频/日志要看清 */
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    box-shadow: var(--glass-highlight);
+  }
 }
 
 .stream-header {
@@ -339,11 +365,37 @@
 
 /* 左侧视频区 */
 .stream-video {
+  position: relative;          /* 加载动画浮层的定位基准 */
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* 首帧到达前(含自动重试期间)覆盖在黑屏上的加载动画 */
+.stream-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text2);
+  font-size: 13px;
+  pointer-events: none;        /* 不挡住底下，仅作提示 */
+}
+.stream-spinner {
+  width: 38px;
+  height: 38px;
+  border: 3px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: stream-spin 0.8s linear infinite;
+}
+@keyframes stream-spin {
+  to { transform: rotate(360deg); }
 }
 
 .stream-img {
@@ -381,6 +433,17 @@
   text-align: center;
 }
 .stream-hint b { color: var(--accent); }
+.stream-retry-btn {
+  margin-top: 16px;
+  padding: 6px 18px;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.stream-retry-btn:hover { background: var(--accent); color: #fff; }
 
 .stream-footer {
   display: flex;

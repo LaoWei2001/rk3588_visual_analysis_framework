@@ -130,13 +130,13 @@ static void logic_xxx(ChannelContext *ctx)
    ```cpp
    REGISTER_LOGIC("logic_xxx", logic_xxx);
    ```
-2. **声明到 logics.json**（让网页能选、能渲染参数；`report` 决定要不要连「上报配置」节点）：
+2. **声明到 logics.json**（让网页能选、能渲染参数）：
    
    ```json
    { "name": "logic_xxx", "label": "中文名", "report": "server", "params": [] }
    ```
    
-   - `report`: 用了 `alarm_uploader_enqueue` 填 `"server"`；用了 `dify_uploader_enqueue` 填 `"dify"`；不上报就不写这个键。
+   - `report`: 仅标注意图（上报类型默认 server/dify），**不决定是否上报**。是否上报由画布上有没有连「上报配置」节点决定 → 写通道 `report_enable`。你的 logic 调上报函数时**把 `ctx->config->report_enable` 作为 `report_enable` 参数传入**（如 `alarm_uploader_enqueue(..., ctx->config->report_enable, url)`），false 时函数内部自动跳过。详见 `references/upload-and-wiring.md`。
 3. **可调参数**（仅当逻辑需要用户在网页改的数值，如"半径""停留秒数"）必须走以下步骤，缺一不可：
    
    - `ChannelConfig`（config.h）加字段，如 `int dwell_sec = 3;`

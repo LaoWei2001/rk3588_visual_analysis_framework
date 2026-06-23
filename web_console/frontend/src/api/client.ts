@@ -42,6 +42,7 @@ export interface AppInfo {
   videos: string[]
   config_files: string[]        // assets/ 下可选作启动配置的 .json（排除 roi_zones.json）
   active_config: string         // 上次/默认启动所用的配置文件名
+  unreported: number            // 本地发件箱里待上报的告警条数（平台还没收到的）
   status: 'running' | 'stopped' | 'unknown'
   mode: string | null
   pid: number | null

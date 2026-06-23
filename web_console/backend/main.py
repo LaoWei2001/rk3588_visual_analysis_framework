@@ -1,8 +1,9 @@
 import os
+import random
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -13,6 +14,17 @@ from services.auth_service import get_session
 from services.process_manager import recover_processes
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+
+# 侧边栏 / 登录页 logo: 用户把图片或 GIF 放进 frontend/logos/, 每次打开网页随机取一张;
+# 目录为空 / 不存在时回退到 frontend/logo.png。下面是允许的扩展名 → MIME 类型。
+LOGO_DIR      = Path(__file__).parent.parent / "frontend" / "logos"
+LOGO_FALLBACK = Path(__file__).parent.parent / "frontend" / "logo.png"
+_LOGO_MIME = {
+    ".png": "image/png",  ".apng": "image/apng",
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif",  ".webp": "image/webp",
+    ".bmp": "image/bmp",  ".svg":  "image/svg+xml",
+}
 
 # Paths that are always public (no auth required)
 _PUBLIC_API = {"/api/auth/login"}
@@ -99,6 +111,29 @@ async def serve_logo():
         raise HTTPException(status_code=404, detail="logo.png not found in frontend/")
     return FileResponse(str(path), media_type="image/png",
                         headers={"Cache-Control": "no-cache, no-store"})
+
+
+@app.get("/logo/random")
+async def serve_random_logo():
+    """从 frontend/logos/ 随机返回一张图片或 GIF。每次请求都重新随机, 故每次打开网页
+    (前端用 ?t=<nonce> 触发) 都可能是不同的一张。目录为空/不存在则回退 logo.png。
+    公开(无需登录), 登录页也用它。GIF 由浏览器 <img> 原生播放。"""
+    pick = None
+    try:
+        if LOGO_DIR.is_dir():
+            pool = [f for f in LOGO_DIR.iterdir()
+                    if f.is_file() and f.suffix.lower() in _LOGO_MIME]
+            if pool:
+                pick = random.choice(pool)
+    except OSError:
+        pick = None
+    if pick is None:
+        pick = LOGO_FALLBACK
+    if not pick.exists():
+        raise HTTPException(status_code=404, detail="no logo available")
+    media = _LOGO_MIME.get(pick.suffix.lower(), "image/png")
+    return FileResponse(str(pick), media_type=media,
+                        headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
 @app.get("/img.png")

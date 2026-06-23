@@ -2,6 +2,7 @@
 
 :root {
   --bg: #0f1117;
+  --bg2: #171c2b;          /* 背景渐变的较亮一端，给暗色界面一点纵深 */
   --surface: #1a1d27;
   --surface2: #22263a;
   --border: #2e3352;
@@ -13,11 +14,24 @@
   --text: #e2e8f0;
   --text2: #94a3b8;
   --radius: 8px;
+  /* 亚克力(毛玻璃)材质 —— 选择性用于侧边栏/卡片/弹窗；不支持 backdrop-filter 时回退实底。
+     比 --surface 更亮更透，让背后的彩色光晕能"磨砂"透出来，玻璃感才明显。 */
+  --glass-bg: rgba(34, 40, 60, 0.50);
+  --glass-blur: blur(22px) saturate(180%);
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.10);  /* 顶部高光，仿苹果材质 */
 }
 
 body {
   font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
-  background: var(--bg);
+  /* 对角渐变打底 + 几团柔和的蓝/紫/青光晕：给毛玻璃面"磨砂"出彩色的料 */
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(circle at 12% 16%, rgba(79, 142, 247, 0.16) 0%, transparent 38%),
+    radial-gradient(circle at 90% 8%,  rgba(124, 58, 237, 0.14) 0%, transparent 36%),
+    radial-gradient(circle at 80% 95%, rgba(56, 189, 248, 0.08) 0%, transparent 42%),
+    linear-gradient(135deg, var(--bg) 0%, var(--bg2) 100%);
+  background-attachment: fixed;
   color: var(--text);
   font-size: 14px;
   line-height: 1.5;

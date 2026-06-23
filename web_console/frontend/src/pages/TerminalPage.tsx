@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import './TerminalPage.css'
 import {
   MAX_TERMINALS, listTerminals, openTerminal, closeTerminal, getSession,
@@ -88,7 +87,6 @@ function TerminalPane({ id, fontSize, index, canClose, onClose }: {
 }
 
 export default function TerminalPage() {
-  const navigate = useNavigate()
   const [fontSize, setFontSize] = useState<number>(loadFontSize)
   const [ids, setIds] = useState<string[]>(listTerminals)
 
@@ -117,14 +115,10 @@ export default function TerminalPage() {
     <div className="terminal-page">
       <div className="terminal-header">
         <div className="terminal-header-left">
-          <button className="tb-btn" onClick={() => navigate('/')}>返回</button>
-          <span className="terminal-title">板端终端</span>
           <button className="tb-btn" onClick={addTerminal} disabled={ids.length >= MAX_TERMINALS}>
             ＋ 新建分屏
           </button>
           <span className="terminal-hint">{ids.length}/{MAX_TERMINALS}</span>
-        </div>
-        <div className="terminal-header-right">
           <span className="terminal-select-label">字号设置</span>
           <select className="terminal-select" value={fontSize} onChange={e => {
             const v = +e.target.value
@@ -133,7 +127,6 @@ export default function TerminalPage() {
           }}>
             {FONT_SIZES.map(s => <option key={s} value={s}>{s}px</option>)}
           </select>
-          <span className="terminal-hint">Ctrl+C / Ctrl+D</span>
         </div>
       </div>
 

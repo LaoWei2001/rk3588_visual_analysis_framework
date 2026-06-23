@@ -1,29 +1,17 @@
 import { Node, Edge, MarkerType } from '@xyflow/react'
+import { sopConfigToFlow } from './sopFlow'
 import type { GlobalLogicEntry } from '../components/GlobalLogicsPanel'
 import type { GlobalSettingsData } from '../components/GlobalSettingsPanel'
 import { DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
 import type { RoiZone } from './graphToConfig'
 
-// NOTE: _ctr is intentionally declared inside configToGraph() below
-//       so IDs are deterministic (reset each call) — required for position restore.
+// NOTE: _ctr is declared inside configToGraph() below so node IDs are local to each call.
+//       Canvas positions are restored from config._editor_layout (keyed by channel index +
+//       node role), NOT by node ID — see `layout`/`pos` below. This survives ID changes,
+//       drag/drop/paste, and channel add/remove.
 
-const DIFY_LOGICS   = ['logic_dify', 'logic_dify_person_verify']
-const SERVER_LOGICS = ['logic_server']
-
-// 优先 logics.json 的 report 字段，回退内置名单（与 graphToConfig 对称）。
-function resolveReport(
-  logic: string,
-  reportByLogic?: Record<string, string>,
-): 'server' | 'dify' | null {
-  const r = reportByLogic?.[logic]
-  if (r === 'server' || r === 'dify') return r
-  if (DIFY_LOGICS.includes(logic)) return 'dify'
-  if (SERVER_LOGICS.includes(logic)) return 'server'
-  return null
-}
-
-// 通道里若带上报字段(server_url / dify_*) → 说明画布上连过报警节点, 反序列化时据此重建,
-// 与 logic 是否声明 report 解耦(修复: 连到未声明 report 的 logic 上的报警节点, 刷新后消失)。
+// 通道里带的上报字段(server_url / dify_*)指明上报类型(server/dify)。
+// 也用作老配置(无 report_enable 字段)的回退判断: 带上报字段 = 当初连过上报配置节点。
 function channelReportType(ch: Record<string, unknown>): 'server' | 'dify' | null {
   if ('dify_prompt' in ch || 'dify_api_url' in ch || 'dify_api_key' in ch) return 'dify'
   if ('server_url' in ch) return 'server'
@@ -42,7 +30,6 @@ const MODEL_KEYS = new Set([
 export function configToGraph(
   config: Record<string, unknown>,
   roi: Record<string, { polygon?: number[][]; zones?: RoiZone[] }>,
-  reportByLogic: Record<string, string> = {}
 ): {
   nodes: Node[]
   edges: Edge[]
@@ -50,8 +37,9 @@ export function configToGraph(
   globalLogics: GlobalLogicEntry[]
   globalSettings: GlobalSettingsData
 } {
-  // Deterministic IDs: reset counter each call so the same config always
-  // produces the same node IDs — this is required for localStorage position restore.
+  // Node IDs are local to this call (counter resets each call); they only wire up
+  // nodes/edges within the produced graph. Canvas positions come from
+  // config._editor_layout, keyed by channel index + role — not by these IDs.
   let _ctr = 0
   const uid = (p: string) => `${p}-${++_ctr}`
 
@@ -76,6 +64,10 @@ export function configToGraph(
   const global   = (config.global ?? config) as Record<string, unknown>
   const channels = (config.channels as Record<string, unknown>[]) ?? []
 
+  // 画布坐标(由 graphToConfig 按「通道序号 + 角色」写入 _editor_layout)。
+  // 下面每个节点优先取保存坐标，没有则退回默认排布。缺这个键(老配置/手写配置)→ 全用默认。
+  const layout = (config._editor_layout as Record<string, Record<string, { x: number; y: number }>>) ?? {}
+
   // Global logics
   const rawGL = (global.global_logics as Record<string, unknown>[]) ?? []
   const globalLogics: GlobalLogicEntry[] = rawGL.map(gl => ({
@@ -99,6 +91,9 @@ export function configToGraph(
   channels.forEach((ch, idx) => {
     const y      = idx * ROW_H + 60
     const origId = (ch.id as number) ?? idx
+    // 该通道保存的画布坐标(按角色)；pos() 取保存值，缺失则用传入的默认坐标
+    const lay = layout[String(idx)] ?? {}
+    const pos = (role: string, x: number, yy: number) => lay[role] ?? { x, y: yy }
     const stream = ch.stream as Record<string, unknown> ?? {}
 
     // 该通道是否带 YOLO 模型节点: 配了 model_type 或 model_path → 画 model 节点
@@ -114,13 +109,14 @@ export function configToGraph(
     const streamId = uid('stream')
     nodes.push({
       id: streamId, type: 'stream',
-      position: { x: STREAM_X, y },
+      position: pos('stream', STREAM_X, y),
       data: { ...stream, channel_id: origId },
     })
 
     // ── 通道字段分流：模型字段 → 模型节点；其余(radius 及任意 logic 参数) → 逻辑节点 ──
+    // report_enable 由上报节点的有无表达, 不能混进逻辑参数(否则会绕过节点又被写回通道)。
     const { stream: _s, logic: _lg, dify_prompt: _dp, server_url: _su,
-            dify_api_url: _du, dify_api_key: _dk, ...rest } = ch
+            dify_api_url: _du, dify_api_key: _dk, report_enable: _re, ...rest } = ch
     const modelData:   Record<string, unknown> = {}
     const logicParams: Record<string, unknown> = {}
     Object.entries(rest).forEach(([k, v]) => {
@@ -129,14 +125,14 @@ export function configToGraph(
     })
 
     // ── Model node (仅 YOLO 通道) ──
-    // 节点创建顺序保持 stream→model→roi→logic→report, 使同一份配置始终生成相同节点 ID
-    // (localStorage 画布布局恢复依赖确定性 ID)。
+    // 节点创建顺序: stream→model→roi→logic→report。画布坐标按「通道序号 + 角色」从
+    // config._editor_layout 还原(见 pos())，与节点 ID 无关。
     let modelId: string | null = null
     if (hasModel) {
       modelId = uid('model')
       nodes.push({
         id: modelId, type: 'model',
-        position: { x: MODEL_X, y },
+        position: pos('model', MODEL_X, y),
         data: { ...modelData },
       })
       edges.push(edge(streamId, 'stream-out', modelId, 'stream-in', '#3b82f6'))
@@ -163,7 +159,7 @@ export function configToGraph(
       roiId = uid('roi')
       nodes.push({
         id: roiId, type: 'roi',
-        position: { x: ROI_X, y: y - 80 },
+        position: pos('roi', ROI_X, y - 80),
         data: {},
       })
       roiMapping[roiId] = zones
@@ -171,26 +167,34 @@ export function configToGraph(
       if (hasModel) edges.push(edge(roiId, 'roi-out', modelId!, 'roi-in', '#f97316'))
     }
 
-    // ── Logic node ──
+    // ── Logic / SOP node ──
     const logic   = String(_lg ?? 'logic_default')
-    const logicId = uid('logic')
-    // logic 名 + 该通道的所有 logic 参数(radius 等)；具体渲染哪些由 logics.json 决定
-    const logicData: Record<string, unknown> = { logic, ...logicParams }
+    const isSop   = logic === 'logic_path_sop'
+    const logicId = uid(isSop ? 'sop' : 'logic')
+    // SOP: 结构化流程(target/reset/steps, 集中在 sopConfigToFlow); 普通逻辑: 名字 + 参数(logics.json 驱动)
+    const logicData: Record<string, unknown> = isSop
+      ? { ...sopConfigToFlow(ch) }
+      : { logic, ...logicParams }
     nodes.push({
-      id: logicId, type: 'logic',
-      position: { x: hasModel ? LOGIC_X : MODEL_X, y },  // 传统通道 logic 占据 model 的列位置, 更紧凑
+      id: logicId, type: isSop ? 'sop' : 'logic',
+      position: pos('logic', hasModel ? LOGIC_X : MODEL_X, y),  // 传统通道 logic 占据 model 的列位置, 更紧凑
       data: logicData,
     })
     if (hasModel) {
-      edges.push(edge(modelId!, 'logic-out', logicId, 'logic-in', '#a855f7'))
+      edges.push(edge(modelId!, 'logic-out', logicId, 'logic-in', isSop ? '#06b6d4' : '#a855f7'))
     } else {
       // 传统/无推理通道: 视频流直连逻辑函数; 有 ROI 则 ROI 接到逻辑函数顶部
       edges.push(edge(streamId, 'stream-out', logicId, 'logic-in', '#3b82f6'))
       if (roiId) edges.push(edge(roiId, 'roi-out', logicId, 'roi-in', '#f97316'))
     }
 
-    // ── Report node (only for logics that need it) ──
-    const reportType = resolveReport(logic, reportByLogic) ?? channelReportType(ch)
+    // ── Report node ── 只在画布上「显式连过上报配置节点」时重建。
+    // 以 report_enable 为准(graphToConfig 按节点是否连写入); 老配置(无此字段)回退到
+    // 「通道是否带上报字段」。不再因 logic 声明就自动出现报警节点。
+    const reportConnected = ch.report_enable !== undefined
+      ? ch.report_enable === true
+      : channelReportType(ch) != null
+    const reportType = reportConnected ? (channelReportType(ch) ?? 'server') : null
     if (reportType) {
       const reportId   = uid('report')
       const reportData: Record<string, unknown> = {}
@@ -205,7 +209,7 @@ export function configToGraph(
       }
       nodes.push({
         id: reportId, type: 'report',
-        position: { x: hasModel ? REPORT_X : LOGIC_X, y },
+        position: pos('report', hasModel ? REPORT_X : LOGIC_X, y),
         data: reportData,
       })
       edges.push(edge(logicId, 'report-out', reportId, 'report-in', '#ef4444'))

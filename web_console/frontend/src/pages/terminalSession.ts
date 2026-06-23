@@ -118,6 +118,9 @@ function createSession(id: string, fontSize: number): TermSession {
     if (e.type !== 'keydown') return true
     const isC = e.key === 'c' || e.key === 'C' || e.code === 'KeyC' || e.keyCode === 67
     const isV = e.key === 'v' || e.key === 'V' || e.code === 'KeyV' || e.keyCode === 86
+    const isD = e.key === 'd' || e.key === 'D' || e.code === 'KeyD' || e.keyCode === 68
+    // Ctrl+D 会向 shell 发 EOF(\x04)，在空命令行上等于退出/注销当前 shell —— 用户不需要该功能，直接挡掉。
+    if (isD && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) return false
     if (isC && e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
       if (term.hasSelection() || !e.isTrusted || Date.now() - lastMouseTs < 250) {
         copySelection()

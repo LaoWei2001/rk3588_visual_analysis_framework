@@ -1,5 +1,6 @@
 import { Node, Edge } from '@xyflow/react'
 import { getSrcType } from './streamSource'
+import { sopFlowToConfig, type SopFlow } from './sopFlow'
 import type { GlobalLogicEntry } from '../components/GlobalLogicsPanel'
 import type { GlobalSettingsData } from '../components/GlobalSettingsPanel'
 import type { Zone } from '../store/roiStore'
@@ -8,24 +9,6 @@ import type { Zone } from '../store/roiStore'
 export type RoiZone = Zone
 // roi_zones.json 的 per-channel 结构: polygon=首个区域(向后兼容), zones=全部区域。
 type RoiEntry = { polygon: number[][]; zones: RoiZone[] }
-
-// 内置回退名单（logics.json 不可用时用）。优先读 logics.json 的 report 字段，见 resolveReport。
-const DIFY_LOGICS   = ['logic_dify', 'logic_dify_person_verify']
-const SERVER_LOGICS = ['logic_server']
-
-// 解析某 logic 的上报类型：优先 logics.json 的 report 字段(reportByLogic)，回退内置名单。
-// 开发者在 channel_logic.cpp 新写的逻辑，只要在 logics.json 声明 "report":"server"/"dify"，
-// 网页就自动给它显示上报配置、并把地址/提示词写进 config.json —— 前端无需改。
-function resolveReport(
-  logic: string,
-  reportByLogic?: Record<string, string>,
-): 'server' | 'dify' | null {
-  const r = reportByLogic?.[logic]
-  if (r === 'server' || r === 'dify') return r
-  if (DIFY_LOGICS.includes(logic)) return 'dify'
-  if (SERVER_LOGICS.includes(logic)) return 'server'
-  return null
-}
 
 function buildStream(d: Record<string, unknown>): Record<string, unknown> {
   // src_type 必填、不再自动推断；按【显式】类型分别落字段（新建节点已带 src_type）。
@@ -49,7 +32,6 @@ export function graphToConfig(
   roiZones: Record<string, Zone[]>,
   globalLogics: GlobalLogicEntry[] = [],
   globalSettings: GlobalSettingsData,
-  reportByLogic: Record<string, string> = {}
 ): { config: Record<string, unknown>; roi: Record<string, RoiEntry> } | null {
   // ── 收集“通道锚点”: 一个锚点 = 一条通道 ──
   // YOLO 通道锚点 = model 节点; 传统/无推理通道锚点 = 被「视频流」直连的 logic 节点。
@@ -77,6 +59,11 @@ export function graphToConfig(
 
   const channels: Record<string, unknown>[] = []
   const roiOut: Record<string, RoiEntry> = {}
+  // 画布坐标按「通道序号 idx + 节点角色」记录(与 ROI 用同一套 idx 对齐)，随 config 一起存。
+  // 重新加载时 configToGraph 据此还原各节点位置 —— 不依赖易变的节点 ID，拖动/粘贴/增删通道后依旧稳。
+  // C++ 用 cJSON 按键名取值，忽略这个多余的键。
+  const layout: Record<string, Record<string, { x: number; y: number }>> = {}
+  const rp = (n: Node) => ({ x: Math.round(n.position.x), y: Math.round(n.position.y) })
 
   anchors.forEach(({ node: aNode, isModel }, idx) => {
     const m = isModel ? (aNode.data as Record<string, unknown>) : {}
@@ -99,21 +86,23 @@ export function graphToConfig(
     // C++ load_roi_zones() iterates channels by sorted position (ch=0,1,2…) and looks up
     // key = std::to_string(ch). Using channel_id here would misplace ROI for non-sequential ids.
     const roiEdge = edges.find(e => e.target === aNode.id && e.targetHandle === 'roi-in')
+    const roiNode = roiEdge ? nodes.find(n => n.id === roiEdge.source) ?? null : null
     const zones: RoiZone[] = (roiEdge ? (roiZones[roiEdge.source] ?? []) : [])
       .filter(z => Array.isArray(z.polygon) && z.polygon.length >= 3)
       .map(z => ({ name: z.name ?? '', polygon: z.polygon }))
     const roiPoly = zones.length > 0 ? zones[0].polygon : []   // 首区域(向后兼容单 ROI)
     roiOut[String(idx)] = { polygon: roiPoly, zones }
 
-    // ── Logic ── YOLO: model 的 logic-out → logic 节点; 传统: 锚点自身即 logic 节点 ──
+    // ── Logic/SOP ── YOLO: model 的 logic-out → logic 或 sop 节点; 传统: 锚点自身即 logic 节点 ──
     const logicNode = isModel
       ? (() => {
           const le = edges.find(e => e.source === aNode.id && e.sourceHandle === 'logic-out')
           return le ? nodes.find(n => n.id === le.target) ?? null : null
         })()
       : aNode
+    const isSop = logicNode?.type === 'sop'
     const l = logicNode ? (logicNode.data as Record<string, unknown>) : {}
-    const logic = String(l.logic ?? 'logic_default')
+    const logic = isSop ? 'logic_path_sop' : String(l.logic ?? 'logic_default')
 
     // ── Report ──
     const reportEdge = logicNode
@@ -149,26 +138,33 @@ export function graphToConfig(
           logic,
         }
 
-    // 上报参数仍由「上报配置」节点提供
-    // 方案2: 上报地址每通道独立写进 config.json(空=用上报服务默认值)，随后经 C++ → Redis 消息下发
-    // 报警节点存活以「画布上是否连了报警节点」为准: 连了就按它自己的 report_type 写字段,
-    // 与 logic 是否在 logics.json 声明 report 解耦(否则连到未声明的 logic 上, 保存即丢、刷新即消失)。
-    // 没连报警节点时仍按 logic 声明自动判定(保留"上报型 logic 自动带报警节点"的行为)。
+    // 上报开关完全以「画布上是否连了上报配置节点」为准 —— 连了才上报, 没连就不报。
+    // report_enable 写进 config, C++ 各上报类 logic 把 ctx->config->report_enable 作为上报函数参数传入,
+    // 这样这个节点是真正的开关; 不再因 logic 声明而"没连也报"。
+    // 方案2: 上报地址每通道独立写进 config.json(空=用上报服务默认值)，随后经 C++ → Redis 消息下发。
     const nodeReportType = (r.report_type === 'dify' || r.report_type === 'server') ? r.report_type : null
-    const reportType = (reportNode ? (nodeReportType ?? 'server') : null) ?? resolveReport(logic, reportByLogic)
+    const reportType = reportNode ? (nodeReportType ?? 'server') : null
+    ch.report_enable = reportNode != null
     if (reportType === 'dify') {
       ch.dify_prompt  = r.dify_prompt  ?? l.dify_prompt ?? ''
       ch.dify_api_url = r.dify_api_url ?? ''
       ch.dify_api_key = r.dify_api_key ?? ''
     }
     if (reportType === 'server') ch.server_url = r.server_url ?? ''
-    // 逻辑节点上的参数(除 logic 名本身)→ 写入通道；由 logics.json 动态驱动，不再逐字段硬编码
-    // (上报地址/提示词由上报节点负责，这里跳过以免重复)
-    Object.entries(l).forEach(([k, v]) => {
-      if (k === 'logic' || k === 'dify_prompt' || k === 'server_url'
-          || k === 'dify_api_url' || k === 'dify_api_key') return
-      if (v != null) ch[k] = v
-    })
+    if (isSop) {
+      // SOP 节点: 把流程序列化成 path_* 通道字段(逻辑集中在 sopFlowToConfig, 与普通逻辑参数解耦)
+      Object.assign(ch, sopFlowToConfig(l as unknown as SopFlow))
+      // 连了 server 型「上报配置」节点才上报 SOP 报警(顺序错误/漏检); 仅屏幕显示则不连
+      ch.path_report = reportType === 'server'
+    } else {
+      // 逻辑节点上的参数(除 logic 名本身)→ 写入通道；由 logics.json 动态驱动，不再逐字段硬编码
+      // (上报地址/提示词由上报节点负责，这里跳过以免重复)
+      Object.entries(l).forEach(([k, v]) => {
+        if (k === 'logic' || k === 'dify_prompt' || k === 'server_url'
+            || k === 'dify_api_url' || k === 'dify_api_key' || k === 'report_enable') return
+        if (v != null) ch[k] = v
+      })
+    }
 
     // Per-channel tracker overrides (仅 YOLO 通道; 传统通道 m={} 自然跳过)
     if (m.tracker_enable   != null) ch.tracker_enable   = m.tracker_enable
@@ -183,6 +179,15 @@ export function graphToConfig(
       ch.roi_zones   = zones    // 全部区域
       ch.roi_polygon = roiPoly  // 首区域(向后兼容)
     }
+
+    // 记录该通道各角色节点的画布坐标(缺失的角色不写)，供重新加载时还原布局
+    const slot: Record<string, { x: number; y: number }> = {}
+    if (streamNode) slot.stream = rp(streamNode)
+    if (isModel)    slot.model  = rp(aNode)
+    if (roiNode)    slot.roi    = rp(roiNode)
+    if (logicNode)  slot.logic  = rp(logicNode)
+    if (reportNode) slot.report = rp(reportNode)
+    layout[String(idx)] = slot
 
     channels.push(ch)
   })
@@ -226,7 +231,7 @@ export function graphToConfig(
   }
 
   return {
-    config: { schema_version: 2, global: globalCfg, channels },
+    config: { schema_version: 2, global: globalCfg, channels, _editor_layout: layout },
     roi:    roiOut,
   }
 }

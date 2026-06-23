@@ -9,10 +9,10 @@ import {
   useNodesState,
   useEdgesState,
   Node, Edge, Connection,
-  NodeChange,
   Panel,
   MarkerType,
   ReactFlowInstance,
+  SelectionMode,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 
@@ -20,17 +20,19 @@ import StreamNode  from '../nodes/StreamNode'
 import ModelNode   from '../nodes/ModelNode'
 import ROINode     from '../nodes/ROINode'
 import LogicNode   from '../nodes/LogicNode'
+import SopNode     from '../nodes/SopNode'
 import ReportNode  from '../nodes/ReportNode'
 
 import { useROIStore, type Zone } from '../store/roiStore'
 import { useConsoleStore } from '../store/consoleStore'
 import { useEditorStore }  from '../store/editorStore'
+import { useSopUiStore }   from '../store/sopUiStore'
 import { graphToConfig }   from '../utils/graphToConfig'
 import { configToGraph }   from '../utils/configToGraph'
+import { saveLastConfig }  from '../utils/lastConfig'
 import {
   fetchConfig, fetchROI, saveConfig, saveROI, saveConfigFile, deleteConfigFile,
   fetchConfigFiles, loadConfigFile,
-  fetchAppLogics, asLogicDef,
   type RoiEntry,
 } from '../api/client'
 import GlobalLogicsPanel,  { GlobalLogicEntry }                    from '../components/GlobalLogicsPanel'
@@ -45,6 +47,7 @@ const nodeTypes = {
   model:  ModelNode,
   roi:    ROINode,
   logic:  LogicNode,
+  sop:    SopNode,
   report: ReportNode,
 }
 
@@ -62,6 +65,7 @@ const PALETTE_NODES = [
   { type: 'model',  label: 'YOLO推理', icon: '🧠', cls: 'model'  },
   { type: 'roi',    label: 'ROI区域',  icon: '◆', cls: 'roi'    },
   { type: 'logic',  label: '逻辑函数', icon: '⚡', cls: 'logic'  },
+  { type: 'sop',    label: 'SOP流程',  icon: '🧭', cls: 'sop'    },
   { type: 'report', label: '上报配置', icon: '📤', cls: 'report' },
 ] as const
 
@@ -75,6 +79,7 @@ const NODE_DEFAULTS: Record<string, Record<string, unknown>> = {
             model_path: '', label_path: '', obj_thresh: 0.3, nms_thresh: 0.45, detect_classes: [] },
   roi:    {},
   logic:  { logic: 'logic_default' },
+  sop:    { target_label: '', reset_sec: 5, end_mode: 'leave', end_zone: '', steps: [] },
   report: { report_type: 'server', server_url: '' },
 }
 
@@ -119,11 +124,12 @@ export default function EditorPage() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
   const [rfInstance, setRfInstance]      = useState<ReactFlowInstance<Node, Edge> | null>(null)
+  // 加载/导入配置后待执行的「自动 fit view」：等节点测量完 + 实例就绪再触发(见下方 effect)
+  const pendingFitRef  = useRef(false)
 
-  // Layout persistence: keep a ref so the debounced timer always sees latest nodes
+  // Keep refs to the latest nodes/edges (used by paste / connect-validation / save)
   const nodesRef       = useRef<Node[]>([])
   const edgesRef       = useRef<Edge[]>([])
-  const layoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // 复制/剪切的剪贴板（节点 + 内部连线 + ROI 区域）
   const clipboardRef   = useRef<{
     nodes: Node[]
@@ -134,9 +140,11 @@ export default function EditorPage() {
   useEffect(() => { edgesRef.current = edges }, [edges])
 
   // ── 未保存改动追踪 ──
-  // savedSigRef: 上次「保存/加载」时的画布签名；pendingMarkClean: 下次状态稳定后把当前签名设为干净基线
-  const savedSigRef        = useRef<string>('')
-  const pendingMarkClean   = useRef(true)
+  // savedSigRef: 上次「保存/加载」时的画布基线签名；当前签名与它不同 = 有未保存改动。
+  // 初值 = 空画布签名 → 加载完成前(含异步拉取配置期间)空画布不会被误判为「有改动」。
+  const savedSigRef        = useRef<string>(
+    histSig({ nodes: [], edges: [], roi: {}, gs: DEFAULT_GLOBAL_SETTINGS, gl: [] })
+  )
   const dirtyRef           = useRef(false)
   const toastTimer         = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -144,7 +152,6 @@ export default function EditorPage() {
   const [toast,          setToast]         = useState<{ msg: string; ok: boolean } | null>(null)
   const [globalLogics,   setGlobalLogics]  = useState<GlobalLogicEntry[]>([])
   const [globalSettings, setGlobalSettings] = useState<GlobalSettingsData>(DEFAULT_GLOBAL_SETTINGS)
-  const [reportByLogic,  setReportByLogic]  = useState<Record<string, string>>({})
   const [importFiles,    setImportFiles]   = useState<string[]>([])
   const [showImport,     setShowImport]    = useState(false)
   const [showServiceCfg, setShowServiceCfg] = useState(false)
@@ -156,6 +163,8 @@ export default function EditorPage() {
   const roiZones    = useROIStore(s => s.zones)
   const setAllROI   = useROIStore(s => s.setAll)
   const loadConsole = useConsoleStore(s => s.load)
+  // SOP 流程弹窗打开时, 暂停主画布的 Delete 删节点(避免误删整个 SOP 节点)
+  const sopFlowOpen = useSopUiStore(s => s.flowOpen)
 
   // ── 撤销/恢复 历史栈 (Ctrl+Z / Ctrl+Y) ──
   const gsRef   = useRef(globalSettings)
@@ -216,9 +225,6 @@ export default function EditorPage() {
     setCurrentFile(targetRel)
     ;(async () => {
       try {
-        // logic→上报类型映射，与配置并行拉取
-        const logicsP = fetchAppLogics(appName).catch(() => null)
-
         let cfg: Record<string, unknown> | null = null
         let roi: Record<string, RoiEntry> = {}
         if (isDefault) {
@@ -238,42 +244,20 @@ export default function EditorPage() {
           cfg = {}
         }
 
-        const logics = await logicsP
-        const repMap: Record<string, string> = {}
-        if (logics) logics.channel_logics.map(asLogicDef).forEach(d => { if (d.report) repMap[d.name] = d.report })
-        setReportByLogic(repMap)
-        applyConfig(cfg, roi, isDefault, repMap)
+        applyConfig(cfg, roi)
       } catch { /* blank canvas */ }
     })()
   }, [appName, configParam]) // eslint-disable-line
 
-  // localStorage key for layout persistence (per app)
-  const layoutKey = appName ? `flow_layout_${appName}` : null
-
-  // applyConfig: load nodes/edges, restore saved positions, then fit view
-  // restoreLayout=true: 初次加载本程序的 config.json 时，沿用用户拖拽过的坐标
-  // restoreLayout=false: 导入"另一个"配置文件时，不沿用旧坐标(节点ID是确定性的,
-  //                      沿用会让新配置贴到旧位置、看起来像没换)，用干净的默认排布
+  // applyConfig: load nodes/edges, then fit view.
+  // 画布坐标随配置一起存(config._editor_layout, 见 graphToConfig/configToGraph)，由
+  // configToGraph 按「通道序号 + 角色」还原 —— 每份配置自带各自的布局，互不影响，无需 localStorage。
   const applyConfig = (
     cfg: Record<string, unknown>,
     roi: Record<string, RoiEntry>,
-    restoreLayout = true,
-    reportMap: Record<string, string> = reportByLogic,
   ) => {
     const { nodes: n, edges: e, roiMapping, globalLogics: gl, globalSettings: gs } =
-      configToGraph(cfg, roi, reportMap)
-
-    if (restoreLayout) {
-      try {
-        const saved = layoutKey ? localStorage.getItem(layoutKey) : null
-        if (saved) {
-          const pos: Record<string, { x: number; y: number }> = JSON.parse(saved)
-          n.forEach(node => { if (pos[node.id]) node.position = { ...pos[node.id] } })
-        }
-      } catch { /* corrupted or unavailable — fall back to default layout */ }
-    } else if (layoutKey) {
-      try { localStorage.removeItem(layoutKey) } catch { /**/ }
-    }
+      configToGraph(cfg, roi)
 
     setNodes(n)
     setEdges(e)
@@ -282,10 +266,29 @@ export default function EditorPage() {
     setGlobalSettings(gs)
     // 加载/导入新配置 → 重置撤销历史（每份配置各自独立的历史）
     histRef.current = { stack: [], idx: -1, restoring: false }
-    // 刚加载/导入/新建的配置 = 干净状态：下次状态稳定后把它设为基线（dirty=false）
-    pendingMarkClean.current = true
-    setTimeout(() => rfInstance?.fitView({ padding: 0.12, duration: 300 }), 50)
+    // 干净基线：直接用刚生成的图算签名，而不是等多次 setState 落定后再从实时状态采样。
+    // 节点走 React state、ROI 走 Zustand store，二者可能分属不同 commit；若在中途采样基线，
+    // 余下状态到位时就会被误判成「有改动」——这正是"什么都没动却提示未保存"的根因。
+    savedSigRef.current = histSig({ nodes: n, edges: e, roi: roiMapping, gs, gl })
+    if (dirtyRef.current) { dirtyRef.current = false; setDirty(false) }
+    // 标记「这次加载完要自动 fit view」；具体何时触发交给下方 effect(等节点测量 + 实例就绪)
+    pendingFitRef.current = true
   }
+
+  // 自动 fit view：加载/导入配置后(pendingFitRef=true)，等节点进入状态且实例就绪再触发。
+  // 用双 rAF 留一帧给 React Flow 测量节点尺寸，比固定 setTimeout(50) 可靠——每次打开/换配置都生效。
+  // 节点是确定性进入状态的：实例后于节点就绪时此 effect 也会因 rfInstance 变化重跑，不会漏。
+  useEffect(() => {
+    if (!pendingFitRef.current || !rfInstance || nodes.length === 0) return
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        rfInstance.fitView({ padding: 0.12, duration: 300 })
+        pendingFitRef.current = false
+      })
+    })
+    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2) }
+  }, [nodes, rfInstance])
 
   const dismissToast = () => {
     if (toastTimer.current) { clearTimeout(toastTimer.current); toastTimer.current = null }
@@ -304,18 +307,6 @@ export default function EditorPage() {
     savedSigRef.current = histSig(makeHistorySnap())
     if (dirtyRef.current) { dirtyRef.current = false; setDirty(false) }
   }
-
-  // ── Auto-save node positions after user drag (debounced 600 ms) ──
-  const onNodesChangeWithLayout = useCallback((changes: NodeChange[]) => {
-    onNodesChange(changes)
-    if (!layoutKey || !changes.some(c => c.type === 'position')) return
-    if (layoutTimerRef.current) clearTimeout(layoutTimerRef.current)
-    layoutTimerRef.current = setTimeout(() => {
-      const positions: Record<string, { x: number; y: number }> = {}
-      nodesRef.current.forEach((n: Node) => { positions[n.id] = n.position })
-      try { localStorage.setItem(layoutKey, JSON.stringify(positions)) } catch { /**/ }
-    }, 600)
-  }, [onNodesChange, layoutKey])
 
   // ── Colored edges based on source handle ──
   const onConnect = useCallback((params: Connection) => {
@@ -471,16 +462,11 @@ export default function EditorPage() {
   // 防抖记录历史：状态稳定 400ms 后入栈（自然合并连续拖拽/输入）；跳过 restore 自身引发的变更
   useEffect(() => {
     const h = histRef.current
-    // ── 未保存改动判定：与「上次保存/加载」的签名比对（立即更新，含撤销/恢复后）──
+    // ── 未保存改动判定：当前画布签名与「上次保存/加载」的基线比对（含撤销/恢复后）──
+    // 基线在 applyConfig / markClean 里同步设定，这里只做纯比较，不再从实时状态采样基线。
     const curSig = histSig(makeHistorySnap())
-    if (pendingMarkClean.current) {
-      pendingMarkClean.current = false
-      savedSigRef.current = curSig
-      if (dirtyRef.current) { dirtyRef.current = false; setDirty(false) }
-    } else {
-      const nd = curSig !== savedSigRef.current
-      if (nd !== dirtyRef.current) { dirtyRef.current = nd; setDirty(nd) }
-    }
+    const nd = curSig !== savedSigRef.current
+    if (nd !== dirtyRef.current) { dirtyRef.current = nd; setDirty(nd) }
     if (h.restoring) { h.restoring = false; return }
     const timer = setTimeout(() => {
       const snap = makeHistorySnap()
@@ -554,8 +540,8 @@ export default function EditorPage() {
       const cfg = await loadConfigFile(appName, filePath)
       // 导入另一份配置: ROI 只用该配置自带的(ch.roi_polygon)，
       // 不去拉本 App 当前的 roi_zones.json(那是上一份配置的 ROI，会串用)。
-      // 同样用干净布局, 不沿用旧坐标。
-      applyConfig(cfg, {}, false)
+      // 画布布局也用该文件自带的 _editor_layout（每份配置自带布局，互不串用）。
+      applyConfig(cfg, {})
       setCurrentFile(filePath)   // 之后「保存」写回这份文件，不动 config.json
       showToast(`已加载 ${filePath}（保存将写入此文件）`)
     } catch (e: unknown) {
@@ -579,7 +565,7 @@ export default function EditorPage() {
     setSaving(true)
     try {
       const r = await saveConfigFile(appName, path, {})
-      applyConfig({}, {}, false)         // 空白画布
+      applyConfig({}, {})                // 空白画布
       setCurrentFile(r.path)             // 之后「保存」写到新文件
       setShowImport(false)
       showToast(`已新建 ${fname}，现在编辑的是空配置`)
@@ -649,7 +635,7 @@ export default function EditorPage() {
       return null
     }
 
-    const result = graphToConfig(nodes, edges, roiZones, globalLogics, globalSettings, reportByLogic)
+    const result = graphToConfig(nodes, edges, roiZones, globalLogics, globalSettings)
     if (!result) { showToast('配置生成失败', false); return null }
     return result as { config: Record<string, unknown>; roi: Record<string, RoiEntry> }
   }
@@ -669,6 +655,7 @@ export default function EditorPage() {
         await saveConfigFile(appName, currentFile, result.config)
       }
       markClean()
+      saveLastConfig(appName, cfgBase(currentFile))   // 让「程序管理」返回后默认选中刚保存的这份配置
       showToast(`保存成功 ✓（${cfgBase(currentFile)}）`)
       return true
     } catch (e: unknown) {
@@ -696,6 +683,7 @@ export default function EditorPage() {
       const r = await saveConfigFile(appName, path, result.config)
       setCurrentFile(r.path)                       // 切到新文件：后续「保存」写到它
       markClean()                                  // 副本内容 = 当前画布 → 标记为已保存
+      saveLastConfig(appName, cfgBase(r.path))     // 让「程序管理」返回后默认选中这份副本
       showToast(`已另存为 ${fname}，现在编辑的是这份副本`)
       try { setImportFiles(await fetchConfigFiles(appName)) } catch { /* 列表刷新失败不致命 */ }
     } catch (e: unknown) {
@@ -731,6 +719,7 @@ export default function EditorPage() {
     if (n.type === 'model')  return '#16a34a'
     if (n.type === 'roi')    return '#ea580c'
     if (n.type === 'logic')  return '#9333ea'
+    if (n.type === 'sop')    return '#06b6d4'
     return '#dc2626'
   }
 
@@ -839,14 +828,15 @@ export default function EditorPage() {
           <ReactFlow
             nodes={nodes}
             edges={edges}
-            onNodesChange={onNodesChangeWithLayout}
+            onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onInit={setRfInstance}
             nodeTypes={nodeTypes}
-            deleteKeyCode="Delete"
+            deleteKeyCode={sopFlowOpen ? null : 'Delete'}
             proOptions={{ hideAttribution: true }}
             selectionOnDrag={true}
+            selectionMode={SelectionMode.Partial}
             panOnDrag={[1, 2]}
             onDrop={onDrop}
             onDragOver={onDragOver}

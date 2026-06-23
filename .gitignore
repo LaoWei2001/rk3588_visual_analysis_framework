@@ -10,3 +10,7 @@ node_modules
 .vscode
 *.png
 *.jpg
+*.jpeg
+!web_console/frontend/logos/*.png
+!web_console/frontend/logos/*.jpg
+!web_console/frontend/logos/*.jpeg
