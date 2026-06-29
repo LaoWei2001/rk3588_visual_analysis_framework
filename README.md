@@ -6,8 +6,12 @@
 
 祝编程愉快！ Happy coding! :)
 
-![Hits](https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Fgithub.com%2FLaoWei2001%2Frk3588_visual_analysis_framework&v=1)
-
+<p align="center">
+  <img
+    src="https://komarev.com/ghpvc/?username=LaoWei2001&label=PROJECT+VIEWS&color=brightgreen&style=for-the-badge"
+    alt="Project Views"
+  />
+</p>
 ---
 
 ## 特性
