@@ -6,7 +6,7 @@
 
 祝编程愉快！ Happy coding! :)
 
-![Visitor Count](https://profile-counter.glitch.me/LaoWei2001_rk3588_visual_analysis_framework/count.svg)
+![Hits](https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Fgithub.com%2FLaoWei2001%2Frk3588_visual_analysis_framework&v=1)
 
 ---
 
