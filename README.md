@@ -8,8 +8,8 @@
 
 <p align="center">
   <img
-    src="https://komarev.com/ghpvc/?username=LaoWei2001&label=PROJECT+VIEWS&color=brightgreen&style=for-the-badge"
-    alt="Project Views"
+    src="https://komarev.com/ghpvc/?username=LaoWei2001&label=%E8%AE%BF%E5%AE%A2%E4%BA%BA%E6%95%B0&color=0e75b6&style=flat-square"
+    alt="访客人数"
   />
 </p>
 ---
