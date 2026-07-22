@@ -1,0 +1,13 @@
+*.mp4
+*.docx
+__pycache__
+build
+dist
+*.tsbuildinfo
+.rknn
+node_modules
+.claude
+.vscode
+
+# 编译后的单元测试二进制（由 tests/**/build.sh 重新生成）
+*_queue_producer_test

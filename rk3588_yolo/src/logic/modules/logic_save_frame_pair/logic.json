@@ -1,0 +1,17 @@
+{
+    "label": "保存原始帧与缩放帧",
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "output_dir": {
+                "type": "string",
+                "title": "图片保存目录",
+                "description": "启用逻辑后保存一张原始分辨率帧和一张模型输入尺寸帧。相对路径以程序工作目录为基准。",
+                "default": "./captures/frame_pair",
+                "x-hot-reload": "reset_state"
+            }
+        }
+    },
+    "report_fields": []
+}

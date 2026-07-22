@@ -1,0 +1,95 @@
+.config-preview {
+  width: clamp(320px, 25vw, 430px);
+  min-width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #0d111b;
+  border-left: 1px solid var(--border);
+}
+
+.config-preview-header {
+  min-height: 46px;
+  padding: 8px 10px 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.config-preview-title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.config-preview-file {
+  max-width: 230px;
+  margin-top: 2px;
+  color: var(--text2);
+  font-family: monospace;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-preview-header button {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface2);
+  color: var(--accent);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.config-preview-header button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.config-preview-code {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  color: #c7d2fe;
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.config-preview-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  color: var(--text2);
+  text-align: center;
+  font-size: 12px;
+}
+
+.config-preview-empty span {
+  max-width: 250px;
+  opacity: 0.65;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+@media (max-width: 1400px) {
+  .config-preview {
+    width: 320px;
+    min-width: 280px;
+  }
+}

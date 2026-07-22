@@ -1,0 +1,55 @@
+{
+    "label": "通用上报框架演示",
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+    },
+    "report_fields": [
+        {
+            "key": "label",
+            "type": "string",
+            "label": "目标类别"
+        },
+        {
+            "key": "score",
+            "type": "number",
+            "label": "置信度"
+        },
+        {
+            "key": "track_id",
+            "type": "number",
+            "label": "跟踪ID"
+        },
+        {
+            "key": "roi_index",
+            "type": "number",
+            "label": "ROI序号"
+        },
+        {
+            "key": "roi_name",
+            "type": "string",
+            "label": "ROI名称"
+        },
+        {
+            "key": "box_x",
+            "type": "number",
+            "label": "目标框X"
+        },
+        {
+            "key": "box_y",
+            "type": "number",
+            "label": "目标框Y"
+        },
+        {
+            "key": "box_width",
+            "type": "number",
+            "label": "目标框宽度"
+        },
+        {
+            "key": "box_height",
+            "type": "number",
+            "label": "目标框高度"
+        }
+    ]
+}

@@ -1,0 +1,9 @@
+{
+    "label": "课程1：文字叠加",
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+    },
+    "report_fields": []
+}

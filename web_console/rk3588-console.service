@@ -1,0 +1,24 @@
+[Unit]
+Description=RK3588 Web Config Console
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ai_apps/_console/backend
+Environment=APPS_ROOT=/opt/ai_apps
+Environment=BINARY_NAME=rk3588_yolo
+ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --log-level info
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rk3588-console
+# Critical: only kill uvicorn, not its child inference processes
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
