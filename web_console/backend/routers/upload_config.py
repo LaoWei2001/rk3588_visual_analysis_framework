@@ -1,8 +1,7 @@
 """
-upload_config.py — 网页管理「上报服务」的 config.yaml（默认地址 / Redis / 超时）。
+upload_config.py — 网页管理「上报服务」的 config.yaml（默认地址 / Profile / 超时）。
 
-方案2 下, 每通道地址写在 config.json(编辑器管)；这里管的是 config.yaml 里的
-「默认/兜底地址 + Redis 连接 + 超时」, 即通道留空时使用的值。
+每通道的投递策略只保存 profile_id；连接地址和密钥集中保存在这里，便于复用和轮换。
 
 文件位置: APPS_ROOT/{name}/services/upload/config.yaml
 """
@@ -22,8 +21,7 @@ router = APIRouter()
 DEFAULT_UPLOAD_CONFIG: Dict[str, Any] = {
     "dify":   {"api_url": "", "api_key": "", "timeout": 120},
     "server": {"url": "", "timeout": 15},
-    "redis":  {"host": "localhost", "port": 6379, "db": 0,
-               "dify_queue": "dify_queue", "server_queue": "server_queue"},
+    "profiles": {},
 }
 
 

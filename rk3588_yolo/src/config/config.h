@@ -41,23 +41,51 @@ struct RoiZoneConfig
     std::vector<std::pair<double, double>> polygon;
 };
 
+/*======================== 单通道模型配置 ========================*/
+struct ChannelModelConfig
+{
+    std::string id;                           /* Web画布模型节点ID，仅用于区分同通道模型 */
+    bool enable = true;
+    std::string model_type;
+    std::string model_path;
+    std::string label_path;
+    float obj_thresh = -1.0f;
+    float nms_thresh = -1.0f;
+    std::vector<std::string> detect_classes;
+    int npu_core = -1;
+};
+
+inline bool operator==(const ChannelModelConfig &a, const ChannelModelConfig &b)
+{
+    return a.id == b.id && a.enable == b.enable &&
+           a.model_type == b.model_type && a.model_path == b.model_path &&
+           a.label_path == b.label_path && a.obj_thresh == b.obj_thresh &&
+           a.nms_thresh == b.nms_thresh && a.detect_classes == b.detect_classes &&
+           a.npu_core == b.npu_core;
+}
+inline bool operator!=(const ChannelModelConfig &a, const ChannelModelConfig &b) { return !(a == b); }
+
 /*======================== 针对通道的配置(被下面的全局配置AppConfig包含) ========================*/
 struct ChannelConfig
 {
     int id = -1;
     bool enable = true;
-    bool infer_enable = true;                /* 是否启用 YOLO 推理。false=传统算法通道:仍解码/显示/逐帧跑 logic, 但不进 NPU, ctx->results 为空、ctx->infer_enabled=0 */
+    bool infer_enable = true;                /* 是否启用 YOLO 推理。false=不进 NPU；仍解码/显示，配置了后处理时以空 results 逐帧调用 */
     bool swap_rb = false;                    /* 仅显示: 1=该通道画面 R/B 互换显示(跳过显示前 BGR→RGB);不影响推理/上报 */
     StreamConfig stream;
-    std::string logic = "logic_default";     /* 自定义逻辑名称 (须为已注册的 logic_xxx) */
+    std::string logic = "";                  /* 可选后处理模块；空=不执行模块，仅保留视频/模型结果绘制 */
     std::string model_type = "";             /* 模型类型: "yolov5"/"yolov8_det"/"yolov8_pose"/"yolov5_seg" */
     std::string model_path = "";             /* 模型路径，为空表示该通道不做YOLO推理 */
     std::string label_path = "";             /* 标签路径（检测/分割模型需要） */
+    std::vector<ChannelModelConfig> models;   /* 多模型配置；非空时优先于上面的旧单模型字段 */
     float obj_thresh = -1.0f;                /* <0 表示使用全局值 */
     float nms_thresh = -1.0f;                /* <0 表示使用全局值 */
     std::vector<std::string> detect_classes; /* 检测类别名称列表, 空=全部 */
     std::vector<RoiZoneConfig> roi_zones;     /* 多ROI区域(名称+归一化顶点), 空=无区域 */
     std::vector<std::pair<double, double>> roi_polygon; /* 单ROI区域(归一化顶点), 兼容旧配置 */
+    /* 逻辑模块专有参数：由模块 logic.json Schema 统一定义和校验。
+     * 配置文件键为 logic_parameters；新增普通逻辑参数不再扩展 ChannelConfig。 */
+    std::string logic_parameters_json = "{}";
     int threads = -1;                        /* 单通道并发线程数, <0表示使用全局设置 */
     int playback_fps = -1;                   /* 播放/处理帧率上限，<0表示不限制(本地文件默认25) */
     int max_fps = -1;                        /* 推理帧率上限，<0表示继承全局设置 */
@@ -69,25 +97,6 @@ struct ChannelConfig
     int tracker_max_miss = 10;       /* 连续丢失上限, 超限删除轨迹 */
     int tracker_min_hits = 3;        /* 确认轨迹所需的最小命中帧数 */
 
-    /* 自定义通道逻辑中的变量 */
-    int radius = 1;
-    int report_interval_sec = 5;             /* logic_server / logic_dify 上报间隔(秒): 两次上报间的最小冷却 */
-    int line_width = 20;                      /* logic_wafer: 擦拭轨迹拓宽的线条宽度(像素), 模拟扫过的面积带 */
-    int linger_sec = 10;
-    float t_start = 1.0f;                      /* logic_wafer: 工序开始确认时长(秒) - cleanwiper 需在 wafer 框内持续此久才开始; 滤手短暂进入/反光误检, 期间不画不计 */
-    float t_end = 1.0f;                        /* logic_wafer: 工序结束确认时长(秒) - cleanwiper 离开区域/消失持续此久即判定工序结束并结算 */
-    float coverage_threshold = 80.0f;         /* logic_wafer: 擦拭覆盖率合格阈值(百分比) */
-    std::string required_actions = "";        /* logic_wafer: 必做动作列表(逗号分隔, 横擦/纵擦/圆弧擦 或 h/v/arc; 空=跳过动作完整性校验) */
-
-    /* logic_wafer_sop: 晶圆湿法清洗 SOP 合规检测(花篮转移顺序/朝向/纯水槽抖动) */
-    std::string sop_sequence = "去胶槽1,去胶槽2,IPA槽,纯水槽"; /* 进槽顺序(逗号分隔); 名字须与本通道各 ROI 区域名完全一致 */
-    std::string basket_normal_label   = "bkt_normal";   /* 花篮"正常朝向"类别名(须与 labels.txt 一致) */
-    std::string basket_abnormal_label = "bkt_abnormal"; /* 花篮"翻转朝向"类别名; 出现即判定方向偏转 */
-    int sop_shake_amplitude = 15;             /* 纯水槽抖动: 一次有效上/下摆动的最小幅度(模型坐标 px) */
-    int sop_shake_min_count = 3;              /* 纯水槽抖动: 工序内所需的最小有效抖动次数, 不足则告警 */
-    float sop_enter_sec = 0.8f;               /* 进入区域确认时长(秒): 花篮须在某槽内持续此久才算"真正进入", 滤除转移时短暂划过 */
-    float sop_dir_sec   = 0.5f;               /* 朝向切换确认时长(秒): 翻转/恢复类别须持续此久才判定为"真正变向" */
-
     /* logic_path_sop: 目标"路径/顺序/停留/合规"检测(单目标·按类别; 不含抖动/朝向) */
     std::string path_sequence = "";           /* 设计路径: 逗号分隔的区域名(须与本通道各 ROI 区域名完全一致), 顺序=期望经过顺序 */
     std::string path_target_label = "";       /* 要跟踪的目标类别名(取整帧该类置信度最高的一个) */
@@ -97,37 +106,36 @@ struct ChannelConfig
     std::string path_enter_list = "";         /* 每步进入确认(秒), 逗号分隔, 与 path_sequence 对齐(空项回退默认); 由 SOP 编排画布生成 */
     std::string path_dwell_list = "";         /* 每步最小停留(秒), 逗号分隔, 与 path_sequence 对齐(空项回退默认); 由 SOP 编排画布生成 */
     std::string path_dwell_max_list = "";     /* 每步最大停留(秒), 逗号分隔, 与 path_sequence 对齐(空项回退默认; 0=不限); 由 SOP 编排画布生成 */
+    std::string path_edges = "";              /* 图边列表(可空, 空=默认线性链 0→1→...→N-1); 形如 "0-1,0-3,1-2,3-2": 每条边 src-dst, 索引基于 path_sequence 位置。允许多分支(同源多出 / 多源汇合) / 环 */
+    std::string path_entries = "";            /* 起点 step 索引(逗号分隔, 如 "0,2"): 被标记为「🚩 起点」的步骤。允许多起点(多路线)+ 同 zone 多起点(靠后续区域区分)。空 → fallback step 0 */
+    std::string path_exits = "";              /* 出口 step 索引(逗号分隔, 如 "3,5"): 用户在 SOP 子画布上连到「🏁 结束判定」的 source step。漏检判定: visited 子图必须存在 entry→exit 路径。空 → fallback 到出度0(老 DAG 行为) */
+    std::string path_edge_limits = "";        /* 边循环次数约束: "src-dst:min-max,..."(如 "1-0:2-5" = 1→0 边必须走 2~5 次)。settle 时判 count∈[min,max], 不在范围内 → 报"循环次数不符"。min/max 为 0 = 该侧不限 */
     float path_reset_sec = 5.0f;              /* 离场超时(秒): 目标离场持续此久 → 工序结束(漏检结算/复位); leave 模式为主判定, endzone 模式为兜底 */
-    std::string path_end_mode = "leave";      /* 工序结束判定: "leave"=离场超时, "endzone"=进入终点区域 */
+    std::string path_end_mode = "leave";      /* 工序结束判定: "leave"=离场超时, "endzone"=进入终点区域, "trigger"=外部触发信号 */
     std::string path_end_zone = "";           /* 终点区域名(end_mode=endzone 时用) */
-    bool path_report = false;                 /* 是否上报 SOP 报警(顺序错误/漏检); 由画布是否连"上报配置"节点决定 */
+    float path_end_dwell_sec = 0.0f;          /* 终点连续停留达到此秒数才结束; 0=通过终点进入确认后立即结束(兼容旧配置) */
+    float path_total_min_sec = 0.0f;          /* 工序总耗时下限(秒): 一轮总耗时 < 此值 → 报"总耗时不足" (赶工); 0=不限 */
+    float path_total_max_sec = 0.0f;          /* 工序总耗时上限(秒): 一轮总耗时 > 此值 → 报"总耗时超时" (卡壳); 0=不限 */
+    std::string path_trigger_mode = "auto";   /* 起点触发方式: "auto"=目标进入即开始; "external"=等待sop_trigger外部信号 */
+    bool path_trigger_mandatory = false;       /* 仅 external 模式有效: 未触发而进入区域 → 报 sop_untracked_entry */
+    bool path_report_normal = false;           /* 一轮正式结算且完全合规时是否上报 sop_normal；默认关闭以兼容旧配置 */
+    /* 报警事件视频内部运行参数；由 report_policy 派生，供源帧预缓冲使用。 */
+    bool event_video_enable = false;
+    float event_video_pre_sec = 3.0f;
+    float event_video_post_sec = 3.0f;
+    int event_video_fps = 15;                 /* 环形缓冲采样/输出帧率 */
+    std::string event_video_overlay = "custom"; /* none=原始源帧；custom/all=按实时播放规则独立渲染 */
 
-    /* logic_fall_detect: 人员跌倒检测 */
-    float fall_ratio_thresh = 1.25f;          /* 人员框宽高比阈值: width / height 超过该值时判为横躺嫌疑 */
-    float fall_dwell_sec = 2.0f;              /* 跌倒嫌疑须持续多久才报警 */
-    int fall_cooldown_sec = 10;               /* 两次跌倒报警之间的最小间隔 */
-    int wave_min_swings = 2;                  /* 挥手求救: 短时间内左右摆动达到该次数才报警 */
-    float wave_window_sec = 2.0f;             /* 挥手求救: 统计左右摆动的时间窗口 */
-
-    /* logic_dify 专用: 发送给 Dify 的提示词, 空则使用默认值 */
-    std::string dify_prompt = "";
-
-    /* 上报总开关: 画布上连了"上报配置"节点才置 true。各上报类 logic(server/dify/hook/fall
-       及自定义逻辑) 调 *_uploader_enqueue 时直接把 ctx->config->report_enable 作为 report_enable 参数传入。
-       缺省 false —— 没连节点(或老配置未写此字段)即不上报, 让"上报配置"节点成为真正的开关而非摆设。 */
-    bool report_enable = false;
-
-    /* 上报地址 (方案2: 每通道独立可填; 空 = 用 Python 上报服务 config.yaml 的默认值) */
-    std::string server_url   = ""; /* logic_server 专用: HTTP 上报地址 */
-    std::string dify_api_url = ""; /* logic_dify   专用: Dify 服务地址 */
-    std::string dify_api_key = ""; /* logic_dify   专用: Dify 应用 API Key */
+    /* 通用告警配置：Web 直接保存对象/数组，C++ 以 JSON 文本解析，新增参数无需改结构体。 */
+    std::string report_policy_json = "{}";
+    std::string report_parameters_json = "{}";
 };
 
 /*======================== 全局逻辑配置 (支持多个并行实例) ========================*/
 struct GlobalLogicConfig
 {
     bool enable = false;                  /* 是否启用 */
-    std::string logic = "global_example"; /* 逻辑名称 */
+    std::string logic = "global_default"; /* 逻辑名称 */
     std::vector<int> channels;            /* 监控的通道列表，空 = 全部 */
     int poll_interval_ms = 100;           /* 轮询间隔 (毫秒) */
 };
@@ -170,14 +178,13 @@ struct AppConfig
     int         rtsp_fps     = 25;      /* 推流帧率 */
     int         rtsp_bitrate = 4096;    /* 软件编码码率(kbps); 硬件编码用默认码率 */
     std::string rtsp_codec   = "h264";  /* "h264" 或 "h265" */
-    std::string rtsp_encoder = "auto";  /* "auto"=有硬件就硬编否则软编; "hw"=强制硬编; "sw"=强制软编 */
+    std::string rtsp_encoder = "auto";  /* "auto"=有硬件就硬编否则软编; "hw"=强制硬编 */
 
     /* 推理引擎 */
     int channel_threads = 1;                 /* 每个通道并发数默认值 */
     int max_fps = 30;                        /* 每通道推理帧率上限默认值 (从15提高到30) */
     int local_default_fps = 25;              /* 本地文件默认播放采样率 */
     int queue_size = 1;                      /* 每核任务队列深度 */
-    int npu_cores = 3;                       /* RKNN上下文数 (1-3) */
     float obj_thresh = 0.4f;                 /* 全局默认置信度阈值 */
     float nms_thresh = 0.45f;                /* 全局默认NMS阈值 */
     std::vector<std::string> detect_classes; /* 全局默认检测类别, 空=全部 */

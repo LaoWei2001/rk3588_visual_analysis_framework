@@ -34,7 +34,6 @@ void init_config_fields(AppConfig &cfg)
     REG_G("max_fps", INT, max_fps);
     REG_G("local_default_fps", INT, local_default_fps);
     REG_G("queue_size", INT, queue_size);
-    REG_G("npu_cores", INT, npu_cores);
     REG_G("obj_thresh", FLOAT, obj_thresh);
     REG_G("nms_thresh", FLOAT, nms_thresh);
     REG_G("detect_classes", STRING_ARRAY, detect_classes);
@@ -55,6 +54,7 @@ void init_config_fields(AppConfig &cfg)
     REG_C("obj_thresh", FLOAT, obj_thresh);
     REG_C("nms_thresh", FLOAT, nms_thresh);
     REG_C("detect_classes", STRING_ARRAY, detect_classes);
+    REG_C("logic_parameters", JSON, logic_parameters_json);
     REG_C("threads", INT, threads);
     REG_C("playback_fps", INT, playback_fps);
     REG_C("max_fps", INT, max_fps);
@@ -65,21 +65,6 @@ void init_config_fields(AppConfig &cfg)
     REG_C("tracker_min_hits", INT, tracker_min_hits);
 
     // 自定义逻辑中的变量配置区域
-    REG_C("radius", INT, radius);
-    REG_C("report_interval_sec", INT, report_interval_sec);
-    REG_C("linger_sec", INT, linger_sec);
-    REG_C("line_width", INT, line_width);
-    REG_C("t_start", FLOAT, t_start);
-    REG_C("t_end", FLOAT, t_end);
-    REG_C("coverage_threshold", FLOAT, coverage_threshold);
-    REG_C("required_actions", STRING, required_actions);
-    REG_C("sop_sequence", STRING, sop_sequence);
-    REG_C("basket_normal_label", STRING, basket_normal_label);
-    REG_C("basket_abnormal_label", STRING, basket_abnormal_label);
-    REG_C("sop_shake_amplitude", INT, sop_shake_amplitude);
-    REG_C("sop_shake_min_count", INT, sop_shake_min_count);
-    REG_C("sop_enter_sec", FLOAT, sop_enter_sec);
-    REG_C("sop_dir_sec", FLOAT, sop_dir_sec);
     REG_C("path_sequence", STRING, path_sequence);
     REG_C("path_target_label", STRING, path_target_label);
     REG_C("path_enter_sec", FLOAT, path_enter_sec);
@@ -91,18 +76,22 @@ void init_config_fields(AppConfig &cfg)
     REG_C("path_reset_sec", FLOAT, path_reset_sec);
     REG_C("path_end_mode", STRING, path_end_mode);
     REG_C("path_end_zone", STRING, path_end_zone);
-    REG_C("path_report", BOOL, path_report);
-    REG_C("fall_ratio_thresh", FLOAT, fall_ratio_thresh);
-    REG_C("fall_dwell_sec", FLOAT, fall_dwell_sec);
-    REG_C("fall_cooldown_sec", INT, fall_cooldown_sec);
-    REG_C("wave_min_swings", INT, wave_min_swings);
-    REG_C("wave_window_sec", FLOAT, wave_window_sec);
-    REG_C("dify_prompt", STRING, dify_prompt);
-
-    // 上报总开关 (画布连了"上报配置"节点才为 true; 各上报类 logic 上报前先判它)
-    REG_C("report_enable", BOOL, report_enable);
-    // 上报地址 (方案2: 每通道独立, 空 = 用上报服务默认值)
-    REG_C("server_url", STRING, server_url);
-    REG_C("dify_api_url", STRING, dify_api_url);
-    REG_C("dify_api_key", STRING, dify_api_key);
+    REG_C("path_end_dwell_sec", FLOAT, path_end_dwell_sec);
+    REG_C("path_total_min_sec", FLOAT, path_total_min_sec);
+    REG_C("path_total_max_sec", FLOAT, path_total_max_sec);
+    REG_C("path_edges", STRING, path_edges);
+    REG_C("path_entries", STRING, path_entries);
+    REG_C("path_exits", STRING, path_exits);
+    REG_C("path_edge_limits", STRING, path_edge_limits);
+    REG_C("path_trigger_mode", STRING, path_trigger_mode);
+    REG_C("path_trigger_mandatory", BOOL, path_trigger_mandatory);
+    REG_C("path_report_normal", BOOL, path_report_normal);
+    // 由 report_policy 派生，供原始分辨率录像环形缓冲使用。
+    REG_C("event_video_enable", BOOL, event_video_enable);
+    REG_C("event_video_pre_sec", FLOAT, event_video_pre_sec);
+    REG_C("event_video_post_sec", FLOAT, event_video_post_sec);
+    REG_C("event_video_fps", INT, event_video_fps);
+    REG_C("event_video_overlay", STRING, event_video_overlay);
+    REG_C("report_policy", JSON, report_policy_json);
+    REG_C("report_parameters", JSON, report_parameters_json);
 }

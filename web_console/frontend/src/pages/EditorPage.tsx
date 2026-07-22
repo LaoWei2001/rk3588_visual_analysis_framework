@@ -38,7 +38,7 @@ import {
 import GlobalLogicsPanel,  { GlobalLogicEntry }                    from '../components/GlobalLogicsPanel'
 import GlobalSettingsPanel, { GlobalSettingsData, DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
 import NodeConfigPanel from '../components/NodeConfigPanel'
-import ServiceConfigModal from '../components/ServiceConfigModal'
+import ConfigPreviewPanel from '../components/ConfigPreviewPanel'
 import './EditorPage.css'
 
 // ── Node types (defined outside component → stable reference) ──
@@ -75,12 +75,20 @@ const DEFAULT_RTSP_URL = 'rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels
 // ── Default node data when dropped ──
 const NODE_DEFAULTS: Record<string, Record<string, unknown>> = {
   stream: { src_type: 'rtsp', url: DEFAULT_RTSP_URL, video_enc: 'h264', channel_id: 0 },
-  model:  { enable: true, npu_core: 0, model_type: 'yolov8_det',
+  model:  { enable: true, model_type: 'yolov8_det',
             model_path: '', label_path: '', obj_thresh: 0.3, nms_thresh: 0.45, detect_classes: [] },
   roi:    {},
-  logic:  { logic: 'logic_default' },
-  sop:    { target_label: '', reset_sec: 5, end_mode: 'leave', end_zone: '', steps: [] },
-  report: { report_type: 'server', server_url: '' },
+  logic:  { logic: '' },
+  sop:    { target_label: '', reset_sec: 5, end_mode: 'leave', end_zone: '', end_dwell_sec: 0, report_normal: false, steps: [] },
+  report: {
+    report_policy: {
+      enabled: true,
+      deliveries: [{ id: 'image_server', enabled: true, media: 'image', target: 'server', inputs: [] }],
+      parameters: [], image_overlay: 'custom', video_overlay: 'custom',
+      video_pre_sec: 3, video_post_sec: 3, video_fps: 15, merge_window_sec: 5,
+    },
+    report_parameters: {},
+  },
 }
 
 let _uid = 0
@@ -117,6 +125,7 @@ export default function EditorPage() {
   const navigate       = useNavigate()
   const setAppName     = useEditorStore(s => s.setAppName)
   const loadAssets     = useEditorStore(s => s.loadAssets)
+  const loadUploadProfiles = useEditorStore(s => s.loadUploadProfiles)
   const setGlobalMaxFps = useEditorStore(s => s.setGlobalMaxFps)
   const dirty          = useEditorStore(s => s.dirty)       // 有未保存改动（也供侧边栏导航拦截）
   const setDirty       = useEditorStore(s => s.setDirty)
@@ -124,8 +133,13 @@ export default function EditorPage() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
   const [rfInstance, setRfInstance]      = useState<ReactFlowInstance<Node, Edge> | null>(null)
+  // 原生拖放的自定义 MIME 数据在部分浏览器/远程桌面环境中可能丢失，
+  // 使用 ref 保存本次拖动的节点类型作为可靠后备。
+  const dragNodeTypeRef = useRef<string | null>(null)
   // 加载/导入配置后待执行的「自动 fit view」：等节点测量完 + 实例就绪再触发(见下方 effect)
   const pendingFitRef  = useRef(false)
+  // 浏览器本地 JSON 文件选择器；隐藏 input 由工具栏按钮触发。
+  const localConfigInputRef = useRef<HTMLInputElement | null>(null)
 
   // Keep refs to the latest nodes/edges (used by paste / connect-validation / save)
   const nodesRef       = useRef<Node[]>([])
@@ -154,7 +168,6 @@ export default function EditorPage() {
   const [globalSettings, setGlobalSettings] = useState<GlobalSettingsData>(DEFAULT_GLOBAL_SETTINGS)
   const [importFiles,    setImportFiles]   = useState<string[]>([])
   const [showImport,     setShowImport]    = useState(false)
-  const [showServiceCfg, setShowServiceCfg] = useState(false)
   const [leavePrompt,    setLeavePrompt]    = useState(false)   // 未保存退出时的「是否保存配置」弹窗
   // 当前正在编辑/将保存到的配置文件（相对 app 目录）。导入/另存为后会切到对应文件，
   // 之后「保存」写到这里 —— 这样可以在副本上改而不动 config.json。
@@ -181,13 +194,26 @@ export default function EditorPage() {
     [nodes]
   )
 
+  // 与“保存”共用同一个序列化函数：这里看到的就是将写入当前配置文件的 JSON。
+  const previewJson = useMemo(() => {
+    const result = graphToConfig(nodes, edges, roiZones, globalLogics, globalSettings)
+    return result ? JSON.stringify(result.config, null, 2) : null
+  }, [nodes, edges, roiZones, globalLogics, globalSettings])
+
   // ── Update node data from config panel (outside ReactFlow context) ──
   const handleUpdateNodeData = useCallback((nodeId: string, patch: Record<string, unknown>) => {
-    setNodes(prev => prev.map(n =>
-      n.id === nodeId
-        ? { ...n, data: { ...(n.data as Record<string, unknown>), ...patch } }
-        : n
-    ))
+    const reportTargets = patch.logic == null ? new Set<string>() : new Set(
+      edgesRef.current.filter(edge => edge.source === nodeId && edge.targetHandle === 'report-in')
+        .map(edge => edge.target)
+    )
+    setNodes(prev => prev.map(n => {
+      if (n.id === nodeId) return { ...n, data: { ...(n.data as Record<string, unknown>), ...patch } }
+      if (reportTargets.has(n.id)) return {
+        ...n,
+        data: { ...(n.data as Record<string, unknown>), logic_name: String(patch.logic) },
+      }
+      return n
+    }))
   }, [setNodes])
 
   // Sync appName to editorStore, load assets
@@ -195,12 +221,13 @@ export default function EditorPage() {
     if (appName) {
       setAppName(appName)
       loadAssets(appName)
+      loadUploadProfiles(appName)
     }
-  }, [appName, setAppName, loadAssets])
+  }, [appName, setAppName, loadAssets, loadUploadProfiles])
 
   // 全局最大FPS → editorStore：ROINode 抓 USB 帧时按它推算采集分辨率(与 C++ 一致)，避免 ROI 错位
   useEffect(() => {
-    setGlobalMaxFps(Number(globalSettings.max_fps ?? 15))
+    setGlobalMaxFps(Number(globalSettings.max_fps ?? 25))
   }, [globalSettings.max_fps, setGlobalMaxFps])
 
   useEffect(() => { loadConsole() }, [loadConsole])
@@ -255,6 +282,7 @@ export default function EditorPage() {
   const applyConfig = (
     cfg: Record<string, unknown>,
     roi: Record<string, RoiEntry>,
+    markAsSaved = true,
   ) => {
     const { nodes: n, edges: e, roiMapping, globalLogics: gl, globalSettings: gs } =
       configToGraph(cfg, roi)
@@ -269,8 +297,15 @@ export default function EditorPage() {
     // 干净基线：直接用刚生成的图算签名，而不是等多次 setState 落定后再从实时状态采样。
     // 节点走 React state、ROI 走 Zustand store，二者可能分属不同 commit；若在中途采样基线，
     // 余下状态到位时就会被误判成「有改动」——这正是"什么都没动却提示未保存"的根因。
-    savedSigRef.current = histSig({ nodes: n, edges: e, roi: roiMapping, gs, gl })
-    if (dirtyRef.current) { dirtyRef.current = false; setDirty(false) }
+    if (markAsSaved) {
+      savedSigRef.current = histSig({ nodes: n, edges: e, roi: roiMapping, gs, gl })
+      if (dirtyRef.current) { dirtyRef.current = false; setDirty(false) }
+    } else {
+      // 本地文件只进入浏览器内存，尚未写入板端；使用不可能等于画布 JSON 的基线强制标记未保存。
+      savedSigRef.current = '__LOCAL_CONFIG_NOT_SAVED__'
+      dirtyRef.current = true
+      setDirty(true)
+    }
     // 标记「这次加载完要自动 fit view」；具体何时触发交给下方 effect(等节点测量 + 实例就绪)
     pendingFitRef.current = true
   }
@@ -310,14 +345,54 @@ export default function EditorPage() {
 
   // ── Colored edges based on source handle ──
   const onConnect = useCallback((params: Connection) => {
-    // 视频流节点 stream-out 只允许连一个下游节点（通道号唯一，不能一对多）
+    // 一个视频流可连接多个模型；但“多模型推理”和“直连逻辑的无推理模式”不能混用。
     if (params.sourceHandle === 'stream-out') {
-      const alreadyUsed = edgesRef.current.some(
-        e => e.source === params.source && e.sourceHandle === 'stream-out'
-      )
-      if (alreadyUsed) {
-        showToast('视频流节点已连接 — 通道号唯一，一个视频流只能接一路（YOLO 推理或逻辑函数）', false)
+      const targetNode = nodesRef.current.find(node => node.id === params.target)
+      const existingTargets = edgesRef.current
+        .filter(e => e.source === params.source && e.sourceHandle === 'stream-out')
+        .map(e => nodesRef.current.find(node => node.id === e.target))
+        .filter((node): node is Node => node != null)
+      const canAddModel = targetNode?.type === 'model' &&
+        existingTargets.every(node => node.type === 'model')
+      if (existingTargets.length > 0 && !canAddModel) {
+        showToast('视频流可以连接多个模型，但不能同时直连逻辑函数和模型', false)
         return
+      }
+      const targetAlreadyUsed = edgesRef.current.some(
+        e => e.target === params.target && e.targetHandle === 'stream-in'
+      )
+      if (targetNode?.type === 'model' && targetAlreadyUsed) {
+        showToast('该模型节点已经连接了一个视频流', false)
+        return
+      }
+    }
+    // 每个模型只能汇入一个逻辑节点，避免保存时产生有歧义的模型结果去向。
+    if (params.sourceHandle === 'logic-out') {
+      const alreadyConnected = edgesRef.current.some(
+        e => e.source === params.source && e.sourceHandle === 'logic-out'
+      )
+      if (alreadyConnected) {
+        showToast('一个模型节点只能连接一个逻辑节点', false)
+        return
+      }
+    }
+    // 一个上报节点只属于一路通道；同一逻辑可从 report-out 连接多个独立上报节点。
+    if (params.targetHandle === 'report-in') {
+      const alreadyConnected = edgesRef.current.some(
+        e => e.target === params.target && e.targetHandle === 'report-in'
+      )
+      if (alreadyConnected) {
+        showToast('一个上报配置节点只能连接一路通道；请新增另一个上报节点', false)
+        return
+      }
+      const source = nodesRef.current.find(node => node.id === params.source)
+      const logicName = source?.type === 'sop'
+        ? 'logic_path_sop'
+        : String((source?.data as Record<string, unknown> | undefined)?.logic ?? '')
+      if (logicName) {
+        setNodes(nodes => nodes.map(node => node.id === params.target
+          ? { ...node, data: { ...(node.data as Record<string, unknown>), logic_name: logicName } }
+          : node))
       }
     }
     const color = EDGE_COLORS[params.sourceHandle ?? ''] ?? '#4f8ef7'
@@ -332,21 +407,42 @@ export default function EditorPage() {
   // ── Drag-from-palette ──
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault()
-    event.dataTransfer.dropEffect = 'move'
+    event.dataTransfer.dropEffect = 'copy'
   }, [])
 
   const onDrop = useCallback((event: React.DragEvent) => {
+    // SOP 配置弹窗位于主 ReactFlow 的 DOM 子树中。外层使用捕获阶段接收 drop，
+    // 因此必须先放行 SOP 专用拖拽，否则这里的 stopPropagation 会让子画布收不到事件。
+    if (event.dataTransfer.getData('application/reactflow-sop')) return
     event.preventDefault()
+    event.stopPropagation()
     const nodeType = event.dataTransfer.getData('application/reactflow')
+      || event.dataTransfer.getData('text/plain')
+      || dragNodeTypeRef.current
+      || ''
+    dragNodeTypeRef.current = null
     if (!nodeType || !rfInstance) return
+    // 白名单防御: 只接受主画布 palette 注册过的类型, 否则忽略 —— 防止其他 ReactFlow 实例
+    // (如 SOP 子画布) 拖出的节点意外落到主画布上, 出现"未知 type 的白框"。
+    if (!(nodeType in NODE_DEFAULTS)) return
     const position = rfInstance.screenToFlowPosition({ x: event.clientX, y: event.clientY })
     const id = uid(nodeType)
-    setNodes(ns => [...ns, {
-      id,
-      type: nodeType,
-      position,
-      data: { ...(NODE_DEFAULTS[nodeType] ?? {}) },
-    } as Node])
+    setNodes(ns => {
+      const data = { ...(NODE_DEFAULTS[nodeType] ?? {}) }
+      // 新增 YOLO 节点按现有模型数量循环绑定 Core 0/1/2，避免默认全部压到 Core 0。
+      if (nodeType === 'model')
+        data.npu_core = ns.filter(n => n.type === 'model').length % 3
+      // 一个上报节点固定一条投递，并使用节点级唯一 ID，避免多个节点共享 image_server。
+      if (nodeType === 'report') {
+        data.report_policy = {
+          ...((data.report_policy as Record<string, unknown>) ?? {}),
+          deliveries: [{ id: `delivery_${id}`, enabled: true, media: 'image', target: 'server', inputs: [] }],
+          parameters: [],
+        }
+        data.report_parameters = {}
+      }
+      return [...ns, { id, type: nodeType, position, data } as Node]
+    })
   }, [rfInstance, setNodes])
 
   // ── 复制 / 剪切 / 粘贴 选中节点 (Ctrl+C / X / V) ──
@@ -393,11 +489,14 @@ export default function EditorPage() {
     let probe = 0
     const nextFreeCh = () => { while (usedCh.has(probe)) probe++; usedCh.add(probe); return probe }
 
+    let nextModelCore = nodesRef.current.filter(n => n.type === 'model').length
     const newNodes: Node[] = clip.nodes.map(n => {
       const newId = uid(n.type ?? 'node')
       idMap.set(n.id, newId)
       const data = { ...(n.data as Record<string, unknown>) }
       if (n.type === 'stream') data.channel_id = nextFreeCh()
+      // 粘贴出的 YOLO 节点视为新节点，同样继续 0/1/2 轮询分配。
+      if (n.type === 'model') data.npu_core = (nextModelCore++) % 3
       return { ...n, id: newId, selected: true,
                position: { x: n.position.x + OFFSET, y: n.position.y + OFFSET }, data } as Node
     })
@@ -506,6 +605,8 @@ export default function EditorPage() {
     }
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+      // SOP 弹窗打开时不抢快捷键 — 让弹窗自己的 Ctrl+C/X/V/Z/Y 路由到子画布(主画布上选中的 SOP 节点不应被误复制)
+      if (useSopUiStore.getState().flowOpen) return
       // 在输入框/下拉里打字时不抢快捷键
       const t = e.target as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
@@ -546,6 +647,39 @@ export default function EditorPage() {
       showToast(`已加载 ${filePath}（保存将写入此文件）`)
     } catch (e: unknown) {
       showToast(`加载失败: ${e instanceof Error ? e.message : String(e)}`, false)
+    }
+  }
+
+  // ── 从操作电脑导入 JSON：只加载到画布，点击“保存/另存为”后才写入板端 ──
+  const handleLocalConfigFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget
+    const file = input.files?.[0]
+    // 清空选择值，允许用户修正文件后再次选择同一个文件名。
+    input.value = ''
+    if (!file) return
+    if (dirtyRef.current && !window.confirm('当前画布有未保存改动，确定用本地配置替换吗？')) return
+
+    try {
+      const parsed: unknown = JSON.parse(await file.text())
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+        throw new Error('JSON 根节点必须是对象')
+      const cfg = parsed as Record<string, unknown>
+      if (!Array.isArray(cfg.channels))
+        throw new Error('缺少 channels 数组，不是有效的 RK3588 配置文件')
+      if (!cfg.global || typeof cfg.global !== 'object' || Array.isArray(cfg.global))
+        throw new Error('缺少 global 对象，不是有效的 RK3588 配置文件')
+
+      let fileName = file.name.replace(/\\/g, '/').split('/').pop() || 'config_imported.json'
+      if (!fileName.toLowerCase().endsWith('.json')) fileName += '.json'
+      if (fileName.toLowerCase() === 'roi_zones.json') fileName = 'config_imported.json'
+
+      // ROI 从 channels[].roi_zones / roi_polygon 恢复；导出的配置本身已内嵌这些字段。
+      applyConfig(cfg, {}, false)
+      setCurrentFile(`assets/${fileName}`)
+      setShowImport(false)
+      showToast(`已从电脑导入 ${fileName}，尚未写入板端；请点击保存或另存为`)
+    } catch (e: unknown) {
+      showToast(`本地配置导入失败: ${e instanceof Error ? e.message : String(e)}`, false)
     }
   }
 
@@ -604,28 +738,17 @@ export default function EditorPage() {
   // ── 由当前画布生成配置（含校验）；失败时弹 toast 并返回 null ──
   const buildConfig = (): { config: Record<string, unknown>; roi: Record<string, RoiEntry> } | null => {
     if (!appName) { showToast('未选择程序', false); return null }
-    // 通道锚点 = YOLO 推理节点，或被「视频流」直连的逻辑函数节点（传统 / 无推理通道）。
-    const hasModel = nodes.some(n => n.type === 'model')
-    const hasDirectLogic = nodes.some(n =>
-      n.type === 'logic' &&
-      edges.some(e => e.target === n.id && e.targetHandle === 'logic-in'
-                      && nodes.find(s => s.id === e.source)?.type === 'stream'))
-    if (!hasModel && !hasDirectLogic) {
-      showToast('画布为空：请添加 YOLO 推理节点，或把视频流直接连到逻辑函数节点', false)
+    // 每个视频流节点本身就是合法通道；模型和后处理 logic 都是可选步骤。
+    const streamNodes = nodes.filter(n => n.type === 'stream')
+    if (streamNodes.length === 0) {
+      showToast('画布为空：请至少添加一个视频流节点', false)
       return null
     }
 
-    // ── 检测重复通道号（检查所有真正接入下游的视频流节点：接 YOLO 推理 或 直连逻辑函数）──
-    const connectedStreamIds = new Set(
-      edges
-        .filter(e => e.targetHandle === 'stream-in' || e.targetHandle === 'logic-in')
-        .map(e => e.source)
-    )
+    // ── 检测所有视频流节点的重复通道号 ──
     const dupSet = new Set<number>()
     const dupNums: number[] = []
-    nodes
-      .filter(n => n.type === 'stream' && connectedStreamIds.has(n.id))
-      .forEach(n => {
+    streamNodes.forEach(n => {
         const cid = Number((n.data as Record<string, unknown>).channel_id ?? 0)
         if (dupSet.has(cid)) dupNums.push(cid)
         dupSet.add(cid)
@@ -633,6 +756,24 @@ export default function EditorPage() {
     if (dupNums.length > 0) {
       showToast(`通道号重复：Ch.${[...new Set(dupNums)].join('、')} — 请在视频流节点中修改后再保存`, false)
       return null
+    }
+
+    // 同一视频流下的模型可以全部不接后处理；若接，则必须全部汇入同一个逻辑节点。
+    for (const stream of nodes.filter(n => n.type === 'stream')) {
+      const modelIds = edges
+        .filter(e => e.source === stream.id && e.sourceHandle === 'stream-out')
+        .map(e => nodes.find(n => n.id === e.target))
+        .filter((n): n is Node => n?.type === 'model')
+        .map(n => n.id)
+      if (modelIds.length === 0) continue
+      const logicTargets = modelIds.map(modelId =>
+        edges.find(e => e.source === modelId && e.sourceHandle === 'logic-out')?.target ?? '')
+      const connectedTargets = logicTargets.filter(Boolean)
+      if (connectedTargets.length > 0 &&
+          (connectedTargets.length !== logicTargets.length || new Set(connectedTargets).size !== 1)) {
+        showToast(`Ch.${Number((stream.data as Record<string, unknown>).channel_id ?? 0)} 的模型必须全部不接后处理，或全部连接到同一个逻辑节点`, false)
+        return null
+      }
     }
 
     const result = graphToConfig(nodes, edges, roiZones, globalLogics, globalSettings)
@@ -734,10 +875,6 @@ export default function EditorPage() {
         </div>
       )}
 
-      {showServiceCfg && appName && (
-        <ServiceConfigModal appName={appName} onClose={() => setShowServiceCfg(false)} onToast={showToast} />
-      )}
-
       {/* Config files dialog: open / delete */}
       {showImport && (
         <div className="import-overlay" onClick={() => setShowImport(false)}>
@@ -786,6 +923,13 @@ export default function EditorPage() {
 
       {/* Toolbar */}
       <div className="editor-toolbar">
+        <input
+          ref={localConfigInputRef}
+          type="file"
+          accept=".json,application/json"
+          style={{ display: 'none' }}
+          onChange={handleLocalConfigFile}
+        />
         <button className="tb-btn" onClick={handleBack}>← 返回</button>
         <span className="tb-title">
           {appName ? `配置: ${appName}` : '流程编辑器'}
@@ -793,9 +937,11 @@ export default function EditorPage() {
           {dirty && <span className="tb-dirty" title="有未保存的改动">● 未保存</span>}
         </span>
         <div className="tb-actions">
-          <button className="tb-btn" onClick={() => setShowServiceCfg(true)}>⚙ 服务配置</button>
           <button className="tb-btn" onClick={handleNewFile} disabled={saving}>➕ 新建</button>
           <button className="tb-btn import" onClick={handleImportClick}>📂 配置文件</button>
+          <button className="tb-btn import" onClick={() => localConfigInputRef.current?.click()} disabled={saving}>
+            ⬆ 本地导入
+          </button>
           <button className="tb-btn" onClick={handleExport} disabled={saving}>⬇ 导出</button>
           <button className="tb-btn" onClick={handleSaveAs} disabled={saving}>🗐 另存为</button>
           <button className="tb-btn save"   onClick={handleSave} disabled={saving}>
@@ -813,9 +959,12 @@ export default function EditorPage() {
             className={`palette-chip ${p.cls}`}
             draggable
             onDragStart={e => {
+              dragNodeTypeRef.current = p.type
               e.dataTransfer.setData('application/reactflow', p.type)
-              e.dataTransfer.effectAllowed = 'move'
+              e.dataTransfer.setData('text/plain', p.type)
+              e.dataTransfer.effectAllowed = 'copy'
             }}
+            onDragEnd={() => { dragNodeTypeRef.current = null }}
           >
             {p.icon} {p.label}
           </div>
@@ -824,7 +973,11 @@ export default function EditorPage() {
 
       {/* Canvas + config sidebar */}
       <div className="editor-main">
-        <div className="flow-container">
+        <div
+          className="flow-container"
+          onDropCapture={onDrop}
+          onDragOverCapture={onDragOver}
+        >
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -838,8 +991,6 @@ export default function EditorPage() {
             selectionOnDrag={true}
             selectionMode={SelectionMode.Partial}
             panOnDrag={[1, 2]}
-            onDrop={onDrop}
-            onDragOver={onDragOver}
             minZoom={0.05}
           >
             <Background color="#2e3352" gap={20} size={1} />
@@ -853,16 +1004,13 @@ export default function EditorPage() {
             {nodes.length === 0 && (
               <Panel position="top-center">
                 <div className="canvas-empty-hint">
-                  从上方拖拽节点到画布，按顺序连线：
-                  <strong style={{color:'#3b82f6'}}>视频流</strong> →{' '}
-                  <strong style={{color:'#16a34a'}}>YOLO推理</strong> →{' '}
-                  <strong style={{color:'#9333ea'}}>逻辑函数</strong> →{' '}
-                  <strong style={{color:'#dc2626'}}>上报配置</strong>
-                  （ROI 区域可选，连到节点顶部）
+                  从上方添加 <strong style={{color:'#3b82f6'}}>视频流</strong> 即可形成纯显示通道；
+                  <strong style={{color:'#16a34a'}}> YOLO推理</strong>、
+                  <strong style={{color:'#9333ea'}}>逻辑函数</strong>和
+                  <strong style={{color:'#dc2626'}}>上报配置</strong>均按需连接。
                   <br />
                   <span style={{ opacity: 0.85 }}>
-                    不用 YOLO？把 <strong style={{color:'#3b82f6'}}>视频流</strong> 直接连到{' '}
-                    <strong style={{color:'#9333ea'}}>逻辑函数</strong>，即为传统 CV / 无推理通道
+                    模型可直接结束于推理节点并保留检测框绘制；传统 CV 则把视频流直接连接到逻辑函数。
                   </span>
                 </div>
               </Panel>
@@ -874,9 +1022,14 @@ export default function EditorPage() {
         <NodeConfigPanel node={selectedNode} onUpdate={handleUpdateNodeData} />
       </div>
 
-      {/* Bottom panels */}
-      <GlobalSettingsPanel settings={globalSettings} onChange={setGlobalSettings} />
-      <GlobalLogicsPanel   logics={globalLogics}     onChange={setGlobalLogics}   />
+      {/* Bottom area: global settings on the left, generated config preview on the right */}
+      <div className="editor-bottom">
+        <div className="editor-bottom-settings">
+          <GlobalSettingsPanel settings={globalSettings} onChange={setGlobalSettings} />
+          <GlobalLogicsPanel   logics={globalLogics}     onChange={setGlobalLogics}   />
+        </div>
+        <ConfigPreviewPanel fileName={cfgBase(currentFile)} json={previewJson} />
+      </div>
     </div>
   )
 }

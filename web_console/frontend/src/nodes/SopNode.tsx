@@ -9,7 +9,7 @@ import './nodeStyles.css'
 
 // SOP 流程节点: 接在 YOLO 节点之后(model.logic-out → 本节点 logic-in), 右侧接「上报配置」。
 // 模型/区域沿用上游: 检测来自 model, 区域名来自 model 连的 ROI 节点 —— 与常规通道同一套架构。
-// 点「配置流程」进入流程弹窗, 配置目标 + 各步骤(选区域 + 独立参数)。
+// 点「配置流程」进入流程弹窗, 配置目标 + 各步骤(选区域 + 独立参数) + 结束判定。
 export default function SopNode({ id, data, selected }: NodeProps) {
   const flow  = { ...DEFAULT_SOP_FLOW, ...(data as Partial<SopFlow>) }
   const steps = flow.steps ?? []
@@ -34,7 +34,7 @@ export default function SopNode({ id, data, selected }: NodeProps) {
   }
 
   const saveFlow = (f: SopFlow) =>
-    rf.setNodes(ns => ns.map(n => (n.id === id ? { ...n, data: { ...f } } : n)))
+    rf.setNodes(ns => ns.map(n => (n.id === id ? { ...n, data: { ...n.data, ...f } } : n)))
 
   return (
     <>

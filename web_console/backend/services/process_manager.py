@@ -8,15 +8,17 @@ process_manager.py — App 进程生命周期管理
     启动时把 assets/config.json 作为命令行参数传给二进制。
 """
 
+import fcntl
 import json
 import os
 import signal
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Iterator, Optional
 
 APPS_ROOT   = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 BINARY_NAME = os.environ.get("BINARY_NAME", "rk3588_yolo")
@@ -33,10 +35,120 @@ class ManagedProcess:
 
 
 _processes: Dict[str, ManagedProcess] = {}
+_start_thread_lock = threading.Lock()
+_start_lock_path = APPS_ROOT / ".app_start.lock"
+
+
+class AppAlreadyRunningError(RuntimeError):
+    """尝试启动第二个 App 时抛出，由 API 转换成 HTTP 409。"""
+
+    def __init__(self, app_name: str, pid: Optional[int]):
+        self.app_name = app_name
+        self.pid = pid
+        pid_text = f"（PID {pid}）" if pid is not None else ""
+        super().__init__(f"程序 {app_name}{pid_text} 正在运行，请先停止它再启动其他程序")
+
+
+@contextmanager
+def _exclusive_start_lock() -> Iterator[None]:
+    """跨线程、跨 worker 串行化启动检查与 PID 提交，防止并发启动两个 App。"""
+    APPS_ROOT.mkdir(parents=True, exist_ok=True)
+    with _start_thread_lock:
+        with _start_lock_path.open("a+") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _app_path(app_name: str) -> Path:
     return APPS_ROOT / app_name
+
+
+def _read_pid(app_name: str) -> Optional[int]:
+    try:
+        return int((_app_path(app_name) / "run.pid").read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _find_running_app(exclude: Optional[str] = None) -> Optional[ManagedProcess]:
+    """扫描磁盘运行标记，返回一个仍存活的 App；用于全局单实例启动约束。"""
+    if not APPS_ROOT.exists():
+        return None
+    try:
+        entries = list(APPS_ROOT.iterdir())
+    except OSError:
+        return None
+    for entry in sorted(entries, key=lambda item: item.name):
+        if not entry.is_dir() or entry.name.startswith((".", "_")) or entry.name == exclude:
+            continue
+        status = get_status(entry.name)
+        if status.get("status") == "running":
+            return _processes.get(entry.name) or _recover_process(entry.name)
+    return None
+
+
+def _recover_process(app_name: str, announce: bool = False) -> Optional[ManagedProcess]:
+    """从App目录的运行标记恢复一个进程，供多worker和跨请求状态查询使用。"""
+    app_dir = _app_path(app_name)
+    pid_file = app_dir / "run.pid"
+    pid = _read_pid(app_name)
+    if pid is None:
+        if pid_file.exists():
+            pid_file.unlink(missing_ok=True)
+        return None
+
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        pid_file.unlink(missing_ok=True)
+        return None
+
+    mode_file = app_dir / "run.mode"
+    cfg_file = app_dir / "run.config"
+    started_file = app_dir / "run.started_at"
+    try:
+        mode = mode_file.read_text().strip() if mode_file.exists() else "deploy"
+    except OSError:
+        mode = "deploy"
+    try:
+        config = cfg_file.read_text().strip() if cfg_file.exists() else "config.json"
+    except OSError:
+        config = "config.json"
+    try:
+        started_at = float(started_file.read_text().strip())
+        if started_at <= 0 or started_at > time.time():
+            raise ValueError
+    except (OSError, ValueError):
+        started_at = time.time()
+
+    managed = ManagedProcess(
+        app_name=app_name,
+        pid=pid,
+        mode=mode or "deploy",
+        started_at=started_at,
+        proc=None,  # type: ignore[arg-type]
+        config=config or "config.json",
+    )
+    _processes[app_name] = managed
+
+    if announce:
+        from services.log_buffer import get_log_buffer
+        get_log_buffer(app_name).push(
+            f"[控制台已重新关联运行进程 PID={pid}；本次会话日志从此处续接]"
+        )
+    return managed
+
+
+def _clear_runtime_files_if_pid(app_name: str, pid: int) -> None:
+    """只清理仍属于指定PID的标记，避免其他worker刚启动的新进程标记被误删。"""
+    if _read_pid(app_name) != pid:
+        return
+    app_dir = _app_path(app_name)
+    (app_dir / "run.pid").unlink(missing_ok=True)
+    (app_dir / "run.control.sock").unlink(missing_ok=True)
 
 
 def _normalize_config_name(config_name: Optional[str]) -> str:
@@ -99,28 +211,9 @@ def recover_processes() -> None:
     for entry in APPS_ROOT.iterdir():
         if not entry.is_dir() or entry.name.startswith("_"):
             continue
-        pid_file  = entry / "run.pid"
-        mode_file = entry / "run.mode"
-        cfg_file  = entry / "run.config"
-        if not pid_file.exists():
+        if not (entry / "run.pid").exists():
             continue
-        try:
-            pid  = int(pid_file.read_text().strip())
-            os.kill(pid, 0)                         # 进程存活检查
-            mode = mode_file.read_text().strip() if mode_file.exists() else "deploy"
-            cfg  = cfg_file.read_text().strip() if cfg_file.exists() else "config.json"
-            _processes[entry.name] = ManagedProcess(
-                app_name=entry.name, pid=pid, mode=mode,
-                started_at=time.time(), proc=None,  # type: ignore[arg-type]
-                config=cfg,
-            )
-            # 在内存缓冲写一条提示，提醒用户日志从此处续接
-            from services.log_buffer import get_log_buffer
-            get_log_buffer(entry.name).push(
-                f"[控制台已重启，进程 PID={pid} 仍在运行；本次会话日志从此处续接]"
-            )
-        except (ValueError, ProcessLookupError, PermissionError):
-            pid_file.unlink(missing_ok=True)
+        _recover_process(entry.name, announce=True)
 
 
 # ── 启动 ─────────────────────────────────────────────────────────────────────
@@ -180,6 +273,7 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
     app_dir     = _app_path(app_name)
     binary      = app_dir / BINARY_NAME
     assets_dir  = app_dir / "assets"
+    control_sock = app_dir / "run.control.sock"
     config_name = _normalize_config_name(config_name)
     config      = assets_dir / config_name
 
@@ -192,61 +286,93 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
     if not os.access(binary, os.X_OK):
         os.chmod(binary, 0o755)
 
-    stop_app(app_name)
+    # 检查其他 App、重启同名 App、拉起进程和写入 PID 必须处于同一把跨 worker 锁内。
+    # 否则两个浏览器同时点击不同 App 时，都可能在对方写 PID 前通过检查。
+    with _exclusive_start_lock():
+        running = _find_running_app(exclude=app_name)
+        if running is not None:
+            raise AppAlreadyRunningError(running.app_name, running.pid)
 
-    # 根据启动模式自动同步 enable_display：部署=0，调试=1
-    _patch_display(config, enable=(mode == "debug"))
+        # 同一个 App 再次启动仍保持原来的“重启”语义，不会与其他 App 并存。
+        stop_app(app_name)
 
-    # 清空内存日志缓冲，准备新一轮输出
-    from services.log_buffer import get_log_buffer
-    buf = get_log_buffer(app_name)
-    buf.clear()
+        # 根据启动模式自动同步 enable_display：部署=0，调试=1
+        _patch_display(config, enable=(mode == "debug"))
 
-    env = os.environ.copy()
-    # Debug 模式要在板端 HDMI 上显示：补齐 X 显示环境（DISPLAY + XAUTHORITY + 放行本地 root）。
-    # 否则 systemd 服务(无图形会话)拉起的程序连不上 X，表现为“先得在命令行手动跑一次才显示”。
-    if mode == "debug":
-        _setup_display_env(env)
+        # 清空内存日志缓冲，准备新一轮输出
+        from services.log_buffer import get_log_buffer
+        buf = get_log_buffer(app_name)
+        buf.clear()
 
-    # 用 PIPE 捕获 stdout+stderr，不落盘
-    proc = subprocess.Popen(
-        [str(binary), str(config)],
-        cwd=str(app_dir),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,    # Python 侧行缓冲；C 侧因走管道是块缓冲，但不影响最终正确性
-        env=env,
-    )
+        env = os.environ.copy()
+        control_sock.unlink(missing_ok=True)
+        env["RK_CHANNEL_CONTROL_SOCKET"] = str(control_sock)
+        # Debug 模式要在板端 HDMI 上显示：补齐 X 显示环境（DISPLAY + XAUTHORITY + 放行本地 root）。
+        # 否则 systemd 服务(无图形会话)拉起的程序连不上 X，表现为“先得在命令行手动跑一次才显示”。
+        if mode == "debug":
+            _setup_display_env(env)
 
-    # 后台 reader 线程：从管道逐行读取，推入内存缓冲
-    def _pipe_reader() -> None:
+        # 用 PIPE 捕获 stdout+stderr，不落盘
+        proc = subprocess.Popen(
+            [str(binary), str(config)],
+            cwd=str(app_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,    # Python 侧行缓冲；C 侧因走管道是块缓冲，但不影响最终正确性
+            env=env,
+        )
+
+        # 后台 reader 线程：从管道逐行读取，推入内存缓冲
+        def _pipe_reader() -> None:
+            try:
+                for line in proc.stdout:            # type: ignore[union-attr]
+                    buf.push(line.rstrip("\n"))
+            except Exception:
+                pass
+            buf.push("[进程已停止]")
+
+        threading.Thread(target=_pipe_reader, daemon=True, name=f"log-reader-{app_name}").start()
+
+        started_at = time.time()
+        _processes[app_name] = ManagedProcess(
+            app_name=app_name, pid=proc.pid, mode=mode,
+            started_at=started_at, proc=proc, config=config_name,
+        )
+
         try:
-            for line in proc.stdout:            # type: ignore[union-attr]
-                buf.push(line.rstrip("\n"))
+            # PID文件是运行状态的提交标记，最后写入；其他worker看到PID时，其余元数据已经完整。
+            (app_dir / "run.mode").write_text(mode)
+            (app_dir / "run.config").write_text(config_name)
+            (app_dir / "run.started_at").write_text(str(started_at))
+            (app_dir / "run.pid").write_text(str(proc.pid))
         except Exception:
-            pass
-        buf.push("[进程已停止]")
+            # 提交运行标记失败时不能留下一个无法被后续互斥检查发现的孤儿进程。
+            _processes.pop(app_name, None)
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+            except ProcessLookupError:
+                pass
+            # 当前仍持有全局启动锁，不可能误删另一个 worker 刚提交的新 PID。
+            (app_dir / "run.pid").unlink(missing_ok=True)
+            control_sock.unlink(missing_ok=True)
+            raise
 
-    threading.Thread(target=_pipe_reader, daemon=True, name=f"log-reader-{app_name}").start()
-
-    _processes[app_name] = ManagedProcess(
-        app_name=app_name, pid=proc.pid, mode=mode,
-        started_at=time.time(), proc=proc, config=config_name,
-    )
-
-    # 持久化 PID / 模式 / 配置文件名，供服务重启后恢复与展示
-    (app_dir / "run.pid").write_text(str(proc.pid))
-    (app_dir / "run.mode").write_text(mode)
-    (app_dir / "run.config").write_text(config_name)
-
-    return proc.pid
+        return proc.pid
 
 
 # ── 停止 ─────────────────────────────────────────────────────────────────────
 
 def stop_app(app_name: str) -> bool:
     mp = _processes.get(app_name)
+    disk_pid = _read_pid(app_name)
+    if disk_pid is not None and (mp is None or mp.pid != disk_pid):
+        mp = _recover_process(app_name)
     if not mp:
         # 没有 Popen 句柄时，尝试通过 PID 文件杀进程
         pid_file = _app_path(app_name) / "run.pid"
@@ -263,6 +389,7 @@ def stop_app(app_name: str) -> bool:
             except (ValueError, ProcessLookupError):
                 pass
             pid_file.unlink(missing_ok=True)
+            (_app_path(app_name) / "run.control.sock").unlink(missing_ok=True)
         return False
 
     try:
@@ -284,7 +411,7 @@ def stop_app(app_name: str) -> bool:
         pass
     finally:
         _processes.pop(app_name, None)
-        (_app_path(app_name) / "run.pid").unlink(missing_ok=True)
+        _clear_runtime_files_if_pid(app_name, mp.pid)
 
     return True
 
@@ -296,20 +423,25 @@ def get_status(app_name: str) -> dict:
                "uptime_seconds": None, "config": None}
 
     mp = _processes.get(app_name)
+    disk_pid = _read_pid(app_name)
+    # 运行状态以服务器共享的PID标记为准。当前worker没有启动该进程，或另一个worker
+    # 已重新启动出新PID时，立即从磁盘恢复，避免不同浏览器命中不同worker后状态不一致。
+    if disk_pid is not None and (mp is None or mp.pid != disk_pid):
+        mp = _recover_process(app_name)
     if not mp:
         return stopped
 
     if mp.proc is not None:
         if mp.proc.poll() is not None:
             _processes.pop(app_name, None)
-            (_app_path(app_name) / "run.pid").unlink(missing_ok=True)
+            _clear_runtime_files_if_pid(app_name, mp.pid)
             return stopped
     else:
         try:
             os.kill(mp.pid, 0)
         except ProcessLookupError:
             _processes.pop(app_name, None)
-            (_app_path(app_name) / "run.pid").unlink(missing_ok=True)
+            _clear_runtime_files_if_pid(app_name, mp.pid)
             return stopped
 
     return {

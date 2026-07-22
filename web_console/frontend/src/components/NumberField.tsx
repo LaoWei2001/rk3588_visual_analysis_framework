@@ -12,6 +12,8 @@ export interface NumberFieldProps {
   min?: number | string
   max?: number | string
   step?: number | string
+  /** 仅接受整数；用于 JSON Schema integer 等字段。 */
+  integerOnly?: boolean
   placeholder?: string
   className?: string
   style?: CSSProperties
@@ -31,9 +33,20 @@ export interface NumberFieldProps {
  */
 export default function NumberField({
   value, onChange, allowEmpty = false, def,
-  min, max, step, placeholder, className, style,
+  min, max, step, integerOnly = false, placeholder, className, style,
 }: NumberFieldProps) {
   const [text, setText] = useState(value == null ? '' : String(value))
+  const bound = (input: number | string | undefined) => {
+    if (input === undefined || input === '') return undefined
+    const parsed = Number(input)
+    return Number.isFinite(parsed) ? parsed : undefined
+  }
+  const minimum = bound(min)
+  const maximum = bound(max)
+  const isValid = (parsed: number) => Number.isFinite(parsed)
+    && (!integerOnly || Number.isInteger(parsed))
+    && (minimum === undefined || parsed >= minimum)
+    && (maximum === undefined || parsed <= maximum)
 
   // 仅当外部值与当前文本解析结果不一致时同步，避免把用户正在输入的 "0." 改写成 "0"
   useEffect(() => {
@@ -54,10 +67,13 @@ export default function NumberField({
         const t = e.target.value
         setText(t)
         if (t === '') { if (allowEmpty) onChange(undefined) }
-        else if (!isNaN(Number(t))) onChange(Number(t))
+        else {
+          const parsed = Number(t)
+          if (isValid(parsed)) onChange(parsed)
+        }
       }}
       onBlur={() => {
-        if (text === '' || isNaN(Number(text))) {
+        if (text === '' || !isValid(Number(text))) {
           if (allowEmpty) { setText(''); onChange(undefined) }
           else setText(value != null ? String(value) : (def != null ? String(def) : ''))
         }

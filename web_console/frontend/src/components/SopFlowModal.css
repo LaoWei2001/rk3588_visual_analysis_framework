@@ -4,6 +4,7 @@
   display: flex; align-items: center; justify-content: center;
 }
 .sop-fm-dialog {
+  position: relative;   /* toast 锚点 */
   width: min(1100px, 94vw); height: min(720px, 90vh);
   display: flex; flex-direction: column;
   background: #0f1117; border: 1px solid #232838; border-radius: 12px;
@@ -30,9 +31,34 @@
 }
 .sop-fm-close:hover { color: #e5e7eb; }
 
-/* Body: canvas + side panel */
+/* Body: palette + canvas + side panel */
 .sop-fm-body { flex: 1; display: flex; min-height: 0; }
 .sop-fm-flow { flex: 1; min-width: 0; position: relative; }
+
+/* ─── 左侧 palette ─── 形态对齐主画布 EditorPage 的 .palette-chip */
+.sop-fm-palette {
+  width: 130px; flex-shrink: 0;
+  background: #12151e; border-right: 1px solid #232838;
+  padding: 12px 10px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.sop-fm-palette-title {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+  color: #94a3b8; text-transform: uppercase; padding-bottom: 4px;
+}
+.sop-fm-palette .palette-chip {
+  width: 100%; cursor: grab;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; font-size: 12px;
+  border-radius: 6px; border: 1px solid #313850;
+  background: rgba(255,255,255,0.02); user-select: none;
+}
+.sop-fm-palette .palette-chip:active { cursor: grabbing; opacity: 0.65; transform: scale(0.95); }
+.sop-fm-palette .palette-chip:hover  { opacity: 0.85; box-shadow: 0 2px 8px rgba(0,0,0,0.35); }
+.sop-fm-palette-hint {
+  margin-top: auto; font-size: 10px; color: #64748b; line-height: 1.6;
+  padding-top: 10px; border-top: 1px solid #232838;
+}
 .sop-fm-hint {
   font-size: 12px; color: #cbd5e1;
   background: rgba(22, 26, 37, 0.92); border: 1px solid #313850;
@@ -55,6 +81,24 @@
 .sop-fm-field input:focus, .sop-fm-field select:focus { border-color: #06b6d4; }
 .sop-fm-side-hint { font-size: 11px; color: #6b7280; line-height: 1.5; }
 .sop-fm-side-empty { margin-top: 24px; text-align: center; font-size: 12px; line-height: 1.7; color: #6b7280; }
+
+
+/* 右侧栏「↻ 循环次数」标题: 橙色调, 与橙色循环边视觉一致 */
+.sop-fm-side-title--loop {
+  color: #fef3c7 !important;
+  border-bottom-color: #7c2d12 !important;
+}
+
+/* 操作 toast: 复制/剪切/粘贴/撤销/恢复后的短反馈 */
+.sop-fm-toast {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  z-index: 10;
+  padding: 6px 14px; font-size: 12px; color: #cffafe;
+  background: rgba(15, 23, 42, 0.95); border: 1px solid #06b6d4;
+  border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.45);
+  pointer-events: none; animation: sop-fm-toast-in 0.18s ease-out;
+}
+@keyframes sop-fm-toast-in { from { opacity: 0; transform: translate(-50%, -8px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
 /* Footer */
 .sop-fm-footer {

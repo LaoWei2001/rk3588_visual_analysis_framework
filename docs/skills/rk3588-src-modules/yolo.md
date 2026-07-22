@@ -1,209 +1,45 @@
-# YOLO 推理模块 (yolo/)
+# `src/yolo`：RKNN 模型实现
 
-> 基于 RKNN Runtime 的 NPU 推理引擎，提供统一的模型抽象基类和多种 YOLO 变体实现。
+## 当前实现
 
----
+| 配置 `model_type` | 类/文件 | 主要输出 |
+|---|---|---|
+| `yolov5` | `YOLO` / `yolo.*` | 检测框 |
+| `yolov8_det` | `YoloV8Det` / `yolov8det.*` | 检测框 |
+| `yolov8_pose` | `YoloPose` / `yolopose.*` | 检测框、关键点和分数 |
+| `yolov5_seg` | `YoloSeg` / `yoloseg.*` | 检测框和 mask |
 
-## 文件清单
+`model_base.h` 定义统一接口；`composite_model.*` 把同通道多个子模型的结果过滤、标注来源并合并。模型创建工厂实际位于 `src/analyzer/algo_engine.cpp`，不是 yolo 目录。
 
-| 文件 | 职责 |
-|------|------|
-| `model_base.h` | `ModelBase` 抽象基类，定义推理接口 |
-| `yolo_utils.h` | 公用工具：LetterBox、NMS、坐标变换等 |
-| `yolo.h / yolo.cpp` | YOLOv5 检测（通用 RKNN 推理实现） |
-| `yolov8det.h / yolov8det.cpp` | YOLOv8 检测（后处理与 v5 有差异） |
-| `yolopose.h / yolopose.cpp` | YOLOv8-Pose 关键点检测 |
-| `yoloseg.h / yoloseg.cpp` | YOLOv5-Seg 实例分割 |
+## `ModelBase` 契约
 
----
+派生类必须实现 `infer()`、输入宽高、阈值设置/读取；支持 DMA-BUF 零拷贝时覆盖 `get_input_fd()`、`get_input_rga_handle()` 和 `infer_zero_copy()`。`nms_done()` 告诉上层后处理是否已经做过 NMS。
 
-## 架构设计
+基类的 `infer_mtx` 保护共享 RKNN context；锁范围需要覆盖 RGA 写模型输入缓冲到 NPU 推理完成。不要只锁 `infer_zero_copy()` 而让另一个通道同时覆盖输入。
 
-### 模型基类（ModelBase）
+## 单模型与多模型
 
-所有模型类型继承自 `ModelBase`，推理管线（`algoProcess.cpp`）只依赖此接口，做到推理引擎与业务逻辑解耦：
+单模型配置经 `create_model(type, model_path, label_path, core_mask, obj, nms)` 生成 `shared_ptr<ModelBase>`。NPU core 允许 0、1、2；未指定时按实例轮转分配。
 
-```cpp
-class ModelBase {
-public:
-    // 标准推理（CPU 前处理 + NPU 推理 + CPU 后处理）
-    virtual bool infer(cv::Mat &frame, vector<AlgoResult> &results,
-                       YoloPerfStat *perf = nullptr) = 0;
+当 `ChannelConfig.models[]` 有多个有效条目时，推理层为每个条目创建子模型并包装为 `CompositeModel`。持久并行执行器让子模型在同一帧上运行，再由 `merge_child_results()`：
 
-    // 零拷贝推理（RGA 直接写入 RKNN 输入内存，跳过 memcpy）
-    virtual bool infer_zero_copy(vector<AlgoResult> &results,
-                                 YoloPerfStat *perf = nullptr) { return false; }
+- 按每个子模型自己的类别集合过滤；
+- 填 `model_id`、`model_type`、`model_index`；
+- 合并性能统计和结果；
+- 保持上层仍接收统一 `vector<AlgoResult>`。
 
-    // 获取 RKNN 输入内存的 DMA-BUF 句柄（供 RGA 零拷贝使用）
-    virtual int get_input_fd() const { return -1; }
+因此通道级外层类别过滤不能再次错误过滤使用不同标签表的子模型。
 
-    virtual int   input_width() const = 0;
-    virtual int   input_height() const = 0;
-    virtual void  set_thresh(float obj_thresh, float nms_thresh) = 0;
-    virtual float get_obj_thresh() const = 0;
+## 输入与坐标
 
-    // 若模型后处理已内置 NMS，返回 true，管线跳过外部 NMS
-    virtual bool  nms_done() const { return false; }
-};
-```
+analyzer 把源帧整幅 resize 到模型声明的输入宽高，不做 letterbox；模型后处理、ROI、logic 和 render 共享这一坐标系。新增模型若自身需要 letterbox，必须同时提供反变换，并评估整个项目的统一坐标约定，不能只在后处理局部改框。
 
-### 推理流程
+## 接入新模型类型
 
-**标准路径（`infer`）：**
-```
-cv::Mat (BGR, 640×640)
-    ↓ preprocess()  letterbox 缩放 + BGR→RGB + 归一化
-    ↓ rknn_inputs_set()
-    ↓ rknn_run()    NPU 执行
-    ↓ rknn_outputs_get()
-    ↓ post_process()  解码特征图 → 置信度过滤 → NMS
-    ↓ vector<AlgoResult>
-```
+1. 新建继承 `ModelBase` 的头/源文件，正确管理 RKNN context、tensor/buffer 和 RGA handle 生命周期。
+2. 把输出转换为 `AlgoResult`；模型专有数据使用已有扩展字段，确有需要再扩展公共结构及所有复制/渲染方。
+3. 在 `algo_engine.cpp::create_model()` 增加类型分支。
+4. 在 `config_validator.cpp` 支持该类型，并把同名字符串加入 `src/logic/catalog.json` 的 `model_types` 数组；正常打包会聚合到 App `logics.json`，同时确认 Web 模型节点选项链路。
+5. 检查单模型、`CompositeModel`、热 reload、阈值/类别更新和 NPU core 分配。
 
-**零拷贝路径（`infer_zero_copy`）：**
-```
-RGA 直接写入 in_mem_->fd 所指向的物理内存（NV12 → RGB888）
-    ↓ rknn_run()    NPU 执行（无需 CPU 参与前处理）
-    ↓ post_process()
-    ↓ vector<AlgoResult>
-```
-
-零拷贝路径可节省一次 `memcpy`（约 640×640×3 ≈ 1.2MB），在多路场景下效果显著。
-
-### AlgoResult — 推理结果
-
-```cpp
-struct AlgoResult {
-    cv::Rect  box;            // 检测框（模型输入坐标系，如 640×640）
-    string    label;          // 类别名称
-    int       class_id;       // 类别索引
-    float     score;          // 置信度
-    int       track_id;       // 目标跟踪 ID（-1=未跟踪）
-    int       chn_id;         // 来源通道号
-    int64_t   frame_id;       // 产出本结果的帧序号
-    uint64_t  timestamp_ms;   // 产出本结果的时间戳（毫秒）
-    cv::Scalar box_color;     // 自定义显示颜色（(-1,-1,-1)=使用默认色）
-
-    // 便捷方法
-    cv::Point box_center() const;          // 框中心点
-    bool      box_contains(cv::Point) const; // 点是否在框内
-    int       dist_sq_to(cv::Point) const; // 中心点到指定点的距离平方
-
-    // 模型特有字段
-    vector<cv::Point2f> keypoints;  // 关键点（Pose 模型）
-    cv::Mat             boxMask;    // 分割 mask（Seg 模型）
-};
-```
-
----
-
-## 支持的模型类型
-
-| 配置值（`model_type`） | 对应类 | 说明 |
-|------------------------|--------|------|
-| `"yolov5"` | `YOLO` | YOLOv5 目标检测 |
-| `"yolov8_det"` | `YOLOv8Det` | YOLOv8 目标检测 |
-| `"yolov8_pose"` | `YOLOPose` | YOLOv8-Pose 关键点检测 |
-| `"yolov5_seg"` | `YOLOSeg` | YOLOv5 实例分割 |
-
----
-
-## 性能统计（YoloPerfStat）
-
-每次推理可选填充性能统计结构：
-
-```cpp
-struct YoloPerfStat {
-    float preprocess_ms  = 0.0f;  // 前处理耗时
-    float infer_ms       = 0.0f;  // NPU 推理耗时
-    float postprocess_ms = 0.0f;  // 后处理耗时
-};
-```
-
-性能数据汇总后在终端以 Feed 统计日志形式输出（`performance_display=true` 时）。
-
----
-
-## 二次开发指南
-
-### 接入新模型类型
-
-1. 新建头文件和实现文件，继承 `ModelBase`：
-
-```cpp
-// src/yolo/mymodel.h
-#include "model_base.h"
-
-class MyModel : public ModelBase {
-public:
-    MyModel(const string &model_path, const string &label_path,
-            int core_mask, float obj_thresh, float nms_thresh);
-
-    bool infer(cv::Mat &frame, vector<AlgoResult> &results,
-               YoloPerfStat *perf = nullptr) override;
-
-    int  input_width()  const override { return model_w_; }
-    int  input_height() const override { return model_h_; }
-    void set_thresh(float obj, float nms) override { obj_thresh_=obj; nms_thresh_=nms; }
-    float get_obj_thresh() const override { return obj_thresh_; }
-
-private:
-    // ... RKNN 上下文、标签等成员 ...
-};
-```
-
-2. 在 `algo_engine.cpp` 的模型工厂函数 `create_model()` 中添加新类型的分支（声明在 `algo_internal.h`，`algoProcess.cpp` 只负责调用它）：
-
-```cpp
-// algo_engine.cpp 的 create_model 函数中
-if (cfg.model_type == "my_model") {
-    return make_unique<MyModel>(cfg.model_path, cfg.label_path,
-                                core_mask, cfg.obj_thresh, cfg.nms_thresh);
-}
-```
-
-3. 在 `config_validator.cpp` 中将 `"my_model"` 加入合法的 `model_type` 列表。
-
-### 自定义后处理
-
-覆盖 `infer()` 方法，在调用 `rknn_run()` 后实现自己的特征图解码：
-
-```cpp
-bool MyModel::infer(cv::Mat &frame, vector<AlgoResult> &results, YoloPerfStat *perf) {
-    // 1. 前处理（letterbox + 归一化）
-    auto lb = preprocess(frame);
-
-    // 2. NPU 推理
-    rknn_run(ctx_, nullptr);
-
-    // 3. 自定义后处理
-    rknn_output outputs[num_out];
-    rknn_outputs_get(ctx_, num_out, outputs, nullptr);
-    my_decode(outputs, lb, results);
-    rknn_outputs_release(ctx_, num_out, outputs);
-    return true;
-}
-```
-
-### 修改置信度阈值
-
-阈值可在运行时热更新，无需重启：
-
-```cpp
-// 通过 algoProcess 接口更新（会转调 model->set_thresh）
-algorithm_update_thresh(chnId, new_obj_thresh, new_nms_thresh);
-
-// 或者直接在 config.json 中修改并触发热重载
-```
-
-### 使用跟踪 ID
-
-`AlgoResult::track_id` 由 `Tracker`（SORT 算法）在 `analyzer.cpp` 中填入，`yolo` 模块本身不负责跟踪。业务逻辑通过 `r.track_id` 访问：
-
-```cpp
-for (auto &r : ctx->results) {
-    if (r.track_id > 0) {
-        // r.track_id 是稳定的跨帧轨迹 ID，可用于目标计数、轨迹绘制等
-    }
-}
-```
+tracker 不属于 yolo 模块，它在 analyzer 的 channel pipeline 中对合并后的结果运行。不要在每个模型派生类内各自分配 track id。

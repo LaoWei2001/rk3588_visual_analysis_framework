@@ -10,20 +10,12 @@ import type { RoiZone } from './graphToConfig'
 //       node role), NOT by node ID — see `layout`/`pos` below. This survives ID changes,
 //       drag/drop/paste, and channel add/remove.
 
-// 通道里带的上报字段(server_url / dify_*)指明上报类型(server/dify)。
-// 也用作老配置(无 report_enable 字段)的回退判断: 带上报字段 = 当初连过上报配置节点。
-function channelReportType(ch: Record<string, unknown>): 'server' | 'dify' | null {
-  if ('dify_prompt' in ch || 'dify_api_url' in ch || 'dify_api_key' in ch) return 'dify'
-  if ('server_url' in ch) return 'server'
-  return null
-}
-
-// 模型节点字段；通道里除这些(及 stream/logic/dify_prompt/server_url)之外的键，一律视为 logic 参数，路由到逻辑节点
+// 模型节点字段；通道里除这些(及 stream/logic/上报运行字段)之外的键视为逻辑参数。
 const MODEL_KEYS = new Set([
   'id', 'enable', 'infer_enable', 'npu_core', 'model_type', 'model_path', 'label_path',
   'obj_thresh', 'nms_thresh', 'detect_classes', 'threads', 'max_fps',
   'playback_fps', 'tracker_enable', 'tracker_iou_thresh', 'tracker_max_miss',
-  'tracker_min_hits', 'version', 'roi_polygon', 'roi_zones',
+  'tracker_min_hits', 'version', 'roi_polygon', 'roi_zones', 'models',
 ])
 
 
@@ -88,6 +80,7 @@ export function configToGraph(
   const REPORT_X  = 940
   const ROW_H     = 260  // vertical spacing per channel group
 
+  let modelCoreIndex = 0
   channels.forEach((ch, idx) => {
     const y      = idx * ROW_H + 60
     const origId = (ch.id as number) ?? idx
@@ -101,11 +94,28 @@ export function configToGraph(
     // 视频流直连逻辑函数, 不画 model 节点。graphToConfig 对传统通道刻意不写这两个字段。
     const mType = typeof ch.model_type === 'string' ? (ch.model_type as string).trim() : ''
     const mPath = typeof ch.model_path === 'string' ? (ch.model_path as string).trim() : ''
-    const hasModel = mType !== '' || mPath !== ''
+    const configuredModels = Array.isArray(ch.models)
+      ? (ch.models as Record<string, unknown>[]).filter(model =>
+          String(model.model_type ?? '').trim() !== '' || String(model.model_path ?? '').trim() !== '')
+      : []
+    const modelConfigs = configuredModels.length > 0
+      ? configuredModels
+      : (mType !== '' || mPath !== '' ? [{
+          id: 'legacy_model',
+          enable: ch.infer_enable !== false,
+          model_type: ch.model_type,
+          model_path: ch.model_path,
+          label_path: ch.label_path,
+          obj_thresh: ch.obj_thresh,
+          nms_thresh: ch.nms_thresh,
+          detect_classes: ch.detect_classes,
+          npu_core: ch.npu_core,
+        }] : [])
+    const hasModel = modelConfigs.length > 0
 
     // ── Stream node — 每个通道独立创建，不做去重 ──
-    // 通道号 (channel_id) 唯一，一个 StreamNode 只能连一个下游节点，
-    // 因此即使两个通道 URL 相同，也必须各自有独立的 StreamNode。
+    // 通道号 (channel_id) 唯一。每个通道使用独立 StreamNode；同一 StreamNode 可连接多个模型。
+    // 即使两个通道 URL 相同，也仍然分别创建各自的视频流节点。
     const streamId = uid('stream')
     nodes.push({
       id: streamId, type: 'stream',
@@ -113,29 +123,46 @@ export function configToGraph(
       data: { ...stream, channel_id: origId },
     })
 
-    // ── 通道字段分流：模型字段 → 模型节点；其余(radius 及任意 logic 参数) → 逻辑节点 ──
-    // report_enable 由上报节点的有无表达, 不能混进逻辑参数(否则会绕过节点又被写回通道)。
-    const { stream: _s, logic: _lg, dify_prompt: _dp, server_url: _su,
-            dify_api_url: _du, dify_api_key: _dk, report_enable: _re, ...rest } = ch
+    // ── 通道字段分流：模型字段 → 模型节点；其余参数 → 逻辑节点 ──
+    const {
+      stream: _s, logic: _lg, logic_parameters: _logicParameters,
+      event_video_enable: _eve, event_video_pre_sec: _evpre,
+      event_video_post_sec: _evpost, event_video_fps: _evfps,
+      event_video_overlay: _evOverlay,
+      report_policy: _reportPolicy, report_parameters: _reportParameters,
+      ...rest
+    } = ch
     const modelData:   Record<string, unknown> = {}
     const logicParams: Record<string, unknown> = {}
     Object.entries(rest).forEach(([k, v]) => {
       if (MODEL_KEYS.has(k)) modelData[k] = v
       else                   logicParams[k] = v
     })
+    delete modelData.models
 
     // ── Model node (仅 YOLO 通道) ──
     // 节点创建顺序: stream→model→roi→logic→report。画布坐标按「通道序号 + 角色」从
     // config._editor_layout 还原(见 pos())，与节点 ID 无关。
-    let modelId: string | null = null
+    const modelIds: string[] = []
     if (hasModel) {
-      modelId = uid('model')
-      nodes.push({
-        id: modelId, type: 'model',
-        position: pos('model', MODEL_X, y),
-        data: { ...modelData },
+      modelConfigs.forEach((configuredModel, modelIndex) => {
+        const modelId = uid('model')
+        const npuCore = configuredModel.npu_core ?? (modelCoreIndex % 3)
+        modelCoreIndex++
+        const role = modelIndex === 0 ? 'model' : `model_${modelIndex}`
+        nodes.push({
+          id: modelId, type: 'model',
+          position: pos(role, MODEL_X, y + modelIndex * 90),
+          data: {
+            ...modelData,
+            ...configuredModel,
+            infer_enable: configuredModel.enable !== false,
+            npu_core: npuCore,
+          },
+        })
+        edges.push(edge(streamId, 'stream-out', modelId, 'stream-in', '#3b82f6'))
+        modelIds.push(modelId)
       })
-      edges.push(edge(streamId, 'stream-out', modelId, 'stream-in', '#3b82f6'))
     }
 
     // ── ROI node (一个 ROI 节点 = 该通道的多个命名区域) ──
@@ -164,55 +191,78 @@ export function configToGraph(
       })
       roiMapping[roiId] = zones
       // YOLO 通道此处即连 model; 传统通道的 roi→logic 连线在 logic 节点创建后补。
-      if (hasModel) edges.push(edge(roiId, 'roi-out', modelId!, 'roi-in', '#f97316'))
+      if (hasModel) modelIds.forEach(modelId =>
+        edges.push(edge(roiId!, 'roi-out', modelId, 'roi-in', '#f97316')))
     }
 
-    // ── Logic / SOP node ──
-    const logic   = String(_lg ?? 'logic_default')
+    // ── Logic / SOP node（可选）── 配置未声明 logic 时不创建后处理节点。
+    const logic   = String(_lg ?? '').trim()
     const isSop   = logic === 'logic_path_sop'
-    const logicId = uid(isSop ? 'sop' : 'logic')
+    let logicId: string | null = null
     // SOP: 结构化流程(target/reset/steps, 集中在 sopConfigToFlow); 普通逻辑: 名字 + 参数(logics.json 驱动)
-    const logicData: Record<string, unknown> = isSop
-      ? { ...sopConfigToFlow(ch) }
-      : { logic, ...logicParams }
-    nodes.push({
-      id: logicId, type: isSop ? 'sop' : 'logic',
-      position: pos('logic', hasModel ? LOGIC_X : MODEL_X, y),  // 传统通道 logic 占据 model 的列位置, 更紧凑
-      data: logicData,
-    })
-    if (hasModel) {
-      edges.push(edge(modelId!, 'logic-out', logicId, 'logic-in', isSop ? '#06b6d4' : '#a855f7'))
-    } else {
-      // 传统/无推理通道: 视频流直连逻辑函数; 有 ROI 则 ROI 接到逻辑函数顶部
-      edges.push(edge(streamId, 'stream-out', logicId, 'logic-in', '#3b82f6'))
-      if (roiId) edges.push(edge(roiId, 'roi-out', logicId, 'roi-in', '#f97316'))
+    const moduleParameters = _logicParameters && typeof _logicParameters === 'object' && !Array.isArray(_logicParameters)
+      ? _logicParameters as Record<string, unknown> : {}
+    if (logic) {
+      logicId = uid(isSop ? 'sop' : 'logic')
+      const logicData: Record<string, unknown> = isSop
+        ? { ...sopConfigToFlow(ch), logic_parameters: moduleParameters }
+        : { logic, logic_parameters: moduleParameters, ...logicParams }
+      nodes.push({
+        id: logicId, type: isSop ? 'sop' : 'logic',
+        position: pos('logic', hasModel ? LOGIC_X : MODEL_X, y),  // 传统通道 logic 占据 model 的列位置, 更紧凑
+        data: logicData,
+      })
+      if (hasModel) {
+        modelIds.forEach(modelId =>
+          edges.push(edge(modelId, 'logic-out', logicId!, 'logic-in', isSop ? '#06b6d4' : '#a855f7')))
+      } else {
+        // 传统/无推理通道: 视频流直连逻辑函数; 有 ROI 则 ROI 接到逻辑函数顶部
+        edges.push(edge(streamId, 'stream-out', logicId, 'logic-in', '#3b82f6'))
+        if (roiId) edges.push(edge(roiId, 'roi-out', logicId, 'roi-in', '#f97316'))
+      }
     }
 
-    // ── Report node ── 只在画布上「显式连过上报配置节点」时重建。
-    // 以 report_enable 为准(graphToConfig 按节点是否连写入); 老配置(无此字段)回退到
-    // 「通道是否带上报字段」。不再因 logic 声明就自动出现报警节点。
-    const reportConnected = ch.report_enable !== undefined
-      ? ch.report_enable === true
-      : channelReportType(ch) != null
-    const reportType = reportConnected ? (channelReportType(ch) ?? 'server') : null
-    if (reportType) {
-      const reportId   = uid('report')
-      const reportData: Record<string, unknown> = {}
-      if (reportType === 'dify') {
-        reportData.report_type  = 'dify'
-        reportData.dify_prompt  = _dp ?? ''
-        reportData.dify_api_url = _du ?? ''
-        reportData.dify_api_key = _dk ?? ''
-      } else {
-        reportData.report_type = 'server'
-        reportData.server_url  = _su ?? ''
-      }
-      nodes.push({
-        id: reportId, type: 'report',
-        position: pos('report', hasModel ? REPORT_X : LOGIC_X, y),
-        data: reportData,
+    // ── Report node ── 截图上报或事件视频任一启用时重建。
+    const policyObj = (_reportPolicy && typeof _reportPolicy === 'object'
+      ? _reportPolicy : null) as Record<string, unknown> | null
+    const configuredDeliveries = Array.isArray(policyObj?.deliveries)
+      ? policyObj!.deliveries as Record<string, unknown>[] : []
+    // enabled 是新配置的显式节点存在标记；deliveries 判断用于兼容没有 enabled 的旧配置。
+    const hasReportNode = logicId !== null &&
+      (policyObj?.enabled === true || configuredDeliveries.length > 0)
+    if (hasReportNode && logicId) {
+      const nodeDeliveries = configuredDeliveries.length > 0 ? configuredDeliveries : [{
+        id: `delivery_ch${origId}`,
+        enabled: true,
+        media: 'image',
+        target: 'server',
+        inputs: [],
+      }]
+      nodeDeliveries.forEach((delivery, reportIndex) => {
+        const reportId = uid('report')
+        const reportData: Record<string, unknown> = {
+          logic_name: logic,
+          report_policy: {
+            ...(policyObj ?? {}),
+            enabled: true,
+            deliveries: [{ ...delivery, enabled: delivery.enabled !== false }],
+            image_overlay: policyObj?.image_overlay ?? 'custom',
+            video_overlay: policyObj?.video_overlay ?? _evOverlay ?? 'custom',
+            video_pre_sec: policyObj?.video_pre_sec ?? _evpre ?? 3,
+            video_post_sec: policyObj?.video_post_sec ?? _evpost ?? 3,
+            video_fps: policyObj?.video_fps ?? _evfps ?? 15,
+          },
+          report_parameters: (_reportParameters && typeof _reportParameters === 'object') ? _reportParameters : {},
+        }
+        const role = reportIndex === 0 ? 'report' : `report_${reportIndex}`
+        const baseX = hasModel ? REPORT_X : LOGIC_X
+        nodes.push({
+          id: reportId, type: 'report',
+          position: pos(role, baseX + reportIndex * 250, y),
+          data: reportData,
+        })
+        edges.push(edge(logicId, 'report-out', reportId, 'report-in', '#ef4444'))
       })
-      edges.push(edge(logicId, 'report-out', reportId, 'report-in', '#ef4444'))
     }
   })
 

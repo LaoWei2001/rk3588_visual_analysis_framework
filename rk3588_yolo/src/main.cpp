@@ -23,16 +23,13 @@
  *
  * 1. config_monitor_thread  — 配置文件热加载监控 (main 直接 pthread_create)
  * 2. fd_monitor_thread      — fd 使用量监控 (main 直接 pthread_create)
- * 3. capture_bus_thread[N]  — GStreamer bus 监听 + 重连 (DecChannel::init
- * 内部创建, 底层)
- * 4. display_worker[N]      — 异步显示 RGA + framebuffer (main 直接
- * pthread_create)
- * 5. dispatch_worker[N]     — NPU 结果分发 + channel_logic (main 直接
- * pthread_create)
+ * 3. capture_bus_thread[N]  — GStreamer bus 监听 + 重连 (DecChannel::init 内部创建, 底层)
+ * 4. display_worker[N]      — 异步显示 RGA + framebuffer (main 直接 pthread_create)
+ * 5. dispatch_worker[N]     — NPU 结果分发 + channel_logic (main 直接 pthread_create)
  * 6. infer_worker[N]        — NPU 推理 worker (algorithm_init 内部创建, 底层)
- * 7. global_logic[N]        — 跨通道全局逻辑轮询 (global_logic_start_all
- * 内部创建)
- * 8. upload_worker          — Redis 报警异步上传 (alarm_uploader_init 内部创建)
+ * 7. global_logic[N]        — 跨通道全局逻辑轮询 (global_logic_start_all 内部创建)
+ * 8. alarm_image_worker     — 告警图片与事件清单异步落盘 (首次报警时创建)
+ * 9. event_video_worker     — 报警前后片段异步编码 (首次启用录像时创建)
  *
  * === 同步模型 ===
  * mtx (rwlock)    — 保护 config 读/写
@@ -43,29 +40,34 @@
  * 信号 → isRunning=0 → 唤醒所有等待线程 → 逆序 join → 释放资源
  */
 
-#include <algorithm>
-#include <cerrno>
-#include <chrono>
-#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
+#include <csignal>
 #include <dirent.h>
-#include <glib-unix.h>
-#include <pthread.h>
 #include <sys/resource.h>
 #include <unistd.h>
+#include <glib-unix.h>
+#include <pthread.h>
+#include <algorithm>
+#include <chrono>
+#include <vector>
 
-#include "analyzer/analyzer.h"
-#include "capturer/decChannel.h"
+#include "system.h"
 #include "config/config.h"
 #include "core/app_ctrl.h"
 #include "core/pause_ctrl.h"
-#include "logic/global_logic.h"
+#include "core/process_signals.h"
+#include "capturer/decChannel.h"
+#include "analyzer/analyzer.h"
+#include "control/channel_control.h"
+#include "logic/core/channel_logic.h"
+#include "logic/core/global_logic.h"
 #include "player/display.h"
 #include "player/rtsp_streamer.h"
-#include "system.h"
-#include "uploader/alarm_uploader.h"
+#include "recorder/event_video_recorder.h"
+#include "alarm/alarm_report.h"
 
 /* config_monitor_thread_func — 由 app_ctrl.cpp 导出 (C++ mangling) */
 extern "C" void *config_monitor_thread_func(void *arg);
@@ -73,27 +75,20 @@ extern "C" void *config_monitor_thread_func(void *arg);
 /*======================== 信号处理 ========================*/
 
 /* 信号触发标志: 所有工作线程检查此标志退出 */
-static volatile sig_atomic_t g_signal_received = 0;
+volatile sig_atomic_t g_shutdown_signal = 0;
+volatile sig_atomic_t g_pause_toggle_signal = 0;
 
 static void signal_handler(int sig)
 {
     (void)sig;
-    g_signal_received = 1;
-    if (g_pCtrl)
-    {
-        g_pCtrl->isRunning = 0;
-        /* 唤醒 config_monitor (pthread_cond 在 signal handler 中
-         * 严格来说不是异步信号安全的, 但 Linux/glibc 实际可行) */
-        pthread_cond_broadcast(&g_pCtrl->cv_config);
-    }
-    pause_ctrl::resume_all();
+    g_shutdown_signal = 1;
 }
 
 /* SIGUSR1: 暂停/恢复切换 */
 static void sigusr1_handler(int sig)
 {
     (void)sig;
-    pause_ctrl::toggle();
+    g_pause_toggle_signal = 1;
 }
 
 /*======================== 资源上限 + fd 监控 ========================*/
@@ -109,7 +104,8 @@ static void raise_fd_limit_or_warn(void)
     rlim_t want = 65536;
     if (rl.rlim_cur >= want)
     {
-        printf("[Main] RLIMIT_NOFILE already %lu (>= %lu), keep\n", (unsigned long)rl.rlim_cur, (unsigned long)want);
+        printf("[Main] RLIMIT_NOFILE already %lu (>= %lu), keep\n",
+               (unsigned long)rl.rlim_cur, (unsigned long)want);
         return;
     }
     struct rlimit nrl = rl;
@@ -128,8 +124,9 @@ static void raise_fd_limit_or_warn(void)
             return;
         }
     }
-    printf("[Main] RLIMIT_NOFILE raised: soft %lu -> %lu, hard %lu -> %lu\n", (unsigned long)rl.rlim_cur,
-           (unsigned long)nrl.rlim_cur, (unsigned long)rl.rlim_max, (unsigned long)nrl.rlim_max);
+    printf("[Main] RLIMIT_NOFILE raised: soft %lu -> %lu, hard %lu -> %lu\n",
+           (unsigned long)rl.rlim_cur, (unsigned long)nrl.rlim_cur,
+           (unsigned long)rl.rlim_max, (unsigned long)nrl.rlim_max);
 }
 
 static int count_self_fds(void)
@@ -150,7 +147,7 @@ static int count_self_fds(void)
 static void *fd_monitor_thread_func(void *arg)
 {
     (void)arg;
-    while (g_pCtrl && g_pCtrl->isRunning && !g_pCtrl->fd_monitor_exit)
+    while (g_pCtrl && g_pCtrl->isRunning.load() && !g_pCtrl->fd_monitor_exit.load())
     {
         /* 60 秒超时等待 */
         struct timespec ts;
@@ -159,7 +156,7 @@ static void *fd_monitor_thread_func(void *arg)
 
         pthread_mutex_lock(&g_pCtrl->cv_config_mtx);
         pthread_cond_timedwait(&g_pCtrl->cv_config, &g_pCtrl->cv_config_mtx, &ts);
-        int running = g_pCtrl->isRunning && !g_pCtrl->fd_monitor_exit;
+        const bool running = g_pCtrl->isRunning.load() && !g_pCtrl->fd_monitor_exit.load();
         pthread_mutex_unlock(&g_pCtrl->cv_config_mtx);
 
         if (!running)
@@ -167,77 +164,68 @@ static void *fd_monitor_thread_func(void *arg)
 
         int show = 0;
         if (g_pCtrl)
-        {
-            pthread_rwlock_rdlock(&g_pCtrl->mtx);
-            show = g_pCtrl->config.performance_display;
-            pthread_rwlock_unlock(&g_pCtrl->mtx);
-        }
+            show = app_ctrl_get_performance_display();
         if (!show)
             continue;
 
         int fd_count = count_self_fds();
         struct rlimit rl;
         getrlimit(RLIMIT_NOFILE, &rl);
-        printf("[Perf] fd_in_use=%d soft_limit=%lu hard_limit=%lu\n", fd_count, (unsigned long)rl.rlim_cur,
-               (unsigned long)rl.rlim_max);
+        printf("[Perf] fd_in_use=%d soft_limit=%lu hard_limit=%lu\n",
+               fd_count, (unsigned long)rl.rlim_cur, (unsigned long)rl.rlim_max);
     }
     return nullptr;
 }
 
-/*======================== 线程句柄数组 ========================*/
-/* display/dispatch 线程数在运行时确定, 动态分配 */
-static pthread_t *g_display_tids = nullptr;
-static int g_display_thread_count = 0;
-static pthread_t *g_dispatch_tids = nullptr;
-static int g_dispatch_thread_count = 0;
-
 /*======================== main ========================*/
 int main(int argc, char **argv)
 {
-    /* -------- 0. 抬高 fd 上限 -------- */
-    raise_fd_limit_or_warn();
+    if (argc == 2 && strcmp(argv[1], "--list-logics") == 0)
+    {
+        for (const auto &name : channel_logic_names())
+            printf("%s\n", name.c_str());
+        return 0;
+    }
 
-    /* -------- 1. 配置加载 -------- */
-    const char *cfgPath = (argc > 1) ? argv[1] : "./assets/config.json";
+    const char *cfgPath = (argc > 1) ? argv[1] : "./assets/config_sop.json";
+    int exit_code = 0;
+    bool ctrl_initialized = false;
+    bool analyzer_initialized = false;
+    bool config_monitor_started = false;
+    bool fd_monitor_started = false;
+    std::vector<pthread_t> display_tids;
+    std::vector<pthread_t> dispatch_tids;
+    std::shared_ptr<const AppRuntimeSnapshot> startup_runtime;
+
+    raise_fd_limit_or_warn();
     if (app_ctrl_init(cfgPath) != 0)
     {
         fprintf(stderr, "[FATAL] app_ctrl_init failed\n");
         return -1;
     }
-
-    /* -------- 2. GStreamer -------- */
+    ctrl_initialized = true;
     gst_init(&argc, &argv);
 
     if (app_ctrl_get_chn_nums() <= 0)
     {
         fprintf(stderr, "[FATAL] no streams configured\n");
-        app_ctrl_deinit();
-        return -1;
+        exit_code = -1;
+        goto cleanup;
     }
 
-    /* -------- 3. 信号处理 (sigaction — Haikang 风格) -------- */
     {
-        struct sigaction sa;
-        memset(&sa, 0, sizeof(sa));
+        struct sigaction sa{};
         sa.sa_handler = signal_handler;
-        sa.sa_flags = 0;
         sigaction(SIGINT, &sa, nullptr);
         sigaction(SIGTERM, &sa, nullptr);
-
-        struct sigaction sa_usr;
-        memset(&sa_usr, 0, sizeof(sa_usr));
+        struct sigaction sa_usr{};
         sa_usr.sa_handler = sigusr1_handler;
-        sa_usr.sa_flags = 0;
         sigaction(SIGUSR1, &sa_usr, nullptr);
-
-        /* 忽略 SIGPIPE (防止 Redis 断连时程序崩溃) */
-        struct sigaction sa_pipe;
-        memset(&sa_pipe, 0, sizeof(sa_pipe));
+        struct sigaction sa_pipe{};
         sa_pipe.sa_handler = SIG_IGN;
         sigaction(SIGPIPE, &sa_pipe, nullptr);
     }
 
-    /* -------- 4. 暂停键初始化 -------- */
     if (g_pCtrl->config.enable_pause_key && g_pCtrl->config.enable_display)
     {
         pause_ctrl::init(true);
@@ -246,264 +234,213 @@ int main(int argc, char **argv)
     else
         pause_ctrl::init(false);
 
-    /* -------- 5. 显示缓冲区 --------
-     * GTK 显示和 RTSP 推流共用同一张拼接大图 g_disp, 任一开启都需要分配并合成。
-     * 这样无显示器(enable_display=false)、仅 enable_rtsp=true 时也能对外推流。 */
-    g_pCtrl->dispDesc = {"rtsp_yolo_grid", 0, 0, app_ctrl_get_disp_width(), app_ctrl_get_disp_height()};
+    g_pCtrl->dispDesc = {"rtsp_yolo_grid", 0, 0,
+                         app_ctrl_get_disp_width(), app_ctrl_get_disp_height()};
     if (app_ctrl_get_enable_disp() || app_ctrl_get_enable_rtsp())
     {
         g_pCtrl->pDispBuffer = dispBufferMap(&g_pCtrl->dispDesc);
-        if (!g_pCtrl->pDispBuffer || !(*g_pCtrl->pDispBuffer))
+        if (!g_pCtrl->pDispBuffer || !*g_pCtrl->pDispBuffer)
         {
             fprintf(stderr, "[FATAL] alloc display buffer failed\n");
-            app_ctrl_deinit();
-            return -2;
+            exit_code = -2;
+            goto cleanup;
         }
     }
 
-    /* -------- 6. 分析器初始化 (数据结构, 不创建线程) -------- */
     if (analyzer_init() != 0)
     {
         fprintf(stderr, "[FATAL] analyzer init failed\n");
-        app_ctrl_deinit();
-        return -3;
+        exit_code = -3;
+        goto cleanup;
     }
+    analyzer_initialized = true;
 
-    /* ==================================================================
-     * 7. 线程创建区 — 所有线程在此清晰可见
-     * ================================================================== */
+    if (channel_control_init() != 0)
+        fprintf(stderr, "[Main] WARNING: channel control init failed, web action buttons disabled\n");
 
-    /* ---- 7a. 配置热加载监控线程 ---- */
-    if (pthread_create(&g_pCtrl->config_monitor_tid, nullptr, config_monitor_thread_func, nullptr) != 0)
-    {
-        fprintf(stderr, "[FATAL] pthread_create config_monitor failed\n");
-        analyzer_deinit();
-        app_ctrl_deinit();
-        return -4;
-    }
-    printf("[Main] config_monitor_thread created (tid=%lu)\n", (unsigned long)g_pCtrl->config_monitor_tid);
-
-    /* ---- 7b. fd 监控线程 ---- */
-    if (pthread_create(&g_pCtrl->fd_monitor_tid, nullptr, fd_monitor_thread_func, nullptr) != 0)
-    {
-        fprintf(stderr, "[WARNING] pthread_create fd_monitor failed, continuing\n");
-        g_pCtrl->fd_monitor_exit = 1;
-    }
-    else
-        printf("[Main] fd_monitor_thread created (tid=%lu)\n", (unsigned long)g_pCtrl->fd_monitor_tid);
-
-    /* ---- 7c. 采集器 + bus 监听线程 (底层, DecChannel 内部 pthread_create) ----
-     * busListen 线程在 DecChannel::init() → createVideoDecChannel() 中创建,
-     * 负责 GStreamer bus 消息监听 + 断流重连. 每个唯一 RTSP 源一个线程. */
     g_pCtrl->capturer_count = 0;
-    for (int i = 0; i < app_ctrl_get_chn_nums(); ++i)
+    startup_runtime = app_ctrl_get_runtime_snapshot();
+    for (int config_index = 0;
+         config_index < static_cast<int>(startup_runtime->config.channels.size());
+         ++config_index)
     {
-        const auto &chCfg = g_pCtrl->config.channels[i];
+        const auto &chCfg = startup_runtime->config.channels[config_index];
+        const int channel_id = chCfg.id;
         SrcCfg_t srcCfg;
         srcCfg.srcType = config_utils::normalize_src_type(chCfg.stream);
         srcCfg.location = config_utils::resolve_stream_location(chCfg.stream, srcCfg.srcType);
-        srcCfg.videoEncType =
-            chCfg.stream.video_enc.empty() ? "h264" : config_utils::to_lower_copy(chCfg.stream.video_enc);
+        srcCfg.videoEncType = chCfg.stream.video_enc.empty()
+            ? "h264" : config_utils::to_lower_copy(chCfg.stream.video_enc);
         srcCfg.loop = chCfg.stream.loop;
-
+        srcCfg.usb_width = chCfg.stream.usb_width;
+        srcCfg.usb_height = chCfg.stream.usb_height;
+        srcCfg.usb_fps = chCfg.playback_fps > 0 ? chCfg.playback_fps :
+            (chCfg.max_fps > 0 ? chCfg.max_fps : app_ctrl_get_max_fps());
         if (srcCfg.location.empty())
         {
-            fprintf(stderr, "[Main] channel %d has empty stream location (src_type=%s)\n", i, srcCfg.srcType.c_str());
+            fprintf(stderr, "[Main] channel %d has empty stream location (src_type=%s)\n",
+                    channel_id, srcCfg.srcType.c_str());
             continue;
         }
 
-        /* 检查是否可共享已有采集器 */
-        int shared = 0;
-        for (int j = 0; j < i; ++j)
+        bool shared = false;
+        for (int other_index = 0; other_index < config_index; ++other_index)
         {
-            if (!g_pCtrl->capturers[j])
-                continue;
-            const auto &otherCfg = g_pCtrl->config.channels[j];
-            auto otherSrcType = config_utils::normalize_src_type(otherCfg.stream);
-            auto otherLocation = config_utils::resolve_stream_location(otherCfg.stream, otherSrcType);
+            const auto &otherCfg = startup_runtime->config.channels[other_index];
+            const int other_id = otherCfg.id;
+            if (!g_pCtrl->capturers[other_id]) continue;
+            const auto otherSrcType = config_utils::normalize_src_type(otherCfg.stream);
+            const auto otherLocation = config_utils::resolve_stream_location(otherCfg.stream, otherSrcType);
             if (srcCfg.srcType == otherSrcType && srcCfg.location == otherLocation)
             {
-                fprintf(stderr, "[Main] channel %d shares stream (%s: %s) with channel %d\n", i, srcCfg.srcType.c_str(),
-                        srcCfg.location.c_str(), j);
-                g_pCtrl->capturers[j]->addTargetChannel(i);
-                shared = 1;
+                printf("[Main] channel %d shares stream with channel %d\n",
+                       channel_id, other_id);
+                g_pCtrl->capturers[other_id]->addTargetChannel(channel_id);
+                shared = true;
                 break;
             }
         }
-        if (shared)
-            continue;
+        if (shared) continue;
 
-        DecChannel *ch = new DecChannel(i, srcCfg);
-        if (!ch)
-        {
-            fprintf(stderr, "[Main] channel %d creation failed\n", i);
-            continue;
-        }
-
-        int ret = ch->init();
+        DecChannel *ch = new DecChannel(channel_id, srcCfg);
+        const int ret = ch ? ch->init() : -1;
         if (ret != 0)
         {
-            fprintf(stderr, "[Main] channel %d init failed (code=%d), url=%s\n", i, ret, chCfg.stream.url.c_str());
+            fprintf(stderr, "[Main] channel %d init failed (code=%d), url=%s\n",
+                    channel_id, ret, chCfg.stream.url.c_str());
             delete ch;
             continue;
         }
-        g_pCtrl->capturers[i] = ch;
-        g_pCtrl->capturer_count++;
-        printf("[Main] capture_bus_thread[ch%d] created (via DecChannel::init)\n", i);
+        g_pCtrl->capturers[channel_id] = ch;
+        ++g_pCtrl->capturer_count;
+        printf("[Main] capture_bus_thread[channel=%d] created\n", channel_id);
     }
 
-    /* ---- 7d. 异步显示线程 (每通道一个) ---- */
-    g_display_thread_count = analyzer_get_display_thread_count();
-    if (g_display_thread_count > 0)
+    for (int i = 0; i < analyzer_get_display_thread_count(); ++i)
     {
-        g_display_tids = new pthread_t[g_display_thread_count];
-        for (int i = 0; i < g_display_thread_count; ++i)
+        const int channel_id = analyzer_get_display_chn_id(i);
+        pthread_t tid{};
+        const int ret = pthread_create(&tid, nullptr, display_worker_thread,
+                                       (void *)(intptr_t)channel_id);
+        if (ret != 0)
+            fprintf(stderr, "[Main] pthread_create display_worker[channel=%d] failed: %s\n",
+                    channel_id, strerror(ret));
+        else
         {
-            int chnId = analyzer_get_display_chn_id(i);
-            int ret = pthread_create(&g_display_tids[i], nullptr, display_worker_thread, (void *)(intptr_t)chnId);
-            if (ret != 0)
-                fprintf(stderr, "[Main] pthread_create display_worker[ch%d] failed: %s\n", chnId, strerror(ret));
-            else
-                printf("[Main] display_worker[ch%d] created (tid=%lu)\n", chnId, (unsigned long)g_display_tids[i]);
+            display_tids.push_back(tid);
+            printf("[Main] display_worker[channel=%d] created (tid=%lu)\n",
+                   channel_id, (unsigned long)tid);
         }
     }
 
-    /* ---- 7e. 结果分发线程 (每推理通道一个) ---- */
-    g_dispatch_thread_count = analyzer_get_dispatch_thread_count();
-    if (g_dispatch_thread_count > 0)
+    for (int i = 0; i < analyzer_get_dispatch_thread_count(); ++i)
     {
-        g_dispatch_tids = new pthread_t[g_dispatch_thread_count];
-        for (int i = 0; i < g_dispatch_thread_count; ++i)
+        const int channel_id = analyzer_get_dispatch_chn_id(i);
+        pthread_t tid{};
+        const int ret = pthread_create(&tid, nullptr, dispatch_worker_thread,
+                                       (void *)(intptr_t)channel_id);
+        if (ret != 0)
+            fprintf(stderr, "[Main] pthread_create dispatch_worker[channel=%d] failed: %s\n",
+                    channel_id, strerror(ret));
+        else
         {
-            int chnId = analyzer_get_dispatch_chn_id(i);
-            int ret = pthread_create(&g_dispatch_tids[i], nullptr, dispatch_worker_thread, (void *)(intptr_t)chnId);
-            if (ret != 0)
-                fprintf(stderr, "[Main] pthread_create dispatch_worker[ch%d] failed: %s\n", chnId, strerror(ret));
-            else
-                printf("[Main] dispatch_worker[ch%d] created (tid=%lu)\n", chnId, (unsigned long)g_dispatch_tids[i]);
+            dispatch_tids.push_back(tid);
+            printf("[Main] dispatch_worker[channel=%d] created (tid=%lu)\n",
+                   channel_id, (unsigned long)tid);
         }
     }
 
-    /* ---- 7f. 推理 worker 线程 (底层, algorithm_init 内部 pthread_create) ----
-     * 每个模型实例一个 worker 线程.
-     * 线程数 = sum(每个推理通道的 threads 参数), 通常 = 推理通道数 * 1. */
-    printf("[Main] infer_workers created by algorithm_init (pthread, see "
-           "algoProcess.cpp)\n");
-
-    /* ---- 7g. 全局逻辑线程 (global_logic_start_all 内部创建) ----
-     * 每个 GlobalLogicConfig 实例一个独立线程.
-     * 已在 analyzer_init → global_logic_start_all 中创建. */
-    printf("[Main] global_logic threads created by global_logic_start_all (%d "
-           "instance(s))\n",
+    printf("[Main] infer workers managed by algorithm_init; global logic instances=%d\n",
            global_logic_get_instance_count());
-
-    /* ---- 7h. Redis 报警上传线程 ---- */
-    if (!alarm_uploader_init("127.0.0.1", 6379))
-        fprintf(stderr, "[Main] WARNING: Redis not reachable at startup, upload "
-                        "worker will retry\n");
-    printf("[Main] upload_worker created (via alarm_uploader_init)\n");
-
-    /* ---- 7i. RTSP 推流服务 (enable_rtsp 时启动) ----
-     * 内部起独立 GMainContext + loop 线程 + feeder 线程,
-     * 推送与显示屏一致的拼接画面; 与 GTK 显示互不干扰, 无显示器时也能工作.
-     * 未启用则为空操作. */
     if (rtsp_streamer_init() != 0)
-        fprintf(stderr, "[Main] WARNING: RTSP streamer init failed, continuing without RTSP\n");
+    {
+        fprintf(stderr, "[Main] FATAL: RTSP streamer startup failed\n");
+        exit_code = -4;
+        goto cleanup;
+    }
 
-    printf("\n[Main] === All threads started. Entering main loop. ===\n\n");
+    /* 所有依赖固定拓扑的采集/显示/分发线程就绪后才启动热更新。
+     * 避免启动阶段 config_monitor 与 main 同时改 capturers/config。 */
+    if (pthread_create(&g_pCtrl->config_monitor_tid, nullptr,
+                       config_monitor_thread_func, nullptr) != 0)
+    {
+        fprintf(stderr, "[FATAL] pthread_create config_monitor failed\n");
+        exit_code = -4;
+        goto cleanup;
+    }
+    config_monitor_started = true;
+    printf("[Main] config_monitor_thread created (tid=%lu)\n",
+           (unsigned long)g_pCtrl->config_monitor_tid);
 
-    /* ==================================================================
-     * 8. 主循环
-     * ================================================================== */
-    if (app_ctrl_get_enable_disp())
-        display(&g_pCtrl->dispDesc); /* 阻塞直到窗口关闭 */
+    if (pthread_create(&g_pCtrl->fd_monitor_tid, nullptr,
+                       fd_monitor_thread_func, nullptr) != 0)
+        fprintf(stderr, "[WARNING] pthread_create fd_monitor failed, continuing\n");
     else
     {
-        while (g_pCtrl->isRunning && !g_signal_received)
-            usleep(500 * 1000);
+        fd_monitor_started = true;
+        printf("[Main] fd_monitor_thread created (tid=%lu)\n",
+               (unsigned long)g_pCtrl->fd_monitor_tid);
     }
 
-    printf("\n[Main] === Exiting. Joining all threads... ===\n");
-
-    /* ==================================================================
-     * 9. 逆序退出 — join 所有线程 → 释放资源
-     * ================================================================== */
-
-    /* 步骤 0: 停止 RTSP 推流 (先停其 feeder/loop 线程, 之后才拆显示缓冲/通道) */
-    rtsp_streamer_deinit();
-
-    /* 步骤 0b: 解除暂停状态 */
-    pause_ctrl::resume_all();
-
-    /* 步骤 1: 通知所有线程停止 */
-    if (g_pCtrl)
+    printf("\n[Main] === All threads started. Entering main loop. ===\n\n");
+    if (app_ctrl_get_enable_disp())
+        display(&g_pCtrl->dispDesc);
+    else
     {
-        g_pCtrl->isRunning = 0;
-        g_pCtrl->config_monitor_exit = 1;
-        g_pCtrl->fd_monitor_exit = 1;
-        g_pCtrl->upload_worker_exit = 1;
-        g_pCtrl->disp_thread_exit = 1;
-        pthread_cond_broadcast(&g_pCtrl->cv_config);
+        while (g_pCtrl->isRunning.load() && !g_shutdown_signal)
+        {
+            if (g_pause_toggle_signal)
+            {
+                g_pause_toggle_signal = 0;
+                pause_ctrl::toggle();
+            }
+            usleep(100 * 1000);
+        }
     }
-    g_signal_received = 1;
 
-    /* 步骤 2: 停止采集器 bus 线程 */
+cleanup:
+    printf("\n[Main] === Stopping and joining all threads... ===\n");
+    rtsp_streamer_deinit();
+    if (ctrl_initialized) app_ctrl_request_stop();
+    pause_ctrl::resume_all();
+    channel_control_deinit();
+
+    /* 配置线程可能重建 capturer，必须先于 capturer 销毁完成 join。 */
+    if (fd_monitor_started)
+        pthread_join(g_pCtrl->fd_monitor_tid, nullptr);
+    if (config_monitor_started)
+        pthread_join(g_pCtrl->config_monitor_tid, nullptr);
+
+    /* 热重载线程退出后再停止算法，避免它在 shutdown 中途重启模型 worker。 */
+    if (analyzer_initialized) analyzer_request_stop();
+
     if (g_pCtrl)
     {
         for (int i = 0; i < APP_CTRL_MAX_CAPTURERS; ++i)
         {
-            if (g_pCtrl->capturers[i])
-            {
-                g_pCtrl->capturers[i]->stop();
-                delete g_pCtrl->capturers[i];
-                g_pCtrl->capturers[i] = nullptr;
-            }
+            if (!g_pCtrl->capturers[i]) continue;
+            g_pCtrl->capturers[i]->stop();
+            delete g_pCtrl->capturers[i];
+            g_pCtrl->capturers[i] = nullptr;
         }
+        g_pCtrl->capturer_count = 0;
     }
 
-    /* 步骤 3: 停推理引擎 → join dispatch 线程 */
-    analyzer_deinit(); /* stop infer workers, global_logic, trackers,
-                          channel_logic */
-    printf("[Main] Joining %d dispatch thread(s)...\n", g_dispatch_thread_count);
-    for (int i = 0; i < g_dispatch_thread_count; ++i)
-        pthread_join(g_dispatch_tids[i], nullptr);
-    delete[] g_dispatch_tids;
-    g_dispatch_tids = nullptr;
+    /* 先回收仍可能触发 logic/告警的线程，再关闭告警与录像消费者。 */
+    for (pthread_t tid : dispatch_tids) pthread_join(tid, nullptr);
+    for (pthread_t tid : display_tids) pthread_join(tid, nullptr);
 
-    /* 步骤 4: join display 线程 (在销毁其队列同步原语之前) */
-    printf("[Main] Joining %d display thread(s)...\n", g_display_thread_count);
-    analyzer_wake_display_threads(); /* 唤醒所有阻塞在 pthread_cond_wait 的
-                                        display 线程 */
-    for (int i = 0; i < g_display_thread_count; ++i)
-        pthread_join(g_display_tids[i], nullptr);
-    delete[] g_display_tids;
-    g_display_tids = nullptr;
+    if (analyzer_initialized)
+        analyzer_deinit();
 
-    /* 步骤 5: 销毁 display 队列同步原语 (display 线程已退出) */
-    analyzer_destroy_display_queues();
+    event_video_recorder_deinit();
+    alarm_report_deinit();
 
-    /* 步骤 6: 停止上传线程 */
-    alarm_uploader_deinit();
+    if (analyzer_initialized)
+        analyzer_destroy_display_queues();
+    dispBufferUnmap();
+    if (ctrl_initialized) app_ctrl_deinit();
 
-    /* 步骤 7: join fd_monitor */
-    if (g_pCtrl && !g_pCtrl->fd_monitor_exit)
-    {
-        g_pCtrl->fd_monitor_exit = 1;
-        pthread_cond_broadcast(&g_pCtrl->cv_config);
-        pthread_join(g_pCtrl->fd_monitor_tid, nullptr);
-    }
-
-    /* 步骤 8: join config_monitor */
-    if (g_pCtrl && !g_pCtrl->config_monitor_exit)
-    {
-        g_pCtrl->config_monitor_exit = 1;
-        pthread_cond_broadcast(&g_pCtrl->cv_config);
-        pthread_join(g_pCtrl->config_monitor_tid, nullptr);
-    }
-
-    /* 步骤 9: 销毁控制块 */
-    app_ctrl_deinit();
-
-    printf("[Main] Clean exit.\n");
-    return 0;
+    printf("[Main] Clean exit (code=%d).\n", exit_code);
+    return exit_code;
 }

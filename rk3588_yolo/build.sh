@@ -8,6 +8,7 @@
 #   ./build.sh out --no-strip             # 禁用 strip (保留调试信息)
 #   ./build.sh out --no-bundle-libs       # 不打包依赖动态库
 #   ./build.sh out --image <name>         # 指定交叉编译 Docker 镜像名
+#   ./build.sh out --clean                # 清除已有 build/ 后进行全量编译
 # ============================================================
 
 set -e
@@ -23,6 +24,7 @@ DO_STRIP=true
 BUNDLE_LIBS=true
 BUILD_TYPE="Release" # CMake 构建类型; --debug 模式改为 Debug
 DEBUG_ONLY=false     # true=只编译可执行文件, 跳过打包(由命令行的 --debug 选项触发)
+CLEAN_BUILD=false    # true=编译前清除 build/，默认复用构建缓存进行增量编译
 IMAGE_NAME="rk3588_builder:2026_4_30"
 
 # 需要打包的 Python 微服务列表（相对路径:目标名, 路径相对于项目根 common/）
@@ -33,10 +35,11 @@ PYTHON_SERVICES=(
 
 # --- 命令行参数解析 ---
 usage() {
-    echo "用法: ./build.sh <输出目录名> [--debug] [--no-strip] [--no-bundle-libs] [--image <name>]"
+    echo "用法: ./build.sh <输出目录名> [--debug] [--clean] [--no-strip] [--no-bundle-libs] [--image <name>]"
     echo "  (编译方式按 CPU 架构自动识别: aarch64->板端原生, x86_64->Docker交叉编译)"
     echo "  <输出目录名>  编译产物文件夹名 (创建于 $PROJECT_DIR 下), 如 dist / release_v8"
     echo "  --debug       只编译可执行文件(Debug构建), 不打包, 产物直接放在 build.sh 同级目录"
+    echo "  --clean       编译前清除已有 build/；默认保留 build/ 并进行增量编译"
 }
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -45,6 +48,7 @@ while [[ $# -gt 0 ]]; do
         --image)           IMAGE_NAME="$2"; shift 2 ;;
         -h|--help)         usage; exit 0 ;;
         --debug)           DEBUG_ONLY=true; BUILD_TYPE=Debug; DO_STRIP=false; BUNDLE_LIBS=false; shift ;;
+        --clean)           CLEAN_BUILD=true; shift ;;
         --*)               echo "[ERROR] 未知选项: $1"; usage; exit 1 ;;
         *)
             if [ -z "$OUT_NAME" ]; then
@@ -92,6 +96,7 @@ echo "  调试模式 : 仅编译可执行文件 (跳过打包)"
 fi
 echo "  项目目录 : $PROJECT_DIR"
 echo "  输出目录 : $DIST_DIR"
+echo "  清理构建 : $CLEAN_BUILD"
 echo "  Strip    : $DO_STRIP"
 if [ "$MODE" = "docker" ]; then
     echo "  Docker镜像: $IMAGE_NAME"
@@ -102,6 +107,12 @@ echo "========================================================"
 
 # --- 编译前准备 ---
 cd "$PROJECT_DIR"
+if [ "$CLEAN_BUILD" = "true" ]; then
+    echo ">>> [clean] 清除旧构建目录: $PROJECT_DIR/build"
+    rm -rf "$PROJECT_DIR/build"
+else
+    echo ">>> [incremental] 保留 build/，复用已有构建缓存"
+fi
 if [ "$DEBUG_ONLY" = "true" ]; then
     : # debug: 产物直接放项目根目录, 不清空、不另建目录
 else
@@ -160,7 +171,7 @@ set(ENV{PKG_CONFIG_DIR} "")
 set(ENV{PKG_CONFIG_LIBDIR} "/sysroot/usr/lib/pkgconfig:/sysroot/usr/share/pkgconfig:/sysroot/usr/lib/aarch64-linux-gnu/pkgconfig")
 set(ENV{PKG_CONFIG_SYSROOT_DIR} "/sysroot")
 CROSS_EOF
-rm -rf build && mkdir -p build && cd build
+mkdir -p build && cd build
 cmake .. -DCROSS_CMAKE_FILE=/workspace/cross.cmake -DCMAKE_BUILD_TYPE=${BUILD_TYPE:-Release}
 echo "  [make] 开始编译..."
 make -j$(nproc)
@@ -195,7 +206,7 @@ DOCKER_CMD
 # ============================================================
 elif [ "$MODE" = "onboard" ]; then
     echo ">>> [1/4] 开始板端原生编译..."
-    rm -rf build && mkdir -p build && cd build
+    mkdir -p build && cd build
     cmake .. -DCMAKE_BUILD_TYPE=$BUILD_TYPE
     make -j$(nproc)
     cd "$PROJECT_DIR"
@@ -246,11 +257,16 @@ if [ -d "$PROJECT_DIR/assets" ]; then
     cp -rp "$PROJECT_DIR/assets" "$DIST_DIR/"
 fi
 
-# 逻辑参数清单（供 Web 控制台动态渲染各 logic 的可调参数；后端读 app 根目录下的 logics.json）
-if [ -f "$PROJECT_DIR/src/logic/logics.json" ]; then
-    cp "$PROJECT_DIR/src/logic/logics.json" "$DIST_DIR/logics.json"
-    echo "  打包: src/logic/logics.json  ->  logics.json"
+# 从 REGISTER_LOGIC(func) 取 logic ID，并聚合每个模块的 logic.json，
+# 生成 Web 控制台兼容的根目录 logics.json。
+# 生成器同时校验逻辑身份、参数 Schema，以及 C++ param_* 调用的键和类型。
+LOGICS_GENERATOR="$PROJECT_DIR/scripts/generate_logics_catalog.py"
+if [ ! -f "$LOGICS_GENERATOR" ]; then
+    echo "[ERROR] 缺少逻辑清单生成器: $LOGICS_GENERATOR"
+    exit 1
 fi
+python3 "$LOGICS_GENERATOR" --output "$DIST_DIR/logics.json"
+echo "  聚合: REGISTER_LOGIC(func) + src/logic/modules/*/logic.json  ->  logics.json"
 
 mkdir -p "$DIST_DIR/services"
 for entry in "${PYTHON_SERVICES[@]}"; do

@@ -200,7 +200,7 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
       const res = await captureSnapshot(appName, {
         src_type,
         url:    String(streamData.url    ?? ''),
-        device: String(streamData.device ?? '/dev/video0'),
+        device: String(streamData.device ?? '/dev/video81'),
         ...(src_type === 'usb' && usbRes
           ? { usb_width: usbRes.width, usb_height: usbRes.height }
           : {}),

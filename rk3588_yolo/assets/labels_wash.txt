@@ -1,2 +1,0 @@
-bkt_normal
-bkt_abnormal

@@ -1,6 +1,0 @@
-person
-vehicle
-helmet
-AGV1
-AGV2
-AGV3

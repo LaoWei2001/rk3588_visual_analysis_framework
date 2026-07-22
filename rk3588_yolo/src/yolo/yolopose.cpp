@@ -1,16 +1,38 @@
 #include "yolopose.h"
 #include <algorithm>
-#include <chrono>
 #include <cstring>
+#include <chrono>
+#include <stdexcept>
 #include <rga/im2d.h>
 
-YoloPose::YoloPose(const std::string &model_path, int core_mask, float obj_thresh, float nms_thresh)
+YoloPose::YoloPose(const std::string &model_path, const std::string &label_path,
+                   int core_mask,
+                   float obj_thresh, float nms_thresh)
 {
     obj_thresh_ = obj_thresh;
     nms_thresh_ = nms_thresh;
     init_rknn(model_path, core_mask);
-    query_model_info();
-    init_zero_copy_input();
+    try
+    {
+        query_model_info();
+        load_pose_label(label_path);
+        init_zero_copy_input();
+    }
+    catch (...)
+    {
+        if (ctx_ > 0)
+        {
+            rknn_destroy(ctx_);
+            ctx_ = 0;
+        }
+        throw;
+    }
+}
+
+YoloPose::YoloPose(const std::string &model_path, int core_mask,
+                   float obj_thresh, float nms_thresh)
+    : YoloPose(model_path, std::string(), core_mask, obj_thresh, nms_thresh)
+{
 }
 
 YoloPose::~YoloPose()
@@ -49,14 +71,16 @@ void YoloPose::init_rknn(const std::string &model_path, int core_mask)
 
 void YoloPose::query_model_info()
 {
-    rknn_input_output_num io_num;
-    rknn_query(ctx_, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
+    rknn_input_output_num io_num{};
+    if (rknn_query(ctx_, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num)) < 0)
+        throw std::runtime_error("YoloPose failed to query input/output count");
     io_num_in_ = io_num.n_input;
     io_num_out_ = io_num.n_output;
 
     memset(&in_attr_, 0, sizeof(in_attr_));
     in_attr_.index = 0;
-    rknn_query(ctx_, RKNN_QUERY_INPUT_ATTR, &in_attr_, sizeof(in_attr_));
+    if (rknn_query(ctx_, RKNN_QUERY_INPUT_ATTR, &in_attr_, sizeof(in_attr_)) < 0)
+        throw std::runtime_error("YoloPose failed to query input attributes");
 
     if (in_attr_.fmt == RKNN_TENSOR_NCHW)
     {
@@ -74,16 +98,170 @@ void YoloPose::query_model_info()
     out_attrs_.clear();
     for (int i = 0; i < io_num_out_; i++)
     {
-        rknn_tensor_attr attr;
+        rknn_tensor_attr attr{};
         attr.index = i;
-        rknn_query(ctx_, RKNN_QUERY_OUTPUT_ATTR, &attr, sizeof(attr));
+        if (rknn_query(ctx_, RKNN_QUERY_OUTPUT_ATTR, &attr, sizeof(attr)) < 0)
+            throw std::runtime_error("YoloPose failed to query output attributes");
         out_attrs_.push_back(attr);
+        printf("[YoloPose] output[%d] shape=", i);
+        for (uint32_t d = 0; d < attr.n_dims; ++d)
+            printf("%s%u", d == 0 ? "[" : ",", attr.dims[d]);
+        printf("] elements=%u fmt=%d\n", attr.n_elems, static_cast<int>(attr.fmt));
     }
-    // printf("[YoloPose] model %dx%d, inputs %d, outputs %d\n", model_w_,
-    // model_h_, io_num_in_, io_num_out_);
+    configure_pose_layout();
+    printf("[YoloPose] model %dx%d, inputs=%d, outputs=%d, keypoints=%d, candidates=%d, "
+           "kpt_output=%d, layout=%s\n",
+           model_w_, model_h_, io_num_in_, io_num_out_, keypoint_count_, total_grid_points_,
+           keypoint_output_index_, keypoints_channels_first_ ? "channels_first" : "candidates_first");
 
     /* 预分配热路径缓存 */
     rknn_outputs_cache_.resize(io_num_out_);
+}
+
+bool YoloPose::output_grid_size(const rknn_tensor_attr &attr, int &grid_h, int &grid_w) const
+{
+    grid_h = 0;
+    grid_w = 0;
+    if (attr.n_dims < 4)
+        return false;
+    if (attr.fmt == RKNN_TENSOR_NHWC)
+    {
+        grid_h = attr.dims[1];
+        grid_w = attr.dims[2];
+    }
+    else
+    {
+        grid_h = attr.dims[attr.n_dims - 2];
+        grid_w = attr.dims[attr.n_dims - 1];
+    }
+    return grid_h > 0 && grid_w > 0;
+}
+
+void YoloPose::configure_pose_layout()
+{
+    if (io_num_out_ < detection_head_count_ + 1)
+        throw std::runtime_error("YoloPose requires 3 detection heads and a keypoint output");
+
+    total_grid_points_ = 0;
+    for (int i = 0; i < detection_head_count_; ++i)
+    {
+        int grid_h = 0;
+        int grid_w = 0;
+        if (!output_grid_size(out_attrs_[i], grid_h, grid_w))
+            throw std::runtime_error("YoloPose detection output has unsupported dimensions");
+        total_grid_points_ += grid_h * grid_w;
+    }
+    if (total_grid_points_ <= 0)
+        throw std::runtime_error("YoloPose candidate count is zero");
+
+    keypoint_output_index_ = -1;
+    for (int output_index = detection_head_count_; output_index < io_num_out_; ++output_index)
+    {
+        const rknn_tensor_attr &attr = out_attrs_[output_index];
+        if (attr.n_elems == 0 || attr.n_elems % total_grid_points_ != 0)
+            continue;
+
+        const int values_per_candidate = static_cast<int>(attr.n_elems / total_grid_points_);
+        if (values_per_candidate < 3 || values_per_candidate % 3 != 0)
+            continue;
+
+        bool layout_known = false;
+        bool channels_first = true;
+        for (uint32_t axis = 1; axis < attr.n_dims; ++axis)
+        {
+            if (static_cast<int>(attr.dims[axis]) != total_grid_points_)
+                continue;
+
+            long long before = 1;
+            long long after = 1;
+            for (uint32_t d = 1; d < axis; ++d)
+                before *= attr.dims[d];
+            for (uint32_t d = axis + 1; d < attr.n_dims; ++d)
+                after *= attr.dims[d];
+
+            if (before == values_per_candidate && after == 1)
+            {
+                channels_first = true;
+                layout_known = true;
+                break;
+            }
+            if (before == 1 && after == values_per_candidate)
+            {
+                channels_first = false;
+                layout_known = true;
+                break;
+            }
+        }
+
+        /* 兼容候选维度被拆成多个空间维度的导出形式。 */
+        if (!layout_known && attr.n_dims >= 3)
+        {
+            if (static_cast<int>(attr.dims[1]) == values_per_candidate)
+            {
+                channels_first = true;
+                layout_known = true;
+            }
+            else if (static_cast<int>(attr.dims[attr.n_dims - 1]) == values_per_candidate)
+            {
+                channels_first = false;
+                layout_known = true;
+            }
+        }
+        if (!layout_known)
+            continue;
+
+        keypoint_output_index_ = output_index;
+        keypoint_values_per_candidate_ = values_per_candidate;
+        keypoint_count_ = values_per_candidate / 3;
+        keypoints_channels_first_ = channels_first;
+        break;
+    }
+
+    if (keypoint_output_index_ < 0 || keypoint_count_ <= 0)
+        throw std::runtime_error("YoloPose cannot identify keypoint output layout");
+}
+
+void YoloPose::load_pose_label(const std::string &label_path)
+{
+    std::vector<std::string> labels;
+    if (!label_path.empty())
+        load_label_file(label_path, labels);
+
+    if (!labels.empty())
+    {
+        pose_label_ = labels.front();
+        while (!pose_label_.empty() &&
+               (pose_label_.back() == '\r' || pose_label_.back() == '\n'))
+            pose_label_.pop_back();
+    }
+    else if (keypoint_count_ == 17)
+    {
+        pose_label_ = "person";
+    }
+    else if (keypoint_count_ == 21)
+    {
+        pose_label_ = "hand";
+    }
+    else
+    {
+        pose_label_ = "pose";
+    }
+
+    if (!label_path.empty() && labels.empty())
+        printf("[YoloPose] warning: cannot load pose label from %s, using '%s'\n",
+               label_path.c_str(), pose_label_.c_str());
+}
+
+float YoloPose::keypoint_value(const float *buffer, int keypoint_index,
+                               int component, int candidate_index) const
+{
+    const int channel = keypoint_index * 3 + component;
+    size_t offset = 0;
+    if (keypoints_channels_first_)
+        offset = static_cast<size_t>(channel) * total_grid_points_ + candidate_index;
+    else
+        offset = static_cast<size_t>(candidate_index) * keypoint_values_per_candidate_ + channel;
+    return buffer[offset];
 }
 
 bool YoloPose::init_zero_copy_input()
@@ -125,13 +303,12 @@ bool YoloPose::init_zero_copy_input()
     printf("[YoloPose] zero-copy input enabled, mem=%u bytes, fd=%d\n", alloc_size, in_mem_->fd);
 
     im_handle_param_t rga_dst_param{};
-    rga_dst_param.width = static_cast<uint32_t>(model_w_);
+    rga_dst_param.width  = static_cast<uint32_t>(model_w_);
     rga_dst_param.height = static_cast<uint32_t>(model_h_);
     rga_dst_param.format = RK_FORMAT_RGB_888;
     input_rga_handle_ = static_cast<int>(importbuffer_fd(in_mem_->fd, &rga_dst_param));
     if (input_rga_handle_ == 0)
-        printf("[YoloPose] Warning: RGA dst handle cache failed, will import "
-               "per-frame\n");
+        printf("[YoloPose] Warning: RGA dst handle cache failed, will import per-frame\n");
     else
         printf("[YoloPose] RGA dst handle cached (handle=%d)\n", input_rga_handle_);
 
@@ -159,9 +336,8 @@ cv::Mat YoloPose::preprocess(cv::Mat &img, YoloPoseLetterBoxInfo &lb)
     // The top-left corner is where we copy to. We must use integer conversion.
     int top = std::round(lb.y_pad);
     int left = std::round(lb.x_pad);
-    // Be very careful that left and top correspond exactly to the substracted
-    // padding! If integer truncation makes them off by 0.5 pixels it's fine, but
-    // lb.x_pad should be exact
+    // Be very careful that left and top correspond exactly to the substracted padding!
+    // If integer truncation makes them off by 0.5 pixels it's fine, but lb.x_pad should be exact
 
     // In yolo logic, it uses: lb.dw = (model_w_ - nw) / 2;
     lb.x_pad = (model_w_ - new_w) / 2;
@@ -194,8 +370,7 @@ void YoloPose::softmax(float *input, int size)
     }
 }
 
-float YoloPose::box_iou(float xmin0, float ymin0, float xmax0, float ymax0, float xmin1, float ymin1, float xmax1,
-                        float ymax1)
+float YoloPose::box_iou(float xmin0, float ymin0, float xmax0, float ymax0, float xmin1, float ymin1, float xmax1, float ymax1)
 {
     float w = fmax(0.f, fmin(xmax0, xmax1) - fmax(xmin0, xmin1) + 1.0f);
     float h = fmax(0.f, fmin(ymax0, ymax1) - fmax(ymin0, ymin1) + 1.0f);
@@ -204,8 +379,9 @@ float YoloPose::box_iou(float xmin0, float ymin0, float xmax0, float ymax0, floa
     return u <= 0.f ? 0.f : (i / u);
 }
 
-int YoloPose::process_fp32(float *input, int grid_h, int grid_w, int stride, std::vector<float> &boxes,
-                           std::vector<float> &boxScores, std::vector<int> &classId, int32_t zp, float scale, int index)
+int YoloPose::process_fp32(float *input, int grid_h, int grid_w, int stride,
+                           std::vector<float> &boxes, std::vector<float> &boxScores, std::vector<int> &classId,
+                           int32_t zp, float scale, int index)
 {
     int input_loc_len = 64;
     int obj_class_num = 1;
@@ -304,19 +480,16 @@ int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std:
     int validCount = 0;
     int index = 0;
 
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < detection_head_count_; i++)
     {
-        int grid_h = out_attrs_[i].dims[2]; // Assuming NCHW shape from rknn outputs in process
-        int grid_w = out_attrs_[i].dims[3];
-        if (out_attrs_[i].fmt == RKNN_TENSOR_NHWC)
-        {
-            grid_h = out_attrs_[i].dims[1];
-            grid_w = out_attrs_[i].dims[2];
-        }
+        int grid_h = 0;
+        int grid_w = 0;
+        if (!output_grid_size(out_attrs_[i], grid_h, grid_w))
+            return -1;
         int stride = model_h_ / grid_h;
 
-        validCount += process_fp32((float *)outputs[i].buf, grid_h, grid_w, stride, filterBoxes, objProbs, classId,
-                                   out_attrs_[i].zp, out_attrs_[i].scale, index);
+        validCount += process_fp32((float *)outputs[i].buf, grid_h, grid_w, stride, filterBoxes, objProbs,
+                                   classId, out_attrs_[i].zp, out_attrs_[i].scale, index);
         index += grid_h * grid_w;
     }
 
@@ -371,7 +544,7 @@ int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std:
 
         AlgoResult res;
         res.class_id = classId[n];
-        res.label = "person"; // Pose usually only supports person class
+        res.label = pose_label_;
         res.score = objProbs[n];
 
         // yolo.cpp uses: res.box.x = (int)((cx - rw/2.0f - lb.dw) / lb.ratio);
@@ -381,30 +554,26 @@ int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std:
         res.box.width = std::max(0, (int)(w / lb.scale));
         res.box.height = std::max(0, (int)(h / lb.scale));
 
-        res.keypoints.resize(17);
-        // Ensure out_attrs_[3] has the right dimensions. If not, it might crash or
-        // read junk.
-        int total_grid_pts = 8400; // YOLOv8 pose default is usually 8400
-
-        /* keypoints extraction:
-         * The standalone yolo-pose repo accesses this as 1D array:
-         *   j*3*8400 + 0*8400 for X,  1*8400 for Y. */
-        if (out_attrs_.size() > 3)
+        if (keypoints_index >= 0 && keypoints_index < total_grid_points_ &&
+            keypoint_output_index_ >= 0 && outputs[keypoint_output_index_].buf)
         {
-            float *kpts_buf = (float *)outputs[3].buf;
-            for (int j = 0; j < 17; ++j)
+            const float *kpts_buf = static_cast<const float *>(outputs[keypoint_output_index_].buf);
+            res.keypoints.resize(keypoint_count_);
+            res.keypoint_scores.resize(keypoint_count_);
+            for (int j = 0; j < keypoint_count_; ++j)
             {
-                int x_offset = j * 3 * total_grid_pts + 0 * total_grid_pts + keypoints_index;
-                int y_offset = j * 3 * total_grid_pts + 1 * total_grid_pts + keypoints_index;
-
-                float kx = (kpts_buf[x_offset] - lb.x_pad) / lb.scale;
-                float ky = (kpts_buf[y_offset] - lb.y_pad) / lb.scale;
+                float kx = (keypoint_value(kpts_buf, j, 0, keypoints_index) - lb.x_pad) / lb.scale;
+                float ky = (keypoint_value(kpts_buf, j, 1, keypoints_index) - lb.y_pad) / lb.scale;
+                float keypoint_score = keypoint_value(kpts_buf, j, 2, keypoints_index);
+                if (keypoint_score < 0.0f || keypoint_score > 1.0f)
+                    keypoint_score = sigmoid(keypoint_score);
                 res.keypoints[j] = cv::Point2f(kx, ky);
+                res.keypoint_scores[j] = keypoint_score;
             }
         }
         results.push_back(res);
     }
-    return 0;
+    return static_cast<int>(results.size());
 }
 
 bool YoloPose::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat *perf)

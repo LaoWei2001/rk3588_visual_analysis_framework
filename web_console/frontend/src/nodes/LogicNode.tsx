@@ -3,7 +3,7 @@ import './nodeStyles.css'
 
 export default function LogicNode({ id, data, selected }: NodeProps) {
   const d     = data as Record<string, unknown>
-  const logic = String(d.logic ?? 'logic_default')
+  const logic = String(d.logic ?? '')
 
   // 该逻辑节点的输入是否直接来自「视频流」(而非 YOLO 模型) → 传统/无推理通道。
   // 用户可不放 YOLO 节点, 把视频流直连逻辑函数, 走传统 CV / 非 YOLO 算法。
@@ -32,7 +32,9 @@ export default function LogicNode({ id, data, selected }: NodeProps) {
           </span>
         )}
       </div>
-      <div className="rf-node-summary" title={logic}>{logic}</div>
+      <div className="rf-node-summary" title={logic || '未选择后处理逻辑'}>
+        {logic || '未选择后处理逻辑'}
+      </div>
 
       <Handle type="source" position={Position.Right} id="report-out" />
     </div>

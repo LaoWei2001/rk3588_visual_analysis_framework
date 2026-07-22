@@ -11,25 +11,7 @@ APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 
 router = APIRouter()
 
-KNOWN_CHANNEL_LOGICS = [
-    "logic_default",
-    "logic_server",
-    "logic_dify",
-    "logic_hook",
-    "logic_roll",
-    "logic_custom",
-    "logic_person_alarm",
-    "logic_cross_camera",
-    "logic_dify_person_verify",
-    "logic_roi",
-    "logic_multi_roi",
-    "logic_wafer",
-    "logic_wafer2",
-    "logic_wafer_sop",
-]
-
-KNOWN_GLOBAL_LOGICS = ["global_example", "global_default"]
-
+KNOWN_GLOBAL_LOGICS = ["global_default"]
 KNOWN_MODEL_TYPES = ["yolov5", "yolov8_det", "yolov8_pose", "yolov5_seg"]
 
 
@@ -70,7 +52,6 @@ async def console_info():
         "version": "1.0.0",
         "apps_root": str(APPS_ROOT),
         "binary_name": os.environ.get("BINARY_NAME", "rk3588_yolo"),
-        "known_channel_logics": KNOWN_CHANNEL_LOGICS,
         "known_global_logics": KNOWN_GLOBAL_LOGICS,
         "known_model_types": KNOWN_MODEL_TYPES,
     }
@@ -78,23 +59,43 @@ async def console_info():
 
 @router.get("/apps/{name}/logics")
 async def get_app_logics(name: str):
-    """动态获取该 App 可用的 logic 名称列表。
-    优先级: logics.json > 二进制 --list-logics > 内置列表
+    """动态获取该 App 可用的 logic 清单。
+
+    优先级: logics.json > 二进制 --list-logics。两者都不可用时返回空清单和
+    明确错误，不回退到可能已经过期的硬编码通道逻辑名。
     """
     app_dir = _app_dir(name)
+    errors = []
 
-    # 1. logics.json（用户手动维护）
+    # 1. logics.json（logic ID 来自 REGISTER_LOGIC(func)，其余元数据由模块 logic.json 聚合）
     logics_file = app_dir / "logics.json"
     if logics_file.exists():
         try:
             data = json.loads(logics_file.read_text(encoding="utf-8"))
-            return {
-                "channel_logics": data.get("channel_logics", KNOWN_CHANNEL_LOGICS),
-                "global_logics":  data.get("global_logics",  KNOWN_GLOBAL_LOGICS),
-                "model_types":    data.get("model_types",    KNOWN_MODEL_TYPES),
-            }
-        except Exception:
-            pass
+            channel_logics = data.get("channel_logics") if isinstance(data, dict) else None
+            if not isinstance(channel_logics, list):
+                errors.append("logics.json 缺少有效的 channel_logics 数组")
+            else:
+                global_logics = data.get("global_logics", KNOWN_GLOBAL_LOGICS)
+                model_types = data.get("model_types", KNOWN_MODEL_TYPES)
+                return {
+                    "channel_logics": channel_logics,
+                    "global_logics": (
+                        global_logics
+                        if isinstance(global_logics, list)
+                        else KNOWN_GLOBAL_LOGICS
+                    ),
+                    "model_types": (
+                        model_types
+                        if isinstance(model_types, list)
+                        else KNOWN_MODEL_TYPES
+                    ),
+                    "source": "catalog",
+                }
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            errors.append(f"logics.json 读取失败: {exc}")
+    else:
+        errors.append("应用包中没有 logics.json")
 
     # 2. 尝试运行二进制 --list-logics
     binary_name = os.environ.get("BINARY_NAME", "rk3588_yolo")
@@ -105,21 +106,31 @@ async def get_app_logics(name: str):
                 [str(binary_path), "--list-logics"],
                 capture_output=True, text=True, timeout=3, cwd=str(app_dir),
             )
-            if result.returncode == 0 and result.stdout.strip():
+            if result.returncode == 0:
                 lines = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
                 return {
                     "channel_logics": lines,
                     "global_logics":  KNOWN_GLOBAL_LOGICS,
                     "model_types":    KNOWN_MODEL_TYPES,
+                    "source": "binary",
                 }
-        except Exception:
-            pass
+            errors.append(
+                f"二进制 --list-logics 执行失败（退出码 {result.returncode}）"
+            )
+        except subprocess.TimeoutExpired:
+            errors.append("二进制 --list-logics 执行超时")
+        except (OSError, UnicodeError) as exc:
+            errors.append(f"二进制 --list-logics 无法执行: {exc}")
+    else:
+        errors.append(f"应用包中没有可执行文件 {binary_name}")
 
-    # 3. 内置回退
+    # 不返回静态逻辑名，避免已删除模块重新出现在 Web 下拉框中。
     return {
-        "channel_logics": KNOWN_CHANNEL_LOGICS,
+        "channel_logics": [],
         "global_logics":  KNOWN_GLOBAL_LOGICS,
         "model_types":    KNOWN_MODEL_TYPES,
+        "source": "unavailable",
+        "error": "；".join(errors),
     }
 
 

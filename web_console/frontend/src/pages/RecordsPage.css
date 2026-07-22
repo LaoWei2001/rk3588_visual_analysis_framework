@@ -72,12 +72,29 @@
 }
 .rec-card:hover { border-color: #3b82f6; }
 
+.rec-card-clickable {
+  cursor: pointer;
+}
+
 .rec-thumb {
   width: 100%;
   height: 150px;
   object-fit: cover;
   background: #111;
   display: block;
+}
+
+/* 告警视频必须完整显示整帧，不能像图片缩略图一样 cover 后裁掉四周。
+ * 全屏时继续保持 contain，宽高比不一致只补黑边。 */
+video.rec-thumb {
+  object-fit: contain;
+}
+
+video.rec-thumb:fullscreen {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
 }
 
 .rec-info {
@@ -96,6 +113,56 @@
   border-radius: 10px;
 }
 
+.rec-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rec-media-badge.image {
+  background: #164e63;
+  color: #67e8f9;
+}
+
+.rec-media-badge.video {
+  background: #4c1d95;
+  color: #c4b5fd;
+}
+
+.rec-media-badge.pending {
+  background: #374151;
+  color: #d1d5db;
+}
+
+.rec-media-badge.json {
+  background: #1e3a5f;
+  color: #93c5fd;
+}
+
+.rec-kind-badge.normal {
+  background: #14532d;
+  color: #86efac;
+}
+
+.rec-kind-badge.violation {
+  background: #7f1d1d;
+  color: #fca5a5;
+}
+
+.rec-kind-badge.alarm {
+  background: #78350f;
+  color: #fcd34d;
+}
+
+.rec-json-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.8;
+  color: #93c5fd;
+  background: #111827;
+}
+
 .rec-line {
   font-size: 13px;
   color: #e5e7eb;
@@ -104,4 +171,126 @@
 .rec-time {
   font-size: 12px;
   color: #9ca3af;
+}
+
+.record-json-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, .72);
+}
+
+.record-json-dialog {
+  width: min(900px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #171717;
+  border: 1px solid #374151;
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .55);
+}
+
+.record-json-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #303030;
+}
+
+.record-json-title {
+  color: #f3f4f6;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.record-json-subtitle {
+  margin-top: 3px;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.record-json-hint {
+  padding: 9px 16px;
+  color: #9ca3af;
+  font-size: 12px;
+  background: #1f2937;
+}
+
+.record-json-hint code {
+  color: #93c5fd;
+}
+
+.record-json-delivery-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  color: #9ca3af;
+  font-size: 12px;
+  background: #151b26;
+  border-bottom: 1px solid #303030;
+}
+
+.record-json-delivery-select select {
+  min-width: 260px;
+  padding: 4px 7px;
+  color: #e5e7eb;
+  background: #111827;
+  border: 1px solid #4b5563;
+  border-radius: 5px;
+}
+
+.record-json-code {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  color: #d1fae5;
+  background: #0b1020;
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.record-json-state {
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: #9ca3af;
+}
+
+.record-json-state.err {
+  color: #f87171;
+}
+
+.record-json-source {
+  flex-shrink: 0;
+  max-height: 45vh;
+  overflow: auto;
+  color: #9ca3af;
+  background: #111827;
+  border-top: 1px solid #303030;
+}
+
+.record-json-source > summary {
+  padding: 9px 16px;
+  cursor: pointer;
+  font-size: 12px;
+  user-select: none;
+}
+
+.record-json-source > .record-json-code {
+  max-height: 36vh;
+  border-top: 1px solid #303030;
 }

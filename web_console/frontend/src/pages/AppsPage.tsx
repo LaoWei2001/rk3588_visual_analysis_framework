@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
-import { fetchApps, fetchLogTail, startApp, stopApp, streamUrl, uploadApp, deleteApp, fetchConfig, loadConfigFile, AppInfo } from '../api/client'
+import { fetchApps, fetchLogTail, fetchStreamHealth, startApp, stopApp, streamUrl, uploadApp, deleteApp, fetchConfig, loadConfigFile, fetchChannelControls, sendChannelAction, AppInfo, ChannelControlsResponse, LogicActionDef } from '../api/client'
 import { loadLastConfig } from '../utils/lastConfig'
 import { useAuthStore } from '../store/authStore'
-import ServicesPanel from '../components/ServicesPanel'
 import './AppsPage.css'
 
 function errMsg(e: unknown): string {
@@ -24,7 +23,7 @@ function fmtUptime(s: number | null): string {
   return `${sec}s`
 }
 
-// 'assets/config.json' → 'config.json'（下拉显示与 active_config/运行态 config 对齐）
+// 下拉框只显示配置文件名，并与 active_config/运行配置保持一致。
 const cfgName = (p: string): string => p.split('/').pop() ?? p
 
 export default function AppsPage() {
@@ -35,17 +34,18 @@ export default function AppsPage() {
   const [busy, setBusy]       = useState<Record<string, boolean>>({})
   const [toast, setToast]     = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
   const [crashInfo, setCrashInfo] = useState<{ name: string; lines: string[] } | null>(null)
-  const [viewApp, setViewApp]       = useState<string | null>(null)   // 正在监看的 App
+  const [viewApp, setViewApp]       = useState<string | null>(null)   // 正在查看实时画面的程序
   const [streamErr, setStreamErr]   = useState(false)
   const [streamLoading, setStreamLoading] = useState(true)           // 视频首帧到达前显示加载动画
-  const [streamLogs, setStreamLogs] = useState<string[]>([])          // 监看弹窗右侧的滚动日志
-  const [viewNonce, setViewNonce]   = useState(0)                     // 每次打开换一个值, 强制刷新视频, 防残留上次的旧帧
-  const streamRetryRef   = useRef(0)                                  // 流未就绪(刚启动)时的自动重试计数
+  const [streamLogs, setStreamLogs] = useState<string[]>([])          // 实时画面弹窗右侧的滚动日志
+  const [viewNonce, setViewNonce]   = useState(0)                     // 强制刷新视频地址，避免残留上一条流
+  const streamRetryRef   = useRef(0)                                  // 视频流尚未就绪时的自动重试次数
   const streamRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const streamLoadingRef = useRef(true)                               // 供卡死看门狗读「当前是否仍在加载」(避免闭包取旧值)
+  const streamRetryPendingRef = useRef(false)
+  const streamLoadingRef = useRef(true)                               // 供卡流看门狗读取最新加载状态
   const logWsRef  = useRef<WebSocket | null>(null)
   const logBoxRef = useRef<HTMLDivElement>(null)
-  // 监看日志是否“跟随到底”：在底部(40px 内)=跟随，往上拉=暂停并停在当前位置，拉回底部=自动恢复
+  // 日志距底部 40px 内自动跟随；向上滚动时暂停，回到底部后恢复。
   const logAutoScrollRef = useRef(true)
   const onStreamLogScroll = () => {
     const el = logBoxRef.current
@@ -54,41 +54,82 @@ export default function AppsPage() {
   const fileRef   = useRef<HTMLInputElement>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [uploading, setUploading] = useState<{ name: string; pct: number } | null>(null)
+  const [viewControls, setViewControls] = useState<ChannelControlsResponse | null>(null)
+  const [channelActionBusy, setChannelActionBusy] = useState<Record<string, boolean>>({})
   const navigate = useNavigate()
 
-  // 打开实时画面前先检查该程序是否开启了 RTSP 推流——没开则必然黑屏，提前提示而不是让用户等失败。
+  // 打开实时画面前检查 RTSP 配置，避免用户进入后只看到黑屏。
   const openView = async (app: AppInfo) => {
     try {
       const running = app.config && app.config !== 'config.json' ? `assets/${app.config}` : null
       const cfg = running ? await loadConfigFile(app.name, running) : await fetchConfig(app.name)
       const g = (cfg && ((cfg as Record<string, unknown>).global ?? cfg)) as Record<string, unknown> | null
-      // 读到配置且明确未开启才拦截；读不到（异常/旧配置）一律放行，避免误拦正常推流
+      // 仅在配置明确关闭 RTSP 时拦截；读取失败时仍允许打开。
       if (g && !Number(g.enable_rtsp ?? 0)) {
-        showToast(`${app.name} 未开启 RTSP 推流，无法显示实时画面。请到「配置 → 全局配置」勾选「RTSP 推流」并重启程序。`, 'err')
+        showToast(`${app.name} 的配置未启用 RTSP 推流`, 'err')
         return
       }
-    } catch { /* 配置读取失败：不拦截，照常打开（仍会回退到弹窗内的原有提示） */ }
+    } catch { /* 配置读取失败时不拦截，继续使用弹窗内的错误提示。 */ }
+    let controls: ChannelControlsResponse | null = null
+    try {
+      controls = await fetchChannelControls(app.name)
+    } catch {
+      controls = null
+    }
+    setViewControls(controls)
+    setChannelActionBusy({})
     setStreamErr(false); setStreamLoading(true); streamRetryRef.current = 0
     setStreamLogs([]); setViewNonce(Date.now()); setViewApp(app.name)
   }
 
-  // 视频流自动重试: 程序刚启动时 RTSP 服务/首帧还没就绪, 直接拉流会失败或卡住。
-  // 不再直接判失败黑屏, 而是换 nonce 重新拉流, 直到出帧(onLoad)或超过重试上限,
-  // 这样画面会自己加载出来, 不用退出再进入。
-  const STREAM_MAX_RETRY = 25     // 重试上限(到顶才显示错误提示)
-  const STREAM_STALL_MS  = 4000   // 4s 内既没出首帧也没报错 = 卡住(常见于"刚启动就极快点进"), 换条连接重连
+  // 程序刚启动时 RTSP 服务可能尚未出首帧，通过更新 nonce 自动重连。
+  const STREAM_MAX_RETRY = 25
+  const STREAM_STALL_MS  = 4000   // 4 秒未出首帧且未报错时，视为连接卡住。
 
-  // 安排下一次重连: onError(连接被拒, 隔 1.5s) 与卡死看门狗(立即) 共用; 超过上限则放弃并提示
+  // onError 和卡流看门狗共用此重试入口，超过上限后显示错误提示。
+  const closeView = () => {
+    setViewApp(null)
+    setViewControls(null)
+    setChannelActionBusy({})
+  }
+
+  const handleChannelAction = async (channelId: number, action: LogicActionDef) => {
+    if (!viewApp) return
+    if (action.confirm && !window.confirm(action.confirm)) return
+    const key = `${channelId}:${action.id}`
+    setChannelActionBusy(prev => ({ ...prev, [key]: true }))
+    try {
+      const resp = await sendChannelAction(viewApp, channelId, action.id, action.payload ?? {})
+      showToast(resp?.message ? `通道 ${channelId}：${resp.message}` : `通道 ${channelId} 的操作已进入队列`)
+    } catch (e) {
+      showToast(`通道 ${channelId} 操作失败：${errMsg(e)}`, 'err')
+    } finally {
+      setChannelActionBusy(prev => ({ ...prev, [key]: false }))
+    }
+  }
+
   const scheduleStreamRetry = (delay: number) => {
+    if (streamRetryPendingRef.current) return
     if (streamRetryTimer.current) clearTimeout(streamRetryTimer.current)
     if (streamRetryRef.current >= STREAM_MAX_RETRY) { setStreamLoading(false); setStreamErr(true); return }
     streamRetryRef.current += 1
+    streamRetryPendingRef.current = true
     setStreamLoading(true)
-    streamRetryTimer.current = setTimeout(() => setViewNonce(Date.now()), delay)
+    streamRetryTimer.current = setTimeout(() => {
+      streamRetryPendingRef.current = false
+      streamRetryTimer.current = null
+      setViewNonce(Date.now())
+    }, delay)
   }
-  const onStreamLoad  = () => { streamRetryRef.current = 0; setStreamLoading(false) }
+  const onStreamLoad  = () => {
+    if (streamRetryTimer.current) clearTimeout(streamRetryTimer.current)
+    streamRetryTimer.current = null
+    streamRetryPendingRef.current = false
+    streamRetryRef.current = 0
+    setStreamLoading(false)
+  }
   const onStreamError = () => scheduleStreamRetry(1500)
-  // 错误提示里的「重试」: 重置计数并重新开始拉流
+  // 用户点击“重试”时重置计数并重新拉流。
   const retryStream = () => {
     streamRetryRef.current = 0
     setStreamErr(false); setStreamLoading(true); setViewNonce(Date.now())
@@ -116,10 +157,10 @@ export default function AppsPage() {
             app.status !== 'running' &&
             !busyRef.current[app.name]
           ) {
-            // Process died without user action — fetch last log lines
+            // 非用户操作导致进程退出时，读取最后一段日志。
             fetchLogTail(app.name, 40)
               .then(data => setCrashInfo({ name: app.name, lines: Array.isArray(data?.lines) ? data.lines : [] }))
-              .catch(() => showToast(`${app.name} 进程意外退出`, 'err'))
+              .catch(() => showToast(`${app.name} 异常退出`, 'err'))
           }
         }
       }
@@ -145,12 +186,12 @@ export default function AppsPage() {
     return () => clearInterval(interval)
   }, []) // eslint-disable-line
 
-  // 监看弹窗打开时：连日志 WebSocket，实时滚动显示在视频右侧
+  // 实时画面弹窗打开时，通过 WebSocket 在右侧持续显示日志。
   useEffect(() => {
     if (!viewApp) return
     const app = viewApp
-    logAutoScrollRef.current = true   // 每次打开监看默认跟随到底
-    // 只有用户停在底部时才跟随；拉上去看历史就停住，不再被新日志拽回底部
+    logAutoScrollRef.current = true   // 每次打开弹窗时默认跟随到底部
+    // 用户查看历史日志时暂停自动滚动。
     const stick = () => { const el = logBoxRef.current; if (el && logAutoScrollRef.current) el.scrollTop = el.scrollHeight }
 
     fetchLogTail(app, 200)
@@ -163,12 +204,10 @@ export default function AppsPage() {
     logWsRef.current = ws
     ws.onmessage = (e) => {
       const text = String(e.data)
-      if (!text) return                                   // 心跳空帧
+      if (!text) return                                   // 蹇冭烦绌哄抚
       const add = text.split('\n').filter(l => l !== '')
       if (add.length) {
-        // 跟随到底时维持 1000 行上限；用户拉上去看历史时不裁顶部(放宽到 5000)——
-        // 否则每来一批日志就从顶部裁掉旧行，会把视口里的历史内容往上挤 → 闪烁、看不清。
-        // 滚回底部恢复跟随后，裁剪发生在视口上方且贴底锁定，看不到跳动。
+        // 自动跟随时保留 1000 行；查看历史时最多保留 5000 行，避免视口跳动。
         setStreamLogs(prev => {
           const next = [...prev, ...add]
           return logAutoScrollRef.current ? next.slice(-1000) : next.slice(-5000)
@@ -179,14 +218,14 @@ export default function AppsPage() {
     return () => { ws.close(); logWsRef.current = null }
   }, [viewApp])
 
-  // 关弹窗/切换 App 时清掉待执行的重试定时器, 避免泄漏或对已关闭的弹窗刷流
+  // 关闭弹窗或切换程序时清理重试定时器。
   useEffect(() => () => {
     if (streamRetryTimer.current) { clearTimeout(streamRetryTimer.current); streamRetryTimer.current = null }
+    streamRetryPendingRef.current = false
   }, [viewApp])
 
-  // 卡死看门狗: 后端可能连上了 RTSP 但迟迟不出首帧, <img> 既不触发 onLoad 也不触发 onError,
-  // 画面就会一直转圈("程序刚启动就极快点进"最容易撞上)。每次发起拉流(viewNonce 变)后等
-  // STREAM_STALL_MS, 若仍在加载就换条连接重连 —— 后端单飞机制会顺带杀掉那条卡住的旧流。
+  // RTSP 已连接但迟迟没有首帧时，img 不一定触发 onLoad/onError。
+  // 看门狗会在 STREAM_STALL_MS 后更换连接重新拉流。
   useEffect(() => {
     if (!viewApp || streamErr) return
     const t = setTimeout(() => {
@@ -194,6 +233,26 @@ export default function AppsPage() {
     }, STREAM_STALL_MS)
     return () => clearTimeout(t)
   }, [viewApp, viewNonce, streamErr]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 首帧成功后继续监控后端是否有新视频数据。MJPEG 长连接中途断开时，
+  // 浏览器不保证触发 img.onError，必须通过服务端帧心跳识别永久黑屏。
+  useEffect(() => {
+    if (!viewApp || streamErr) return
+    let cancelled = false
+    const app = viewApp
+    const check = async () => {
+      try {
+        const health = await fetchStreamHealth(app)
+        if (cancelled || streamLoadingRef.current) return
+        const stalled = !health.active || health.last_data_age_ms == null || health.last_data_age_ms > 10000
+        if (stalled) scheduleStreamRetry(0)
+      } catch {
+        // 单次健康检查失败不打断当前画面，下一轮继续确认。
+      }
+    }
+    const timer = setInterval(check, 2500)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [viewApp, streamErr]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const dismissToast = () => {
     if (toastTimer.current) { clearTimeout(toastTimer.current); toastTimer.current = null }
@@ -203,7 +262,7 @@ export default function AppsPage() {
   const showToast = (msg: string, type: 'ok' | 'err' = 'ok') => {
     if (toastTimer.current) { clearTimeout(toastTimer.current); toastTimer.current = null }
     setToast({ msg, type })
-    // 成功提示 3s 自动消失；错误提示常驻，直到用户点 ✕ 关闭，避免一扭头就错过失败原因
+    // 成功提示 3 秒后消失；错误提示保留到用户关闭。
     if (type === 'ok') toastTimer.current = setTimeout(() => { setToast(null); toastTimer.current = null }, 3000)
   }
 
@@ -211,10 +270,10 @@ export default function AppsPage() {
     setBusy(b => ({ ...b, [name]: true }))
     try {
       await startApp(name, modes[name] ?? 'deploy', config)
-      showToast(`${name} 已启动${config && config !== 'config.json' ? `（配置: ${config}）` : ''}`)
+      showToast(config && config !== 'config.json' ? `${name} 已使用配置 ${config} 启动` : `${name} 已启动`)
       await load()
     } catch (e: unknown) {
-      showToast(`启动失败: ${errMsg(e)}`, 'err')
+      showToast(`启动失败：${errMsg(e)}`, 'err')
     } finally {
       setBusy(b => ({ ...b, [name]: false }))
     }
@@ -227,7 +286,7 @@ export default function AppsPage() {
       showToast(`${name} 已停止`)
       await load()
     } catch (e: unknown) {
-      showToast(`停止失败: ${errMsg(e)}`, 'err')
+      showToast(`停止失败：${errMsg(e)}`, 'err')
     } finally {
       setBusy(b => ({ ...b, [name]: false }))
     }
@@ -235,34 +294,40 @@ export default function AppsPage() {
 
   const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
-    e.target.value = ''                       // 允许再次选同一文件
+    e.target.value = ''                       // 鍏佽鍐嶆閫夊悓涓€鏂囦欢
     if (!f) return
     setUploading({ name: f.name, pct: 0 })
     try {
       const r = await uploadApp(f, undefined, pct => setUploading({ name: f.name, pct }))
-      const warn = `${r.has_binary ? '' : '（⚠ 无二进制）'}${r.has_config ? '' : '（⚠ 无 config.json，需在编辑器存一份）'}`
-      showToast(`已上传程序: ${r.name} ${warn}`)
+      const warn = `${r.has_binary ? '' : '（缺少可执行文件）'}${r.has_config ? '' : '（尚无 config.json）'}`
+      showToast(`程序 ${r.name} 上传成功${warn}`)
       await load()
     } catch (err: unknown) {
-      showToast(`上传失败: ${errMsg(err)}`, 'err')
+      showToast(`上传失败：${errMsg(err)}`, 'err')
     } finally {
       setUploading(null)
     }
   }
 
   const handleDelete = async (name: string) => {
-    if (!window.confirm(`确定删除程序「${name}」？\n会先停止其进程，并删除 /opt/ai_apps/${name} 整个目录，不可恢复。`)) return
+    if (!window.confirm(`确定删除程序 ${name}？\n此操作会永久删除 /opt/ai_apps/${name}。`)) return
     setBusy(b => ({ ...b, [name]: true }))
     try {
       await deleteApp(name)
-      showToast(`已删除: ${name}`)
+      showToast(`程序 ${name} 已删除`)
       await load()
     } catch (e: unknown) {
-      showToast(`删除失败: ${errMsg(e)}`, 'err')
+      showToast(`删除失败：${errMsg(e)}`, 'err')
     } finally {
       setBusy(b => ({ ...b, [name]: false }))
     }
   }
+
+  // 后端负责最终互斥；前端同步禁用其他启动按钮，提前告诉用户需要先停止哪个程序。
+  // busy 也纳入判断，覆盖启动请求尚未完成、轮询还没拿到 running 状态的短暂窗口。
+  const runningAppName = apps.find(app => app.status === 'running')?.name
+  const busyAppName = Object.keys(busy).find(name => busy[name])
+  const launchBlockerName = runningAppName ?? busyAppName
 
   return (
     <div className="apps-page">
@@ -270,8 +335,8 @@ export default function AppsPage() {
         <h2>程序管理</h2>
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="reload-btn" disabled={!!uploading}
-            onClick={() => fileRef.current?.click()}>⬆ 上传程序包</button>
-          <button className="reload-btn" onClick={load}>↻ 刷新</button>
+            onClick={() => fileRef.current?.click()}>上传程序</button>
+          <button className="reload-btn" onClick={load}>刷新</button>
         </div>
         <input ref={fileRef} type="file" accept=".zip,.tar.gz,.tgz,.tar"
           style={{ display: 'none' }} onChange={handleUploadFile} />
@@ -281,26 +346,24 @@ export default function AppsPage() {
         <div className={`toast ${toast.type}`}>
           <span className="toast-msg">{toast.msg}</span>
           {toast.type === 'err' && (
-            <button className="toast-close" onClick={dismissToast} title="关闭">✕</button>
+            <button className="toast-close" onClick={dismissToast} title="关闭">×</button>
           )}
         </div>
       )}
       {uploading && (
-        <div className="toast ok">⬆ 上传中 {uploading.name} … {uploading.pct}%</div>
+        <div className="toast ok">正在上传 {uploading.name} — {uploading.pct}%</div>
       )}
-
-      <ServicesPanel apps={apps} onToast={showToast} />
 
       {/* Crash log dialog */}
       {crashInfo && (
         <div className="crash-overlay" onClick={() => setCrashInfo(null)}>
           <div className="crash-dialog" onClick={e => e.stopPropagation()}>
             <div className="crash-header">
-              <span>⚠ {crashInfo.name} 进程意外退出</span>
-              <button onClick={() => setCrashInfo(null)}>✕</button>
+              <span>程序异常退出：{crashInfo.name}</span>
+              <button onClick={() => setCrashInfo(null)}>×</button>
             </div>
             <div className="crash-subtext">
-              以下为 run.log 末尾输出，可帮助定位原因：
+              异常退出前的最后日志：
             </div>
             <pre className="crash-log">
               {crashInfo.lines.length > 0
@@ -331,10 +394,11 @@ export default function AppsPage() {
         <div className="stream-overlay">
           <div className="stream-dialog">
             <div className="stream-header">
-              <span>👁 {viewApp} · 实时画面</span>
-              <button onClick={() => setViewApp(null)}>✕</button>
+              <span>{viewApp} — 实时画面</span>
+              <button onClick={closeView}>×</button>
             </div>
             <div className="stream-body">
+              <div className="stream-video-column">
               <div className="stream-video">
                 {!streamErr ? (
                   <>
@@ -349,23 +413,63 @@ export default function AppsPage() {
                     {streamLoading && (
                       <div className="stream-loading">
                         <div className="stream-spinner" />
-                        <span>正在加载视频…</span>
+                        <span>正在加载视频……</span>
                       </div>
                     )}
                   </>
                 ) : (
                   <div className="stream-hint">
-                    无法获取视频流。请确认：<br />
-                    ① 程序正在运行（监看仅在运行时可用）；<br />
-                    ② 已在「配置 → 全局配置」勾选 <b>RTSP 推流</b> 并重启程序。
+                    实时视频暂不可用。<br />
+                    1. 请确认程序正在运行。<br />
+                    2. 请在全局配置中启用 <b>RTSP 推流</b>，然后重启程序。
                     <br />
                     <button className="stream-retry-btn" onClick={retryStream}>重试</button>
                   </div>
                 )}
               </div>
+              <div className="stream-channel-controls">
+                <div className="stream-channel-controls-head">
+                  <span>通道控制</span>
+                  {!viewControls?.socket_ready && <span className="stream-control-badge">未连接</span>}
+                </div>
+                {!viewControls ? (
+                  <div className="stream-channel-empty">暂时无法获取通道控制信息。</div>
+                ) : viewControls.channels.length === 0 ? (
+                  <div className="stream-channel-empty">当前配置中没有通道。</div>
+                ) : (
+                  <div className="stream-channel-grid">
+                    {viewControls.channels.map(channel => (
+                      <div key={channel.channel_id} className="stream-channel-card">
+                        <div className="stream-channel-title">
+                          <span>{`通道 ${channel.channel_id}`}</span>
+                          <span className="stream-channel-logic">{channel.logic_label}</span>
+                        </div>
+                        <div className="stream-channel-actions">
+                          {channel.actions.map(action => {
+                            const key = `${channel.channel_id}:${action.id}`
+                            const disabled = !viewControls.socket_ready || !channel.enabled || !!channelActionBusy[key]
+                            return (
+                              <button
+                                key={key}
+                                className={`stream-action-btn ${action.style ?? 'default'}`}
+                                disabled={disabled}
+                                title={action.help ?? action.id}
+                                onClick={() => handleChannelAction(channel.channel_id, action)}
+                              >
+                                {channelActionBusy[key] ? '...' : (action.label ?? action.id)}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              </div>
               <div className="stream-logs" ref={logBoxRef} onScroll={onStreamLogScroll}>
                 {streamLogs.length === 0
-                  ? <div className="stream-logs-empty">暂无日志…</div>
+                  ? <div className="stream-logs-empty">暂无日志。</div>
                   : streamLogs.map((line, i) => (
                       <div key={i} className={`stream-log-line${/ERROR|error|\[进程已停止\]/.test(line) ? ' err' : /WARN/.test(line) ? ' warn' : ''}`}>
                         {line}
@@ -374,34 +478,35 @@ export default function AppsPage() {
               </div>
             </div>
             <div className="stream-footer">
-              <span className="stream-tip">画面与接显示器一致（含检测框/叠加）。点右上角 ✕ 关闭弹窗即停止拉流。</span>
+              <span className="stream-tip">按钮操作按通道进入队列，并在下一帧 C++ 通道逻辑执行前处理。</span>
             </div>
           </div>
         </div>
       )}
 
       {loading ? (
-        <div className="loading">加载中…</div>
+        <div className="loading">正在加载……</div>
       ) : apps.length === 0 ? (
-        <div className="empty">未找到任何算法程序。请检查 APPS_ROOT 目录。</div>
+        <div className="empty">程序目录中暂无可用程序。</div>
       ) : (
         <div className="app-grid">
           {apps.map(app => {
-            // 该程序可选的启动配置文件（basename），以及当前选中的那个
+            // 程序可选的启动配置文件名，以及当前选中的配置。
             const cfgOpts = app.config_files.map(cfgName)
-            // 优先级：本次手动选择 > 编辑器里最后保存的配置 > 上次启动配置 > config.json > 第一个
+            // 优先级：手动选择 > 编辑器最后保存 > 上次启动 > config.json > 第一项。
             const lastCfg = loadLastConfig(app.name)
             const effCfg  = cfgSel[app.name]
               ?? (lastCfg && cfgOpts.includes(lastCfg) ? lastCfg
                   : cfgOpts.includes(app.active_config) ? app.active_config
                   : cfgOpts.includes('config.json')     ? 'config.json'
                   : cfgOpts[0] ?? 'config.json')
+            const blockedByOtherApp = !!launchBlockerName && launchBlockerName !== app.name
             return (
             <div key={app.name} className={`app-card ${app.status}`}>
               <div className="card-top">
                 <div className="app-name">{app.name}</div>
                 <span className={`status-badge ${app.status}`}>
-                  {app.status === 'running' ? '● 运行中' : '○ 已停止'}
+                  {app.status === 'running' ? '运行中' : '已停止'}
                 </span>
               </div>
 
@@ -409,17 +514,20 @@ export default function AppsPage() {
                 {app.status === 'running' && (
                   <>
                     <span>PID: {app.pid}</span>
-                    <span>运行: {fmtUptime(app.uptime_seconds)}</span>
-                    <span>模式: {app.mode === 'debug' ? '调试' : '部署'}</span>
-                    {app.config && <span>配置: {app.config}</span>}
+                    <span>运行时间：{fmtUptime(app.uptime_seconds)}</span>
+                    <span>模式：{app.mode === 'debug' ? '调试' : '部署'}</span>
+                    {app.config && <span>配置：{app.config}</span>}
                   </>
                 )}
-                <span>模型: {app.models.length} 个</span>
-                {!app.has_binary && <span className="warn">⚠ 无可执行文件</span>}
-                {app.config_files.length === 0 && <span className="warn">⚠ 无配置文件</span>}
+                <span>模型数量：{app.models.length}</span>
+                {!app.has_binary && <span className="warn">缺少可执行文件</span>}
+                {app.config_files.length === 0 && <span className="warn">缺少配置文件</span>}
+                {app.status !== 'running' && blockedByOtherApp && (
+                  <span className="warn">请先停止程序 {launchBlockerName}</span>
+                )}
               </div>
 
-              {/* 启动配置选择：只要有配置文件就显示（含仅 1 份的情况）；运行中变灰不可改（保持卡片布局不跳动） */}
+              {/* 始终显示启动配置；程序运行时禁用修改，保持卡片布局稳定。 */}
               {cfgOpts.length >= 1 && (
                 <div className="config-row">
                   <label>启动配置</label>
@@ -453,10 +561,11 @@ export default function AppsPage() {
                   {app.status !== 'running' ? (
                     <button
                       className="action-btn start"
-                      disabled={!app.has_binary || app.config_files.length === 0 || !!busy[app.name]}
+                      disabled={!app.has_binary || app.config_files.length === 0 || !!busy[app.name] || blockedByOtherApp}
+                      title={blockedByOtherApp ? `同一时间只能运行一个程序，请先停止 ${launchBlockerName}` : '启动程序'}
                       onClick={() => handleStart(app.name, effCfg)}
                     >
-                      {busy[app.name] ? '…' : '▶ 启动'}
+                      {busy[app.name] ? '...' : '启动'}
                     </button>
                   ) : (
                     <button
@@ -464,40 +573,40 @@ export default function AppsPage() {
                       disabled={!!busy[app.name]}
                       onClick={() => handleStop(app.name)}
                     >
-                      {busy[app.name] ? '…' : '■ 停止'}
+                      {busy[app.name] ? '...' : '停止'}
                     </button>
                   )}
 
                   <button
                     className="action-btn view"
                     disabled={app.status !== 'running'}
-                    title={app.status === 'running' ? '查看实时画面' : '程序运行后才能查看'}
+                    title={app.status === 'running' ? '查看实时画面' : '仅在程序运行时可用'}
                     onClick={() => openView(app)}
-                  >👁 实时画面</button>
+                  >实时画面</button>
 
                   <button
                     className="action-btn edit"
                     onClick={() => navigate(`/editor/${app.name}?config=${encodeURIComponent(effCfg)}`)}
-                  >⚙ 配置</button>
+                  >配置</button>
 
                   <button
                     className="action-btn log"
                     onClick={() => navigate(`/logs/${app.name}`)}
-                  >≡ 日志</button>
+                  >日志</button>
 
                   <button
                     className="action-btn log"
                     onClick={() => navigate(`/records/${app.name}`)}
-                    title="本地暂存、还没传到平台的告警(断网时攒在盒子里的)"
-                  >🖼 未上报告警{(app.unreported ?? 0) > 0 ? `（${app.unreported}条）` : ''}</button>
+                    title="查看本地发件箱中的待上报记录"
+                  >待上报记录{(app.unreported ?? 0) > 0 ? `（${app.unreported}条）` : ''}</button>
 
                   <button
                     className="action-btn"
                     style={{ background: '#7f1d1d', color: '#fff' }}
                     disabled={!!busy[app.name]}
                     onClick={() => handleDelete(app.name)}
-                    title="停止并删除该程序包（不可恢复）"
-                  >🗑 删除</button>
+                    title="停止并删除该程序包"
+                  >删除</button>
                 </div>
               </div>
             </div>

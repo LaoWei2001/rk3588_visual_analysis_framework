@@ -1,93 +1,73 @@
-# rk3588_yolo 源码模块说明（src/ 蒸馏）
+# rk3588_yolo `src/` 模块索引
 
-> 本目录是 `rk3588_yolo/src/` 各模块的深度说明，按模块一份 `.md`。原先散落在 `src/<模块>/README.md`，
-> 现统一收敛到这里，作为整个 C++ 端的“蒸馏文档”——既给后续开发者看，也可直接喂给大模型做二次开发提示词。
->
-> 面向“任务”的指南（怎么写一个通道逻辑、全局逻辑、网页控制台运维）见同级的
-> `../rk3588-channel-logic/`、`../rk3588-global-logic/`、`../rk3588-console-ops/`。
+> 文档角色：C++ 源码参考索引，供已经明确模块边界的开发者深入查阅；不是项目总入口。上级导航：[docs 文档总入口](../../README.md) · [开发/运维知识库索引](../README.md)。
 
----
+本目录按当前 `rk3588_yolo/src/` 源码整理，供开发者查架构，也供大模型在二次开发前按需读取。路径均相对 `rk3588_yolo/`。不要把本文当作配置 Schema；字段真值以 `src/config/config.h`、`config_init.cpp` 和 `config_validator.cpp` 为准。
 
 ## 模块地图
 
-| 模块 | 一句话职责 | 文档 |
+| 源码范围 | 职责 | 文档 |
 |---|---|---|
-| **core** | 全局控制块 `g_pCtrl`、通道状态与锁约定、配置热监控线程、跨通道安全取数 | [core.md](core.md) |
-| **config** | `config.json` 解析/校验、注册表字段级热重载、通道继承全局默认值 | [config.md](config.md) |
-| **capturer** | GStreamer 多路采集（RTSP/USB/文件）、硬解、帧率限流、阶梯退避重连 | [capturer.md](capturer.md) |
-| **analyzer** | 帧处理总枢纽：FPS 节流 → RGA 转 640 → NPU 推理队列 → tracker → 调通道逻辑 → 分发显示 | [analyzer.md](analyzer.md) |
-| **yolo** | RKNN 推理引擎：`ModelBase` 抽象 + YOLOv5/v8-det/v8-pose/v5-seg 实现 | [yolo.md](yolo.md) |
-| **logic** | 通道业务逻辑框架：`ChannelContext`、`draw_*`、自注册分发表、各 `logic_*.cpp` | [logic.md](logic.md) |
-| **player** | GTK/framebuffer 多路拼接显示 + `render_overlays` 叠加 + 内置 RTSP 推流 | [player.md](player.md) |
-| **uploader** | 异步告警上报：编码 → 写 Redis 队列 → Python 微服务消费（HTTP / Dify） | [uploader.md](uploader.md) |
+| `src/main.cpp`、`src/system.h` | 进程启动、线程创建、信号和逆序退出、公共日志宏 | [runtime.md](runtime.md) |
+| `src/config/` | JSON 加载、校验、字段注册和热重载数据模型 | [config.md](config.md) |
+| `src/core/` | 全局控制块、通道状态、线程安全查询、暂停和图片工具 | [core.md](core.md) |
+| `src/capturer/` | RTSP、文件、USB 的 GStreamer 采集、共享和重连 | [capturer.md](capturer.md) |
+| `src/analyzer/` | 帧入口、RGA、推理调度、tracker、logic 和显示分发 | [analyzer.md](analyzer.md) |
+| `src/yolo/` | RKNN 模型实现及多模型结果合并 | [yolo.md](yolo.md) |
+| `src/logic/` | 通道逻辑、全局逻辑、ROI/绘制 API 和业务实现 | [logic.md](logic.md) |
+| `src/control/` | Web/外设动作经 Unix Socket 投递到通道逻辑 | [control.md](control.md) |
+| `src/alarm/` | 告警事件建档、图片生成、投递清单和事件合并 | [alarm.md](alarm.md) |
+| `src/recorder/` | 告警前后帧缓存与 MP4 编码 | [recorder.md](recorder.md) |
+| `src/player/` | 拼接显示、统一叠加、UTF-8 文本和 RTSP 推流 | [player.md](player.md) |
+| `src/third_party/` | GStreamer buffer 适配、RK MPI 声明、系统工具和 cJSON | [third_party.md](third_party.md) |
+| 外部上传服务 | 消费 `alarm_store` 发件箱并发送到服务器/Dify；不是当前 `src/` 模块 | [uploader.md](uploader.md) |
 
-> 全局逻辑（跨通道、周期性）的框架在 `src/logic/global_logic.*`，任务指南见 `../rk3588-global-logic/`。
+`src/third_party/` 不按业务模块扩展；修改或升级它时，应核对许可证、ABI 和所有调用方。
 
----
+## 当前端到端链路
 
-## 端到端数据流
-
-```
-[capturer] decChannel(GStreamer 硬解)
-      │  解码出 NV12 帧
-      ▼
-[analyzer] videoOutHandle()  ← 帧处理总入口(analyzer.cpp)
-      │   ├─ FPS 节流(frame_inlet): 未到推理时间 → 只送显示, 跳过 NPU
-      │   ├─ RGA 转换(rga_convert): 源帧 → 模型输入 640×640 BGR(整幅拉伸, 无 letterbox)
-      │   ├─ 送推理队列(algoProcess) ──► [yolo] NPU 推理(algo_engine: create_model) → vector<AlgoResult>
-      │   └─ 异步送显示队列
-      ▼
-[analyzer] result_dispatch → channel_pipeline
-      │   ├─ tracker(SORT): 填 AlgoResult.track_id
-      │   └─ 构造 ChannelContext, 调用通道 logic
-      ▼
-[logic] logic_xxx(ctx)  ← 你的业务代码
-      │   ├─ 读 ctx->results / ctx->rois / ctx->config / ctx->unix_ms ...
-      │   ├─ draw_*(ctx, ...) 产出绘制指令(模型 640 坐标系)
-      │   └─ (可选) alarm_uploader_enqueue(...) 触发上报
-      ▼
-[player] display_pipeline → display_render → render_overlays(display.cpp)
-      │   RGA 缩放到 tile + 叠加框/ROI/文字/draw_cmds(坐标与线宽按 输出/640 等比缩放) → framebuffer / RTSP
-      ▼
-[uploader] 上传线程: server告警→落盘发件箱(alarm_store/) / dify→Redis(dify_queue) → Python 微服务 → HTTP/Dify
+```text
+DecChannel/appsink
+  -> videoOutHandle/frame_inlet
+     -> 事件录像源帧预缓存
+     -> 显示单槽队列 ---------------------------> display_worker -> 拼接缓冲 -> GTK/RTSP
+     -> RGA 转模型输入 -> algorithm_process_mat
+                           -> infer worker -> result_dispatch
+                              -> tracker
+                              -> 先消费通道动作，再执行 channel logic
+                              -> 原子写回同帧 frame/results/draw_cmds/state
+                                      -> report_alarm
+                                         -> alarm_store/<event_id>/manifest.json
+                                            + raw.jpg / snapshot.jpg
+                                         -> event_video_recorder -> clip.mp4
+                                         -> 外部上传服务消费发件箱
 ```
 
-横切关注点：**core** 提供 `g_pCtrl` 全局状态与跨通道安全取数；**config** 的热监控线程在运行中改阈值/类别/logic/模型而不重启。
+没有启用推理的通道仍会解码、显示并逐帧调用 logic，只是 `ctx->results` 为空。显示使用最新源帧并允许复用较旧推理结果；业务 logic、告警图片和快照使用与推理结果严格匹配的模型输入帧。
 
----
+## 全局约定
 
-## 必须先懂的几个约定（贯穿全代码）
+- `chnId/channel_id/ChannelConfig.id` 是同一个值，也直接作为固定通道数组索引。配置加载后按 ID 排序，排序位置只用于显示布局；热重载禁止改变通道数量或 ID。
+- 检测框、ROI、`ctx->frame` 和 `draw_*` 均在模型输入坐标系中，通常为 640×640。预处理为整幅缩放，不是 letterbox。
+- `ctx->timestamp_ms` 是单调时钟，只算间隔；`ctx->unix_ms` 是 Unix epoch 毫秒，用于日历时间和上报。
+- 颜色使用 OpenCV BGR：`cv::Scalar(B, G, R)`。
+- `DrawCommand::DISPLAY`、`IMAGE`、`VIDEO` 是绘制目标位；`UPLOAD=IMAGE|VIDEO`，`ALL` 包含三者。当前告警“叠加画面”会复用实时层，因此图片按 `DISPLAY|IMAGE`、视频按 `DISPLAY|VIDEO` 取命令；纯原始媒体不绘制任何命令。
+- 配置由 `g_pCtrl->mtx`（pthread rwlock）保护，通道共享状态由 `chn_mtx[chnId]` 保护。跨通道业务代码优先使用 `get_channel_snapshot()`。
 
-- **坐标系**：检测框、ROI、`draw_*`、`ctx->frame` 一律用**模型输入 640×640** 坐标系。预处理是**整幅拉伸**（非 letterbox 补边），渲染层按 `输出尺寸/640` 把坐标**和线宽/字号一起**等比缩放，所以 overlay 与画面/ROI 永远对齐、且随窗口等比缩放（见 player.md / `display.cpp`）。
-- **线程与锁**：每通道一把 `g_pCtrl->chn_mtx[chnId]`；`ChannelState` 字段按“谁拥有”分三组，越组访问要持对应锁（见 core.md 的表）。跨通道取数只用 `ctx->get_channel_snapshot(ch)` / `app_ctrl_*`，它在一把锁内原子读出 frame+results+state，保证“同帧”。
-- **时间**：`ctx->unix_ms`（Unix epoch 毫秒，墙钟，三种源统一）/ `ctx->time_hms()` / `ctx->datetime()` 是真实日历时间；`ctx->timestamp_ms` 是单调钟，只能算间隔。
-- **颜色 BGR**：OpenCV 顺序 `cv::Scalar(B,G,R)`，不是 RGB。
-- **自注册**：每个 `logic_xxx.cpp` 末尾 `REGISTER_LOGIC("logic_xxx", logic_xxx)` 在 `main()` 前登记；新增=加文件、删除=删文件，不动框架（见 logic.md）。
+## 按任务选择文档
 
----
-
-## 二次开发：从“我想做 X”到“改哪里”
-
-| 我想… | 改哪个模块 / 看哪份文档 |
+| 任务 | 先读 |
 |---|---|
-| 写一个通道业务逻辑 | [logic.md](logic.md) + `../rk3588-channel-logic/`（任务指南、API、示例） |
-| 写跨通道/周期逻辑 | `src/logic/global_logic.*` + `../rk3588-global-logic/` |
-| 接入新模型类型 | [yolo.md](yolo.md)（继承 `ModelBase` + `algo_engine.cpp` 的 `create_model`）+ config_validator |
-| 加一个配置字段 | [config.md](config.md)（`config.h` 声明 + `config_init.cpp` 的 `REG_G/REG_C`） |
-| 加一种视频源 | [capturer.md](capturer.md)（仿 `createUsbDecChannel`）+ config 的 `is_supported_src_type` |
-| 自定义画面叠加 | [player.md](player.md) + logic 里用 `draw_*` |
-| 触发告警上报 | [uploader.md](uploader.md)（`alarm_uploader_enqueue` / `dify_uploader_enqueue`） |
-| 跨通道安全读另一路数据 | [core.md](core.md)（`app_ctrl_*` / `ctx->get_channel_snapshot`） |
+| 新增或修改通道 logic | [logic.md](logic.md)、`../rk3588-channel-logic/` |
+| 新增 Web 自定义按钮/外部动作 | [control.md](control.md)、[logic.md](logic.md) |
+| 新增配置字段或理解热重载 | [config.md](config.md)、[core.md](core.md) |
+| 接入新模型 | [yolo.md](yolo.md)、[analyzer.md](analyzer.md) |
+| 接入新视频源或调整重连 | [capturer.md](capturer.md) |
+| 修改叠加或输出画面 | [player.md](player.md)、[logic.md](logic.md) |
+| 触发告警并生成图片/视频 | [alarm.md](alarm.md)、[recorder.md](recorder.md) |
+| 修改进程线程或退出顺序 | [runtime.md](runtime.md) |
+| 更换 GStreamer/RK MPI/第三方基础适配 | [third_party.md](third_party.md) |
 
----
+## 文档维护规则
 
-## 构建与运行（速查）
-
-```bash
-# 板端原生编译(aarch64) 或 x86_64 Docker 交叉编译, 自动识别
-./build.sh dist            # 编译+打包到 ./dist
-./build.sh --debug         # 只编译可执行文件(Debug), 不打包
-./rk3588_yolo ./assets/config_xxx.json   # 运行
-```
-
-> `src/logic` 下的 `.cpp` 由 CMake `aux_source_directory` 自动收集，新增/删除逻辑文件无需改 CMake。
+新增、删除或移动 `src/<module>` 时同步更新本表；修改公共结构/API 时同步更新对应模块页。示例必须来自当前头文件或真实调用点，不能保留已经删除的函数名。

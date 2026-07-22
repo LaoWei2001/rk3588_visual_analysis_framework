@@ -124,7 +124,6 @@ set(custom_inc
 set(custom_libs
     rga
     rknnrt
-    hiredis
     ${OpenCV_LIBS}
     ${GTK3_LIBRARIES}
     Threads::Threads
@@ -143,10 +142,50 @@ aux_source_directory(${PROJECT_SOURCE_DIR}/src/config                   dir_srcs
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/core                     dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/capturer                 dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/analyzer                 dir_srcs)
-aux_source_directory(${PROJECT_SOURCE_DIR}/src/logic     dir_srcs)
+aux_source_directory(${PROJECT_SOURCE_DIR}/src/control                  dir_srcs)
+# 每种业务逻辑位于 src/logic/modules/<logic_name>/，框架位于 src/logic/core/。
+# 递归收集让新增/删除逻辑模块无需再修改 CMakeLists.txt；重新运行 cmake 即可刷新列表。
+file(GLOB_RECURSE logic_srcs
+    "${PROJECT_SOURCE_DIR}/src/logic/*.cpp"
+    "${PROJECT_SOURCE_DIR}/src/logic/*.cc"
+    "${PROJECT_SOURCE_DIR}/src/logic/*.cxx"
+)
+list(APPEND dir_srcs ${logic_srcs})
+
+# 模块 logic.json 是参数 Schema 的唯一真源。构建时将聚合后的能力清单嵌入二进制，
+# 因此 --debug 直接运行也能完成参数默认值、类型和热重载策略校验，不依赖外部 logics.json。
+find_program(PYTHON3_EXECUTABLE NAMES python3)
+if(NOT PYTHON3_EXECUTABLE)
+    message(FATAL_ERROR "生成逻辑参数能力需要 python3")
+endif()
+file(GLOB logic_manifest_files "${PROJECT_SOURCE_DIR}/src/logic/modules/*/logic.json")
+file(GLOB_RECURSE logic_validation_files
+    "${PROJECT_SOURCE_DIR}/src/logic/modules/*.cpp"
+    "${PROJECT_SOURCE_DIR}/src/logic/modules/*.cc"
+    "${PROJECT_SOURCE_DIR}/src/logic/modules/*.cxx"
+    "${PROJECT_SOURCE_DIR}/src/logic/modules/*.h"
+    "${PROJECT_SOURCE_DIR}/src/logic/modules/*.hpp"
+)
+set(logic_catalog_cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/logic_catalog_embedded.cpp")
+add_custom_command(
+    OUTPUT "${logic_catalog_cpp}"
+    COMMAND "${PYTHON3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/scripts/generate_logics_catalog.py"
+            --logic-root "${PROJECT_SOURCE_DIR}/src/logic"
+            --cpp-output "${logic_catalog_cpp}"
+    DEPENDS
+            "${PROJECT_SOURCE_DIR}/scripts/generate_logics_catalog.py"
+            "${PROJECT_SOURCE_DIR}/src/logic/catalog.json"
+            ${logic_manifest_files}
+            ${logic_validation_files}
+    COMMENT "Validating and embedding per-logic parameter schemas"
+    VERBATIM
+)
+list(APPEND dir_srcs "${logic_catalog_cpp}")
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/player                   dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/yolo                     dir_srcs)
-aux_source_directory(${PROJECT_SOURCE_DIR}/src/uploader                 dir_srcs)
+aux_source_directory(${PROJECT_SOURCE_DIR}/src/recorder                 dir_srcs)
+aux_source_directory(${PROJECT_SOURCE_DIR}/src/alarm                    dir_srcs)
 set(cjson_src ${PROJECT_SOURCE_DIR}/src/third_party/json/cJSON.c)
 # ========================== custom ============================
 

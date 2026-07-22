@@ -1,8 +1,11 @@
 #include "display.h"
+#include "../analyzer/algoProcess.h"
 #include "../core/app_ctrl.h"
 #include "../core/pause_ctrl.h"
+#include "../core/process_signals.h"
 #include "system.h"
 #include "text_overlay.h"
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -12,15 +15,14 @@
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
-/* 文本绘制出口: 中英文统一用 freetype 渲染(不再回退 Hershey)。font_scale 沿用
- * putText 语义 按比例换算成像素高; freetype
- * 不可用时不绘制(已在字体加载处报错)。 thickness = 加粗级别(对外即 draw_text
- * 的"粗细"): <=1 普通填充字(默认外观, 与历史一致);
- *   >=2 在填充字基础上再叠一层同色描边把笔画加粗, 数值越大越粗(上限封顶,
- * 防糊成一团)。 始终先填充, 保证是实心清晰字; 不会因 thickness>0
- * 变成空心描边字。 */
+/* 文本绘制出口: 中英文统一用 freetype 渲染(不再回退 Hershey)。font_scale 沿用 putText 语义
+ * 按比例换算成像素高; freetype 不可用时不绘制(已在字体加载处报错)。
+ * thickness = 加粗级别(对外即 draw_text 的"粗细"): <=1 普通填充字(默认外观, 与历史一致);
+ *   >=2 在填充字基础上再叠一层同色描边把笔画加粗, 数值越大越粗(上限封顶, 防糊成一团)。
+ * 始终先填充, 保证是实心清晰字; 不会因 thickness>0 变成空心描边字。 */
 static inline void put_text_auto(cv::Mat &img, const std::string &s, cv::Point org, double font_scale,
                                  const cv::Scalar &color, int thickness)
 {
@@ -34,16 +36,46 @@ static inline void put_text_auto(cv::Mat &img, const std::string &s, cv::Point o
 struct DisplayState
 {
     std::mutex mutex;
-    char *buf_a{nullptr};
-    char *buf_b{nullptr};
+    char *buffer{nullptr};
     char *front{nullptr}; /* 当前可见的前缓冲区 */
     Display_t *desc{nullptr};
 };
 static DisplayState g_disp;
 
-// Yolo-Pose skeleton connections (1-based indices from model definition).
-static const int kPoseSkeleton[38] = {16, 14, 14, 12, 17, 15, 15, 13, 12, 13, 6, 12, 7, 13, 6, 7, 6, 8, 7,
-                                      9,  8,  10, 9,  11, 2,  3,  1,  2,  1,  3, 2,  4, 3,  5, 4, 6, 5, 7};
+/* YOLOv8 COCO 17点人体骨架，索引从0开始。 */
+static const std::pair<int, int> kCoco17Skeleton[] = {
+    {15, 13}, {13, 11}, {16, 14}, {14, 12}, {11, 12}, {5, 11}, {6, 12}, {5, 6}, {5, 7}, {6, 8},
+    {7, 9},   {8, 10},  {1, 2},   {0, 1},   {0, 2},   {1, 3},  {2, 4},  {3, 5}, {4, 6}};
+
+/* 21点手部骨架：0=腕部，其后每4点依次为拇指、食指、中指、无名指、小指。 */
+static const std::pair<int, int> kHand21Skeleton[] = {
+    {0, 1},   {1, 2},   {2, 3},  {3, 4},   {0, 5},   {5, 6},   {6, 7},  {7, 8},   {0, 9},   {9, 10},
+    {10, 11}, {11, 12}, {0, 13}, {13, 14}, {14, 15}, {15, 16}, {0, 17}, {17, 18}, {18, 19}, {19, 20}};
+
+struct PoseSkeletonView
+{
+    const std::pair<int, int> *edges;
+    size_t count;
+};
+
+static PoseSkeletonView pose_skeleton_for(size_t keypoint_count)
+{
+    if (keypoint_count == 17)
+        return {kCoco17Skeleton, sizeof(kCoco17Skeleton) / sizeof(kCoco17Skeleton[0])};
+    if (keypoint_count == 21)
+        return {kHand21Skeleton, sizeof(kHand21Skeleton) / sizeof(kHand21Skeleton[0])};
+    return {nullptr, 0};
+}
+
+static bool pose_keypoint_visible(const AlgoResult &res, size_t index)
+{
+    if (index >= res.keypoints.size())
+        return false;
+    const cv::Point2f &point = res.keypoints[index];
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || point.x < 0.0f || point.y < 0.0f)
+        return false;
+    return res.keypoint_scores.size() != res.keypoints.size() || res.keypoint_scores[index] >= 0.25f;
+}
 
 static void draw_segmentation_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult> &results)
 {
@@ -81,8 +113,7 @@ static void draw_segmentation_overlay(cv::Mat &screen_roi, const std::vector<Alg
             if (cls_id_plus_1 == 0)
                 continue;
             const int color_idx = (cls_id_plus_1 - 1) % 20;
-            // class_colors 定义为 RGB 顺序；screen_roi 统一使用 BGR，ch0=B ch1=G
-            // ch2=R
+            // class_colors 定义为 RGB 顺序；screen_roi 统一使用 BGR，ch0=B ch1=G ch2=R
             const float r = class_colors[color_idx][0];
             const float g = class_colors[color_idx][1];
             const float b = class_colors[color_idx][2];
@@ -98,31 +129,29 @@ static void draw_pose_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult>
 {
     for (const auto &res : results)
     {
-        if (res.keypoints.size() != 17)
+        if (res.keypoints.empty())
             continue;
 
-        for (int j = 0; j < 19; ++j)
+        const PoseSkeletonView skeleton = pose_skeleton_for(res.keypoints.size());
+        for (size_t j = 0; j < skeleton.count; ++j)
         {
-            int idx1 = kPoseSkeleton[j * 2] - 1;
-            int idx2 = kPoseSkeleton[j * 2 + 1] - 1;
-            if (idx1 < 0 || idx1 >= 17 || idx2 < 0 || idx2 >= 17)
+            const size_t idx1 = static_cast<size_t>(skeleton.edges[j].first);
+            const size_t idx2 = static_cast<size_t>(skeleton.edges[j].second);
+            if (!pose_keypoint_visible(res, idx1) || !pose_keypoint_visible(res, idx2))
                 continue;
 
             const cv::Point2f &raw_p1 = res.keypoints[idx1];
             const cv::Point2f &raw_p2 = res.keypoints[idx2];
-            if (raw_p1.x <= 0 || raw_p1.y <= 0 || raw_p2.x <= 0 || raw_p2.y <= 0)
-                continue;
-
             cv::Point p1(static_cast<int>(raw_p1.x * scale_x), static_cast<int>(raw_p1.y * scale_y));
             cv::Point p2(static_cast<int>(raw_p2.x * scale_x), static_cast<int>(raw_p2.y * scale_y));
             cv::line(screen_roi, p1, p2, cv::Scalar(0, 165, 255), 2);
         }
 
-        for (int j = 0; j < 17; ++j)
+        for (size_t j = 0; j < res.keypoints.size(); ++j)
         {
-            const cv::Point2f &raw_p = res.keypoints[j];
-            if (raw_p.x <= 0 || raw_p.y <= 0)
+            if (!pose_keypoint_visible(res, j))
                 continue;
+            const cv::Point2f &raw_p = res.keypoints[j];
             cv::Point p(static_cast<int>(raw_p.x * scale_x), static_cast<int>(raw_p.y * scale_y));
             cv::circle(screen_roi, p, 3, cv::Scalar(0, 255, 255), -1);
         }
@@ -131,9 +160,8 @@ static void draw_pose_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult>
 
 void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
 {
-    // ROI 区域(可多个)：顶点均为模型输入坐标系(同检测框)，统一按 inputW/inputH
-    // 缩放到当前窗口后逐个画。
-    if (p.roi_zones && !p.roi_zones->empty() && p.inputW > 0 && p.inputH > 0)
+    // ROI 区域(可多个)：顶点均为模型输入坐标系(同检测框)，统一按 inputW/inputH 缩放到当前窗口后逐个画。
+    if (p.show_system_overlays && p.roi_zones && !p.roi_zones->empty() && p.inputW > 0 && p.inputH > 0)
     {
         const float sx = static_cast<float>(screen_roi.cols) / static_cast<float>(p.inputW);
         const float sy = static_cast<float>(screen_roi.rows) / static_cast<float>(p.inputH);
@@ -162,18 +190,17 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
     auto thk = [draw_scale](int t) { return t < 0 ? t : std::max(1, cvRound(t * draw_scale)); };
 
     // Segmentation mask
-    if (p.results && !p.results->empty())
+    if (p.show_system_overlays && p.results && !p.results->empty())
         draw_segmentation_overlay(screen_roi, *p.results);
 
     // Detections
-    if (p.results && !p.results->empty())
+    if (p.show_system_overlays && p.results && !p.results->empty())
     {
         /* 速度外推参数：补偿从 NPU 推理完成到当前帧显示之间的管线延迟。
          *
          * 原理：result_age_ms = 当前帧距上次 NPU 推理结果的毫秒数（即管线延迟）。
          * infer_fps = 推理帧率，用于把 Kalman 速度（像素/推理帧）换算成 像素/秒。
-         * frames_elapsed = result_age_ms × infer_fps / 1000 ≈
-         * 经过了几个推理帧间隔。
+         * frames_elapsed = result_age_ms × infer_fps / 1000 ≈ 经过了几个推理帧间隔。
          *
          * 安全限制：
          *  - 只对 confirmed 轨迹 (track_id >= 0, track_hits >= 3) 外推，速度可信
@@ -228,7 +255,7 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
 
     // 自定义绘制指令（坐标系：inputW×inputH）
     // 只渲染 target 与 target_mask 有交集的指令
-    if (p.draw_cmds)
+    if (p.show_custom_overlays && p.draw_cmds)
     {
         for (const auto &cmd : *p.draw_cmds)
         {
@@ -341,7 +368,7 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
     }
 
     // FPS overlay
-    if (g_pCtrl && g_pCtrl->config.performance_display && p.show_fps)
+    if (app_ctrl_get_performance_display() && p.show_fps)
     {
         char fps_text[80];
         snprintf(fps_text, sizeof(fps_text), "Ch%d disp %.1f / inf %.1f FPS", p.chnId, p.disp_fps, p.infer_fps);
@@ -349,36 +376,92 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
     }
 }
 
+void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms)
+{
+    if (bgr.empty() || !app_ctrl_has_channel(chn_id))
+        return;
+
+    auto runtime = app_ctrl_get_runtime_snapshot();
+    const std::vector<RoiZone> *rois = app_ctrl_runtime_channel_rois(runtime, chn_id);
+    if (!rois)
+        return;
+    std::vector<AlgoResult> results;
+    std::vector<DrawCommand> commands;
+    cv::Mat logic_frame;
+    float disp_fps = 0.0f;
+    uint64_t result_ts_ms = 0;
+    uint64_t logic_ts_ms = 0;
+
+    pthread_mutex_lock(&g_pCtrl->chn_mtx[chn_id]);
+    const ChannelState &state = g_pCtrl->channels_state[chn_id];
+    results = state.last_results;
+    commands = state.draw_cmds;
+    logic_frame = state.logic_display_frame;
+    disp_fps = state.disp_fps;
+    result_ts_ms = state.last_result_ts_ms;
+    logic_ts_ms = state.logic_display_ts_ms;
+    pthread_mutex_unlock(&g_pCtrl->chn_mtx[chn_id]);
+
+    const uint64_t current_ms = frame_timestamp_ms != 0
+                                    ? frame_timestamp_ms
+                                    : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                                std::chrono::steady_clock::now().time_since_epoch())
+                                                                .count());
+
+    if (!logic_frame.empty() && current_ms >= logic_ts_ms && current_ms - logic_ts_ms < 1000)
+        cv::resize(logic_frame, bgr, bgr.size());
+
+    RenderParams params;
+    params.chnId = chn_id;
+    params.inputW = g_pCtrl->inputW;
+    params.inputH = g_pCtrl->inputH;
+    if (params.inputW <= 0 || params.inputH <= 0)
+        return;
+    params.disp_fps = disp_fps;
+    params.infer_fps = algorithm_get_infer_fps(chn_id);
+    params.result_age_ms = result_ts_ms != 0 && current_ms >= result_ts_ms
+                               ? static_cast<int64_t>(std::min<uint64_t>(current_ms - result_ts_ms, 200))
+                               : 0;
+    params.target_mask = DrawCommand::DISPLAY;
+    params.show_system_overlays = true;
+    params.show_custom_overlays = true;
+    params.roi_zones = rois;
+    params.results = &results;
+    params.draw_cmds = &commands;
+    render_overlays(bgr, params);
+}
+
 char **dispBufferMap(Display_t *dispDesc)
 {
     static Display_t stDispDesc = {0};
 
-    if ((dispDesc->width != stDispDesc.width) || (dispDesc->height != stDispDesc.height))
+    if (!g_disp.front || (dispDesc->width != stDispDesc.width) || (dispDesc->height != stDispDesc.height))
     {
-        /* free old buffers if exist */
-        if (g_disp.buf_a)
+        if (g_disp.buffer)
         {
-            free(g_disp.buf_a);
-            g_disp.buf_a = nullptr;
-        }
-        if (g_disp.buf_b)
-        {
-            free(g_disp.buf_b);
-            g_disp.buf_b = nullptr;
+            free(g_disp.buffer);
+            g_disp.buffer = nullptr;
         }
         memcpy(&stDispDesc, dispDesc, sizeof(Display_t));
         size_t sz = 3 * dispDesc->width * dispDesc->height;
-        g_disp.buf_a = (char *)malloc(sz);
-        g_disp.buf_b = (char *)malloc(sz);
-        if (g_disp.buf_a)
-            memset(g_disp.buf_a, 0, sz);
-        if (g_disp.buf_b)
-            memset(g_disp.buf_b, 0, sz);
-        g_disp.front = g_disp.buf_a;
+        g_disp.buffer = (char *)malloc(sz);
+        if (g_disp.buffer)
+            memset(g_disp.buffer, 0, sz);
+        g_disp.front = g_disp.buffer;
     }
 
     return &g_disp.front;
 }
+
+void dispBufferUnmap(void)
+{
+    std::lock_guard<std::mutex> lock(g_disp.mutex);
+    free(g_disp.buffer);
+    g_disp.buffer = nullptr;
+    g_disp.front = nullptr;
+    g_disp.desc = nullptr;
+}
+
 static void display_lock_impl()
 {
     g_disp.mutex.lock();
@@ -396,9 +479,21 @@ void display_unlock()
 {
     display_unlock_impl();
 }
+bool display_try_lock()
+{
+    return g_disp.mutex.try_lock();
+}
 
 static gboolean showWidget(GtkWidget *pImage)
 {
+    if (g_pause_toggle_signal)
+    {
+        g_pause_toggle_signal = 0;
+        pause_ctrl::toggle();
+    }
+    if (g_shutdown_signal)
+        app_ctrl_request_stop();
+
     /* Ctrl+C / SIGTERM 退出检测 */
     if (g_pCtrl && !g_pCtrl->isRunning)
     {
@@ -406,8 +501,7 @@ static gboolean showWidget(GtkWidget *pImage)
         return G_SOURCE_REMOVE;
     }
 
-    /* Render from front buffer, which always contains the latest completely
-     * written frame */
+    /* Render from front buffer, which always contains the latest completely written frame */
     char *pBuf = g_disp.front;
     if (NULL == pBuf)
     {
@@ -458,13 +552,11 @@ static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer use
     return FALSE;
 }
 
-/* —— 无图形会话(SSH / VS Code Remote / systemd 服务)拉起时，也能连上板端 HDMI
- * 的 X(:0) —— 现象：这些场景下 shell 没有指向本地 :0 的 DISPLAY、也没有
- * XAUTHORITY cookie，gtk_init 连不上 X，
- *       于是“先得在桌面会话/命令行手动跑一次才显示”。下面在 gtk_init
- * 之前自助补齐显示环境： DISPLAY 缺省 :0；XAUTHORITY 从正在运行的 Xorg 的 -auth
- * 参数(或常见 cookie 路径)取。 已设置的一律不动 —— 所以 ssh -X
- * 转发、板端桌面会话、命令行里照常用各自继承的值。 */
+/* —— 无图形会话(SSH / VS Code Remote / systemd 服务)拉起时，也能连上板端 HDMI 的 X(:0) ——
+ * 现象：这些场景下 shell 没有指向本地 :0 的 DISPLAY、也没有 XAUTHORITY cookie，gtk_init 连不上 X，
+ *       于是“先得在桌面会话/命令行手动跑一次才显示”。下面在 gtk_init 之前自助补齐显示环境：
+ *       DISPLAY 缺省 :0；XAUTHORITY 从正在运行的 Xorg 的 -auth 参数(或常见 cookie 路径)取。
+ *       已设置的一律不动 —— 所以 ssh -X 转发、板端桌面会话、命令行里照常用各自继承的值。 */
 static std::string find_xorg_auth()
 {
     DIR *d = opendir("/proc");
@@ -548,10 +640,8 @@ static void ensure_x_display_env()
 
 static GtkWidget *disp_init(const char *strWinTitle, int32_t width, int32_t height)
 {
-    ensure_x_display_env(); /* 必须在 gtk_init 之前：无图形会话时自助补
-                               DISPLAY/XAUTHORITY */
-    /* 板子没装无障碍(AT-SPI)总线，GTK 会刷一行
-     * dbind-WARNING；关掉无障碍桥，纯净日志、无任何副作用 */
+    ensure_x_display_env(); /* 必须在 gtk_init 之前：无图形会话时自助补 DISPLAY/XAUTHORITY */
+    /* 板子没装无障碍(AT-SPI)总线，GTK 会刷一行 dbind-WARNING；关掉无障碍桥，纯净日志、无任何副作用 */
     setenv("NO_AT_BRIDGE", "1", 0);
     gtk_init(NULL, NULL);
 

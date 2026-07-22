@@ -26,19 +26,20 @@
 | `main.tsx` | 入口;**包了 `<StrictMode>`**(开发模式 effect 跑两次,见 §六坑) |
 | `App.tsx` | 路由 + 侧边栏外壳(`AppShell`):`<Routes>` 定义页面,`<NavLink>` 定义侧边栏入口,登录守卫 `ProtectedRoute` |
 | `api/client.ts` | **所有后端调用的唯一出口**:axios 实例(baseURL `/api`)、Bearer 注入、401 自动登出;每个接口一个导出函数 + TS 类型 |
-| `store/` | 全局状态(zustand):`authStore`(登录 token,持久化)、`consoleStore`、`editorStore`、`roiStore` |
+| `store/` | 全局状态(zustand):`authStore`(登录 token,持久化)、`consoleStore`、`editorStore`、`roiStore`、`sopUiStore` |
 | `pages/` | 路由页面:`LoginPage` `AppsPage`(程序管理)`EditorPage`(配置画布)`LogsPage` `RecordsPage` `TerminalPage` |
 | `pages/terminalSession.ts` | 终端会话单例/注册表(xterm 实例 + WebSocket 常驻,跨路由保活);非 React 组件 |
 | `components/` | 复用组件:`ServicesPanel`(后台服务)`ServiceConfigModal` `NodeConfigPanel`(节点配置面板)`GlobalSettingsPanel`/`GlobalLogicsPanel` `AssetPicker` `NumberField` `ErrorBoundary` 等(ROI 绘制弹窗 `ROIDrawModal` 在 `nodes/ROINode.tsx` 内,不是单独组件) |
-| `nodes/` | 编辑器画布的各类节点(React Flow):`StreamNode` `ModelNode` `ROINode` `LogicNode` `ReportNode`(画布 5 种)+ `GlobalNode` / `GlobalLogicNode` |
+| `nodes/` | 主画布节点：`StreamNode` `ModelNode` `ROINode` `LogicNode` `ReportNode`，以及 `GlobalNode` / `GlobalLogicNode`；SOP 子画布还使用 `SopNode`、`SopStepNode`、`SopEndStepNode`、`SopSelfLoopEdge` |
 | `utils/configToGraph.ts` / `graphToConfig.ts` | **配置 ↔ 画布的双向转换**:把 `config.json` 还原成画布节点/连线,以及把画布存回 `config.json` |
 
 ## 三、关键约定(照着做就不跑偏)
 
 - **调后端一律走 `api/client.ts`**:在那里加一个导出函数(带 TS 类型),组件里 import 来用。不要在组件里散落裸 `fetch`/`axios`——拦截器的鉴权和 401 处理都在 client 里。
-- **WebSocket 不走 axios**:手动 `new WebSocket`,且 **token 必须走查询参数** `?token=...`(WS 和 `<img>` 流没法带 Authorization 头;后端 `auth_middleware` 对带 `?token=` 的请求放行)。范例见 `pages/terminalSession.ts`、`stream` 的 `streamUrl()`。
+- **WebSocket 不走 axios**:手动 `new WebSocket`,且 **token 必须走查询参数** `?token=...`。`/ws/terminal`、`/ws/logs/*` 在各自 WebSocket 路由中调用 `get_session()` 校验，不经过 HTTP `auth_middleware`。MJPEG `<img>` 请求同样不能方便地带 Authorization 头，但它属于 `/api/*` HTTP 请求，由 `auth_middleware` 从 `?token=` 取 token。范例见 `pages/terminalSession.ts`、日志路由和 `streamUrl()`。
 - **状态用 zustand store**:跨组件共享、需要持久化的状态放 `store/`。`authStore` 是范本(`persist` 中间件 → localStorage)。
-- **编辑器是"画布即配置"**:`EditorPage` 用 React Flow 画节点,`configToGraph`/`graphToConfig` 在 `config.json` 和画布之间转换。**逻辑节点的可调参数是数据驱动的**——后端 `/apps/{name}/logics` 透传 App 里的 `logics.json`,`NodeConfigPanel` 的 `LogicForm` 按 `param.type` 自动渲染控件(见 `rk3588-channel-logic` skill 的 `adding-config-parameter.md`)。**给逻辑加参数,前端不用改代码**,加一条 logics.json 声明即可。**逻辑名称只能从 `logics.json` 下拉选、不提供手填**(`LogicForm` 没有自由文本框)——逻辑的"身份"是 `REGISTER_LOGIC` 注册的字符串,手填一个清单里没有的名字只会让运行时查不到、通道空跑;若某通道现有 `logic` 不在 `logics.json`,下拉会标 `⚠ 不在 logics.json,请重新选择`。命名/注册/识别/失配的完整机制见 `rk3588-channel-logic` skill 的 `references/logic-naming-and-registration.md`。
+- **编辑器是“画布即配置”**：`EditorPage` 用 React Flow 画节点，`configToGraph`/`graphToConfig` 在 `config.json` 和画布之间转换。逻辑节点的可调参数由模块 `logic.json.parameters` 驱动，正常打包聚合成 App 根目录 `logics.json`；后端 `/apps/{name}/logics` 透传生成物，`NodeConfigPanel.LogicForm` 按生成的 `param.type/storage` 自动渲染并把值保存到 `logic_parameters`。给普通模块参数增加 Schema 属性时前端无需改代码。逻辑名称只能从清单下拉选择；未知配置会标记警告，而 C++ 也会在 Schema 校验阶段拒绝未编译逻辑。完整机制见 `adding-config-parameter.md` 和 `logic-naming-and-registration.md`。
+- **上报节点是一节点一 delivery**：`NodeConfigPanel.ReportForm` 当前只编辑该节点的第一条 delivery；`graphToConfig` 把同一通道连接的多个上报节点合并为 `report_policy.deliveries`。类型只提供图片→服务器、图片→Dify、视频→Dify。地址和密钥来自“服务配置”的默认连接/Profile，画布只保存 `profile_id`。Dify 字段选择来自 `logics.json.report_fields`；服务器使用固定 JSON，不消费字段映射。断开全部上报节点时写入 `enabled=false, deliveries=[]`。
 
 ## 四、端到端:常见两类改动怎么做
 
@@ -84,7 +85,9 @@ cd web_console/frontend && npm run dev      # vite 起在 5173
 |---------|---------|
 | 前端 `src/*` | `install.sh`(重 build)→ **浏览器 Ctrl+Shift+R** |
 | 后端 `backend/*` | `install.sh`(重启 rk3588-console)或板上 `systemctl restart rk3588-console` |
-| 只换 `logo.png`/`img.png` | 直接覆盖 `frontend/` 下同名文件,后端直接读源文件,无需 build |
+| 只换 `logo.png`/`img.png` | 直接覆盖**当前后端运行目录**的 `frontend/` 下同名文件（标准安装为 `/opt/ai_apps/_console/frontend/`），无需 build；只改开发机工作区但不复制到板端不会生效 |
+
+随机 Logo 也不需要重新构建：把图片或 GIF 放进当前运行目录的 `frontend/logos/`。后端 `/logo/random` 每次请求会从该目录随机选择，目录为空时回退 `frontend/logo.png`。
 
 ## 六、坑(动手前过一遍)
 

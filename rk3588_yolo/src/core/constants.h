@@ -4,8 +4,7 @@
  */
 #pragma once
 
-namespace constants
-{
+namespace constants {
 
 // 通道相关
 constexpr int MAX_CHANNELS = 15;

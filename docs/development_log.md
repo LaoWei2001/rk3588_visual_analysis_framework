@@ -1,5 +1,8 @@
 # 开发日志（备忘录）
 
+> 文档角色：历史归档，不是当前开发入口、接口说明或基线清单。请从 [docs 文档总入口](README.md) 开始，并以现行源码和对应专题文档为准。  
+> 本文件按时间保留历史决策；每个日期条目中的“当前”都只表示该日期当时的状态。早期的 Redis、直接 uploader API、旧 logic 名称、旧源码路径和外部 ROI 文件等描述不得直接用于现行开发。
+
 ## 2025.12 - 2026.3
 
 编程语言的选择：c/c++。因为底层的硬件加速依赖库只提供c++的接口，且python本身就不适合硬件性能受限的情况，多路推理远远达不到要求，使用python初步尝试多路视频推理后发现4路流连10帧都没有。还尝试过c++取流，python进行推理的方式，性能也很差。
@@ -20,7 +23,7 @@
 
 支持将视频流手动绑定至某一个npu的核心，npu有3个核心，建议总的视频流个数为3的倍数，可以使npu负载较均衡。
 
-上报模块从主程序中解耦为python微服务程序，报警队列进入redis，后台微服务再去消费队列，c++主程序只负责将相关数据送入redis。
+上报模块从主程序中解耦为 Python 微服务程序。此阶段曾采用 Redis 报警队列；该实现后来已被 `alarm_store/manifest.json` 持久化发件箱替代，不能作为当前开发接口。
 
 ## 2026.04.23
 
@@ -68,7 +71,7 @@ build.sh现可以自动判断平台类型(arm/x86)进行不同的编译方式，
 
 这样如果不同通道使用的逻辑不一样也可以共用一个dify工作流。
 
-写好两种上报方式（服务器/dify）的单元测试，包含了redis的入队和消费，测试代码要跟主程序源码的相关部分一致，尽量直接引用源代码的函数。
+当时计划为服务器/Dify 的 Redis 入队和消费补单元测试；当前测试目标应改为 `report_alarm → manifest/media → EventOutboxForwarder`，不再测试 Redis 队列。
 
 ## 2026.05.11
 
@@ -86,7 +89,7 @@ build.sh现可以自动判断平台类型(arm/x86)进行不同的编译方式，
 
 ## 2026.05.15
 
-如果多个通道共用同一个逻辑, 且逻辑内部用到了需要跨帧保存的变量, 需要像logic_hook和logic_dify那样使用ctx->state对跨帧状态进行维护, 否则不同通道的跨帧数据会混在一起
+如果多个通道共用同一个逻辑，逻辑内部需要跨帧保存的变量必须使用 `ctx->state` 维护，否则不同通道的数据会混在一起。当前可对照 `logic_upload` 的闩锁和 `logic_button_demo` 的动作状态。
 
 错误例子:
 
@@ -189,13 +192,29 @@ TODO:后续需要测试关于添加, 修改参数的这一整套流程。还有�
 
 ## 2026.06.12
 
-将通道逻辑(channel_logic)做了拆分重构: 原来所有 logic_xxx 函数都挤在 channel_logic.cpp 一个文件里(2600+行), 现在每个逻辑独立成一个 src/logic/logic_xxx.cpp 文件。channel_logic.cpp 只保留框架核心(ChannelContext 方法 / draw_* / 注册分发表), 各 logic 共用的头集中到 logic_common.h(逻辑文件一行 #include 它即可)。
+将通道逻辑(channel_logic)做了拆分重构: 原来所有 logic_xxx 函数都挤在 channel_logic.cpp 一个文件里(2600+行), 当时改为每个逻辑独立成一个 `src/logic/logic_xxx.cpp` 文件。此处是 2026.06.12 的历史路径；现行结构已经继续演进为 `src/logic/modules/<logic_name>/{logic.cpp,logic.json}`，框架核心位于 `src/logic/core/`。
 
 注册方式从「在 channel_logic_init() 里手动 register_logic」改成「文件末尾一行 REGISTER_LOGIC(...) 自注册」, 在 main() 之前的静态初始化阶段自动登记到分发表。好处: 新增一个逻辑=新增一个文件, 删除一个逻辑=删除对应文件, 互不牵连, 耦合最低。src/logic 下的 .cpp 由 CMake(aux_source_directory)自动收集编译, build.sh 每次全新构建会自动包含, 无需手动改 CMake。
 
 注意: channel_logic_init()/deinit() 改成了空实现(仅保留以兼容 analyzer 的调用), 绝不能再在里面清零/清空注册表, 否则会抹掉静态期已完成的自注册, 导致重启后所有通道退化为空逻辑。
 
-同步更新了 docs/skills/rk3588-channel-logic 下的全部文档(SKILL / channelcontext-api / upload-and-wiring / 系统说明文档 + 各 logic 示例)使其与新结构一致; 补齐了缺失的 logic_wafer_sop、logic_fall_detect 两个示例; 并修正了示例里过时的代码(如 logic_server/logic_dify 现已改为按 report_interval_sec 限频, 文档原来还写着无限频/写死10秒)。另外给 channelcontext-api 补上了之前完全缺失的「多 ROI(命名区域)」一节。
+当时曾同步过 channel logic 文档并补充多 ROI 说明，也保留过一批随后从生产源码删除的业务示例。2026.07.14 又按当时四个实际 logic 清理过示例目录；本条只记录该阶段的演进状态，不是现行模块清单。
 
 将整个代码文件夹已上传至github仓库
+
+## 2026.07.14（历史快照，已被后续模块化更新取代）
+
+> 以下内容只描述 2026.07.14 当日状态。当前模块与服务边界请从 [docs 文档总入口](README.md) 查询。
+
+统一告警链路已经收敛为 `report_alarm/alarm_report → alarm_store/<event_id>/manifest.json + 媒体 → unified_upload → server/Dify`。C++ 不再维护直接 uploader 或 Redis 队列，连接地址和密钥集中保存在上传服务 `config.yaml` 的默认连接/Profile 中，Web 通道配置只保存 `report_policy`、`report_parameters` 和 `profile_id`。
+
+截至 2026.07.14，当时生产 `src/logic/` 的具体实现为 `logic_default`、`logic_upload`、`logic_button_demo` 和 `logic_path_sop`。当日删除了文档中对已不存在的 `logic_server`、`logic_dify`、`logic_hook` 等示例的现行引用，并按当时源码补齐四篇示例。后续又增加了正式模块，因此这四项不能作为现行清单。ROI 在该阶段从通道内嵌配置加载并支持热更新；通道数量、顺序或 id 的拓扑变化仍要求重启。
+
+全局逻辑当前没有接受 `GlobalContext*` 的统一媒体告警入口。跨通道规则若需图片/视频告警，应由明确的锚点通道 logic 提交，或先新增线程安全的公共 API；不能伪造 `ChannelContext`。
+
+## 2026.07.16
+
+通道 logic 命名收敛为单一真源：`REGISTER_LOGIC` 从两参数改为 `REGISTER_LOGIC(logic_func)`，宏直接把 C++ 入口函数名字符串化。该名称同时供运行时注册表、`channels[].logic`、Web 和外部 API 使用，不再维护手写注册串。
+
+模块源 `logic.json` 不再声明 `name`；构建生成器从 `REGISTER_LOGIC(logic_func)` 提取函数名并注入生成的 App `logics.json`。模块目录只用于组织源码，可以与 logic ID 不同；每个模块仍必须有 `logic.json`。`REGISTER_LOGIC_ACTION` 的第一参数也改为 logic 入口函数标识符，由宏自动生成同一 logic ID。
 

@@ -1,249 +1,66 @@
-# 配置模块 (config/)
+# `src/config`：配置加载、校验与字段注册
 
-> 负责从 JSON 文件解析运行时配置、验证合法性，并通过注册表机制支持字段级热重载。
+## 文件职责
 
----
+- `config.h`：`AppConfig`、`ChannelConfig`、流、模型、ROI 和全局 logic 的结构定义及 C++ 默认值。
+- `config.cpp`：解析 schema v2 JSON、兼容少量旧字段、继承全局默认、排序启用通道。
+- `config_init.cpp`：用 `REG_G`/`REG_C` 注册可做通用同步的字段。
+- `config_registry.*`：按类型从 cJSON 读取字段，并在热重载时同步已注册字段。
+- `config_validator.*`：首次加载完整校验；热重载使用 critical 校验。
 
-## 文件清单
-
-| 文件 | 职责 |
-|------|------|
-| `config.h` | 所有配置结构体定义（`AppConfig`、`ChannelConfig`、`StreamConfig` 等） |
-| `config.cpp` | `load_config()` JSON 解析实现、`config_utils` 命名空间工具函数 |
-| `config_init.cpp` | 注册表初始化：调用 `REG_G/REG_C` 宏注册所有字段 |
-| `config_registry.h` | `ConfigRegistry` 类接口声明，定义 `REG_G/REG_C` 宏 |
-| `config_registry.cpp` | `ConfigRegistry` 实现：字段解析、字段级同步（`sync_fields`） |
-| `config_validator.h` | `validate_config()` 接口 |
-| `config_validator.cpp` | 配置合法性校验逻辑 |
-
----
-
-## 配置文件格式
-
-配置文件为 JSON，`schema_version = 2`，启动时通过命令行参数指定路径（默认 `./assets/config.json`）。
-
-### 顶层结构
+## JSON 结构
 
 ```json
 {
   "schema_version": 2,
-  "global": { /* 全局参数 */ },
-  "channels": [ /* 每通道参数列表 */ ],
-  "global_logics": [ /* 全局逻辑实例列表（可选）*/ ]
+  "global": {
+    "enable_display": true,
+    "max_fps": 30,
+    "global_logics": [
+      {"enable": true, "logic": "global_default", "channels": [], "poll_interval_ms": 100}
+    ]
+  },
+  "channels": [
+    {
+      "id": 0,
+      "enable": true,
+      "infer_enable": true,
+      "stream": {"src_type": "usb", "device": "/dev/video81"},
+      "models": [
+        {"id": "det-1", "enable": true, "model_type": "yolov8_det",
+         "model_path": "./assets/model.rknn", "label_path": "./assets/labels.txt",
+         "obj_thresh": 0.4, "nms_thresh": 0.45, "detect_classes": [], "npu_core": -1}
+      ],
+      "roi_zones": [{"name": "entrance", "polygon": [[0.1,0.1],[0.9,0.1],[0.9,0.9]]}]
+    }
+  ]
 }
 ```
 
-### 全局参数（`global` 对象）
+`global_logics` 位于 `global` 对象内，不在顶层。`stream.src_type` 必填，只支持 `rtsp`、`file`、`usb`；USB 优先取 `stream.device`，其他源取 `stream.url`。启用通道必须有有效 location。`channels[].logic` 是可选后处理模块名；省略或设为空字符串时不执行任何业务模块，视频仍显示，模型结果仍由框架绘制。
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `model_type` | string | `"yolo"` | 全局默认模型类型 |
-| `model_path` | string | `""` | 全局默认 RKNN 模型文件路径 |
-| `label_path` | string | `""` | 全局默认标签文件路径 |
-| `enable_display` | bool | `true` | 是否打开 GTK 显示窗口 |
-| `disp_width` | int | `1920` | 显示分辨率宽（自动对齐 4 的倍数） |
-| `disp_height` | int | `1080` | 显示分辨率高（自动对齐 2 的倍数） |
-| `tile_cols` | int | `2` | 显示网格列数 |
-| `tile_rows` | int | `2` | 显示网格行数（为 0 时自动计算） |
-| `performance_display` | bool | `true` | 性能统计总开关：终端打印 Feed 性能日志，并叠加画面 FPS（与 `show_fps` 共同决定 FPS 是否上屏） |
-| `debug_display` | bool | `false` | 是否开启 `DBG_PRINT` 调试打印 |
-| `enable_pause_key` | bool | `false` | 暂停键开关：选中显示窗口按空格暂停/继续（需同时开启 `enable_display`） |
-| `enable_rtsp` | bool | `false` | 是否启用内置 RTSP 推流服务（无显示器时用 VLC / 配置平台看拼接画面） |
-| `rtsp_port` | int | `8554` | RTSP 端口，地址 `rtsp://<板IP>:<port><rtsp_path>` |
-| `rtsp_path` | string | `"/live"` | RTSP 挂载点（须以 `/` 开头） |
-| `rtsp_fps` | int | `25` | 推流帧率 |
-| `rtsp_bitrate` | int | `4096` | 软件编码码率(kbps)；硬件编码用默认码率 |
-| `rtsp_codec` | string | `"h264"` | 推流编码 `"h264"` / `"h265"` |
-| `rtsp_encoder` | string | `"auto"` | `"auto"`=有硬件就硬编否则软编，`"hw"`=强制硬编，`"sw"`=强制软编 |
-| `channel_threads` | int | `1` | 每通道并发推理线程数（默认值） |
-| `max_fps` | int | `30` | 每通道推理帧率上限（默认值） |
-| `local_default_fps` | int | `25` | 本地文件播放时的采样帧率 |
-| `queue_size` | int | `1` | 推理任务队列深度 |
-| `npu_cores` | int | `3` | 使用的 RKNN 上下文数量（1~3） |
-| `obj_thresh` | float | `0.4` | 目标置信度阈值（全局默认） |
-| `nms_thresh` | float | `0.45` | NMS 重叠阈值（全局默认） |
-| `detect_classes` | string[] | `[]` | 检测类别白名单，空数组=全部 |
-| `tracker_enable` | int | `1` | 跟踪器开关（全局默认，0=关，1=开） |
-| `tracker_iou_thresh` | float | `0.3` | 跟踪器 IoU 匹配阈值 |
-| `tracker_max_miss` | int | `10` | 跟踪器最大连续丢失帧数 |
-| `tracker_min_hits` | int | `3` | 轨迹确认所需最小命中帧数 |
+## 继承与多模型
 
-### 通道参数（`channels` 数组元素）
+通道的阈值、线程、FPS、tracker 等用负值表达“继承 global”。`models[]` 中存在至少一个启用且路径/类型完整的条目时，推理层使用多模型模式，并忽略旧单模型字段；旧字段仍用于兼容单模型配置。`infer_enable=false` 时不进入 NPU，但仍解码和显示；只有配置了 `logic` 才会以空结果逐帧执行传统 CV 后处理。
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `id` | int | — | 通道唯一 ID（用于 OTA 匹配） |
-| `enable` | bool | `true` | 是否启用该通道 |
-| `infer_enable` | bool | `true` | 是否启用 YOLO 推理；`false`=传统算法通道（仍解码/显示/逐帧跑逻辑，不进 NPU，`ctx->results` 为空） |
-| `stream.url` | string | — | RTSP 地址 |
-| `stream.device` | string | — | USB 摄像头节点，如 `/dev/video0` |
-| `stream.src_type` | string | **必填** | `"rtsp"` / `"file"` / `"usb"`（已取消自动推断，必须显式声明） |
-| `stream.video_enc` | string | `"h264"` | 视频编码类型（`"h264"` 或 `"h265"`） |
-| `stream.loop` | bool | `false` | 本地文件是否循环播放 |
-| `stream.usb_width` | int | `0` | USB 显式采集宽（0=随 fps 自动档）；设定后与 ROI 抓帧坐标统一、不随 fps 变 |
-| `stream.usb_height` | int | `0` | USB 显式采集高（0=随 fps 自动档） |
-| `logic` | string | `"logic_default"` | 绑定的通道逻辑名称 |
-| `model_type` | string | 继承全局 | 通道独立模型类型 |
-| `model_path` | string | 继承全局 | 通道独立模型路径，空=不做推理 |
-| `label_path` | string | 继承全局 | 通道独立标签路径 |
-| `obj_thresh` | float | `-1`（继承全局）| 通道独立置信度阈值 |
-| `nms_thresh` | float | `-1`（继承全局）| 通道独立 NMS 阈值 |
-| `detect_classes` | string[] | 继承全局 | 通道独立类别白名单 |
-| `threads` | int | `-1`（继承全局）| 通道独立并发推理线程数 |
-| `playback_fps` | int | `-1` | 采集帧率上限（RTSP/文件/USB），`-1`=不限制 |
-| `max_fps` | int | `-1`（继承全局）| 推理帧率上限 |
-| `npu_core` | int | `-1`（自动分配）| 绑定 NPU 核心（0/1/2） |
-| `tracker_enable` | int | `-1`（继承全局）| 通道独立跟踪器开关 |
-| `tracker_iou_thresh` | float | 继承全局 | 通道独立跟踪器 IoU 阈值 |
-| `tracker_max_miss` | int | 继承全局 | 通道独立最大丢失帧数 |
-| `tracker_min_hits` | int | 继承全局 | 通道独立最小命中帧数 |
-| `radius` | int | `1` | logic_hook 安全圈半径（自定义业务参数示例） |
-| `report_interval_sec` | int | `5` | logic_server / logic_dify 两次上报的最小间隔（秒） |
-| `dify_prompt` | string | `""` | logic_dify 提示词，空=用默认 |
-| `server_url` | string | `""` | 该通道 HTTP 上报地址（方案2，空=用上报服务默认值） |
-| `dify_api_url` / `dify_api_key` | string | `""` | 该通道 Dify 地址 / 密钥（方案2，空=用默认） |
-| logic 专属算法参数 | — | — | 如 logic_wafer（`line_width`/`t_start`/`t_end`/`coverage_threshold`/`required_actions`）、logic_wafer_sop（`sop_sequence`/`basket_*`/`sop_*`）、logic_fall_detect（`fall_*`/`wave_*`）。完整清单与默认值见 `src/logic/logics.json` 与 `config.h` 的 `ChannelConfig`，此处不逐一列出 |
+ROI 的现代格式是 `roi_zones[]`，顶点为 0–1 归一化坐标；`roi_polygon` 是旧单 ROI 兼容格式。加载后由 analyzer 按模型输入尺寸生成 `RoiZone`。
 
-### 全局逻辑参数（`global_logics` 数组元素）
+`report_policy` 和 `report_parameters` 以通用 JSON 保存到字符串字段，允许 Web 增加上报参数而不扩充 C++ 结构。录像派生字段默认 `event_video_pre_sec=3`、`post_sec=3`、`fps=15`、`overlay=custom`。
 
-```json
-{
-  "enable": true,
-  "logic": "global_example",
-  "channels": [0, 1, 2],
-  "poll_interval_ms": 100
-}
-```
+## 新增公共配置字段
 
-| 字段 | 说明 |
-|------|------|
-| `enable` | 是否启动此实例 |
-| `logic` | 全局逻辑函数名称（在 `global_logic.cpp` 中注册） |
-| `channels` | 监控的通道号列表，空数组 `[]` = 监控所有通道 |
-| `poll_interval_ms` | 轮询间隔（毫秒），实际值会自动收敛到推理帧间隔的一半 |
+以下流程只适用于所有通道/系统共同拥有的新底层配置。某个 `logic_xxx` 独有的普通业务参数应使用模块 `logic.json.parameters + ctx->param_*()`，见 `../rk3588-channel-logic/references/adding-config-parameter.md`，不要扩展中央结构。
 
----
+1. 在 `AppConfig` 或 `ChannelConfig` 添加字段和默认值。
+2. 在 `config_init.cpp` 使用匹配类型的 `REG_G` 或 `REG_C` 注册。
+3. 在 `config_validator.cpp` 加范围、枚举或组合约束。
+4. 若字段是嵌套对象/数组（如 `stream`、`models`、ROI、global logic），在 `config.cpp` 显式解析，并在 `app_ctrl.cpp` 明确热重载行为；注册表不能自动处理任意嵌套结构。
+5. 若 Web 会编辑该公共字段，同步更新对应 Web 节点和配置序列化；不要把系统字段伪装成某个 logic 的模块参数。
 
-## 架构设计
+## 热重载边界
 
-### 配置注册表（`ConfigRegistry`）
+配置监控在文件 mtime 改变且内容稳定后加载临时配置。它拒绝通道数量、排序或 id 变化；这类拓扑变化必须重启。当前可热更新普通注册字段、阈值、类别、tracker、logic（并清空旧状态/结果/绘制）、模型、ROI、global logic 实例和 stream（重建采集器并保持共享源关系）。
 
-所有字段在 `config_init.cpp` 中通过宏声明，系统在运行时按注册表解析 JSON 并执行字段级同步：
+显示缓冲尺寸、tile 布局、线程数量等虽然可能被解析/同步，但其相关资源是在启动时分配的；修改这类结构性参数应重启，不要仅依赖热重载。
 
-```
-config_init.cpp
-  REG_G("obj_thresh", FLOAT, obj_thresh)   → global_fields 列表
-  REG_C("logic",      STRING, logic)        → channel_fields 列表
-
-load_config()
-  parse_global(json_obj, &cfg)             → 按 global_fields 批量赋值
-  parse_channel(json_obj, &ch_cfg)         → 按 channel_fields 批量赋值
-
-config_monitor_thread (热重载)
-  sync_fields(&old_cfg, &new_cfg, true)    → 字段级原地同步（不析构 vector）
-```
-
-**为什么用字段级同步而不是整体赋值 `config = new_cfg`？**  
-整体赋值会触发 `std::vector<ChannelConfig>` 的析构和重新分配，导致 `analyzer.cpp` 中持有的通道指针失效，产生 use-after-free。`sync_fields()` 通过偏移量原地更新每个字段，保证指针有效性。
-
-### 继承机制（通道覆盖全局默认值）
-
-通道配置中值为 `-1` / `""` / 空数组 的字段，在 `load_config()` 内被赋予对应的全局默认值。该继承逻辑**内联在 `config.cpp` 的 `load_config()` 中**（搜 "通道配置继承全局配置" 代码段），并非独立函数。
-
-### 流类型（src_type 必填，不再自动推断）
-
-`stream.src_type` 是**必填**字段，必须显式声明为 `"rtsp"` / `"file"` / `"usb"` 之一。
-前后端均已**取消**按 `url`/`device` 自动推断类型的逻辑：
-
-- C++ `config_utils::normalize_src_type(stream)` 仅做大小写归一；为空即视为配置错误，
-  `load_config()` 与 `ConfigValidator` 都会拒绝。
-- 前端（Web 控制台）视频流节点的「输入类型」必须手动选择；缺省会标红提示「未指定」。
-
----
-
-## 热重载机制
-
-修改配置文件后**无需重启程序**，`config_monitor_thread` 每 2 秒检测文件 `mtime`，变化后延迟一轮再重载（等待文件写入稳定），随后自动生效以下内容：
-
-- 检测阈值（`obj_thresh`、`nms_thresh`）
-- 检测类别白名单（`detect_classes`）
-- 跟踪器参数
-- 通道逻辑名称（`logic`）—— 切换时自动清空跨帧状态
-- RKNN 模型（`model_path` / `model_type` 变化时热加载新模型）
-
-**不支持热重载的字段**（需要重启生效）：通道数量、RTSP 地址、显示分辨率、NPU 核心数。
-
----
-
-## 二次开发指南
-
-### 添加新的全局配置字段
-
-1. 在 `config.h` 的 `AppConfig` 结构体中声明字段：
-
-```cpp
-// config.h
-struct AppConfig {
-    // ... 已有字段 ...
-    int my_new_param = 42;  // ← 新增
-};
-```
-
-2. 在 `config_init.cpp` 中注册到解析表：
-
-```cpp
-// config_init.cpp
-REG_G("my_new_param", INT, my_new_param);
-```
-
-3. 在 `config.json` 的 `global` 对象中添加对应键，重启或热重载即可生效。
-
-### 添加新的通道配置字段
-
-1. 在 `config.h` 的 `ChannelConfig` 中声明：
-
-```cpp
-struct ChannelConfig {
-    // ...
-    float alert_distance = 100.0f;  // ← 新增
-};
-```
-
-2. 在 `config_init.cpp` 中注册：
-
-```cpp
-REG_C("alert_distance", FLOAT, alert_distance);
-```
-
-3. 在业务逻辑中通过 `ctx->config->alert_distance` 直接读取。
-
-### 在业务逻辑中读取配置
-
-通道配置通过 `ChannelContext` 传递，在逻辑函数中随时可读：
-
-```cpp
-static void logic_my(ChannelContext *ctx) {
-    // 读取通道配置字段
-    int r = ctx->config->radius;
-    float thresh = ctx->config->obj_thresh;
-    bool tracker_on = (ctx->config->tracker_enable == 1);
-}
-```
-
-全局配置通过 `g_pCtrl->config` 读取（需持共享锁）：
-
-```cpp
-#include "core/app_ctrl.h"
-
-int max_fps;
-{
-    std::shared_lock<std::shared_timed_mutex> lock(g_pCtrl->mtx);
-    max_fps = g_pCtrl->config.max_fps;
-}
-```
-
----
-
-## 配置示例
-
-参见 `assets/config_file.json`（本地文件单路）、`assets/config_mux16.json`（16 路 RTSP）等示例文件。
+读取全局配置时使用 `g_pCtrl->mtx` 的 pthread 读锁；不要把它误写成 `std::shared_mutex`。通道运行态另由 `chn_mtx[]` 保护。

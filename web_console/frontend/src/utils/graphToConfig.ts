@@ -14,7 +14,7 @@ function buildStream(d: Record<string, unknown>): Record<string, unknown> {
   // src_type 必填、不再自动推断；按【显式】类型分别落字段（新建节点已带 src_type）。
   const t = getSrcType(d)
   if (t === 'usb') {
-    const s: Record<string, unknown> = { src_type: 'usb', device: d.device ?? '/dev/video0' }
+    const s: Record<string, unknown> = { src_type: 'usb', device: d.device ?? '/dev/video81' }
     // 方案B: 显式 USB 采集分辨率(0=自动随 fps)。写进 config 供 C++ 与 ROI 抓帧用同一值
     const uw = Number(d.usb_width ?? 0), uh = Number(d.usb_height ?? 0)
     if (uw > 0 && uh > 0) { s.usb_width = uw; s.usb_height = uh }
@@ -33,28 +33,17 @@ export function graphToConfig(
   globalLogics: GlobalLogicEntry[] = [],
   globalSettings: GlobalSettingsData,
 ): { config: Record<string, unknown>; roi: Record<string, RoiEntry> } | null {
-  // ── 收集“通道锚点”: 一个锚点 = 一条通道 ──
-  // YOLO 通道锚点 = model 节点; 传统/无推理通道锚点 = 被「视频流」直连的 logic 节点。
-  // 用户可以不放 YOLO 节点, 把视频流直接接到逻辑函数 → 该路走传统 CV / 非 YOLO 算法。
-  const isStreamFedLogic = (n: Node): boolean => {
-    if (n.type !== 'logic') return false
-    const inEdge = edges.find(e => e.target === n.id && e.targetHandle === 'logic-in')
-    if (!inEdge) return false
-    return nodes.find(s => s.id === inEdge.source)?.type === 'stream'
-  }
-
-  type Anchor = { node: Node; isModel: boolean }
-  const anchors: Anchor[] = [
-    ...nodes.filter(n => n.type === 'model').map(node => ({ node, isModel: true })),
-    ...nodes.filter(isStreamFedLogic).map(node => ({ node, isModel: false })),
-  ]
+  // 一个视频流节点就是一个通道锚点。后面可以连接零或多个模型，并可选连接一个
+  // 后处理 logic；两者都不连接时仍是合法的纯视频显示通道。
+  const anchors = nodes.filter(n => n.type === 'stream')
   if (anchors.length === 0) return null
 
-  // 统一按画布位置排序(主按 y 分行, 同一行再按 x)。序号 idx 即通道在 config.channels 中的位置,
-  // 也是 ROI 的 key —— 必须与 C++ load_roi_zones() 的“按位置遍历(ch=0,1,2…)”对齐。
+  // config.channels 的运行顺序与 C++ 一致：按稳定的配置 channel_id 排序。
+  // 画布位置只属于布局，拖动节点不能改变运行槽位、控制目标或录像归属。
   anchors.sort((a, b) => {
-    const dy = a.node.position.y - b.node.position.y
-    return Math.abs(dy) > 20 ? dy : a.node.position.x - b.node.position.x
+    const aid = Number((a.data as Record<string, unknown>).channel_id ?? 0)
+    const bid = Number((b.data as Record<string, unknown>).channel_id ?? 0)
+    return aid - bid || a.id.localeCompare(b.id)
   })
 
   const channels: Record<string, unknown>[] = []
@@ -65,19 +54,44 @@ export function graphToConfig(
   const layout: Record<string, Record<string, { x: number; y: number }>> = {}
   const rp = (n: Node) => ({ x: Math.round(n.position.x), y: Math.round(n.position.y) })
 
-  anchors.forEach(({ node: aNode, isModel }, idx) => {
-    const m = isModel ? (aNode.data as Record<string, unknown>) : {}
+  let modelCoreIndex = 0
+  anchors.forEach((streamNode, idx) => {
+    const modelNodes = edges
+      .filter(e => e.source === streamNode.id && e.sourceHandle === 'stream-out')
+      .map(e => nodes.find(n => n.id === e.target))
+      .filter((n): n is Node => n?.type === 'model')
+      .sort((a, b) => a.position.y - b.position.y)
+    const isModel = modelNodes.length > 0
+    const modelDataList = modelNodes.map(n => n.data as Record<string, unknown>)
+    const m = modelDataList[0] ?? {}
+    const stream = buildStream(streamNode.data as Record<string, unknown>)
 
-    // ── Stream ── YOLO: 流接 model 的 stream-in; 传统: 流直连 logic 的 logic-in ──
-    const streamEdge = isModel
-      ? edges.find(e => e.target === aNode.id && e.targetHandle === 'stream-in')
-      : edges.find(e => e.target === aNode.id && e.targetHandle === 'logic-in'
-                        && nodes.find(s => s.id === e.source)?.type === 'stream')
-    const streamNode = streamEdge ? nodes.find(n => n.id === streamEdge.source) : null
-    const stream = streamNode ? buildStream(streamNode.data as Record<string, unknown>) : { url: '', video_enc: 'h264' }
+    const directLogicEdge = edges.find(e => e.source === streamNode.id && e.sourceHandle === 'stream-out' &&
+      ['logic', 'sop'].includes(String(nodes.find(n => n.id === e.target)?.type ?? '')))
+    const modelLogicEdge = modelNodes
+      .map(modelNode => edges.find(e => e.source === modelNode.id && e.sourceHandle === 'logic-out'))
+      .find((edge): edge is Edge => edge != null)
+    const logicEdge = modelLogicEdge ?? directLogicEdge
+    const logicNode = logicEdge ? nodes.find(n => n.id === logicEdge.target) ?? null : null
+
+    const modelConfigs = modelNodes.map((node, modelIndex) => {
+      const data = node.data as Record<string, unknown>
+      return {
+        id:             String(data.id ?? `model_${modelIndex}`),
+        enable:         data.infer_enable !== false,
+        model_type:     data.model_type ?? 'yolov8_det',
+        model_path:     data.model_path ?? '',
+        label_path:     data.label_path ?? '',
+        obj_thresh:     data.obj_thresh ?? 0.3,
+        nms_thresh:     data.nms_thresh ?? 0.45,
+        detect_classes: (data.detect_classes as string[]) ?? [],
+        npu_core:       data.npu_core ?? ((modelCoreIndex + modelIndex) % 3),
+      }
+    })
+    modelCoreIndex += modelNodes.length
 
     // ── Channel id: use stream's channel_id if set, else fall back to sorted position ──
-    const chId = streamNode != null && (streamNode.data as Record<string, unknown>).channel_id != null
+    const chId = (streamNode.data as Record<string, unknown>).channel_id != null
       ? Number((streamNode.data as Record<string, unknown>).channel_id)
       : idx
 
@@ -85,7 +99,9 @@ export function graphToConfig(
     // KEY MUST be sequential position (idx), NOT channel_id.
     // C++ load_roi_zones() iterates channels by sorted position (ch=0,1,2…) and looks up
     // key = std::to_string(ch). Using channel_id here would misplace ROI for non-sequential ids.
-    const roiEdge = edges.find(e => e.target === aNode.id && e.targetHandle === 'roi-in')
+    const modelIds = new Set(modelNodes.map(n => n.id))
+    const roiEdge = edges.find(e => e.targetHandle === 'roi-in' &&
+      (modelIds.has(e.target) || e.target === logicNode?.id))
     const roiNode = roiEdge ? nodes.find(n => n.id === roiEdge.source) ?? null : null
     const zones: RoiZone[] = (roiEdge ? (roiZones[roiEdge.source] ?? []) : [])
       .filter(z => Array.isArray(z.polygon) && z.polygon.length >= 3)
@@ -93,75 +109,137 @@ export function graphToConfig(
     const roiPoly = zones.length > 0 ? zones[0].polygon : []   // 首区域(向后兼容单 ROI)
     roiOut[String(idx)] = { polygon: roiPoly, zones }
 
-    // ── Logic/SOP ── YOLO: model 的 logic-out → logic 或 sop 节点; 传统: 锚点自身即 logic 节点 ──
-    const logicNode = isModel
-      ? (() => {
-          const le = edges.find(e => e.source === aNode.id && e.sourceHandle === 'logic-out')
-          return le ? nodes.find(n => n.id === le.target) ?? null : null
-        })()
-      : aNode
+    // ── Logic/SOP ── 后处理是可选步骤；多个模型连接时应汇入同一个逻辑节点。
     const isSop = logicNode?.type === 'sop'
     const l = logicNode ? (logicNode.data as Record<string, unknown>) : {}
-    const logic = isSop ? 'logic_path_sop' : String(l.logic ?? 'logic_default')
+    const logic = isSop ? 'logic_path_sop' : String(l.logic ?? '').trim()
+    const hasLogic = logic.length > 0
 
     // ── Report ──
-    const reportEdge = logicNode
-      ? edges.find(e => e.source === logicNode.id && e.sourceHandle === 'report-out')
-      : null
-    const reportNode = reportEdge ? nodes.find(n => n.id === reportEdge.target) : null
-    const r = reportNode ? (reportNode.data as Record<string, unknown>) : {}
+    const reportNodes = hasLogic && logicNode
+      ? edges
+          .filter(e => e.source === logicNode.id && e.sourceHandle === 'report-out')
+          .map(e => nodes.find(n => n.id === e.target))
+          .filter((n): n is Node => n?.type === 'report')
+      : []
+    const reportData = reportNodes.map(n => n.data as Record<string, unknown>)
 
     // ── 通道基础字段 ── YOLO 与传统通道字段集不同 ──
     const ch: Record<string, unknown> = isModel
       ? {
           id:             chId,
           enable:         true,                       // 通道存在即启用；YOLO 节点的开关现在控制 infer_enable
-          infer_enable:   m.infer_enable   ?? true,   // 推理开关：false=传统算法通道(仍解码/显示/逐帧跑逻辑)
+          infer_enable:   modelConfigs.some(model => model.enable !== false),
           stream,
-          npu_core:       m.npu_core       ?? 0,
-          logic,
-          model_type:     m.model_type     ?? 'yolov8_det',
-          model_path:     m.model_path     ?? '',
-          label_path:     m.label_path     ?? '',
-          obj_thresh:     m.obj_thresh     ?? 0.3,
-          nms_thresh:     m.nms_thresh     ?? 0.45,
-          detect_classes: (m.detect_classes as string[]) ?? [],
+          ...(modelConfigs.length === 1
+            ? {
+                model_type: modelConfigs[0].model_type,
+                model_path: modelConfigs[0].model_path,
+                label_path: modelConfigs[0].label_path,
+                obj_thresh: modelConfigs[0].obj_thresh,
+                nms_thresh: modelConfigs[0].nms_thresh,
+                detect_classes: modelConfigs[0].detect_classes,
+                npu_core: modelConfigs[0].npu_core,
+              }
+            : { models: modelConfigs }),
         }
       : {
-          // 传统/无推理通道: 不写任何模型字段。C++ 见 model_path 为空即跳过 NPU 推理,
-          // 仍解码/显示/逐帧跑 logic(ctx->results 为空, ctx->infer_enabled=0)。
+          // 传统/无推理通道: 不写任何模型字段。C++ 见 model_path 为空即跳过 NPU 推理，
+          // 仍解码/显示；连接了 logic 时才以空 results 逐帧执行后处理。
           // 缺省 model_type/model_path 也是 configToGraph 区分“无 YOLO 节点”的依据。
           id:           chId,
           enable:       true,
           infer_enable: false,
           stream,
-          logic,
         }
 
-    // 上报开关完全以「画布上是否连了上报配置节点」为准 —— 连了才上报, 没连就不报。
-    // report_enable 写进 config, C++ 各上报类 logic 把 ctx->config->report_enable 作为上报函数参数传入,
-    // 这样这个节点是真正的开关; 不再因 logic 声明而"没连也报"。
-    // 方案2: 上报地址每通道独立写进 config.json(空=用上报服务默认值)，随后经 C++ → Redis 消息下发。
-    const nodeReportType = (r.report_type === 'dify' || r.report_type === 'server') ? r.report_type : null
-    const reportType = reportNode ? (nodeReportType ?? 'server') : null
-    ch.report_enable = reportNode != null
-    if (reportType === 'dify') {
-      ch.dify_prompt  = r.dify_prompt  ?? l.dify_prompt ?? ''
-      ch.dify_api_url = r.dify_api_url ?? ''
-      ch.dify_api_key = r.dify_api_key ?? ''
+    // 不写 logic 字段即表示“不执行后处理模块”；模型检测结果仍由框架负责绘制。
+    if (hasLogic) ch.logic = logic
+
+    // 通用告警策略：每个通道保存独立投递列表和动态参数表。
+    const reportEnabled = reportNodes.length > 0
+    const reportPolicies = reportData.map((data, reportIndex) => {
+      const policy = data.report_policy && typeof data.report_policy === 'object'
+        ? data.report_policy as Record<string, unknown> : {}
+      const configured = Array.isArray(policy.deliveries)
+        ? policy.deliveries as Record<string, unknown>[] : []
+      const delivery = configured[0] ?? {
+        id: `delivery_${reportNodes[reportIndex].id}`,
+        enabled: true,
+        media: 'image',
+        target: 'server',
+        inputs: [],
+      }
+      return { policy, delivery }
+    })
+    const usedDeliveryIds = new Set<string>()
+    const deliveries: Record<string, unknown>[] = reportPolicies.map((item, reportIndex) => {
+      const configuredId = String(item.delivery.id ?? '')
+      const id = configuredId && !usedDeliveryIds.has(configuredId)
+        ? configuredId : `delivery_${reportNodes[reportIndex].id}`
+      usedDeliveryIds.add(id)
+      const inputs = item.delivery.target === 'server' ? [] : Array.isArray(item.delivery.inputs)
+        ? (item.delivery.inputs as Record<string, unknown>[])
+            .filter(input => String(input.key ?? '').trim().length > 0)
+        : []
+      const normalized: Record<string, unknown> = {
+        ...item.delivery,
+        id,
+        enabled: item.delivery.enabled !== false,
+        inputs,
+      }
+      if (isSop && normalized.target === 'dify' && !String(normalized.event_variable ?? '').trim()) {
+        normalized.event_variable = 'event_json'
+      }
+      return normalized
+    })
+    const reportPolicy: Record<string, unknown> = reportEnabled
+      ? { ...(reportPolicies[0]?.policy ?? {}), enabled: true, deliveries }
+      : { enabled: false, deliveries: [] }
+
+    // 视频录制参数取自视频上报节点；图片/视频叠加选项分别取对应媒体节点。
+    const imagePolicy = reportPolicies.find(item => item.delivery.media === 'image')?.policy
+    const videoPolicy = reportPolicies.find(item => item.delivery.media === 'video')?.policy
+    if (imagePolicy?.image_overlay != null) reportPolicy.image_overlay = imagePolicy.image_overlay
+    if (videoPolicy) {
+      for (const key of ['video_overlay', 'video_pre_sec', 'video_post_sec', 'video_fps', 'merge_window_sec']) {
+        if (videoPolicy[key] != null) reportPolicy[key] = videoPolicy[key]
+      }
     }
-    if (reportType === 'server') ch.server_url = r.server_url ?? ''
-    if (isSop) {
+
+    // 多个独立上报节点的参数定义最终仍汇总到通道级配置，按参数 ID 去重。
+    const parameterMap = new Map<string, Record<string, unknown>>()
+    reportPolicies.forEach(({ policy }, reportIndex) => {
+      const defs = Array.isArray(policy.parameters) ? policy.parameters as Record<string, unknown>[] : []
+      defs.forEach((def, defIndex) => {
+        const id = String(def.id ?? '')
+        parameterMap.set(id || `__anonymous_${reportIndex}_${defIndex}`, def)
+      })
+    })
+    reportPolicy.parameters = [...parameterMap.values()]
+    const hasVideo = deliveries.some(x => x.enabled !== false && x.media === 'video')
+    ch.report_policy = reportPolicy
+    ch.report_parameters = reportEnabled
+      ? Object.assign({}, ...reportData.map(data =>
+          data.report_parameters && typeof data.report_parameters === 'object' ? data.report_parameters : {}))
+      : {}
+    ch.event_video_enable = hasVideo
+    ch.event_video_pre_sec = Number(reportPolicy.video_pre_sec ?? 3)
+    ch.event_video_post_sec = Number(reportPolicy.video_post_sec ?? 3)
+    ch.event_video_fps = Number(reportPolicy.video_fps ?? 15)
+    ch.event_video_overlay = String(reportPolicy.video_overlay ?? 'custom')
+    const moduleParameters = l.logic_parameters && typeof l.logic_parameters === 'object' && !Array.isArray(l.logic_parameters)
+      ? l.logic_parameters as Record<string, unknown> : {}
+    if (hasLogic) ch.logic_parameters = moduleParameters
+    if (hasLogic && isSop) {
       // SOP 节点: 把流程序列化成 path_* 通道字段(逻辑集中在 sopFlowToConfig, 与普通逻辑参数解耦)
       Object.assign(ch, sopFlowToConfig(l as unknown as SopFlow))
       // 连了 server 型「上报配置」节点才上报 SOP 报警(顺序错误/漏检); 仅屏幕显示则不连
-      ch.path_report = reportType === 'server'
-    } else {
-      // 逻辑节点上的参数(除 logic 名本身)→ 写入通道；由 logics.json 动态驱动，不再逐字段硬编码
-      // (上报地址/提示词由上报节点负责，这里跳过以免重复)
-      Object.entries(l).forEach(([k, v]) => {
-        if (k === 'logic' || k === 'dify_prompt' || k === 'server_url'
-            || k === 'dify_api_url' || k === 'dify_api_key' || k === 'report_enable') return
+      } else if (hasLogic) {
+      // 兼容旧版通道顶层逻辑字段；新模块参数统一由上面的 logic_parameters 对象保存。
+      // 上报策略由上报节点负责，这里不重复写入逻辑参数。
+        Object.entries(l).forEach(([k, v]) => {
+          if (k === 'logic' || k === 'logic_parameters') return
         if (v != null) ch[k] = v
       })
     }
@@ -183,10 +261,14 @@ export function graphToConfig(
     // 记录该通道各角色节点的画布坐标(缺失的角色不写)，供重新加载时还原布局
     const slot: Record<string, { x: number; y: number }> = {}
     if (streamNode) slot.stream = rp(streamNode)
-    if (isModel)    slot.model  = rp(aNode)
+    modelNodes.forEach((modelNode, modelIndex) => {
+      slot[modelIndex === 0 ? 'model' : `model_${modelIndex}`] = rp(modelNode)
+    })
     if (roiNode)    slot.roi    = rp(roiNode)
     if (logicNode)  slot.logic  = rp(logicNode)
-    if (reportNode) slot.report = rp(reportNode)
+    reportNodes.forEach((reportNode, reportIndex) => {
+      slot[reportIndex === 0 ? 'report' : `report_${reportIndex}`] = rp(reportNode)
+    })
     layout[String(idx)] = slot
 
     channels.push(ch)
@@ -198,14 +280,13 @@ export function graphToConfig(
     model_path: g.model_path ?? '',
     label_path: g.label_path ?? '',
     enable_display:     g.enable_display     ?? 0,
-    disp_width:         g.disp_width         ?? 1920,
-    disp_height:        g.disp_height        ?? 1080,
-    tile_rows:          g.tile_rows          ?? 2,
-    tile_cols:          g.tile_cols          ?? 2,
-    max_fps:            g.max_fps            ?? 15,
+    disp_width:         g.disp_width         ?? 640,
+    disp_height:        g.disp_height        ?? 640,
+    tile_rows:          g.tile_rows          ?? 1,
+    tile_cols:          g.tile_cols          ?? 1,
+    max_fps:            g.max_fps            ?? 25,
     queue_size:         g.queue_size         ?? 1,
-    channel_threads:    g.channel_threads    ?? 1,
-    npu_cores:          g.npu_cores          ?? 3,
+    channel_threads:    g.channel_threads    ?? 3,
     obj_thresh:         g.obj_thresh         ?? 0.3,
     nms_thresh:         g.nms_thresh         ?? 0.45,
     detect_classes:     g.detect_classes     ?? [],
@@ -213,9 +294,9 @@ export function graphToConfig(
     tracker_iou_thresh: g.tracker_iou_thresh ?? 0.3,
     tracker_max_miss:   g.tracker_max_miss   ?? 30,
     tracker_min_hits:   g.tracker_min_hits   ?? 3,
-    performance_display: g.performance_display ?? 1,
+    performance_display: g.performance_display ?? 0,
     enable_pause_key:   g.enable_pause_key   ?? 0,
-    enable_rtsp:        g.enable_rtsp        ?? 0,
+    enable_rtsp:        g.enable_rtsp        ?? 1,
   }
   // 透传 RTSP 高级字段(端口/路径/编码等)，让手改 config.json 的值在网页保存后不丢失
   for (const k of ['rtsp_port', 'rtsp_path', 'rtsp_fps', 'rtsp_bitrate', 'rtsp_codec', 'rtsp_encoder'] as const) {

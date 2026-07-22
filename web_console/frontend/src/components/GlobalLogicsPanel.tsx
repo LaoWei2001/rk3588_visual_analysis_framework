@@ -23,7 +23,7 @@ const DEFAULT_ENTRY: GlobalLogicEntry = {
 
 export default function GlobalLogicsPanel({ logics, onChange }: Props) {
   const info = useConsoleStore(s => s.info)
-  const known = info?.known_global_logics ?? ['global_example', 'global_default']
+  const known = info?.known_global_logics ?? ['global_default']
 
   const update = (i: number, patch: Partial<GlobalLogicEntry>) => {
     const next = logics.map((l, idx) => idx === i ? { ...l, ...patch } : l)

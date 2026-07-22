@@ -12,7 +12,7 @@
 | 后端 `backend/*`                    | `install.sh` 或 `systemctl restart rk3588-console`                         | `journalctl` 里进程 **PID 变了**;或加一条启动日志看到                           |
 | C++ 逻辑/上报/源码                      | `cd rk3588_yolo && ./build.sh <名> && sudo ./install_app.sh <名>` → 网页重启该程序 | 监看画面行为变化;overlay                                                 |
 | `config.json` 普通字段                | 网页保存即可(C++ 热重载)                                                           | 下一帧生效                                                            |
-| **ROI**(roi_zones.json)           | **停止再启动**该程序(不热重载)                                                        | 重新画的区域生效                                                         |
+| **ROI**（通道 `roi_zones` / `roi_polygon`） | 网页保存即可；配置监控会复制字段并调用 `load_roi_zones_from_config()` 重建运行时 ROI | 下一批逻辑帧和显示叠加使用新区域 |
 | 服务配置(config.yaml/ota_config.json) | 把对应后台服务**停止再启动**                                                          | `journalctl -u <svc>`                                            |
 | 开发机改了文件                           | **先 `scp` 到板子**再 install(板子跑的是 `/opt/ai_apps/_console`,不是你的开发副本)          | —                                                                |
 
@@ -97,6 +97,6 @@ journalctl -u unified_upload -n 50 --no-pager
 ## 四、其它常见症结速查
 
 - 后台服务起不来 `CHDIR / Failed at step CHDIR`、单元路径失效、网页与命令行如何配合 → `services-upload-and-ota.md` §7。
-- USB ROI 偏移、改 ROI 不生效、OTA 换模型没生效、apt/Node 国内网络 → `SKILL.md` 四。
-- 给逻辑加参数后网页没有输入框 / 改了值不生效 → `rk3588-channel-logic` 的 `adding-config-parameter.md`(四处 key 对齐 + 热重载约定)。
+- USB ROI 偏移、ROI 配置来源、OTA 换模型没生效、apt/Node 国内网络 → `SKILL.md` 四。当前 ROI 内嵌在通道 `config.json`，支持热更新；若保存后仍未变化，应先确认保存的是正在运行的配置文件，以及通道拓扑没有因非法变化导致整次热重载被拒绝。
+- 给逻辑加参数后网页没有输入框 / 改了值不生效 → `rk3588-channel-logic` 的 `adding-config-parameter.md`（模块 Schema、生成清单、二进制版本与热重载拒绝日志）。
 - 前端"改了不生效"、加页面/加接口、WS 用法 → `web-console-frontend.md`。

@@ -31,6 +31,8 @@
 .header-logic   { background: linear-gradient(90deg,#581c87,#9333ea); color:#f3e8ff; }
 .header-report  { background: linear-gradient(90deg,#7f1d1d,#dc2626); color:#fee2e2; }
 .header-sop     { background: linear-gradient(90deg,#155e75,#06b6d4); color:#cffafe; }
+.header-sopend  { background: linear-gradient(90deg,#0f766e,#14b8a6); color:#ccfbf1; }
+.header-sopstart{ background: linear-gradient(90deg,#15803d,#22c55e); color:#dcfce7; }
 
 /* ── SOP 步骤节点(SOP 流程弹窗内的子画布用) ── */
 .sop-step-idx {

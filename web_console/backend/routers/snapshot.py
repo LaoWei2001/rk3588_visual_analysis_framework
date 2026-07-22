@@ -59,7 +59,7 @@ async def capture_snapshot(
     name: str,
     src_type: str = "rtsp",
     url: str = "",
-    device: str = "/dev/video0",
+    device: str = "/dev/video81",
     # Optional: caller may pass the exact USB resolution to match GStreamer caps.
     # If 0, defaults to USB_DEFAULT_WIDTH × USB_DEFAULT_HEIGHT (1280×720).
     usb_width:  int = 0,
@@ -78,7 +78,7 @@ async def capture_snapshot(
     if src_type == "file":
         source: str = str(app_dir / url) if url and not Path(url).is_absolute() else url
     elif src_type == "usb":
-        source = device if device else "/dev/video0"
+        source = device if device else "/dev/video81"
     else:  # rtsp
         source = url
 

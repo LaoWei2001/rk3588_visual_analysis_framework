@@ -1,8 +1,10 @@
 .login-page {
+  position: relative;
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   /* 门面页：对角渐变打底 + 顶部蓝光 + 左上/右下蓝紫角落光晕（最后一层 linear 在最底） */
   background-color: var(--bg);
   background-image:
@@ -13,6 +15,8 @@
 }
 
 .login-card {
+  position: relative;
+  z-index: 1;
   width: 360px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -22,6 +26,70 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+}
+
+/* 登录卡片背后的颜文字：密码输入时由睁眼切换为遮眼。 */
+.login-kaomoji {
+  position: absolute;
+  z-index: 0;
+  top: 50%;
+  width: 340px;
+  color: rgba(147, 197, 253, 0.34);
+  font-size: clamp(56px, 5.8vw, 88px);
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 2px;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+  text-shadow:
+    0 0 18px rgba(59, 130, 246, 0.22),
+    0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+.login-kaomoji span {
+  display: block;
+  animation: login-kaomoji-pop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.login-kaomoji--left {
+  top: 34%;
+  left: clamp(18px, 4vw, 72px);
+  transform: translateY(-50%) rotate(7deg);
+}
+
+.login-kaomoji--right {
+  top: 66%;
+  right: clamp(30px, 5vw, 80px);
+  width: 460px;
+  color: rgba(196, 181, 253, 0.34);
+  font-size: clamp(44px, 4.5vw, 68px);
+  text-shadow:
+    0 0 18px rgba(139, 92, 246, 0.24),
+    0 12px 32px rgba(0, 0, 0, 0.35);
+  transform: translateY(-50%) rotate(4deg);
+}
+
+.login-kaomoji--bottom {
+  top: auto;
+  bottom: clamp(18px, 3vh, 30px);
+  right: 0;
+  left: 0;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  color: rgba(103, 232, 249, 0.3);
+  font-size: clamp(48px, 5vw, 72px);
+  text-shadow:
+    0 0 18px rgba(34, 211, 238, 0.22),
+    0 12px 32px rgba(0, 0, 0, 0.35);
+  transform: none;
+}
+
+@keyframes login-kaomoji-pop {
+  from { opacity: 0; transform: scale(0.82); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 .login-logo {
@@ -103,6 +171,62 @@
   outline: none;
 }
 
+.login-password-control {
+  position: relative;
+  width: 100%;
+}
+
+.login-password-control input {
+  padding-right: 44px;
+}
+
+/* 屏蔽浏览器按状态显示/隐藏的原生按钮，统一使用下面常驻的显隐按钮。 */
+.login-password-control input::-ms-reveal,
+.login-password-control input::-ms-clear {
+  display: none;
+}
+
+.login-password-toggle {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 7px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: color 0.15s, background 0.15s;
+}
+
+.login-password-toggle:hover {
+  color: #dbeafe;
+  background: rgba(79,142,247,0.12);
+}
+
+.login-password-toggle:focus-visible {
+  color: #dbeafe;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.login-password-toggle svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .login-error {
   padding: 8px 12px;
   background: rgba(127,29,29,0.6);
@@ -140,5 +264,56 @@
   font-size: 11px;
   color: var(--text2);
   text-align: center;
-  opacity: 0.6;
+  line-height: 1.6;
+}
+
+.login-footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.login-footer a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 760px) {
+  .login-card {
+    width: min(360px, calc(100% - 24px));
+  }
+
+  .login-kaomoji {
+    width: 240px;
+    font-size: clamp(42px, 12vw, 56px);
+  }
+
+  .login-kaomoji--left {
+    top: 3%;
+    left: 43%;
+    transform: translateX(-50%) rotate(5deg);
+  }
+
+  .login-kaomoji--right {
+    top: auto;
+    right: auto;
+    bottom: 16%;
+    left: 54%;
+    width: 360px;
+    font-size: clamp(30px, 9vw, 42px);
+    transform: translateX(-50%) rotate(3deg);
+  }
+
+  .login-kaomoji--bottom {
+    bottom: 2%;
+    right: 0;
+    left: 0;
+    width: 100%;
+    font-size: clamp(40px, 11vw, 50px);
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-kaomoji span {
+    animation: none;
+  }
 }

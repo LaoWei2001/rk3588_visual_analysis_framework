@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom'
 import AppsPage    from './pages/AppsPage'
 import EditorPage  from './pages/EditorPage'
@@ -6,6 +6,7 @@ import LogsPage    from './pages/LogsPage'
 import RecordsPage from './pages/RecordsPage'
 import LoginPage   from './pages/LoginPage'
 import TerminalPage from './pages/TerminalPage'
+import ServicesPage from './pages/ServicesPage'
 import { destroyAllTerminals } from './pages/terminalSession'
 import ErrorBoundary from './components/ErrorBoundary'
 import { useAuthStore } from './store/authStore'
@@ -68,6 +69,10 @@ function AppShell() {
           <span className="nav-icon">▣</span> 程序管理
         </NavLink>
 
+        <NavLink to="/services" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
+          <span className="nav-icon">⚙</span> 服务配置
+        </NavLink>
+
         <NavLink to="/terminal" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
           <span className="nav-icon">▤</span> 终端命令行
         </NavLink>
@@ -87,6 +92,7 @@ function AppShell() {
             <Route path="/logs/:appName"     element={<LogsPage />} />
             <Route path="/records/:appName"  element={<RecordsPage />} />
             <Route path="/terminal"        element={<TerminalPage />} />
+            <Route path="/services"        element={<ServicesPage />} />
           </Routes>
         </ErrorBoundary>
       </main>
@@ -96,6 +102,40 @@ function AppShell() {
 
 // ── Root ──────────────────────────────────────────────────────────────────
 export default function App() {
+  useEffect(() => {
+    const normalTitle = document.title
+    let restoreTimer: number | undefined
+
+    const clearTimers = () => {
+      if (restoreTimer !== undefined) window.clearTimeout(restoreTimer)
+      restoreTimer = undefined
+    }
+
+    const handleVisibilityChange = () => {
+      clearTimers()
+
+      if (document.hidden) {
+        document.title = 'Σ(ﾟДﾟ；) 干嘛去了?'
+        restoreTimer = window.setTimeout(() => {
+          if (document.hidden) document.title = normalTitle
+        }, 1000)
+        return
+      }
+
+      document.title = '(｡•́‿•̀｡) 欢迎回来!'
+      restoreTimer = window.setTimeout(() => {
+        if (!document.hidden) document.title = normalTitle
+      }, 1000)
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      clearTimers()
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      document.title = normalTitle
+    }
+  }, [])
+
   return (
     <BrowserRouter>
       <Routes>

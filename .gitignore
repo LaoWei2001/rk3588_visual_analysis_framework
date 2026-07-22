@@ -8,9 +8,6 @@ dist
 node_modules
 .claude
 .vscode
-*.png
-*.jpg
-*.jpeg
-!web_console/frontend/logos/*.png
-!web_console/frontend/logos/*.jpg
-!web_console/frontend/logos/*.jpeg
+
+# 编译后的单元测试二进制（由 tests/**/build.sh 重新生成）
+*_queue_producer_test

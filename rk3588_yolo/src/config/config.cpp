@@ -3,15 +3,16 @@
  * @brief JSON 配置解析与热加载
  */
 #include "config.h"
-#include "../third_party/json/cJSON.h"
 #include "config_registry.h"
 #include "config_validator.h"
+#include "logic/core/logic_parameters.h"
 #include <algorithm>
 #include <cctype>
 #include <fstream>
-#include <set>
 #include <sstream>
+#include <set>
 #include <sys/stat.h>
+#include "../third_party/json/cJSON.h"
 
 void init_config_fields(AppConfig &cfg);
 
@@ -26,7 +27,8 @@ std::string to_lower_copy(const std::string &value)
 {
     std::string out = value;
     std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                   [](unsigned char c)
+                   { return static_cast<char>(std::tolower(c)); });
     return out;
 }
 
@@ -52,16 +54,20 @@ bool is_supported_src_type(const std::string &src_type)
 bool is_channel_infer_enabled(const ChannelConfig &ch_cfg)
 {
     /* 推理开启需同时满足：用户开关 infer_enable=true 且配置了模型(路径+类型)。
-     * infer_enable=false → 传统算法通道：跳过 NPU 推理，但仍解码/显示/逐帧跑
-     * logic。 */
-    return ch_cfg.infer_enable && !ch_cfg.model_path.empty() && !ch_cfg.model_type.empty();
+     * infer_enable=false → 跳过 NPU 推理但仍解码/显示；若配置了后处理则以空结果逐帧调用。 */
+    if (!ch_cfg.infer_enable)
+        return false;
+    if (!ch_cfg.models.empty())
+        return std::any_of(ch_cfg.models.begin(), ch_cfg.models.end(),
+                           [](const ChannelModelConfig &model)
+                           { return model.enable && !model.model_path.empty() && !model.model_type.empty(); });
+    return !ch_cfg.model_path.empty() && !ch_cfg.model_type.empty();
 }
 } // namespace config_utils
 
 bool load_config(const std::string &path, AppConfig &cfg)
 {
-    // 保存热重载标记（在 init_config_fields 之前，因为后面 cfg.config_path
-    // 会被覆盖）
+    // 保存热重载标记（在 init_config_fields 之前，因为后面 cfg.config_path 会被覆盖）
     bool is_hotreload = (cfg.config_path == "HOTRELOAD");
 
     static bool initialized = false;
@@ -112,7 +118,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
     cfg.max_fps = 30;
     cfg.local_default_fps = 25;
     cfg.queue_size = 1;
-    cfg.npu_cores = 3;
     cfg.obj_thresh = 0.4f;
     cfg.nms_thresh = 0.45f;
     cfg.tracker_enable = 1;
@@ -149,7 +154,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
 
             GlobalLogicConfig gl_cfg;
             gl_cfg.enable = false;
-            gl_cfg.logic = "global_example";
+            gl_cfg.logic = "global_default";
             gl_cfg.poll_interval_ms = 100;
 
             cJSON *gl_enable = cJSON_GetObjectItemCaseSensitive(gl_item, "enable");
@@ -179,9 +184,10 @@ bool load_config(const std::string &path, AppConfig &cfg)
 
             if (gl_cfg.enable)
             {
-                printf("[Config] global_logic[%zu] enabled: logic=%s poll=%dms "
-                       "channels=%zu\n",
-                       cfg.global_logics.size() - 1, gl_cfg.logic.c_str(), gl_cfg.poll_interval_ms,
+                printf("[Config] global_logic[%zu] enabled: logic=%s poll=%dms channels=%zu\n",
+                       cfg.global_logics.size() - 1,
+                       gl_cfg.logic.c_str(),
+                       gl_cfg.poll_interval_ms,
                        gl_cfg.channels.size());
             }
         }
@@ -266,8 +272,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 cJSON *zone = nullptr;
                 cJSON_ArrayForEach(zone, rz)
                 {
-                    if (!cJSON_IsObject(zone))
-                        continue;
+                    if (!cJSON_IsObject(zone)) continue;
                     RoiZoneConfig zc;
                     cJSON *nm = cJSON_GetObjectItemCaseSensitive(zone, "name");
                     if (cJSON_IsString(nm) && nm->valuestring)
@@ -308,14 +313,81 @@ bool load_config(const std::string &path, AppConfig &cfg)
 
         g_cfg_reg.parse_channel(item, &ch);
 
-        // 通道配置继承全局配置
-        // 如果通道逻辑是空的, 则分配默认逻辑
-        if (ch.logic.empty())
-            ch.logic = "logic1";
+        cJSON *logic_parameters_item =
+            cJSON_GetObjectItemCaseSensitive(item, "logic_parameters");
+        if (logic_parameters_item && !cJSON_IsObject(logic_parameters_item))
+        {
+            fprintf(stderr,
+                    "[Config] channel %d logic_parameters must be a JSON object\n",
+                    ch.id);
+            cJSON_Delete(root);
+            return false;
+        }
+
+        /* 新多模型格式：models[] 非空时由推理引擎在同一帧上依次执行并合并结果。
+         * 旧 model_type/model_path 字段继续保留，确保历史配置完全兼容。 */
+        ch.models.clear();
+        cJSON *models = cJSON_GetObjectItemCaseSensitive(item, "models");
+        if (cJSON_IsArray(models))
+        {
+            cJSON *model_item = nullptr;
+            int model_index = 0;
+            cJSON_ArrayForEach(model_item, models)
+            {
+                if (!cJSON_IsObject(model_item)) continue;
+                ChannelModelConfig model;
+                model.id = "model_" + std::to_string(model_index++);
+                cJSON *v = cJSON_GetObjectItemCaseSensitive(model_item, "id");
+                if (cJSON_IsString(v) && v->valuestring) model.id = v->valuestring;
+                v = cJSON_GetObjectItemCaseSensitive(model_item, "enable");
+                if (cJSON_IsBool(v)) model.enable = cJSON_IsTrue(v);
+                v = cJSON_GetObjectItemCaseSensitive(model_item, "model_type");
+                if (cJSON_IsString(v) && v->valuestring) model.model_type = v->valuestring;
+                v = cJSON_GetObjectItemCaseSensitive(model_item, "model_path");
+                if (cJSON_IsString(v) && v->valuestring) model.model_path = v->valuestring;
+                v = cJSON_GetObjectItemCaseSensitive(model_item, "label_path");
+                if (cJSON_IsString(v) && v->valuestring) model.label_path = v->valuestring;
+                v = cJSON_GetObjectItemCaseSensitive(model_item, "obj_thresh");
+                if (cJSON_IsNumber(v)) model.obj_thresh = static_cast<float>(v->valuedouble);
+                v = cJSON_GetObjectItemCaseSensitive(model_item, "nms_thresh");
+                if (cJSON_IsNumber(v)) model.nms_thresh = static_cast<float>(v->valuedouble);
+                v = cJSON_GetObjectItemCaseSensitive(model_item, "npu_core");
+                if (cJSON_IsNumber(v)) model.npu_core = v->valueint;
+                v = cJSON_GetObjectItemCaseSensitive(model_item, "detect_classes");
+                if (cJSON_IsArray(v))
+                {
+                    cJSON *class_item = nullptr;
+                    cJSON_ArrayForEach(class_item, v)
+                        if (cJSON_IsString(class_item) && class_item->valuestring)
+                            model.detect_classes.emplace_back(class_item->valuestring);
+                }
+                ch.models.push_back(std::move(model));
+            }
+        }
+
+        /* logic 为空表示该通道不执行业务后处理模块；隐式空 Schema 只接受空参数对象。
+         * 非空 logic 的专有参数由嵌入二进制的 logic.json Schema 校验并补默认值。
+         * 这里在初始启动和热重载时都执行；失败时整份新配置不发布。 */
+        {
+            std::vector<LogicParameterError> parameter_errors;
+            std::string normalized_parameters;
+            if (!logic_parameters_resolve(ch.logic, ch.logic_parameters_json,
+                                          &normalized_parameters, nullptr,
+                                          &parameter_errors))
+            {
+                fprintf(stderr, "[Config] channel %d logic_parameters validation failed:\n", ch.id);
+                for (const auto &error : parameter_errors)
+                    fprintf(stderr, "  - %s: %s\n",
+                            error.field.c_str(), error.message.c_str());
+                cJSON_Delete(root);
+                return false;
+            }
+            ch.logic_parameters_json = std::move(normalized_parameters);
+        }
         // 如果模型路径存在但模型类型是空的, 就分配全局设置的模型类型
         if (!ch.model_path.empty() && ch.model_type.empty())
             ch.model_type = cfg.model_type;
-
+        
         // 如果模型路径存在但标签是空的, 就分配全局设置的标签
         if (!ch.model_path.empty() && ch.label_path.empty())
             ch.label_path = cfg.label_path;
@@ -323,15 +395,23 @@ bool load_config(const std::string &path, AppConfig &cfg)
             ch.obj_thresh = cfg.obj_thresh;
         if (ch.nms_thresh < 0.0f)
             ch.nms_thresh = cfg.nms_thresh;
+        for (auto &model : ch.models)
+        {
+            if (!model.model_path.empty() && model.model_type.empty()) model.model_type = cfg.model_type;
+            if (!model.model_path.empty() && model.label_path.empty()) model.label_path = cfg.label_path;
+            if (model.obj_thresh < 0.0f) model.obj_thresh = ch.obj_thresh;
+            if (model.nms_thresh < 0.0f) model.nms_thresh = ch.nms_thresh;
+            if (model.detect_classes.empty()) model.detect_classes = ch.detect_classes.empty()
+                ? cfg.detect_classes : ch.detect_classes;
+        }
         if (ch.threads < 0)
             ch.threads = cfg.channel_threads;
         if (ch.detect_classes.empty())
             ch.detect_classes = cfg.detect_classes;
         if (ch.max_fps <= 0)
             ch.max_fps = (cfg.max_fps > 0) ? cfg.max_fps : 30;
-        // 注意不要级联 playback_fps！ playback_fps = -1
-        // 对于实时流（RTSP/USB）表示不节流！ file 类型的播放器已在 decChannel.cpp
-        // 内部专门处理了 <=0 回落逻辑。
+        // 注意不要级联 playback_fps！ playback_fps = -1 对于实时流（RTSP/USB）表示不节流！
+        // file 类型的播放器已在 decChannel.cpp 内部专门处理了 <=0 回落逻辑。
 
         if (ch.tracker_enable == -1)
         {
@@ -369,13 +449,11 @@ bool load_config(const std::string &path, AppConfig &cfg)
         if (ch.id < 0 || ch.id >= MAX_CHANNEL_NUM)
         {
             fprintf(stderr, "[Config] channel id out of range: %d\n", ch.id);
-            cJSON_Delete(root);
             return false;
         }
         if (used_ids.find(ch.id) != used_ids.end())
         {
             fprintf(stderr, "[Config] duplicate channel id: %d\n", ch.id);
-            cJSON_Delete(root);
             return false;
         }
         used_ids.insert(ch.id);
@@ -384,10 +462,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
         ch.stream.src_type = config_utils::normalize_src_type(ch.stream);
         if (ch.stream.src_type.empty())
         {
-            fprintf(stderr,
-                    "[Config] channel %d 缺少 stream.src_type（必填: "
-                    "rtsp/file/usb，已取消自动推断）\n",
-                    ch.id);
+            fprintf(stderr, "[Config] channel %d 缺少 stream.src_type（必填: rtsp/file/usb，已取消自动推断）\n", ch.id);
             cJSON_Delete(root);
             return false;
         }
@@ -406,16 +481,15 @@ bool load_config(const std::string &path, AppConfig &cfg)
             return false;
         }
 
-        if (ch.stream.src_type == "usb" && !stream_location.empty() &&
-            !config_utils::starts_with(stream_location, "/dev/video"))
+        if (ch.stream.src_type == "usb" && !stream_location.empty() && !config_utils::starts_with(stream_location, "/dev/video"))
         {
             fprintf(stderr, "[Config] channel %d invalid usb device: %s\n", ch.id, stream_location.c_str());
             cJSON_Delete(root);
             return false;
         }
 
-        if (ch.stream.src_type == "rtsp" && !ch.stream.video_enc.empty() && ch.stream.video_enc != "h264" &&
-            ch.stream.video_enc != "h265")
+        if (ch.stream.src_type == "rtsp" && !ch.stream.video_enc.empty() &&
+            ch.stream.video_enc != "h264" && ch.stream.video_enc != "h265")
         {
             fprintf(stderr, "[Config] channel %d invalid video_enc\n", ch.id);
             cJSON_Delete(root);
@@ -430,7 +504,8 @@ bool load_config(const std::string &path, AppConfig &cfg)
     }
 
     std::sort(cfg.channels.begin(), cfg.channels.end(),
-              [](const ChannelConfig &a, const ChannelConfig &b) { return a.id < b.id; });
+              [](const ChannelConfig &a, const ChannelConfig &b)
+              { return a.id < b.id; });
 
     if (cfg.channels.empty())
     {
@@ -445,10 +520,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
         cfg.tile_rows = 2;
     if (cfg.queue_size <= 0)
         cfg.queue_size = 1;
-    if (cfg.npu_cores <= 0)
-        cfg.npu_cores = 1;
-    if (cfg.npu_cores > 3)
-        cfg.npu_cores = 3;
     if (cfg.obj_thresh < 0.0f)
         cfg.obj_thresh = 0.0f;
     if (cfg.obj_thresh > 1.0f)
@@ -471,7 +542,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
             {
                 fprintf(stderr, "  - %s: %s\n", err.field.c_str(), err.message.c_str());
             }
-            cJSON_Delete(root);
             return false;
         }
     }
@@ -485,7 +555,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
             {
                 fprintf(stderr, "  - %s: %s\n", err.field.c_str(), err.message.c_str());
             }
-            cJSON_Delete(root);
             return false;
         }
         printf("[Config] Hotreload critical validation passed (%zu channels)\n", cfg.channels.size());
@@ -495,11 +564,13 @@ bool load_config(const std::string &path, AppConfig &cfg)
     return true;
 }
 
-/*======================== 配置文件修改时间 ========================*/
+/*======================== 配置文件修改时间（纳秒） ========================*/
 uint64_t config_get_mtime(const std::string &path)
 {
     struct stat st;
     if (stat(path.c_str(), &st) != 0)
         return 0;
-    return static_cast<uint64_t>(st.st_mtime);
+    return static_cast<uint64_t>(st.st_mtim.tv_sec) * 1000000000ULL +
+           static_cast<uint64_t>(st.st_mtim.tv_nsec);
 }
+

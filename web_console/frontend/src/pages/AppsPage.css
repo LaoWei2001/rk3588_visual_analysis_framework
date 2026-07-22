@@ -363,6 +363,14 @@
   padding: 8px;
 }
 
+.stream-video-column {
+  flex: 1 1 auto;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 /* 左侧视频区 */
 .stream-video {
   position: relative;          /* 加载动画浮层的定位基准 */
@@ -400,9 +408,116 @@
 
 .stream-img {
   max-width: 100%;
-  max-height: calc(92vh - 130px);
+  max-height: calc(92vh - 320px);
   display: block;
   object-fit: contain;
+}
+
+.stream-channel-controls {
+  background: #0d0f1a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.stream-channel-controls-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.stream-control-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #b45309;
+  color: #fcd34d;
+  background: rgba(180, 83, 9, 0.15);
+  font-size: 11px;
+}
+
+.stream-channel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.stream-channel-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px;
+}
+
+.stream-channel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.stream-channel-logic {
+  color: var(--text2);
+  font-size: 11px;
+}
+
+.stream-channel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.stream-action-btn {
+  min-width: 90px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.stream-action-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.stream-action-btn.default:hover:not(:disabled) {
+  border-color: var(--text2);
+  color: var(--text);
+}
+
+.stream-action-btn.primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.stream-action-btn.primary:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
+
+.stream-action-btn.danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.stream-action-btn.danger:hover:not(:disabled) {
+  background: var(--red);
+  color: #fff;
+}
+
+.stream-channel-empty {
+  color: var(--text2);
+  font-size: 12px;
+  padding: 10px 0 4px;
 }
 
 /* 右侧实时日志滚动区 */

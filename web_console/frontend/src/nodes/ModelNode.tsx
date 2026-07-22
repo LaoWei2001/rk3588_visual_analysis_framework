@@ -5,6 +5,7 @@ export default function ModelNode({ data, selected }: NodeProps) {
   const d = data as Record<string, unknown>
   const enabled   = d.infer_enable !== false   // YOLO 推理开关（不再是整条通道的 enable）
   const modelPath = String(d.model_path ?? '')
+  const modelType = String(d.model_type ?? 'yolov8_det')
   const basename  = modelPath ? modelPath.split('/').pop()! : '（未配置）'
 
   return (
@@ -26,7 +27,7 @@ export default function ModelNode({ data, selected }: NodeProps) {
           {enabled ? '推理开' : '推理关'}
         </span>
       </div>
-      <div className="rf-node-summary" title={modelPath}>{basename}</div>
+      <div className="rf-node-summary" title={modelPath}>{modelType} · {basename}</div>
 
       {/* right: output to logic */}
       <Handle type="source" position={Position.Right} id="logic-out" />

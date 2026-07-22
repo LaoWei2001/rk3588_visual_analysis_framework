@@ -8,7 +8,7 @@
 #   bash install_deps.sh --build      # 额外安装板端从源码编译主程序所需的 -dev 包
 #
 # 说明：
-#   - Rockchip 厂商运行库 librknnrt.so / librga.so.2 / libhiredis.so.* 由 build.sh
+#   - Rockchip 厂商运行库 librknnrt.so / librga.so.2 由 build.sh
 #     打包进 dist/libs/（仓库 rk3588_yolo/test1/libs 里有现成的），不走 apt。
 #   - 主程序通过 LD_LIBRARY_PATH=dist/libs 加载上述库；GStreamer 插件是运行时
 #     动态加载、不会被打包，所以必须 apt 装插件。
@@ -26,13 +26,12 @@ echo "  模式: $([ "$WANT_BUILD" = true ] && echo '运行时 + 编译' || echo 
 echo "============================================================"
 
 # ---- [1] APT 运行时依赖 ----
-echo ">>> [1/5] 安装 APT 运行时依赖..."
+echo ">>> [1/4] 安装 APT 运行时依赖..."
 # 用 || true：某些板子 sources.list 里有失效的第三方/backports 源(如 bullseye-backports 已下架,
 # 报 404)，apt-get update 会返回非零；但主源「命中」即可用，不该因此中断安装。
 sudo apt-get update || echo "    [提示] apt update 有部分源失败(通常是失效的 backports，可忽略)，继续。"
 sudo apt-get install -y \
     curl ca-certificates gnupg xz-utils \
-    redis-server \
     python3 python3-pip \
     libgtk-3-0 \
     libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 \
@@ -48,19 +47,19 @@ sudo apt-get install -y gstreamer1.0-rockchip 2>/dev/null \
 
 # ---- [2] APT 编译依赖（可选）----
 if [ "$WANT_BUILD" = true ]; then
-    echo ">>> [2/5] 安装 APT 编译依赖（板端从源码编译主程序）..."
+    echo ">>> [2/4] 安装 APT 编译依赖（板端从源码编译主程序）..."
     sudo apt-get install -y \
         build-essential cmake pkg-config \
-        libopencv-dev libgtk-3-dev libhiredis-dev \
+        libopencv-dev libgtk-3-dev \
         libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstrtspserver-1.0-dev \
         libblas-dev liblapack-dev
     echo "    注: RKNN/RGA 头文件来自 Rockchip BSP；运行库已在 rk3588_yolo/test1/libs。"
 else
-    echo ">>> [2/5] 跳过编译依赖（如需板端编译主程序，加 --build 重跑）"
+    echo ">>> [2/4] 跳过编译依赖（如需板端编译主程序，加 --build 重跑）"
 fi
 
 # ---- [3] Node.js（前端构建需要）----
-echo ">>> [3/5] 安装 Node.js + npm (前端构建需 Node 18+)..."
+echo ">>> [3/4] 安装 Node.js + npm (前端构建需 Node 18+)..."
 NODE_OK=false
 if command -v node >/dev/null 2>&1; then
     NODE_MAJOR=$(node -v 2>/dev/null | sed -n 's/v\([0-9]*\).*/\1/p')
@@ -101,13 +100,8 @@ else
     echo "    [警告] 未检测到 npm。若刚用 tarball 装的，确认 /usr/local/bin 在 PATH（执行 hash -r 后重试）。"
 fi
 
-# ---- [4] 启动 Redis ----
-echo ">>> [4/5] 启用并启动 Redis（两个微服务用它作消息队列）..."
-sudo systemctl enable redis-server || true
-sudo systemctl restart redis-server || sudo service redis-server restart || true
-
-# ---- [5] pip 依赖 ----
-echo ">>> [5/5] 安装 pip 依赖（控制台后端 + 两个微服务）..."
+# ---- [4] pip 依赖 ----
+echo ">>> [4/4] 安装 pip 依赖（控制台后端 + 微服务）..."
 python3 -m pip install --upgrade pip -q || true
 for req in $(find "$PROJ" -name requirements.txt 2>/dev/null \
              | grep -vE "node_modules|/tests?/|/test_"); do

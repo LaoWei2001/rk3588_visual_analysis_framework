@@ -18,7 +18,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from services import process_manager as pm
@@ -31,7 +31,9 @@ router = APIRouter()
 
 
 @router.get("/apps", response_model=List[Dict[str, Any]])
-async def list_apps():
+async def list_apps(response: Response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
     return scan_apps()
 
 

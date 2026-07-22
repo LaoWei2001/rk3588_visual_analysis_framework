@@ -67,12 +67,6 @@ export default function GlobalNode({ id, data, selected }: NodeProps) {
               <label>队列深度</label>
               <NumberField def={1} value={d.queue_size} onChange={v => set('queue_size', v ?? 1)} />
             </div>
-            <div className="node-field">
-              <label>NPU 核心数</label>
-              <select value={String(d.npu_cores ?? 3)} onChange={e => set('npu_cores', +e.target.value)}>
-                {[1, 2, 3].map(v => <option key={v} value={v}>{v}</option>)}
-              </select>
-            </div>
           </div>
 
           <div className="node-row">
@@ -108,7 +102,7 @@ export default function GlobalNode({ id, data, selected }: NodeProps) {
       {collapsed && (
         <div className="rf-node-body">
           <span className="collapsed-badge">
-            {String(d.disp_width ?? 1920)}×{String(d.disp_height ?? 1080)} · NPU×{String(d.npu_cores ?? 3)} · {String(d.max_fps ?? 15)}fps
+            {String(d.disp_width ?? 1920)}×{String(d.disp_height ?? 1080)} · {String(d.max_fps ?? 15)}fps
           </span>
         </div>
       )}

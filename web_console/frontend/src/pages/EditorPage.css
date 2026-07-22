@@ -140,7 +140,9 @@
 .palette-chip.model  { color: #86efac; border-color: #16a34a; background: rgba(22,163,74,0.12);  }
 .palette-chip.roi    { color: #fed7aa; border-color: #ea580c; background: rgba(234,88,12,0.12);  }
 .palette-chip.logic  { color: #e9d5ff; border-color: #9333ea; background: rgba(147,51,234,0.12); }
-.palette-chip.sop    { color: #a5f3fc; border-color: #06b6d4; background: rgba(6,182,212,0.12);   }
+.palette-chip.sop     { color: #a5f3fc; border-color: #06b6d4; background: rgba(6,182,212,0.12);   }
+.palette-chip.sopstart{ color: #bbf7d0; border-color: #22c55e; background: rgba(34,197,94,0.12);   }
+.palette-chip.sopend  { color: #99f6e4; border-color: #14b8a6; background: rgba(20,184,166,0.12);  }
 .palette-chip.report { color: #fecaca; border-color: #dc2626; background: rgba(220,38,38,0.12);  }
 
 .palette-hint {
@@ -160,6 +162,34 @@
 /* ── Canvas row: flow + config sidebar ── */
 .editor-main    { flex: 1; display: flex; overflow: hidden; }
 .flow-container { flex: 1; overflow: hidden; }
+
+/* ── Bottom row: global settings + generated config preview ── */
+.editor-bottom {
+  height: clamp(260px, 36vh, 390px);
+  min-height: 0;
+  flex-shrink: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.editor-bottom-settings {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.editor-bottom .config-preview {
+  width: 44%;
+  min-width: 360px;
+  height: 100%;
+}
+
+@media (max-width: 1200px) {
+  .editor-bottom .config-preview {
+    width: 40%;
+    min-width: 300px;
+  }
+}
 
 .flow-hint {
   background: var(--surface);

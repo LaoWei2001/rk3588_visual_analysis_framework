@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from routers import (apps, assets, auth, config_io, logs, ota_config, process,
+from routers import (apps, assets, auth, channel_control, config_io, logs, ota_config, process,
                      records, services, snapshot, stream, terminal, upload_config)
 from services.auth_service import get_session
 from services.process_manager import recover_processes
@@ -82,6 +82,7 @@ async def auth_middleware(request: Request, call_next):
 app.include_router(auth.router,      prefix="/api")
 app.include_router(apps.router,      prefix="/api")
 app.include_router(config_io.router, prefix="/api")
+app.include_router(channel_control.router, prefix="/api")
 app.include_router(assets.router,    prefix="/api")
 app.include_router(process.router,   prefix="/api")
 app.include_router(snapshot.router,  prefix="/api")

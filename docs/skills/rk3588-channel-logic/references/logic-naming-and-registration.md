@@ -1,118 +1,148 @@
-# 逻辑的命名与注册：四个名字的关系 / 网页如何识别 / 失配会怎样
+# 通道逻辑的函数名、注册和 Web 清单
 
-> 回答三个高频问题：
-> ① 一个逻辑的 **cpp 文件名 / C++ 函数名 / `REGISTER_LOGIC` 注册的字符串 / `logics.json` 的 `name`**，这几个是什么关系？
-> ② 我写的逻辑是怎么**被网页"认出来"**的？
-> ③ 这些名字**不一致**会怎样？
->
-> 权威源码：`rk3588_yolo/src/logic/channel_logic.h` / `channel_logic.cpp`（分发表、`REGISTER_LOGIC` 宏）、`rk3588_yolo/src/analyzer/channel_pipeline.cpp`（运行时按名取函数）、`web_console/backend/routers/config_io.py`（网页拿到逻辑清单的接口）、`web_console/frontend/src/components/NodeConfigPanel.tsx`（逻辑节点下拉）。
+本文说明当前模块化目录下，一个 channel logic 的身份如何在 C++、配置和 Web 之间保持一致。
 
-## 一句话结论
+## 当前唯一真源
 
-**唯一的"身份"是 `REGISTER_LOGIC` 第一个参数那个字符串。** 文件名、C++ 函数名只是给人和编译器看的约定，对外不可见；`config.json` 的 `"logic"` 和 `logics.json` 的 `"name"` 必须**等于这个字符串**，逻辑才能既被网页选到、又能在运行时真正跑起来。
+每种通道逻辑位于一个独立模块目录：
 
-## 四个名字各是什么、谁读它
-
-```
-  文件名 logic_xxx.cpp ──(只被 CMake 的 aux_source_directory 收集编译)──> 与"身份"无关
-        │ 文件里定义了
-        ▼
-  C++ 函数名 logic_xxx   (static = 文件内可见，外部根本看不到)
-        │ 只被本文件末尾这一行引用：
-        ▼
-  REGISTER_LOGIC("logic_xxx", logic_xxx)
-        │  把【字符串 "logic_xxx"】→【函数指针】登记进分发表(main 之前自动完成)
-        ▼
-  ┌─────────────────────────────────────────────┐
-  │   注册字符串 "logic_xxx"  ← 唯一身份，一切以它为准   │
-  └─────────────────────────────────────────────┘
-        ▲                                      ▲
-  「运行」要对上它                          「网页」要对上它
-        │                                      │
-  config.json  "logic":"logic_xxx"         logics.json  "name":"logic_xxx"
-  决定运行时跑哪个函数                      决定网页能否选到 + 参数怎么渲染
+```text
+rk3588_yolo/src/logic/modules/<module_dir>/
+├── logic.cpp
+├── logic.json
+└── ...
 ```
 
-| 名字 | 谁读它 | 要和别人一致吗 | 改了/不一致会怎样 |
-|---|---|---|---|
-| **文件名** `logic_xxx.cpp` | 只有 CMake（决定是否编译进来） | **不必**，纯约定 | 随便起名都能编译运行；约定与逻辑同名只是方便人查找 |
-| **C++ 函数名** `logic_xxx` | 只有同文件里的 `REGISTER_LOGIC`（它是 `static`，外部不可见） | **不必** | 改名时同步改 `REGISTER_LOGIC` 第二个参数即可，外部无感 |
-| **注册字符串**（`REGISTER_LOGIC` 第 1 参） | 分发表 `channel_logic_get()` 用 `strcmp` 查 | **★核心**，下面两个都要等于它 | 它才是真名 |
-| **`logics.json` 的 `name`** | 后端 `/apps/{name}/logics` → 前端下拉 | **必须 == 注册字符串**（也 == `config.json` 的 `logic`） | 见下方《名字不一致会怎样》 |
-| （`config.json` 的 `"logic"`） | 运行时拿去查分发表 | **必须 == 注册字符串** | 这是"实际选用了哪个逻辑" |
+当前的唯一 logic ID 来自 C++ 函数标识符：
 
-## 两条互不相干的路
+```text
+static void logic_xxx(ChannelContext *ctx)
+    ↓ REGISTER_LOGIC(logic_xxx) 自动字符串化
+    ↓ 生成 logics.json channel_logics[].name = "logic_xxx"
+    ↓ config.json channels[].logic = "logic_xxx"
+```
 
-逻辑"能不能跑"和"网页认不认得它"是**两条独立的链**，各看各的来源：
+`REGISTER_LOGIC` 只接受一个参数，它既是实际函数，也是生成给 config、Web 和外部 API 的名称。模块目录只用于组织源码，可以与 logic ID 不同，但建议保持一致以便查找。
 
-### ① 运行路径（逻辑到底跑不跑）—— 只看 注册字符串 + config.json
+```cpp
+static void logic_xxx(ChannelContext *ctx)
+{
+    // ...
+}
 
-`config.json "logic":"logic_xxx"` → `channel_pipeline.cpp` 的 `invoke_channel_logic()` 取出 `logic_name` → `channel_logic_get("logic_xxx")` 在分发表里 `strcmp` → 命中就调那个函数；查不到就返回内部兜底 `logic_null`（什么都不做）。
+REGISTER_LOGIC(logic_xxx);
+```
 
-**这条路跟 `logics.json`、文件名都没关系。** 哪怕 `logics.json` 里没声明，只要 `config.json` 写了正确的注册字符串，逻辑照样跑。
+不要再另外手写注册字符串。
 
-### ② 网页识别路径（能不能在 UI 看到/选到、参数能不能渲染）—— 只看 logics.json
+## logic.json 和生成的 logics.json 不是同一个文件
 
-`logics.json` 的 `channel_logics[]` → 后端 `config_io.py` 的 `/apps/{name}/logics` 路由**直接把文件内容透传** → 前端 `api/client.ts` 的 `fetchAppLogics()` 拿去渲染下拉框和参数输入框（`NodeConfigPanel.tsx` 的 `LogicForm`）。
+### 模块 logic.json：源码
 
-**前端根本不读你的 C++、不知道 `REGISTER_LOGIC` 的存在。** "被网页识别" ≈ "写进了 `logics.json`"。
+模块自己的 `logic.json` 是除 logic ID 外的元数据真源，包含：
 
-> **兜底（`--list-logics`）**：只有当该 App 目录**没有** `logics.json` 时，后端才会退一步去跑二进制 `--list-logics`（`config_io.py`），那时列出的才是 C++ 分发表里的注册字符串。正常流程里 **`logics.json` 优先**。
+- `label`；
+- `parameters` 参数 Schema；
+- `actions`；
+- `report_fields` / `business_fields`；
+- 其他该模块 Web 所需元数据。
 
-## 网页端：逻辑名只能"选"、不能"手填"（本项目约定）
+源文件中不允许手写 `name`；构建器会从 `REGISTER_LOGIC(func)` 取函数名并注入生成的 `logics.json`。新增或修改逻辑时也不手工维护中央 `channel_logics` 数组。
 
-`NodeConfigPanel.tsx` 的 `LogicForm` 里，「逻辑名称」是一个**下拉框**，选项全部来自 `logics.json`（经 `fetchAppLogics`）。**不再提供任何"自定义名称/手动输入"的文本框**——用户不能给逻辑取一个 `logics.json` 里没有的新名字。
+### App 根目录 logics.json：生成物
 
-- **为什么这样设计**：手填一个分发表里没有的名字，保存进 `config.json` 后，运行时 `channel_logic_get` 查不到 → 回退 `logic_null` → 该通道**空跑**（表现为"选了逻辑却毫无反应"，且很难一眼看出原因）。把入口收成"只能从 `logics.json` 选"，从源头杜绝这种失配。
-- **遗留/未知值怎么显示**：若某通道 `config.json` 里的 `logic` 当前不在 `logics.json`（如老配置、或逻辑已从 `logics.json` 删除），下拉会把它显示成 `xxx（⚠ 不在 logics.json，请重新选择）`，提示用户重选一个合法项，但**不允许**新建名字。
-- **全局逻辑（`GlobalLogicNode`）同理**：「逻辑名称」也是纯下拉，选项来自 `known_global_logics`（即 `logics.json` 的 `global_logics`），没有手填入口。
+正常打包时，生成器聚合：
 
-> 推论：**要让一个逻辑能在网页上被选，必须在 `logics.json` 声明它**（光在 C++ 里 `REGISTER_LOGIC` 是不够的——那只保证它"能跑"，不保证"网页选得到"）。
+```text
+src/logic/modules/*/logic.json
++ src/logic/catalog.json
+→ App 根目录 logics.json
+```
 
-## 名字不一致会怎样（对照表）
+Web 后端 `/apps/{name}/logics` 读取这份生成物，前端据此显示逻辑下拉、参数控件、按钮和上报字段。
 
-| 写法 | 结果 |
+不要直接编辑生成后的 `logics.json`；下一次打包会覆盖它，而且手改会造成 Web 清单与 C++ 二进制不一致。
+
+## 两条运行链路
+
+### C++ 运行链路
+
+```text
+channels[].logic
+  → 配置加载时查找二进制内嵌模块 Schema
+  → 校验该 logic 的 logic_parameters
+  → 运行快照保存 logic 名和类型化参数
+  → channel_logic_get(name)
+  → 调用 REGISTER_LOGIC 注册的函数
+```
+
+当前配置加载阶段已经要求 logic 存在于内嵌 Schema。名字未知时，启动配置会失败；热重载时则拒绝新配置并继续使用旧运行快照，不再把拼错名称当作正常逻辑静默运行。
+
+### Web 识别链路
+
+```text
+App 根目录 logics.json
+  → Web 后端 /apps/{name}/logics
+  → 前端 LogicForm
+  → 逻辑下拉、参数、动作和上报字段
+```
+
+前端不扫描 C++ 源码。要获得完整 Web 表单，实际 App 目录必须部署与二进制同版本的生成 `logics.json`。
+
+如果 App 根目录没有可解析的 `logics.json`，后端会执行二进制 `--list-logics`，得到实际注册的逻辑名字作为降级选项；该命令只返回名字，不含参数、动作和字段元数据，因此不能代替完整清单。
+
+如果 `logics.json` 和二进制探测都不可用，接口返回空的 `channel_logics` 和明确错误，不使用硬编码逻辑名兜底，避免已删除模块重新出现在 Web 下拉框中。
+
+## 构建期身份校验
+
+生成器会检查：
+
+- 每个 `modules/*/` 下都有 `logic.json`；
+- 源 `logic.json` 不包含 `name`；
+- 每个模块恰好存在一次 `REGISTER_LOGIC(func)`；
+- 模块若注册 action handler，`REGISTER_LOGIC_ACTION(logic_func, handler)` 的第一参数引用同一个 logic 函数且不重复；
+- 不同模块的 logic 函数名不重复；
+- 参数 Schema 合法；
+- 字符串字面量形式的 `ctx->param_*()` 键存在且类型匹配。
+
+可以不编译 C++，单独执行：
+
+```bash
+cd /userdata/sop_agent/rk3588_yolo
+python3 scripts/generate_logics_catalog.py --check
+```
+
+`build.sh --debug` 和正常打包也会自动执行同一套校验。
+
+## 新增 logic 的最小步骤
+
+1. 新建 `src/logic/modules/logic_xxx/`；
+2. 新建 `logic.cpp`，包含 `logic/core/logic_common.h`；
+3. 实现 `logic_xxx(ChannelContext*)`；
+4. 用 `REGISTER_LOGIC(logic_xxx)` 注册；
+5. 新建同目录 `logic.json`，只声明 `label`、参数、动作和上报字段，不写 `name`；
+6. 在 `parameters` 中声明该模块专有参数；
+7. 运行生成器检查并重新构建；
+8. Web 场景部署新二进制和同次打包生成的 `logics.json`；
+9. 在通道配置或 Web 下拉中选择 `logic_xxx`。
+
+CMake 会递归收集 `src/logic` 下的 `.cpp/.cc/.cxx`。使用 `build.sh` 会重新运行 CMake，因此新增源文件不需要手改中央源文件列表。
+
+## 名字不一致时会发生什么
+
+| 问题 | 结果 |
 |---|---|
-| C++ 函数名 ≠ **注册字符串**（第 1 参），如 `REGISTER_LOGIC("logic_banana", logic_apple)` | ✅ 编译、运行都正常。对外的真名是 `"logic_banana"`；`config.json`/`logics.json` 必须填 `logic_banana`，填 `logic_apple` 反而查不到。函数名只是文件内私有标签，易误导，**不建议**。 |
-| **第 2 参**（函数指针）写成不存在的函数，如 `REGISTER_LOGIC("logic_x", logic_typo)` | ❌ **编译报错**（未定义标识符）——编译器替你兜底，注册不了空函数。 |
-| 同一个 `.cpp` 里对同一个 `func` 写两次 `REGISTER_LOGIC` | ❌ 编译报错（宏生成的注册器变量 `_logic_reg_<func>` 重定义）。 |
-| 两个**不同文件**注册了相同的**字符串** | ⚠ 不报错，但运行时**后注册的覆盖先注册的**（`register_logic` 同名则覆盖），只有一个生效。 |
-| `config.json` 的 `logic` 指向一个**未注册**（或拼错）的名字 | ⚠ 运行时 `channel_logic_get` 查不到 → 回退 `logic_null` → 该通道**什么都不跑**。网页下拉会显示成 `⚠ 不在 logics.json`。 |
-| 逻辑**注册了但 `logics.json` 没声明** | ✅ 运行能跑（只要 `config.json` 名字对），但**网页下拉里看不到、参数也不渲染**。 |
+| 模块目录缺少 `logic.json` | 生成器报错，构建停止 |
+| 源 `logic.json` 仍手写 `name` | 生成器报错，提示由 `REGISTER_LOGIC(func)` 生成 |
+| 同一模块重复注册 | 生成器报错，构建停止 |
+| 不同模块使用相同的 logic 函数名 | 生成器报错，构建停止 |
+| `param_*()` 字面量键不存在或访问器类型不匹配 | 生成器报错，构建停止 |
+| 配置中的 `logic` 未被当前二进制编译 | 启动失败，或热重载被拒绝并保留旧快照 |
+| Web `logics.json` 比二进制新 | Web 可能显示新 logic/参数，但旧 C++ 会拒绝未知内容 |
+| 二进制比 Web `logics.json` 新 | 逻辑能运行，但 Web 可能看不到新逻辑或新参数 |
 
-## `REGISTER_LOGIC` 宏背后做了什么
+部署时把二进制和生成清单视为一个版本对，不能只更新其中一个。
 
-宏定义（`channel_logic.h`）：
+## channel logic 与 global logic 的区别
 
-```cpp
-struct LogicRegistrar {
-    LogicRegistrar(const char *name, ChannelLogicFunc func) { register_logic(name, func); }
-};
-#define REGISTER_LOGIC(name_str, func) \
-    static const LogicRegistrar _logic_reg_##func(name_str, func)
-```
-
-`REGISTER_LOGIC("logic_banana", logic_apple)` 展开成：
-
-```cpp
-static const LogicRegistrar _logic_reg_logic_apple("logic_banana", logic_apple);
-//                                                  ↑注册表 key       ↑函数指针
-```
-
-这个文件作用域的静态对象，会在 `main()` 之前（静态初始化阶段）构造，构造时执行 `register_logic("logic_banana", logic_apple)`，把**字符串 → 函数指针**塞进分发表。于是：
-
-- 注册表的 **key 是 `name_str` 那个字符串**，不是函数名。
-- 函数名 `func` 只出现在两处：作为真正要指向的函数、被 `##` 拼进注册器变量名 `_logic_reg_##func`。它**从不进入注册表的 key**，所以对运行时/网页都不可见。
-
-## 实践建议：五处保持一致
-
-技术上只有后三者（注册字符串、`logics.json` 的 `name`、`config.json` 的 `logic`）**必须**相等；但维护时请让**五处全一致**，省得给自己挖坑：
-
-```
-文件名 logic_xxx.cpp  ==  函数名 logic_xxx  ==  REGISTER_LOGIC("logic_xxx", ...)
-                       ==  logics.json 的 "name":"logic_xxx"  ==  config.json 的 "logic":"logic_xxx"
-```
-
-全局逻辑（`global_xxx`）同理：`global_logic.cpp` 里 `register_global_logic("global_xxx", global_xxx)` 的**字符串** == `logics.json` 的 `global_logics[].name` == `config.json` 的 `global_logics[].logic`。
-
-> 这条"全一致"约定，正是网页端把「逻辑名称」收成"只能从 `logics.json` 下拉选、不能手填"的原因——从 UI 入口就保证了 `config.json` 里的名字一定是个合法、可跑、可识别的注册名。
+本文只针对 `REGISTER_LOGIC` 通道逻辑。global logic 当前使用 `global_logic.cpp` 中的显式注册和 `global.global_logics` 配置，发现链路与模块化 channel logic 不同；新增全局逻辑应参考 `docs/skills/rk3588-global-logic/SKILL.md`。

@@ -1,290 +1,304 @@
-# rk3588_yolo 架构图
+# rk3588_yolo 当前架构图
 
-> 配套文档：[rk3588_yolo_系统说明文档.md](rk3588_yolo_系统说明文档.md)
->
-> 本文件用图说明系统结构与线程拓扑；文字详解见系统说明文档。
+> 配套说明：[rk3588_yolo_系统说明文档.md](rk3588_yolo_系统说明文档.md)
 
----
+本文只描述当前 `rk3588_yolo/src/` 实现。图中 C++ 数组旁的 `ch/slot` 指内部运行槽位；
+HTTP、Socket、告警清单和 `ctx->chnId` 中的 `channel_id` 均指 `config.channels[].id`。
 
-## 1. 系统组件总览
+## 1. 总体模块图
 
-```
-                              ┌──────────────────┐
-                              │   config.json    │
-                              │   roi_zones.json │
-                              └────────┬─────────┘
-                                       │ 加载 / 2s 热监控
-                                       ▼
-   ┌───────────────────────────────────────────────────────────────────────┐
-   │                        core/  APP_CTRL（全局控制块）                   │
-   │   config · channels_state[N] · pDispBuffer · 锁集合 · isRunning        │
-   └───────────────────────────────────────────────────────────────────────┘
-            ▲                    ▲                    ▲              ▲
-            │ 读写状态            │                    │              │
-   ┌────────┴──────┐   ┌─────────┴────────┐   ┌───────┴──────┐  ┌────┴──────┐
-   │  capturer/    │   │    analyzer/     │   │   logic/     │  │ uploader/ │
-   │  GStreamer    │──▶│  推理调度核心    │──▶│ channel/     │─▶│ 异步上报  │
-   │  RTSP/文件/USB│帧 │  (见线程拓扑图)  │   │ global logic │  │ 发件箱/R  │
-   └───────────────┘   └────────┬─────────┘   └──────────────┘  └───────────┘
-                                │                     │
-                       ┌────────┴────────┐   ┌────────┴────────┐
-                       │     yolo/       │   │    player/      │
-                       │  RKNN NPU 推理  │   │  GTK3 + RGA显示 │
-                       └─────────────────┘   └─────────────────┘
-```
-
----
-
-## 2. 线程拓扑图（谁创建谁）
-
-程序共 **8 类自建线程** + GStreamer 内部线程 + main 主线程。所有线程在 `main()` 中清晰可循：
-
-```
-main 线程
-  │
-  ├─ app_ctrl_init() ───────────────▶ ① config_monitor_thread   ×1     (配置热重载)
-  │
-  ├─ pthread_create ────────────────▶ ② fd_monitor_thread       ×1     (fd 用量监控)
-  │
-  ├─ DecChannel::init() ────────────▶ ③ capture_bus_thread      ×唯一流数 (bus监听+重连)
-  │        └─ (GStreamer 内部) ······▶   GStreamer streaming     ×N    (new_sample 回调)
-  │
-  ├─ pthread_create ────────────────▶ ④ display_worker          ×显示通道数 (RGA缩放+显示)
-  │
-  ├─ pthread_create ────────────────▶ ⑤ dispatch_worker         ×推理通道数 (取结果+调logic)
-  │
-  ├─ analyzer_init()
-  │     ├─ algorithm_init() ────────▶ ⑥ infer_worker            ×Σ每通道threads (NPU推理)
-  │     └─ global_logic_start_all()─▶ ⑦ global_logic            ×启用实例数 (跨路轮询)
-  │
-  ├─ alarm_uploader_init() ─────────▶ ⑧ upload_worker           ×1     (JPEG编码+Redis)
-  │
-  └─ display() ─────────────────────▶   主线程进入 GTK 主循环（阻塞至窗口关闭）
+```text
+ Web Console
+ ├─ 画布编辑 config.json / report_policy / ROI
+ ├─ 实时画面与系统控制
+ └─ 自定义按钮
+          │ HTTP
+          ▼
+ ┌──────────────────────── web_console backend ────────────────────────┐
+ │ 配置读写、进程管理、控制请求转发                                    │
+ └───────────────┬───────────────────────────────┬─────────────────────┘
+                 │ config.json                   │ Unix Socket
+                 ▼                               ▼
+ ┌──────────────────────── rk3588_yolo process ────────────────────────┐
+ │                                                                    │
+ │  config/ + core/                   control/channel_control          │
+ │  ├─ 配置解析                       ├─ 系统动作                       │
+ │  ├─ REG_G / REG_C                  └─ 每通道业务动作 FIFO            │
+ │  └─ 配置热重载                              │                       │
+ │           │                                  ▼                       │
+ │           ├──────────────▶ analyzer/channel_pipeline                 │
+ │           │                         │                                │
+ │  capturer/decChannel                ├─ action handler                │
+ │  RTSP / USB / 文件 ────────────────▶├─ channel logic                 │
+ │           │                         └─ DrawCommand / report_alarm     │
+ │           ▼                                  │                       │
+ │  analyzer/frame_inlet                       ├────────▶ player/display │
+ │  ├─ 最新显示帧                              ├────────▶ rtsp_streamer │
+ │  ├─ 录像源帧缓存                            ├────────▶ alarm_report  │
+ │  └─ 节流后提交 RKNN                         └────────▶ event_video   │
+ │           │                                                          │
+ │           ▼                                                          │
+ │  yolo / infer workers → result dispatch → tracker                    │
+ │                                                                    │
+ └────────────────────────────────────────────────────────────────────┘
 ```
 
----
+当前 C++ 源码没有 `src/uploader/`。业务 logic 不再调用 `alarm_uploader_enqueue()` 或向 Redis 直接写告警。
 
-## 3. 运行时数据流（线程间如何传递帧与结果）
+## 2. 单通道帧与结果流
 
-```
-   GStreamer streaming 线程
-   （appsink new_sample 回调，每解码一帧触发）
-            │
-            ▼
-   ┌──────────────────────────────────────────────────────────────┐
-   │  videoOutHandle()           [frame_inlet.cpp]                │
-   │   1. FPS 节流（phase-offset 错相）→ 决定 will_infer           │
-   │   2. RGA 转换 NV12→BGR 640×640                               │
-   │   3. 生成单调 frame_seq                                       │
-   └───┬─────────────────────┬──────────────────────┬─────────────┘
-       │ [显示:每帧]          │ [推理通道]            │ [非推理通道]
-       ▼                     ▼                      ▼
- ┌───────────┐      ┌─────────────────┐   ┌──────────────────────────┐
- │ 锁外memcpy│      │algorithm_process│   │ process_channel_results  │
- │ →DispQueue│      │ _mat → TaskQueue│   │ （同步，持 g_process_mtx）│
- │ (单槽覆盖)│      └────────┬────────┘   └────────────┬─────────────┘
- │ signal cv │               │ cv signal               │
- └─────┬─────┘               ▼                         │
-       │            ┌──────────────────┐               │
-       │            │ ⑥ infer_worker   │               │
-       │            │  RGA前处理(零拷贝)│               │
-       │            │  model->infer()  │               │
-       │            │  过滤/NMS/类别   │               │
-       │            │  写 channel_     │               │
-       │            │  results[seq]    │               │
-       │            │  signal ready_cv │               │
-       │            └────────┬─────────┘               │
-       │                     ▼                         │
-       │            ┌──────────────────────┐           │
-       │            │ ⑤ dispatch_worker    │           │
-       │            │  wait_result(100ms)  │           │
-       │            │  take_results(原子)  │           │
-       │            │  process_channel_    │           │
-       │            │  results (g_process_ │           │
-       │            │  mtx 串行)           │           │
-       │            └────────┬─────────────┘           │
-       │                     │                         │
-       │                     ▼   ◀─────────────────────┘
-       │            ┌──────────────────────────────────┐
-       │            │ invoke_channel_logic             │
-       │            │  fn(&ctx)  ← 用户业务逻辑         │
-       │            │  原子写回 last_results /          │
-       │            │  last_logic_frame / draw_cmds     │
-       │            │  (持 chn_mtx[i])                  │
-       │            │  可调 alarm_uploader_enqueue() ───┼──┐
-       │            └──────────────────────────────────┘  │
-       ▼                                                   │
- ┌──────────────────────────────┐                         │
- │ ④ display_worker             │                         │
- │  wait cv → swap_front        │     ┌───────────────────▼────────┐
- │  commitImgtoDispBufMap:      │     │ ⑧ upload_worker            │
- │   RGA缩放→render_overlays    │     │  wait queue_cv             │
- │   (读共享last_results+卡尔曼  │     │  server告警→落盘发件箱      │
- │    速度外推)→framebuffer     │     │  dify→base64+redis RPUSH   │
- └──────────────────────────────┘     └────────────────────────────┘
-
- ⑦ global_logic（独立轮询，与上面解耦）
-     usleep(poll) → app_ctrl_get_results_fresh(ch) → func(&gctx) → 可上报
-```
-
----
-
-## 4. 帧-结果时序匹配（核心正确性保证）
-
-系统有**两条取数路径**，时序语义不同：
-
-```
-═══════════════ 路径 A：logic / 上报（严格同帧匹配）═══════════════
-
- infer_worker                          dispatch_worker / logic
- ──────────                            ──────────────────────
- 持 channel_results[i].mtx:            持 channel_results[i].mtx:
-   data       = 检测框   ┐ 同一把锁      take_results 一次性原子取出
-   data_frame = 640输入图├ 同一seq ───▶  (data, data_frame, seq)
-   latest_seq = seq     ┘ 原子写入            │
-                                              ▼
-                                       invoke_channel_logic
-                                       持 chn_mtx[i] 原子写回:
-                                         last_results / last_logic_frame
-                                         / result_frame_seq （同帧）
-                                              │
-                                              ▼
-                                       get_channel_snapshot
-                                       持 chn_mtx[i] 一次性读出
-                                       frame + results + state（必同帧）
-
- ✅ 保证：frame 与 results 永远来自同一 frame_seq，绝不错位。
-
-
-═══════════════ 路径 B：屏幕实时显示（有意不严格匹配）═══════════════
-
- videoOutHandle                        display_worker
- ──────────────                        ──────────────
- 最新解码帧 ──memcpy──▶ DispQueue ──▶  取最新帧
- (单槽覆盖，永远最新)                   commitImgtoDispBufMap:
-                                         读共享 last_results（可能旧几帧）
-                                         按 result_age_ms 卡尔曼速度外推
-                                         绘制框 → 平滑预览
-
- ⚠️ 显示帧是最新的，叠加框可能旧几帧，靠速度外推补偿。
-    这是「显示流畅优先」的有意取舍，不影响路径 A 的上报准确性。
-```
-
----
-
-## 5. 同步原语全景
-
-```
- 锁 / 条件变量              保护对象                       生产者 → 消费者
- ───────────────────────────────────────────────────────────────────────────
- g_pCtrl->mtx (rwlock)     config 全局配置                config_monitor 写 / 各线程读
- g_pCtrl->chn_mtx[i]       channels_state[i]              logic 写 / snapshot 读
- g_process_mtx[i]          process_channel_results 串行   videoOutHandle ⇿ dispatch_worker
- cv_config (+mtx)          定时唤醒 / 退出信号            main 通知 config/fd_monitor
- ───────────────────────────────────────────────────────────────────────────
- DispQueue[i].mtx + cv     显示帧槽交换 (DispFramePool)   videoOutHandle → display_worker
- TaskQueue.mtx + cv        推理任务队列                   videoOutHandle → infer_worker
- channel_results[i].mtx    检测框+输入图+seq 原子三元组   infer_worker → dispatch_worker
- result_ready_cv[i] (+mtx) 「有新结果」通知               infer_worker → dispatch_worker
- g_algo.dispatch_mtx(rw)   task_queues 结构(热重载保护)   reload 写 / process_mat 读
- model->infer_mtx          共享模型实例串行推理           多个 infer_worker 互斥
- detect_classes_mtx        类别白名单                     config_monitor 写 / worker 读
- ───────────────────────────────────────────────────────────────────────────
- g_queue_mtx + queue_cv    告警/Dify 任务队列             logic → upload_worker
- g_redis_mtx               Redis 连接上下文               upload_worker 独占串行
- g_feed_mtx                FPS 节流 next_due_us           videoOutHandle 自用
-```
-
----
-
-## 6. 三槽显示帧池（DispFramePool）— 锁外拷贝设计
-
-```
-   三个槽轮转，角色循环：back（写）/ mid（就绪）/ front（读）
-   不变量：back_idx ≠ mid_idx ≠ front_idx 始终成立
-
-   生产者 videoOutHandle                消费者 display_worker
-   ────────────────────                ───────────────────
-   back_buf(size)   ← 取写指针(无锁)
-   memcpy 3MB       ← 全程无锁 ✅
-   ┌─ 持 DispQueue.mtx                  ┌─ 持 DispQueue.mtx
-   │   publish():back↔mid (≈20ns)      │   swap_front_if_dirty:mid↔front(≈10ns)
-   └─ 释放 + signal cv                  └─ 释放
-                                        front_buf() ← 读指针(无锁) ✅
-                                        commitImgtoDispBufMap(无锁缩放渲染)
-
-   ► 3MB memcpy 从锁内移到锁外，临界区只剩整数级槽交换。
-```
-
----
-
-## 7. 启动 / 退出时序
-
-```
-   ═══ 启动顺序 ═══                      ═══ 退出顺序（逆序 join）═══
-
-   raise_fd_limit                        信号→isRunning=0 + broadcast cv
-   app_ctrl_init ─▶ config_monitor       resume 暂停态
-   gst_init                              ↓
-   sigaction (SIGINT/TERM/USR1/PIPE)     ① 停采集器 capture_bus（先断源头）
-   dispBufferMap (显示缓冲)              ② analyzer_deinit:
-   analyzer_init                            stop infer_worker → join
-     ├ algorithm_init ─▶ infer_worker       stop global_logic → join
-     └ global_logic_start_all ─▶ global   ③ join dispatch_worker
-   pthread_create config_monitor         ④ 唤醒+join display_worker
-   pthread_create fd_monitor             ⑤ 销毁 display 队列原语
-   DecChannel::init ─▶ capture_bus       ⑥ alarm_uploader_deinit (停upload)
-   pthread_create display_worker         ⑦ join fd_monitor
-   pthread_create dispatch_worker        ⑧ join config_monitor
-   alarm_uploader_init ─▶ upload_worker  ⑨ app_ctrl_deinit
-   display() 主循环阻塞
-
-   ► 退出核心原则：先停数据源头（采集），再由后向前停消费者，
-     最后才销毁各队列的同步原语（确保无线程仍阻塞在其上）。
-```
-
----
-
-## 8. 一条帧的完整旅程（推理通道，端到端）
-
-```
- [GStreamer解码] NV12 帧
-      │ new_sample 回调（streaming 线程）
+```text
+GStreamer appsink
+      │ 原始源帧，src_width × src_height
       ▼
- [videoOutHandle] FPS节流命中 → RGA转BGR640 → frame_seq=K
-      │ algorithm_process_mat
+frame_inlet(ch)
+      ├──────────────────────────────┐
+      │                              │
+      │ 最新帧                       │ 原始帧历史
+      ▼                              ▼
+display_worker(ch)         event_video_recorder ring buffer
+      │
+      └─ 使用最近结果叠加后显示
+
+frame_inlet(ch)
+      │ max_fps 节流、缩放/预处理
       ▼
- [TaskQueue] 入队（满则丢，记 drop）
-      │ cv signal
+infer queue → RKNN infer worker
+      │
       ▼
- [infer_worker] RGA前处理→NPU infer→过滤/NMS→写 channel_results[seq=K]
-      │ result_ready_cv signal
-      ▼
- [dispatch_worker] take_results 原子取 (框+640图+K)
-      │ process_channel_results（持 g_process_mtx）
-      ▼
- [invoke_channel_logic] tracker填track_id → fn(&ctx) 业务判断
-      │ 持 chn_mtx 原子写回 last_results(seq=K) + draw_cmds
-      ├──────────────▶ [可选] alarm_uploader_enqueue → upload_worker → Redis
-      ▼
- （与此并行）最新解码帧 K+m 经 DispQueue → display_worker
-      → 读 last_results(seq=K) 卡尔曼外推 → framebuffer → 屏幕
+dispatch_worker(ch)
+      ├─ tracker
+      ├─ 构造 ChannelContext
+      ├─ channel_control_take(ch)
+      ├─ 执行当前 logic 的 action handler
+      ├─ 执行当前 channel logic
+      └─ 写回 results / draw_cmds / logic_state
 ```
 
----
+`ChannelContext::frame` 和检测框位于模型输入坐标系；`src_width/src_height` 才是原始视频分辨率。
 
-## 9. 近期增强补充（2026-06，详见系统说明文档「近期架构增强」）
+## 3. 通道隔离
 
+```text
+APP_CTRL
+├─ config.channels[0] ─────┐
+├─ channels_state[0]       ├─ ChannelContext(ch=0)
+├─ chn_mtx[0]              │
+└─ process_mtx[0] ─────────┘
+
+├─ config.channels[1] ─────┐
+├─ channels_state[1]       ├─ ChannelContext(ch=1)
+├─ chn_mtx[1]              │
+└─ process_mtx[1] ─────────┘
+
+...每个通道独立分槽
 ```
- 上报（方案2：地址跟着告警走，C++ 不连业务服务器）
-   logic: enqueue(..., ctx->config->server_url / dify_api_url+key)   ← 每通道地址(config.json)
-        → server: record_alarm_local 把地址写进发件箱 .json（+带框图.jpg/原图_raw.jpg），落地 alarm_store/
-        → dify  : build_and_push_dify 把地址写进消息 → redis_rpush(dify_queue)
-        → Python: OutboxForwarder 扫发件箱补传(成功即删) / DifyUploader BLPOP → 按"地址"POST（不同通道发不同服务器）
 
- ROI（坐标系务必一致，否则判定错位）
-   roi_zones.json(归一化0~1) ─load_roi_zones(仅启动一次)─▶ ×模型尺寸 ─▶ roi_for_logic(模型640空间)
-                                                                    │ 与 ctx->results[].box 同坐标系
-   ctx->roi ◀───────────────────────────────────────────────────────┘  判定: pointPolygonTest(*ctx->roi, box_center)
-   ⚠ 改 ROI 不热重载 → 必须停止再启动；USB 用 stream.usb_width/height 固定采集分辨率(与 fps 解耦)防偏移
+同一个 logic 函数可以被多通道复用，但 `ctx->config`、`ctx->results`、`ctx->state` 和 ROI 始终指向当前通道的数据。每通道跨帧状态必须放在 `ctx->state`，不能使用共享 `static`。
+
+跨通道读取：
+
+```text
+logic(ch A)
+   └─ ctx->get_channel_snapshot(ch B)
+          └─ 在 chn_mtx[B] 内取得同帧 frame + results + fps + age
+                 └─ 返回深拷贝快照
 ```
+
+## 4. ROI 数据流
+
+```text
+Web ROI 节点
+   │ 保存归一化坐标 0~1
+   ▼
+config.json / channels[ch]
+   ├─ roi_zones[]     多个命名区域
+   └─ roi_polygon     单区域兼容字段
+          │
+          ▼
+config.cpp 解析到 ChannelConfig
+          │
+          ▼
+load_roi_zones_from_config()
+          │ × 模型输入宽高
+          ▼
+ChannelState::roi_zones（模型坐标系）
+          ├─ ctx->roi   第一个区域，旧逻辑兼容
+          ├─ ctx->rois  全部区域
+          └─ 显示/图片/视频叠加
+```
+
+配置热重载时：
+
+```text
+config mtime 变化
+  → 重新解析
+  → 显式复制 roi_zones / roi_polygon
+  → load_roi_zones_from_config()
+  → 下一批逻辑帧使用新 ROI
+```
+
+当前 C++ 不依赖外部 `roi_zones.json`，ROI 支持热更新。
+
+## 5. Logic 注册与 Web 声明
+
+```text
+logic_xxx.cpp
+  REGISTER_LOGIC(logic_xxx)
+          │ 函数名字符串化为 "logic_xxx"
+          │ 静态初始化
+          ▼
+  C++ channel logic 注册表
+          ▲
+          │ config.json: channels[ch].logic = "logic_xxx"
+          │
+channel_pipeline 查表并执行
+```
+
+Web 识别链是独立的：
+
+```text
+App/logics.json channel_logics[]
+          │ GET /apps/{name}/logics
+          ▼
+NodeConfigPanel 下拉和动态参数表单
+          │ 保存
+          ▼
+config.json channels[ch].logic + 参数
+```
+
+非空时，构建器从 `REGISTER_LOGIC(logic_xxx)` 的函数名生成 `logics.json.name`，通道配置的 `logic` 使用同一名称。源 `logic.json` 不手写 `name`。配置不写 `logic` 时框架直接跳过业务后处理；未知非空名称会被 Schema 校验拒绝。Web 优先读取应用 `logics.json`，缺失时才通过二进制 `--list-logics` 获取名称。
+
+## 6. 告警上报链
+
+```text
+channel logic
+   │ report_alarm(ctx, type, message, fields)
+   ▼
+alarm_report
+   │ 读取本通道 report_policy_json / report_parameters_json
+   │
+   ├─ 图片 delivery
+   │    └─ alarm_image_worker
+   │         ├─ 按策略选择画面与 overlay
+   │         ├─ 编码/落盘
+   │         └─ 写事件清单
+   │
+   └─ 视频 delivery
+        └─ event_video_recorder_trigger
+             ├─ 报警前环形缓存
+             ├─ 报警后继续收帧
+             ├─ 按 video_fps 异步编码 MP4
+             └─ alarm_report_video_ready
+```
+
+上报目标和媒体由 `report_policy` 决定，不再使用通道级 `report_enable/server_url/dify_api_url` 字段。
+
+## 7. 绘制目标路由
+
+```text
+logic draw_*()
+      │ DrawCommand::Target
+      ├─ DISPLAY ─────────▶ 实时显示 / 监看
+      ├─ IMAGE ───────────▶ 告警图片
+      ├─ VIDEO ───────────▶ 事件视频
+      ├─ UPLOAD ──────────▶ IMAGE + VIDEO
+      └─ ALL ─────────────▶ DISPLAY + IMAGE + VIDEO
+```
+
+`report_policy` 还会进一步决定图片或视频是否启用系统叠加、自定义叠加以及使用原始源帧还是通道显示画面。
+
+## 8. 自定义按钮控制链
+
+```text
+实时画面打开
+  → Web 获取当前 logic 的 actions
+  → 用户点击按钮
+  → POST 控制 API
+  → backend 连接 rk3588_yolo Unix Socket
+  → channel_control 解析请求
+       ├─ 系统动作：直接执行上下线/重连等操作
+       └─ 业务动作：记录 channel_id + logic_name + action + payload
+                         │
+                         ▼
+                   每通道 FIFO（最多 64）
+                         │
+                         ▼
+               下一次该通道处理逻辑帧
+                         │
+                         ├─ logic 名未变化：调用 action handler
+                         └─ logic 已变化：丢弃旧动作
+```
+
+HTTP `accepted` 只代表成功进入队列。handler 是否处理成功要看后续执行结果和日志。
+
+## 9. 配置热重载
+
+```text
+config_monitor_thread
+  │ 检测 config.json mtime 并等待写入稳定
+  ▼
+load_app_config(new_cfg)
+  ├─ REG_G / REG_C 字段 → sync_fields
+  ├─ ROI → 显式复制并重建
+  ├─ logic 改变 → 切换名称并 reset logic_state
+  ├─ global_logics 改变 → 重启 global logic threads
+  ├─ model 改变 → 热换模型
+  ├─ tracker/阈值/类别 → 更新运行模块
+  └─ stream 改变 → 停止并重建相关采集器
+```
+
+新增模块专有业务参数时，只修改模块 `logic.json.parameters` 和同目录 C++ 的 `ctx->param_*()` 调用。Schema 在构建时驱动二进制校验、Web 表单和热重载策略；普通参数不再增加 `ChannelConfig/REG_C` 中央字段。
+
+## 10. 线程关系
+
+```text
+main thread
+├─ config_monitor_thread                 ×1
+├─ fd_monitor_thread                     ×1
+├─ capture_bus_thread                    ×采集器
+├─ display_worker                        ×启用显示的通道
+├─ dispatch_worker                       ×通道/调度配置
+├─ infer_worker                          ×模型配置
+├─ global_logic thread                   ×启用的全局逻辑实例
+├─ channel_control server thread         ×1
+├─ rtsp loop + feeder thread             启用 RTSP 推流时
+├─ alarm_image_worker                    首次告警图片任务时
+└─ event_video_worker                    首次启用事件录像时创建固定大小的 worker pool
+```
+
+此外存在 GStreamer、RKNN 等库内部线程。不要用固定数字推断实际线程总数。
+
+## 11. 启动与退出
+
+启动：
+
+```text
+app_ctrl_init
+  → GStreamer/硬件环境
+  → analyzer_init
+       → infer workers / ROI / global logics
+  → channel_control_init
+  → config + fd monitors
+  → DecChannel
+  → display + dispatch workers
+  → rtsp_streamer_init（按配置）
+  → main loop
+```
+
+退出：
+
+```text
+设置停止标志并唤醒等待者
+  → rtsp_streamer_deinit
+  → channel_control_deinit
+  → 停止通道采集器
+  → analyzer_deinit 并等待分发线程
+  → 唤醒并等待显示线程
+  → event_video_recorder_deinit
+  → alarm_report_deinit
+  → 停监控线程
+  → app_ctrl_deinit
+```
+
+原则是先停止上游生产者和外部入口，再停止下游 worker，最后销毁共享状态。

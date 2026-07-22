@@ -50,16 +50,18 @@ def scan_apps() -> List[Dict[str, Any]]:
 
         status_info = get_status(entry.name)
 
-        # 未上报告警数 = 本地发件箱里 .json 元数据文件数(与 records.py 的 count 同口径)。
-        # 只数文件、不解析内容 → 很轻; 上报微服务补传成功后会删除, 故这里是"还没传上去"的条数。
+        # 待上报记录数 = 统一事件目录数，每条事件必须包含 manifest.json。
+        # 只检查目录结构、不解析内容；上报全部成功后事件目录会被删除。
         # ALARM_STORE_DIR 为全局覆盖(与 records.py 一致), 否则用 <app>/alarm_store。
         store = Path(os.environ["ALARM_STORE_DIR"]) if os.environ.get("ALARM_STORE_DIR") \
             else entry / "alarm_store"
         unreported = 0
         if store.is_dir():
             try:
-                unreported = sum(1 for f in store.iterdir()
-                                 if f.suffix == ".json" and f.is_file())
+                unreported = sum(
+                    1 for event_dir in store.iterdir()
+                    if event_dir.is_dir() and (event_dir / "manifest.json").is_file()
+                )
             except OSError:
                 unreported = 0
 

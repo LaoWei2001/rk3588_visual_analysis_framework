@@ -52,9 +52,7 @@ static bool probe_rtsp_tcp(const std::string &rtsp_url, int timeout_ms = 2000)
     if (host.empty())
         return true; /* 解析不出 host, 不拦截 */
 
-    struct addrinfo hints
-    {
-    };
+    struct addrinfo hints{};
     struct addrinfo *res = nullptr;
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
@@ -100,8 +98,7 @@ static bool probe_rtsp_tcp(const std::string &rtsp_url, int timeout_ms = 2000)
 /* bus 消息监听使用 gst_bus_timed_pop_filtered 主动轮询,
  * 不使用 gst_bus_add_signal_watch + g_signal_connect:
  * 后者每次重连都向默认 GMainContext 累积一个 GSource（持有一对 wakeup pipe fd）
- * 而无人 detach, 多路长时间运行后必然触发 fd 耗尽。主动轮询完全等价且零泄漏。
- */
+ * 而无人 detach, 多路长时间运行后必然触发 fd 耗尽。主动轮询完全等价且零泄漏。 */
 
 /* RTSP: pad-added 连接 rtspsrc 视频 pad 到解码链路 */
 static void rtsp_pad_added(GstElement *src, GstPad *new_pad, GstChannel_t *data)
@@ -187,15 +184,15 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
     bool should_process = false;
     for (int cid : data->chnIds)
     {
-        if (g_pCtrl && cid >= 0 && cid < app_ctrl_get_chn_nums())
+        if (app_ctrl_has_channel(cid))
         {
             int target_fps;
             int local_default_fps;
             {
-                pthread_rwlock_rdlock(&g_pCtrl->mtx);
-                target_fps = g_pCtrl->config.channels[cid].playback_fps;
-                local_default_fps = g_pCtrl->config.local_default_fps;
-                pthread_rwlock_unlock(&g_pCtrl->mtx);
+                auto runtime = app_ctrl_get_runtime_snapshot();
+                const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, cid);
+                target_fps = channel ? channel->playback_fps : 0;
+                local_default_fps = runtime ? runtime->config.local_default_fps : 25;
             }
             if (target_fps <= 0 && data->is_file)
             {
@@ -242,8 +239,7 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
     GstBuffer *buffer = gstopt_sample_get_buffer(sample, &stFrameDesc);
     if (!buffer)
     {
-        g_printerr("[DecChannel] WARNING: gstopt_sample_get_buffer returned null, "
-                   "drop one frame and continue\n");
+        g_printerr("[DecChannel] WARNING: gstopt_sample_get_buffer returned null, drop one frame and continue\n");
         gst_sample_unref(sample);
         return GST_FLOW_OK;
     }
@@ -267,8 +263,7 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
     }
     else
     {
-        g_printerr("[DecChannel] WARNING: gst_buffer_map failed, drop one frame "
-                   "and continue\n");
+        g_printerr("[DecChannel] WARNING: gst_buffer_map failed, drop one frame and continue\n");
     }
     gst_sample_unref(sample);
     return GST_FLOW_OK;
@@ -389,8 +384,8 @@ static void *busListen(void *para)
                     if (last_us > 0 && now_us > last_us + stall_threshold_us)
                     {
                         const char *src_type = pThis->mGstChn.is_file ? "file" : "live";
-                        g_printerr("[Ch%d] WARNING: [%s] no new sample for %.2fs "
-                                   "(threshold %.0fs), force reconnect pipeline\n",
+                        g_printerr("[Ch%d] WARNING: [%s] no new sample for %.2fs (threshold %.0fs), force reconnect "
+                                   "pipeline\n",
                                    pThis->channelId(), src_type, static_cast<double>(now_us - last_us) / 1000000.0,
                                    static_cast<double>(stall_threshold_us) / 1000000.0);
                         terminate = TRUE;
@@ -496,9 +491,8 @@ static void *busListen(void *para)
             for (int cid : pThis->mGstChn.chnIds)
                 analyzer_channel_offline(cid);
 
-            // 【修复点 2】RTSP掉线等需要重连的情况，必须用 while 死等，绝不把 NULL
-            // 漏给上层！ 同时检测 mStopRequested，以便流地址热切换时 stop()
-            // 能快速中断此循环。
+            // 【修复点 2】RTSP掉线等需要重连的情况，必须用 while 死等，绝不把 NULL 漏给上层！
+            // 同时检测 mStopRequested，以便流地址热切换时 stop() 能快速中断此循环。
             while (g_pCtrl && g_pCtrl->isRunning && !pThis->isStopRequested())
             {
                 pThis->reconnect();
@@ -596,11 +590,8 @@ void DecChannel::stop()
     }
 
     /* 第二轮: mppvideodec 偶发死锁场景, 再补一次 NULL 状态并等待 5 秒.
-     * 此时 mGstChn.pipeline 可能已经被 busListen 自己置 NULL — 不再访问,
-     * 避免野指针. */
-    g_printerr("[DecChannel ch%d] bus thread did not exit in 3s, retry NULL "
-               "state and wait 5s more\n",
-               channelId());
+     * 此时 mGstChn.pipeline 可能已经被 busListen 自己置 NULL — 不再访问, 避免野指针. */
+    g_printerr("[DecChannel ch%d] bus thread did not exit in 3s, retry NULL state and wait 5s more\n", channelId());
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += 5;
     ret = pthread_timedjoin_np(mTid, NULL, &ts);
@@ -617,8 +608,7 @@ void DecChannel::stop()
      * OS 会回收所有线程及其资源, 比 detach 让线程游离继续访问 GStreamer
      * 对象更安全。这里只打印告警, 函数返回, 让 main 继续走完析构, 最终 exit. */
     g_printerr("[DecChannel ch%d] CRITICAL: bus thread still alive after 8s total wait, "
-               "leaving it for process-exit reaper (no detach to avoid "
-               "use-after-free)\n",
+               "leaving it for process-exit reaper (no detach to avoid use-after-free)\n",
                channelId());
     mGstChn.pipeline = NULL;
     bObjIsInited = false;
@@ -658,9 +648,8 @@ int DecChannel::createVideoDecChannel(bool start_thread)
      * 掉帧、重启进程无效、必须重启设备才能恢复的根因之一. */
     if (!probe_rtsp_tcp(mCfg.location, 2000))
     {
-        g_printerr("[DecChannel ch%d] RTSP TCP probe failed for %s, skip pipeline "
-                   "build this round\n",
-                   channelId(), mCfg.location.c_str());
+        g_printerr("[DecChannel ch%d] RTSP TCP probe failed for %s, skip pipeline build this round\n", channelId(),
+                   mCfg.location.c_str());
         return -1;
     }
 
@@ -765,8 +754,7 @@ int DecChannel::createFileDecChannel(bool start_thread)
 
     /*
      * decodebin 内部自动创建解码器链路（qtdemux -> h264parse -> mppvideodec）。
-     * 其 src pad 解码后输出 video/x-raw (NV12)，通过 pad-added 回调连接到
-     * appsink。
+     * 其 src pad 解码后输出 video/x-raw (NV12)，通过 pad-added 回调连接到 appsink。
      */
     g_signal_connect(mGstChn.decoder, "pad-added", G_CALLBACK(file_pad_added), &mGstChn);
 
@@ -858,19 +846,24 @@ int DecChannel::createUsbDecChannel(bool start_thread)
 
     g_object_set(mGstChn.source, "device", mCfg.location.c_str(), NULL);
 
-    int desired_fps = 15;
-    int explicit_w = 0, explicit_h = 0;
-    if (g_pCtrl && channelId() >= 0 && channelId() < app_ctrl_get_chn_nums())
+    int desired_fps = mCfg.usb_fps > 0 ? mCfg.usb_fps : 15;
+    int explicit_w = mCfg.usb_width, explicit_h = mCfg.usb_height;
+    if (app_ctrl_has_channel(channelId()))
     {
-        const ChannelConfig &ch = g_pCtrl->config.channels[channelId()];
-        if (ch.playback_fps > 0)
-            desired_fps = ch.playback_fps;
-        else if (ch.max_fps > 0)
-            desired_fps = ch.max_fps;
-        else if (app_ctrl_get_max_fps() > 0)
+        int channel_fps = 0;
+        auto runtime = app_ctrl_get_runtime_snapshot();
+        const ChannelConfig *ch = app_ctrl_runtime_channel_config(runtime, channelId());
+        if (ch)
+        {
+            if (ch->playback_fps > 0)
+                channel_fps = ch->playback_fps;
+            else if (ch->max_fps > 0)
+                channel_fps = ch->max_fps;
+        }
+        if (mCfg.usb_fps <= 0 && channel_fps > 0)
+            desired_fps = channel_fps;
+        else if (mCfg.usb_fps <= 0 && app_ctrl_get_max_fps() > 0)
             desired_fps = app_ctrl_get_max_fps();
-        explicit_w = ch.stream.usb_width; /* 方案B: 显式采集分辨率 */
-        explicit_h = ch.stream.usb_height;
     }
     if (desired_fps < 1)
         desired_fps = 1;
@@ -885,9 +878,8 @@ int DecChannel::createUsbDecChannel(bool start_thread)
     if (explicit_w > 0 && explicit_h > 0)
     {
         /* 方案B: 显式 USB 采集分辨率(来自 config: stream.usb_width/height) ——
-         * 与 ROI 抓帧用的分辨率一致、不随 max_fps 变，从而"画的区域 ==
-         * 逻辑/显示拿到的区域"。 帧率仍按分辨率选相机支持的离散档；推理处理帧率由
-         * max_fps 在推理层节流，互不影响。*/
+         * 与 ROI 抓帧用的分辨率一致、不随 max_fps 变，从而"画的区域 == 逻辑/显示拿到的区域"。
+         * 帧率仍按分辨率选相机支持的离散档；推理处理帧率由 max_fps 在推理层节流，互不影响。*/
         preferred_width = explicit_w;
         preferred_height = explicit_h;
         if (explicit_w <= 640)
@@ -960,15 +952,13 @@ int DecChannel::createUsbDecChannel(bool start_thread)
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
             .count());
 
-    g_print("[DecChannel ch%d] USB preferred caps: NV12 %dx%d @ %dfps (target "
-            "infer=%dfps)\n",
-            channelId(), preferred_width, preferred_height, capture_fps, desired_fps);
+    g_print("[DecChannel ch%d] USB preferred caps: NV12 %dx%d @ %dfps (target infer=%dfps)\n", channelId(),
+            preferred_width, preferred_height, capture_fps, desired_fps);
 
     GstStateChangeReturn ret = gst_element_set_state(mGstChn.pipeline, GST_STATE_PLAYING);
     if (ret == GST_STATE_CHANGE_FAILURE)
     {
-        g_printerr("[DecChannel] Failed to set USB pipeline with preferred caps, "
-                   "fallback to device default\n");
+        g_printerr("[DecChannel] Failed to set USB pipeline with preferred caps, fallback to device default\n");
         gst_element_set_state(mGstChn.pipeline, GST_STATE_NULL);
 
         GstCaps *fallback_caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, "NV12", NULL);
@@ -1001,9 +991,12 @@ int DecChannel::createUsbDecChannel(bool start_thread)
 bool DecChannel::isLoop() const
 {
     // 动态去全局配置里查最新的 loop 状态，实现热重载
-    if (g_pCtrl && channelId() >= 0 && channelId() < app_ctrl_get_chn_nums())
+    if (app_ctrl_has_channel(channelId()))
     {
-        return g_pCtrl->config.channels[channelId()].stream.loop;
+        auto runtime = app_ctrl_get_runtime_snapshot();
+        const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, channelId());
+        const bool loop = channel ? channel->stream.loop : mLoop;
+        return loop;
     }
     // 如果还没初始化好，就用刚启动时的默认值
     return mLoop;

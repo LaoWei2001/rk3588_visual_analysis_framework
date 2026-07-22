@@ -12,20 +12,22 @@
  *   5. dispatch_worker[N]      — NPU 结果分发 + channel_logic
  *   6. infer_worker[N]         — NPU 推理 (algoProcess 内部)
  *   7. global_logic[N]         — 跨通道全局逻辑轮询
- *   8. upload_worker           — Redis 报警上传
+ *   8. alarm/event workers     — 告警落盘与事件录像（各模块内部管理）
  */
 
 #pragma once
 
-#include "../config/config.h"
-#include "../logic/channel_logic.h"
-#include "../player/display.h"
+#include <vector>
+#include <string>
 #include <cstdint>
 #include <map>
+#include <atomic>
 #include <opencv2/opencv.hpp>
 #include <pthread.h>
-#include <string>
-#include <vector>
+#include "../config/config.h"
+#include "logic/core/channel_logic.h"
+#include "logic/core/logic_parameters.h"
+#include "../player/display.h"
 
 class DecChannel; /* 前置声明, 底层 C++ 类型 */
 
@@ -59,6 +61,34 @@ struct ChannelRawFrame
     int width = 0;
     int height = 0;
     cv::Mat model_input_mat;
+
+    /* 解码源帧的借用视图：仅在 videoOutHandle 当前回调及其同步调用链内有效。
+     * 传统 CV logic 可通过 ChannelContext::source_frame() 按需转成原分辨率 BGR；
+     * 不得把 source_data 保存到本次 logic 调用之外。异步推理结果路径不设置这些字段。 */
+    const void *source_data = nullptr;
+    int source_format = 0;
+    int source_hstride = 0;
+    int source_vstride = 0;
+};
+
+/*================================================================
+ * 不可变运行配置快照
+ *================================================================*/
+/**
+ * 配置热更新只在框架层构造并整体发布此快照。逐帧处理拿到 shared_ptr 后，
+ * 本帧看到的 ChannelConfig / ROI / 全局参数始终来自同一 generation，
+ * 不会在业务 logic 执行过程中被原地修改。
+ *
+ * ChannelContext 的公开字段保持不变：框架仍向上层提供
+ * ctx->config / ctx->rois / ctx->roi，上层 logic 无需感知此类型。
+ */
+struct AppRuntimeSnapshot
+{
+    AppConfig config;
+    std::vector<RoiZone> roi_zones[MAX_CHANNEL_NUM];
+    LogicParameterSet logic_parameters[MAX_CHANNEL_NUM];
+    int channel_config_index[MAX_CHANNEL_NUM]{};
+    uint64_t generation = 0;
 };
 
 /*================================================================
@@ -66,13 +96,13 @@ struct ChannelRawFrame
  *================================================================*/
 struct ChannelState
 {
-    /* 显示统计 (display_worker 独占, 无锁) */
+    /* fps_counter/last_fps_ts_ms 由 display_worker 独占；disp_fps 跨线程读写走 chn_mtx */
     cv::Mat tile_staging;
     float disp_fps = 0.0f;
     int fps_counter = 0;
     uint64_t last_fps_ts_ms = 0;
 
-    /* 推理时间戳 (videoOutHandle 独占) */
+    /* 推理时间戳由 videoOutHandle 更新，跨线程读写走 chn_mtx */
     uint64_t last_infer_ts_ms = 0;
 
     /* 由 chn_mtx[chnId] 保护 */
@@ -82,31 +112,21 @@ struct ChannelState
     std::vector<AlgoResult> last_results;
     int64_t result_frame_seq = 0; /* last_results/last_logic_frame 对应的帧序号, 用于校验帧-结果匹配 */
     uint64_t last_result_ts_ms = 0;
-    /* 多 ROI 区域 (一个通道可配置多个)。
-     * roi_zones      : 各区域 名字+多边形(模型输入坐标系) —— logic(ctx->rois) 与
-     * 显示 都用它。 roi_zones_raw  : 各区域原始像素顶点,
-     * 仅"旧像素格式"需要(源分辨率变化时据此重算 roi_zones);
-     *                  归一化加载时直接写入 roi_zones、此表留空。索引与 roi_zones
-     * 一一对应。 */
-    std::vector<RoiZone> roi_zones;
-    std::vector<std::vector<cv::Point>> roi_zones_raw;
-    bool roi_model_space = false; /* true=归一化加载(roi_zones 顶点已是模型坐标,
-                                     无需按源分辨率缩放) */
-    int last_src_w = 0;
-    int last_src_h = 0;
-    int src_w_now = 0; /* 当前解码源分辨率(frame_inlet 每帧写); 供推理通道 ROI 缩放用 */
+    int src_w_now = 0; /* 当前解码源分辨率(frame_inlet 写，ChannelContext 元信息读取) */
     int src_h_now = 0;
     std::vector<DrawCommand> draw_cmds;
-    std::string logic_name;
     std::shared_ptr<void> logic_state;
     cv::Mat last_frame;
     cv::Mat last_logic_frame;
-    cv::Mat logic_display_frame;      /* logic 经 display_canvas() 自绘的显示底图(640×640
-                                         BGR)；空=不覆盖，显示走实时采集帧 */
+    cv::Mat logic_display_frame;      /* logic 经 display_canvas() 自绘的显示底图(640×640 BGR)；空=不覆盖，显示走实时采集帧 */
     uint64_t logic_display_ts_ms = 0; /* 上面那帧的产生时刻(steady ms)，显示端据此判新鲜度，过期回退实时帧 */
     int64_t logic_frame_id = 0;
     int64_t input_frame_seq = 0;
     uint64_t last_logic_ts_ms = 0;
+
+    /* 推理运行时开关: 1=按 config 正常推理; 0=本通道强制跳过NPU推理(画面正常显示)。
+     * 由系统级动作 infer_toggle 控制, channel_control 线程写, frame_inlet 线程读。 */
+    int infer_runtime_enable = 1;
 };
 
 /*================================================================
@@ -139,11 +159,14 @@ struct APP_CTRL
     /*!< 1. 全局参数 */
     int b_init;       /*!< 初始化完成标志 */
     AppConfig config; /*!< 全局配置 (JSON 解析结果) */
+    /* 逐帧线程只读此不可变快照；使用 atomic_load/store(shared_ptr) 发布。 */
+    std::shared_ptr<const AppRuntimeSnapshot> runtime_snapshot;
+    uint64_t config_generation = 1;
 
     /*!< 2. 显示子系统 */
     Display_t dispDesc;   /*!< 显示窗口描述符 */
     char **pDispBuffer;   /*!< 双缓冲指针 (front buffer) */
-    int disp_thread_exit; /*!< 显示线程退出标志 */
+    std::atomic<bool> disp_thread_exit{false}; /*!< 显示线程退出标志 */
 
     /*!< 3. 采集子系统 */
     DecChannel *capturers[APP_CTRL_MAX_CAPTURERS]; /*!< 采集器句柄 */
@@ -161,18 +184,16 @@ struct APP_CTRL
     pthread_mutex_t cv_config_mtx;            /*!< 配合 cv_config 的互斥锁 */
     pthread_cond_t cv_config;                 /*!< 配置监控线程条件变量 */
     pthread_mutex_t chn_mtx[MAX_CHANNEL_NUM]; /*!< 通道独立锁 */
-    volatile int isRunning;                   /*!< 全局运行标志: 0=退出 */
+    std::atomic<bool> isRunning{false};        /*!< 全局运行标志: false=退出 */
 
     /*!< 7. 线程句柄 (main 中 pthread_create 填充) */
     pthread_t config_monitor_tid; /*!< 配置热加载监控线程 */
     pthread_t fd_monitor_tid;     /*!< fd 使用量监控线程 */
-    pthread_t upload_worker_tid;  /*!< Redis 报警上传线程 */
 
     /*!< 8. 配置热加载与线程退出标志 */
     uint64_t configLastMtime; /*!< 配置文件上次修改时间 */
-    int config_monitor_exit;  /*!< 配置监控线程退出标志 */
-    int fd_monitor_exit;      /*!< fd 监控线程退出标志 */
-    int upload_worker_exit;   /*!< 上传线程退出标志 */
+    std::atomic<bool> config_monitor_exit{false}; /*!< 配置监控线程退出标志 */
+    std::atomic<bool> fd_monitor_exit{false};     /*!< fd 监控线程退出标志 */
 };
 
 /*======================== 全局指针 ========================*/
@@ -185,7 +206,30 @@ extern "C"
 #endif
 
     int app_ctrl_init(const char *cfgPath);
+    /** 仅发出停止请求并唤醒等待者；所有线程仍须由创建者 join。 */
+    void app_ctrl_request_stop(void);
     void app_ctrl_deinit(void);
+
+    /* 单一通道身份查询。channel_id 始终等于 config.channels[].id。 */
+    int app_ctrl_has_channel(int channel_id);
+    /**
+     * 兼容查询：返回值由线程局部 shared_ptr 保活，内容只读且不会被热更新原地修改。
+     * 新的框架代码优先一次获取 app_ctrl_get_runtime_snapshot()，避免同帧重复查询。
+     */
+    const ChannelConfig *app_ctrl_get_channel_config(int channel_id);
+    int app_ctrl_get_channel_display_order(int channel_id);
+
+    std::shared_ptr<const AppRuntimeSnapshot> app_ctrl_get_runtime_snapshot(void);
+    std::shared_ptr<const AppRuntimeSnapshot> app_ctrl_build_runtime_snapshot(
+        const AppConfig &config, int input_w, int input_h, uint64_t generation);
+    void app_ctrl_store_runtime_snapshot(
+        const std::shared_ptr<const AppRuntimeSnapshot> &snapshot);
+    const ChannelConfig *app_ctrl_runtime_channel_config(
+        const std::shared_ptr<const AppRuntimeSnapshot> &snapshot, int channel_id);
+    const std::vector<RoiZone> *app_ctrl_runtime_channel_rois(
+        const std::shared_ptr<const AppRuntimeSnapshot> &snapshot, int channel_id);
+    const LogicParameterSet *app_ctrl_runtime_logic_parameters(
+        const std::shared_ptr<const AppRuntimeSnapshot> &snapshot, int channel_id);
 
     /*======================== 通道数据查询 (线程安全) ========================*/
     std::vector<AlgoResult> app_ctrl_get_results(int chnId);
@@ -200,45 +244,18 @@ extern "C"
 
     int app_ctrl_get_channel_snapshot(int chnId, ChannelSnapshot *out);
 
-    /*======================== 动态计算属性 ========================*/
-    static inline int app_ctrl_get_chn_nums(void)
-    {
-        return g_pCtrl ? (int)g_pCtrl->config.channels.size() : 0;
-    }
-    static inline int app_ctrl_get_enable_disp(void)
-    {
-        return g_pCtrl ? g_pCtrl->config.enable_display : 0;
-    }
-    static inline int app_ctrl_get_enable_rtsp(void)
-    {
-        return g_pCtrl ? (g_pCtrl->config.enable_rtsp ? 1 : 0) : 0;
-    }
-    static inline int app_ctrl_get_disp_width(void)
-    {
-        return g_pCtrl ? (g_pCtrl->config.disp_width & ~3) : 0;
-    }
-    static inline int app_ctrl_get_disp_height(void)
-    {
-        return g_pCtrl ? (g_pCtrl->config.disp_height & ~1) : 0;
-    }
-    static inline int app_ctrl_get_tile_cols(void)
-    {
-        return g_pCtrl ? (g_pCtrl->config.tile_cols > 0 ? g_pCtrl->config.tile_cols : 1) : 1;
-    }
-    static inline int app_ctrl_get_tile_rows(void)
-    {
-        if (!g_pCtrl)
-            return 1;
-        int c = app_ctrl_get_tile_cols();
-        int n = app_ctrl_get_chn_nums();
-        int req = (n + c - 1) / c;
-        return g_pCtrl->config.tile_rows > 0 ? (g_pCtrl->config.tile_rows > req ? g_pCtrl->config.tile_rows : req)
-                                             : req;
-    }
-    static inline int app_ctrl_get_max_fps(void)
-    {
-        return (g_pCtrl && g_pCtrl->config.max_fps > 0) ? g_pCtrl->config.max_fps : 30;
-    }
+    /*======================== 不可变运行快照属性 ========================*/
+    int app_ctrl_get_chn_nums(void);
+    int app_ctrl_get_enable_disp(void);
+    int app_ctrl_get_enable_rtsp(void);
+    int app_ctrl_get_disp_width(void);
+    int app_ctrl_get_disp_height(void);
+    int app_ctrl_get_tile_cols(void);
+    int app_ctrl_get_tile_rows(void);
+    int app_ctrl_get_max_fps(void);
+    int app_ctrl_get_local_default_fps(void);
+    int app_ctrl_get_performance_display(void);
+    int app_ctrl_get_debug_display(void);
 
 #ifdef __cplusplus
 }

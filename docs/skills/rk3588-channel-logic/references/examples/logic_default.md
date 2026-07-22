@@ -1,23 +1,29 @@
-# logic_default — 默认（无动作）
+# logic_default — 空白逻辑示例
 
-- **上报**：无
-- **可调参数**：无
-- **用到的能力**：无（占位/直通）
+- 源码：`rk3588_yolo/src/logic/modules/logic_default/logic.cpp`
+- 上报：无
+- 参数、动作、状态：无
 
-## 做什么
-什么都不做的占位逻辑。通道选它时只走推理 + 通用显示（检测框由显示层画），不附加任何业务判断。新建通道、或临时关掉某通道的业务逻辑时用。
+`logic_default` 是一个可选、可删除的普通示例模块。它不修改检测结果、不增加绘制、不产生告警；模型和播放器的通用流程仍正常运行。配置不写 `channels[].logic` 时，框架原生进入“无后处理”状态，效果与选择本示例相同，因此系统并不依赖该模块兜底。
 
-## 完整实现
 ```cpp
-static void logic_default(ChannelContext *ctx)
+#include "logic/core/logic_common.h"
+
+static void logic_default(ChannelContext *)
 {
-    (void)ctx;
+}
+
+REGISTER_LOGIC(logic_default);
+```
+
+`logics.json` 对应条目：
+
+```json
+{
+  "label": "空白逻辑示例",
+  "report_fields": [],
+  "params": []
 }
 ```
 
-## 接线
-- 文件 / 注册：独立文件 `src/logic/logic_default.cpp`（顶部 `#include "logic_common.h"`），文件末尾自注册 `REGISTER_LOGIC("logic_default", logic_default);`（在 `main()` 前自动登记，无需改动 `channel_logic.cpp`）。
-- logics.json：`{ "name": "logic_default", "label": "默认（无动作）", "params": [] }`
-
-## 复用提示
-新写一个逻辑时，可以从这个空壳起步，逐步往里加判断/绘制/上报。
+新 logic 可以从这个文件复制结构；学习统一上报、媒体分层和 Web 接线先看 `logic_upload_teach.md`，实现真实 ROI 进入告警再看 `logic_upload.md`。

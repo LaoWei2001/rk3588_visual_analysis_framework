@@ -34,6 +34,13 @@ async def websocket_terminal(websocket: WebSocket):
         # 子进程：尽量和板端 SSH 登录一致
         os.environ["TERM"] = os.environ.get("TERM", "xterm-256color")
         os.environ.setdefault("LANG", "C.UTF-8")
+        # GNU ls 默认不主动输出颜色。首次提示符出现前为当前交互 shell 注入别名，
+        # 让目录、普通文件、可执行文件等使用 xterm 的 ANSI 颜色区分。
+        color_ls = "alias ls='ls --color=auto'"
+        existing_prompt_command = os.environ.get("PROMPT_COMMAND", "")
+        os.environ["PROMPT_COMMAND"] = (
+            f"{color_ls};{existing_prompt_command}" if existing_prompt_command else color_ls
+        )
         try:
             os.chdir("/opt/ai_apps")
         except Exception:

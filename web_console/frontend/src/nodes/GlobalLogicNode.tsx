@@ -9,7 +9,7 @@ export default function GlobalLogicNode({ id, data, selected }: NodeProps) {
   const d = data as Record<string, unknown>
   const set = (key: string, val: unknown) => updateNodeData(id, { [key]: val })
 
-  const globalLogics = info?.known_global_logics ?? ['global_example', 'global_default']
+  const globalLogics = info?.known_global_logics ?? ['global_default']
   const currentLogic = String(d.logic ?? 'global_default')
 
   const channelsRaw = (d.channels as number[]) ?? []

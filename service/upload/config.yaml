@@ -1,9 +1,7 @@
 # Unified upload config
 #
-# 方案2: 下面的 api_url / api_key / url 是「默认地址」。
-#   每条 Redis 消息可自带 dify_api_url / dify_api_key / server_url(由 C++ 按通道下发);
-#   消息里填了就用消息里的, 留空才回落到这里的默认值。
-#   => 不同通道可上报到不同地址; 网页编辑器「上报配置」节点逐通道填写。
+# dify/server 是默认连接；每个通道的 delivery 可通过 profile_id 选择 profiles 中的独立连接。
+# 地址和密钥不写进通道 config.json，避免画布配置携带凭据。
 
 # Dify config (默认地址, 通道留空时使用)
 dify:
@@ -16,10 +14,16 @@ server:
   url: "http://192.168.2.22:9200/api/objectInvadeDet"
   timeout: 15
 
-# Redis config
-redis:
-  host: "localhost"
-  port: 6379
-  db: 0
-  dify_queue: "dify_queue"
-  server_queue: "server_queue"
+# 可复用连接Profile。画布中的 delivery 只保存 profile_id；按项目增加或删除。
+# 示例：
+# profiles:
+#   sop_dify:
+#     type: "dify"
+#     api_url: "http://dify.example.com"
+#     api_key: "app-..."
+#   alarm_server:
+#     type: "server"
+#     url: "http://server.example.com/api/alarm"
+#     token: "..."
+#     timeout: 15
+profiles: {}

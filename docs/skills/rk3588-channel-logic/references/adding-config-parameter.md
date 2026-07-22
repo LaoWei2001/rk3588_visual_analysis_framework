@@ -1,147 +1,436 @@
-# 给某个逻辑加一个可配置参数（代码 + 热重载 + 网页可配）
+# 通道逻辑专有参数：Schema、C++ 调用、Web 配置与热重载
 
-当某个 `logic_xxx` 需要一个用户能调的数值/开关（半径、停留秒数、阈值、开关…），按本文做。项目用一套**基于偏移量的配置注册表**（`config_registry`），把"加字段"变成"填三处对齐 + 一行 REG_C"，**热重载和网页可配几乎是自动实现的**。
+本文面向在 `rk3588_yolo` 上新增或维护 `logic_xxx` 的二次开发者，说明当前已经落地的模块参数体系。本文以现行源码为准，替代旧的“修改 `ChannelConfig`、增加 `REG_C`、手写 `logics.json`”流程。
 
-## 全景：一个参数从代码到网页的一条链
+## 先记住结论
 
-```
-config.h: ChannelConfig 加字段 dwell_sec ──┐
-config_init.cpp: REG_C("dwell_sec",INT,..) ─┤  注册表(g_cfg_reg)知道 "dwell_sec"→ChannelConfig 偏移+类型
-logic 里读 ctx->config->dwell_sec ──────────┘
-                                             │
-logics.json: params 加 {key:"dwell_sec",..} ─→ 网页逻辑节点渲染出一个输入框
-                                             │
-用户在网页改 → graphToConfig 写进该通道 config.json → 保存
-                                             │
-config_monitor 线程检测 config.json 变化 → sync_fields 把新值热拷进运行配置 → 下一帧 ctx->config->dwell_sec 即新值
+给某个通道逻辑增加一个普通业务参数时，开发代码通常只修改该逻辑目录中的两个文件：
+
+```text
+rk3588_yolo/src/logic/modules/logic_xxx/
+├── logic.cpp       # ctx->param_*() 读取参数
+└── logic.json      # 参数 Schema、Web 文案和热重载策略
 ```
 
-## 唯一要记的规则：四处 key 必须完全一致
+不再为每个逻辑参数修改以下中央文件：
 
-**① ChannelConfig 字段名 == ② REG_C 的键 == ③ logics.json 的 `param.key` == ④ 逻辑里 `ctx->config->key` 读的名字。** 四处对齐，整条链就通了。logics.json 顶部 `_comment` 就是这条规则。
+- `src/config/config.h`；
+- `src/config/config_init.cpp`；
+- `src/core/app_ctrl.cpp`；
+- Web 前端字段列表；
+- 生成后的应用根目录 `logics.json`。
 
----
-
-## Step 1 — 在 ChannelConfig 加字段（`rk3588_yolo/src/config/config.h`）
-
-给一个**默认值**（用户没配时用它，也是热重载/解析失败时的兜底）：
-
-```cpp
-struct ChannelConfig {
-    ...
-    int dwell_sec = 3;        // 停留报警秒数
-};
-```
-
-## Step 2 — 注册到配置表（`rk3588_yolo/src/config/config_init.cpp`）
-
-一行 `REG_C(键, 类型, 字段)`。`REG_C` 展开成 `g_cfg_reg.add_channel("dwell_sec", ConfigType::INT, offsetof(ChannelConfig, dwell_sec))`——它告诉解析器"JSON 里 `dwell_sec` 这个键，对应 ChannelConfig 的这个偏移、这个类型"。**注册一次，初始解析和热重载都自动认它**，你不用手写任何 cJSON 解析。
-
-```cpp
-REG_C("dwell_sec", INT, dwell_sec);
-```
-
-类型（`ConfigType`，定义在 `config_registry.h`）：
-
-| REG_C 类型       | C++ 字段类型                   | logics.json `type`                  |
-| -------------- | -------------------------- | ----------------------------------- |
-| `INT`          | `int`                      | `"int"`                             |
-| `FLOAT`        | `float`                    | `"float"`                           |
-| `BOOL`         | `bool`                     | `"bool"`                            |
-| `STRING`       | `std::string`              | `"string"` / `"text"`（多行）/ `"enum"` |
-| `STRING_ARRAY` | `std::vector<std::string>` | （类别列表等，前端按需处理）                      |
-
-## Step 3 — 在逻辑里读它
-
-```cpp
-int dwell = ctx->config ? ctx->config->dwell_sec : 3;   // 永远从 ctx->config 现读，别缓存（见"热重载"）
-```
-
-## Step 4 — 声明到 logics.json，让网页能配（`rk3588_yolo/src/logic/logics.json`）
-
-在该 logic 的 `params` 数组里加一条。**不加这条，网页就渲染不出这个输入框**（但参数本身仍可用，只是不能在 UI 改）。
+具体通道的参数值仍保存在运行配置中，但统一放入该通道的 `logic_parameters` 对象：
 
 ```json
-{ "name": "logic_dwell_alarm", "label": "停留报警", "report": "server", "params": [
-    { "key": "dwell_sec", "type": "int", "label": "停留秒数", "default": 3, "min": 1, "max": 60,
-      "help": "目标在 ROI 内连续停留超过此秒数即报警" }
-] }
+{
+  "id": 0,
+  "logic": "logic_person_dwell",
+  "logic_parameters": {
+    "dwell_sec": 8,
+    "overlay_enabled": true
+  }
+}
 ```
 
-`param` 字段：
+“增加参数定义/修改 C++ 代码”需要重新编译和部署；部署完成后，“修改参数值”才是 Web 热重载，不需要再次编译。
 
-| 字段                     | 必填      | 说明                                              |
-| ---------------------- | ------- | ----------------------------------------------- |
-| `key`                  | ✓       | **必须等于 ChannelConfig 字段名**（四处对齐）                |
-| `type`                 | ✓       | `int`/`float`/`string`/`bool`/`enum`/`text`（多行） |
-| `label`                |         | 网页显示的中文名（缺省用 key）                               |
-| `default`              |         | 默认值（切到该 logic 时自动填）                             |
-| `min` / `max`          |         | 数字范围（int/float）                                 |
-| `options`              | enum 必填 | 下拉选项数组，如 `["low","high"]`                       |
-| `help` / `placeholder` |         | 提示文字                                            |
+## 参数应该放在哪里
 
-**网页这边怎么生效的（机制，便于排查）**：编辑器逻辑节点(`NodeConfigPanel` 的 `LogicForm`)调 `/apps/{name}/logics` 拿到 logics.json → 按 `param.type` 动态渲染控件（int/float→数字框，bool→勾选，enum→下拉，text→多行）→ 用户改的值存在逻辑节点上 → 保存时 `graphToConfig` 把这些参数写进该通道的 `config.json` → 重载回显由 `configToGraph` 还原。**前端不需要为新参数改任何代码**，加一条 logics.json 声明即可。
+不要把所有变量都放进 `logic_parameters`。先判断它属于哪一层：
 
----
-
-## 每通道一份：同名不同值，谁都能读但读到的是自己那份
-
-- **字段定义一次，值每通道独立**：`AppConfig` 里是 `std::vector<ChannelConfig> channels`，每通道一个 `ChannelConfig`。你在 `config.h` 写**一次** `dwell_sec`，物理上 `channels[0].dwell_sec`、`channels[1].dwell_sec` 就是两块内存——**同名、各通道一份独立的值**。每通道的值来自它自己 config.json 的设置；没设的通道用结构体默认值。
-- **任何 logic 都能读 `ctx->config->dwell_sec`，但读到的恒为"本通道那一份"**：字段在每个通道的 config 上都存在，所以哪怕某 logic 用不上也能合法读取；但 `ctx->config` 只指向本通道——通道 1 读 `ctx->config->dwell_sec` 拿到的是通道 1 自己的值（没配就是默认值），**不是某个"专门用它的通道"的值**。`ctx->config` **没有**读别的通道配置字段的能力。想跨通道共享同一个值，要么每个通道 config.json 都写，要么做成全局字段（`AppConfig` 全局 + 加载时下发到各通道）。
-- **现成例子**：`radius`（`config.h`）只被 `logic_hook`/`logic_roll` 用，却是**每个通道都有**的字段；别的通道/逻辑读 `ctx->config->radius` 只会拿到默认值、用不上而已——定义一次、个别逻辑用、其余通道默认值闲置，完全正常，不浪费也不串台。
-
-### 配置参数 vs 运行时状态：变量 A 该放哪？
-
-| A 的性质 | 放哪 | 读写 |
+| 数据性质 | 正确位置 | 读取方式 |
 |---|---|---|
-| 用户设的**只读**参数（半径 / 阈值 / 停留秒数…） | `ChannelConfig` 字段，读 `ctx->config->A` | 只读（`ctx->config` 是 `const`，**别往里写**） |
-| 逻辑运行中**自己更新**的状态（计数 / 计时 / 闩锁 / 去重表…） | `ctx->state`（每通道一格 `shared_ptr`） | 可读可写 |
+| 某个 logic 独有的只读业务参数，例如停留秒数、报警阈值、显示开关 | 模块 `logic.json → parameters` | `ctx->param_*()` |
+| 视频流和通道天然具有的信息，例如源分辨率、FPS、URL、USB 规格 | `ChannelContext` / `ChannelConfig` 公共字段 | `ctx->src_width`、`ctx->config->stream` 等 |
+| 逻辑运行中会变化的计数、计时、闩锁、去重集合 | 每通道 `ctx->state` | logic 自己读写 |
+| 显示、模型、stream、ROI、上报策略等系统配置 | 现有公共配置和专用更新链路 | 使用现有 `ctx`/配置 API |
 
-> 把"逻辑要改的值"放进 ChannelConfig 是错的：① `ctx->config` 只读；② 热重载 `sync_fields` 会用 config.json 的值把它**覆盖回去**。两者都天然每通道独立，按"只读配置 / 可写状态"二选一，且都不要用 `static`。
+`logic_parameters` 是“模块专有、用户可配置、运行时只读”的参数表，不是逻辑状态容器，也不是系统公共配置的替代品。
 
----
+## 整条数据链
 
-## 热重载：为什么改了值不用重启（这是关键，也几乎免费）
+```text
+模块 logic.json + REGISTER_LOGIC(logic_func)
+  ├─ 构建期校验：函数注册、参数键、访问器类型、默认值和范围
+  ├─ 生成最小 C++ Schema → 嵌入可执行文件
+  │    └─ 启动/热重载时校验配置并生成类型化不可变参数表
+  └─ 正常打包时生成 App 根目录 logics.json
+       └─ Web 后端读取 → 前端自动渲染控件
 
-`config_monitor_thread_func`（`rk3588_yolo/src/core/app_ctrl.cpp`）是一条常驻线程，轮询 `config.json` 的 mtime；文件变化并稳定后，重新解析成 `new_cfg`，然后在**写锁内**调：
+Web 保存当前运行配置
+  └─ channels[].logic_parameters
+       └─ C++ 配置监控线程检测文件变化
+            ├─ 校验失败：拒绝新配置，继续使用旧运行快照
+            └─ 校验成功：按 x-hot-reload 策略原子发布新快照
+                 └─ 下一次 logic 调用通过 ctx->param_*() 取得新值
+```
+
+JSON 只在启动或热重载时解析，不在逐帧 logic 中重复解析。
+
+## 完整示例：新增人员停留逻辑
+
+### 1. 创建模块目录
+
+```text
+rk3588_yolo/src/logic/modules/logic_person_dwell/
+├── logic.cpp
+└── logic.json
+```
+
+一个模块对应一种逻辑类型，不对应一个实际视频通道。多个通道可以选择同一模块，每个通道拥有独立的参数值和 `ctx->state`。
+
+### 2. 在 logic.json 声明参数
+
+```json
+{
+  "label": "人员停留报警",
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "dwell_sec": {
+        "type": "number",
+        "title": "滞留时间",
+        "description": "人员连续停留达到该时间后报警。",
+        "minimum": 0.5,
+        "maximum": 300,
+        "default": 5,
+        "x-step": 0.5,
+        "x-unit": "秒",
+        "x-hot-reload": "reset_state"
+      },
+      "overlay_enabled": {
+        "type": "boolean",
+        "title": "显示状态文字",
+        "description": "是否在实时画面显示累计停留时间。",
+        "default": true,
+        "x-hot-reload": "preserve_state"
+      }
+    }
+  },
+  "report_fields": []
+}
+```
+
+硬性规则：
+
+- `parameters.type` 必须是 `"object"`；
+- `additionalProperties` 必须是 `false`，防止拼错参数名后静默运行；
+- 每个参数必须有与类型匹配的 `default`；
+- 源 `logic.json` 不写 `name`；`REGISTER_LOGIC(logic_person_dwell)` 会把函数名自动生成为外部 logic ID；
+- 一个模块必须且只能注册一次自己的通道 logic。
+
+### 3. 在同目录 C++ 中读取
 
 ```cpp
-g_cfg_reg.sync_fields(&ctrl->config.channels[i], &new_cfg.channels[i], false);
+#include "logic/core/logic_common.h"
+
+#include <memory>
+
+struct PersonDwellState
+{
+    float elapsed_sec = 0.0f;
+    bool alarmed = false;
+};
+
+static void logic_person_dwell(ChannelContext *ctx)
+{
+    if (!ctx || !ctx->state || !ctx->frame)
+        return;
+
+    if (!*ctx->state)
+        *ctx->state = std::make_shared<PersonDwellState>();
+    auto &state = *std::static_pointer_cast<PersonDwellState>(*ctx->state);
+
+    const float dwell_sec = ctx->param_float("dwell_sec");
+    const bool overlay_enabled = ctx->param_bool("overlay_enabled");
+
+    const bool person_present = ctx->has_target("person") != 0;
+    if (person_present)
+        state.elapsed_sec += ctx->dt_ms / 1000.0f;
+    else
+    {
+        state.elapsed_sec = 0.0f;
+        state.alarmed = false;
+    }
+
+    if (overlay_enabled)
+    {
+        draw_text(ctx,
+                  ("dwell=" + std::to_string(state.elapsed_sec)).c_str(),
+                  cv::Point(20, 30), cv::Scalar(0, 255, 255), 0.7, 2);
+    }
+
+    if (!state.alarmed && state.elapsed_sec >= dwell_sec)
+    {
+        state.alarmed = true;
+        // 在这里调用 report_alarm() 或执行该逻辑需要的快速状态变更。
+    }
+}
+
+REGISTER_LOGIC(logic_person_dwell);
 ```
 
-`sync_fields` 会把**注册表里所有 REG_C 字段**的新值，按偏移逐个拷进**正在运行的** `ctrl->config.channels[i]`。所以：
+参数访问器与 Schema 类型的推荐对应关系：
 
-> **只要你用 REG_C 注册了字段，它就自动参与热重载。** 用户在网页改 `dwell_sec` 保存 → config.json 变 → 监控线程 sync_fields → 你的逻辑**下一帧** `ctx->config->dwell_sec` 读到的就是新值。你**不需要写任何 reload 回调**。
+| Schema 类型 | C++ 访问器 | 返回值 |
+|---|---|---|
+| `number` | `ctx->param_float("key")` | `float` |
+| `integer` | `ctx->param_int("key")` | `int64_t` |
+| `boolean` | `ctx->param_bool("key")` | `bool` |
+| `string` | `ctx->param_string("key")` | `std::string` |
+| 字符串 `enum` | `ctx->param_string("key")` | `std::string` |
+| `array` / `object` | `ctx->param_json("key")` | 紧凑 JSON 字符串 |
 
-### 唯一要遵守的读取约定
+`ctx->has_param("key")` 可以检查键是否存在。由于每个 Schema 属性都有默认值，正常解析后声明过的键都会存在。
 
-**每帧从 `ctx->config->key` 现读**，不要在逻辑外/`ctx->state` 里缓存一份参数值——否则热重载更新了 `ctx->config`，你读的还是旧缓存。把参数当"每帧问一次配置"来用。
+构建生成器会扫描模块 `.cpp/.cc/.cxx/.h/.hpp` 中使用字符串字面量的 `param_*()` 调用。例如把 `dwell_sec` 错写成 `dwlel_sec`，或者用 `param_bool()` 读取 `number`，构建会直接失败。通过变量动态拼出的键无法做这项静态校验，因此业务代码应优先使用字符串字面量。
 
-### 哪些不走这套自动热重载（例外，写参数时要知道）
+### 4. 在通道配置中选择逻辑
 
-| 改了什么                                       | 怎么热重载的                                             |
-| ------------------------------------------ | -------------------------------------------------- |
-| REG_C 注册的普通参数（你加的就是这类）                     | **自动**，sync_fields 热拷，下一帧生效                        |
-| `model_path`/`model_type`/`label_path`     | 监控线程检测到 → `algorithm_reload_channel_model` 热换模型    |
-| `obj_thresh`/`nms_thresh`/`detect_classes` | 热更新到推理引擎                                           |
-| 通道的 `logic` 名                              | 热切换逻辑函数 + 重置该通道 logic_state                        |
-| `stream`（src_type/url/device/usb_width…）   | 不在注册表，监控线程单独比对、必要时重启解码器                            |
-| **ROI（roi_zones.json）**                    | **不热重载**——只在程序启动 `load_roi_zones` 时读。改 ROI 必须停止再启动 |
+```json
+{
+  "id": 0,
+  "enable": true,
+  "logic": "logic_person_dwell",
+  "logic_parameters": {
+    "dwell_sec": 8,
+    "overlay_enabled": true
+  }
+}
+```
 
----
+也可以省略具体参数：
 
-## 完整示例：给 logic_dwell_alarm 加"停留秒数"
+```json
+{
+  "logic": "logic_person_dwell",
+  "logic_parameters": {}
+}
+```
 
-1. `config.h`：`int dwell_sec = 3;`
-2. `config_init.cpp`：`REG_C("dwell_sec", INT, dwell_sec);`
-3. 逻辑里：`int dwell = ctx->config ? ctx->config->dwell_sec : 3;`（每帧读）
-4. `logics.json`：在 `logic_dwell_alarm` 的 `params` 加上面那条 `dwell_sec` 声明。
-5. 编译装包 → 网页该通道逻辑节点就多出"停留秒数"输入框；改它保存，运行中即时生效，无需重启。
+C++ 会按 Schema 补成 `dwell_sec=5`、`overlay_enabled=true`。配置源文件不一定被反向重写，但运行快照中的值一定已经补全并通过类型校验。“未填写默认值”和“显式填写同一个默认值”在热重载比较中视为没有变化。
 
-## 坑
+## Schema 支持的字段
 
-- **key 不对齐**：四处任意一处拼错，要么网页改了 C++ 读不到，要么解析不出——先核对四处字符串完全一致。
-- **缓存了参数值**：在逻辑里把 `ctx->config->dwell_sec` 存进 `static` 或 `ctx->state` 只读一次 → 热重载失效。每帧现读。
-- **忘了 logics.json**：参数能用、能热重载，但网页上没有它的输入框（只能手改 config.json）。要网页可配就必须加声明。
-- **类型不匹配**：REG_C 用 `INT` 但 logics.json 写 `"type":"float"`，会出现取整/精度问题——保持一致。
-- **新参数没默认值**：ChannelConfig 字段一定给默认值，避免老配置（没这个键）解析后是随机值。
+### 基础类型和校验
+
+| 字段 | 说明 |
+|---|---|
+| `type` | `string`、`number`、`integer`、`boolean`、`array`、`object` |
+| `default` | 必填；同时是 C++ 和 Web 的唯一默认值来源 |
+| `minimum` / `maximum` | `number`、`integer` 的运行时范围校验 |
+| `enum` | 当前支持字符串枚举；默认值必须在枚举中 |
+| `x-hot-reload` | `preserve_state`、`reset_state`、`restart_required` |
+
+整数被限制在 JSON/JavaScript 能精确表达的安全整数范围内。数值必须有限，`NaN` 和无穷大不合法。
+
+对于 `array`/`object`，当前框架校验外层容器类型并提供 JSON 文本；内部元素结构仍应由模块业务代码用 cJSON 等方式解析和校验。不要假设已经实现完整的递归 JSON Schema 校验。
+
+### Web 展示扩展
+
+| 字段 | 作用 |
+|---|---|
+| `title` | 控件中文名称；缺省显示参数 key |
+| `description` | 控件帮助文本 |
+| `x-placeholder` | 输入框占位提示 |
+| `x-step` | 数字输入步长，必须为正数 |
+| `x-unit` | 单位，例如“秒”“像素” |
+| `x-widget: "textarea"` | 将字符串显示为多行文本框 |
+| `x-ui-hidden: true` | 参数仍可在配置/C++ 中使用，但不在通用 Web 表单显示 |
+
+Web 会预先拦截数字越界、`integer` 输入小数以及 `array/object` 容器类型错误；C++ 仍是最终权威校验入口，手改 JSON 或旧前端写入的错误值同样会被拒绝。
+
+## 三种热重载策略
+
+### preserve_state
+
+```json
+"x-hot-reload": "preserve_state"
+```
+
+发布新参数值，保留当前 `ctx->state`。适合显示开关、颜色、文案，以及不改变已有累计状态含义的参数。没有显式填写 `x-hot-reload` 时默认使用此策略。
+
+### reset_state
+
+```json
+"x-hot-reload": "reset_state"
+```
+
+发布新参数值时，在通道处理安全点清空该通道的 logic 状态、旧结果、绘制命令和逻辑画布。下一帧会按新参数重新创建状态。适合状态机规则、累计时长阈值、路径规则等不应继续沿用旧状态的参数。
+
+### restart_required
+
+```json
+"x-hot-reload": "restart_required"
+```
+
+运行中的进程拒绝包含该参数变化的整次热更新，并继续使用旧运行快照；重启程序后才读取文件中的新值。适合依赖一次性资源初始化或无法安全在线替换的数据结构。
+
+注意：Web 保存成功只表示文件已经写入，不等于 C++ 一定采用了新值。若策略要求重启或校验失败，文件会保留新内容，但当前进程继续使用旧快照；应查看进程日志并在必要时修正配置。
+
+## 热重载实际发生了什么
+
+只有保存“当前进程正在使用的配置文件”才会触发该进程热重载。编辑另存的 `config_xxx.json` 不会影响正在使用另一份配置的进程。
+
+配置监控线程检测文件稳定后执行：
+
+1. 重新解析整份配置；
+2. 根据当前 logic 的内嵌 Schema 校验 `logic_parameters`；
+3. 拒绝未知键、重复键、错误类型、越界值和未知 logic；
+4. 补齐默认值；
+5. 按 JSON 语义比较旧值和新值，对象字段顺序变化不算参数变化；
+6. 计算所有变化参数中影响最高的热重载策略；
+7. 在任何模型或视频流副作用之前拒绝 `restart_required`；
+8. 构建包含 ChannelConfig、ROI 和类型化参数表的新不可变快照；
+9. 在通道处理安全点原子发布，必要时重置 logic 状态。
+
+因此一次逐帧调用看到的配置、ROI 和模块参数来自同一代快照，不会出现一半新、一半旧。
+
+## Web 为什么不需要为新参数写代码
+
+构建生成器将模块 Schema 投影成 Web 兼容参数元数据，其中生成字段 `storage: "logic_parameters"` 表示该值应放在嵌套对象中。前端通用表单根据类型自动生成：
+
+- 数字输入框；
+- 布尔开关；
+- 枚举下拉框；
+- 单行/多行字符串；
+- array/object JSON 编辑框。
+
+保存时 `graphToConfig` 统一写入：
+
+```json
+"logic_parameters": {
+  "dwell_sec": 8
+}
+```
+
+重新加载时 `configToGraph` 再还原到该逻辑节点。切换 logic 时，Web 会清掉旧模块的参数键，并使用新模块 Schema 的默认集合，避免把旧逻辑的未知键带给新逻辑。
+
+`logic_path_sop` 的历史 `path_*` 字段和专用流程编辑器暂时保留用于兼容旧配置；以后新增的普通 SOP 扩展参数也应使用本方案，它们会显示在 SOP 面板的“模块扩展参数”区域。
+
+## 构建、生成和部署
+
+### 只校验模块，不编译 C++
+
+```bash
+cd /userdata/sop_agent/rk3588_yolo
+python3 scripts/generate_logics_catalog.py --check
+```
+
+### 板端 debug 构建
+
+```bash
+./build.sh --debug
+```
+
+CMake 会重新发现模块 `.cpp/.cc/.cxx`，校验 manifests，并把最小运行时 Schema 编进可执行文件。直接在板端运行该二进制不依赖外部 `logics.json`。
+
+### 正常打包给 Web 使用
+
+```bash
+./build.sh my_app_package
+```
+
+除嵌入式 Schema 外，正常打包还会自动生成：
+
+```text
+my_app_package/logics.json
+```
+
+该文件包含 Web 所需的逻辑标签、参数控件、动作和上报字段。它是生成物，不要手工维护。修改源模块时只改对应 `logic.json`。
+
+若手工部署或开发调试 Web，可显式生成到目标 App 根目录：
+
+```bash
+python3 scripts/generate_logics_catalog.py \
+  --output /目标/App/目录/logics.json
+```
+
+可执行文件和 `logics.json` 应来自同一次源码版本并一起部署。如果 Web 清单比正在运行的二进制新，Web 可能允许填写新参数，但旧二进制会把它当作未知键拒绝。
+
+二进制的 `--list-logics` 只用于列出实际编译注册的逻辑名；它不能代替包含完整参数表单信息的 `logics.json`。
+
+## 公共视频流参数和绘制仍然怎么用
+
+模块参数改造没有取消 `ChannelContext` 的公共字段和绘图接口。
+
+```cpp
+const int source_width = ctx->src_width;        // 实际解码源宽度
+const int source_height = ctx->src_height;      // 首帧前可能为 0
+const int logic_width = ctx->frame->cols;       // logic/模型坐标系宽度
+const int logic_height = ctx->frame->rows;
+
+const StreamConfig &stream = ctx->config->stream;
+const std::string &src_type = stream.src_type;
+const std::string &url = stream.url;
+const int usb_width = stream.usb_width;
+const int usb_height = stream.usb_height;
+```
+
+`draw_rect()`、`draw_text()`、`draw_line()`、多边形绘制和 `ctx->display_canvas()` 均继续使用。检测框、ROI 和绘图坐标使用 `ctx->frame` 的模型输入坐标系，不要直接用 `src_width/src_height` 当绘图坐标。完整公共 API 见 [channelcontext-api.md](channelcontext-api.md)。
+
+## 真实参考实现
+
+当前按钮演示逻辑已经使用这套参数体系：
+
+- Schema：`rk3588_yolo/src/logic/modules/logic_button_demo/logic.json`；
+- C++ 调用：`rk3588_yolo/src/logic/modules/logic_button_demo/logic.cpp`；
+- 通道配置示例：`rk3588_yolo/assets/config_button.json`；
+- 通用解析器：`rk3588_yolo/src/logic/core/logic_parameters.h/.cpp`；
+- 构建生成器：`rk3588_yolo/scripts/generate_logics_catalog.py`；
+- 热重载入口：`rk3588_yolo/src/core/app_ctrl.cpp`；
+- Web 表单：`web_console/frontend/src/components/NodeConfigPanel.tsx`；
+- Web 配置转换：`web_console/frontend/src/utils/configToGraph.ts`、`graphToConfig.ts`。
+
+## 开发检查清单
+
+新增逻辑：
+
+- [ ] 新建 `src/logic/modules/logic_xxx/`；
+- [ ] `REGISTER_LOGIC(logic_xxx)` 只传入入口函数，源 `logic.json` 不包含 `name`；
+- [ ] `parameters` 是禁止额外键的 object Schema；
+- [ ] 每个属性都有正确类型的默认值；
+- [ ] 为每个参数选择合理的热重载策略；
+- [ ] C++ 使用与 Schema 类型匹配的 `ctx->param_*()`；
+- [ ] 运行状态只放 `ctx->state`，不写回参数；
+- [ ] 运行 `generate_logics_catalog.py --check`；
+- [ ] 重新构建，并把二进制与生成的 `logics.json` 一起部署给 Web。
+
+给现有逻辑增加参数：
+
+- [ ] 只在该模块 `logic.json` 增加属性；
+- [ ] 只在该模块 C++ 中调用；
+- [ ] 不增加新的 `ChannelConfig`/`REG_C` 中央字段；
+- [ ] 不手改生成后的 `logics.json`；
+- [ ] 更新二进制和 Web 清单后，再测试参数值热重载。
+
+## 常见问题排查
+
+### Web 看不到新参数
+
+1. 检查实际 App 根目录的 `logics.json` 是否来自最新打包；
+2. 检查参数是否被设置了 `x-ui-hidden: true`；
+3. 刷新页面或重新打开该 App，使前端重新请求 `/apps/{name}/logics`；
+4. 不要只更新二进制而漏掉 `logics.json`。
+
+### 保存后 C++ 没采用新值
+
+1. 确认保存的是进程当前使用的配置文件；
+2. 查看日志是否提示类型错误、越界、未知参数或重复键；
+3. 查看该参数是否声明为 `restart_required`；
+4. 确认运行二进制和 Web `logics.json` 来自同一版本；
+5. 配置文件即使保存成功，C++ 拒绝后仍会继续使用旧快照。
+
+### 构建提示 param_* 没有 Schema
+
+检查参数 key 是否完全一致，以及访问器类型是否匹配。参数必须声明在调用它的同一个模块目录的 `logic.json` 中，不能依赖另一个模块的专有 Schema。
+
+### 修改阈值后状态表现不合理
+
+如果旧的累计时长、闩锁或状态机不能继续沿用，应把策略从 `preserve_state` 改为 `reset_state`。不要在 `ctx->state` 中缓存一份参数来绕开热重载。
+
+### 参数属于视频流、模型或显示设置
+
+不要复制成模块参数。先使用 `ctx->config`、`ctx->src_width/height`、`ctx->infer_fps/disp_fps` 等公共接口；只有当前公共上下文确实缺少所有 logic 都需要的运行信息时，才考虑扩展一次公共 `ChannelContext`。

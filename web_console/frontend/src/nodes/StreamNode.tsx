@@ -10,7 +10,7 @@ export default function StreamNode({ data, selected }: NodeProps) {
   const srcType = getSrcType(d)
   const chId    = d.channel_id != null ? Number(d.channel_id) : 0
   const addr    = srcType === 'usb'
-    ? String(d.device ?? '/dev/video0')
+    ? String(d.device ?? '/dev/video81')
     : String(d.url    ?? '（未配置地址）')
   const color = srcType ? (TYPE_COLORS[srcType] ?? '#6b7280') : '#ef4444'
 
