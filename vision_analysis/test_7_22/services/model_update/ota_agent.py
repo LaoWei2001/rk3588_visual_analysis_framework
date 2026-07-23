@@ -10,16 +10,16 @@ import uuid
 
 # ================= 配置区 =================
 # 资产目录: 优先用环境变量 ASSETS_DIR, 未设置时自动检测
-#   源目录调试: ASSETS_DIR 未设置 → 自动找到 ../../rk3588_yolo/assets
+#   源目录调试: ASSETS_DIR 未设置 → 自动找到 ../../vision_analysis/assets
 #   dist 部署:   ASSETS_DIR 由启动脚本设置为 dist/assets
 def _resolve_assets_dir():
     env_dir = os.environ.get("ASSETS_DIR", "")
     if env_dir:
         return os.path.abspath(env_dir)
-    # 自动检测: 从 service/model_update/ 向上到项目根, 再找 rk3588_yolo/assets
+    # 自动检测: 从 service/model_update/ 向上到项目根, 再找 vision_analysis/assets
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    # 源目录: service/model_update/../../rk3588_yolo/assets
-    candidate = os.path.normpath(os.path.join(script_dir, "..", "..", "rk3588_yolo", "assets"))
+    # 源目录: service/model_update/../../vision_analysis/assets
+    candidate = os.path.normpath(os.path.join(script_dir, "..", "..", "vision_analysis", "assets"))
     if os.path.isdir(candidate):
         return candidate
     # dist 部署降级: dist/services/model_update/../../assets = dist/assets

@@ -42,7 +42,7 @@
 
 | 范围 | 当前职责 |
 |---|---|
-| `rk3588_yolo/` | C++ 采集、推理、通道/全局 logic、绘制、录像和本地告警事件 |
+| `vision_analysis/` | C++ 采集、推理、通道/全局 logic、绘制、录像和本地告警事件 |
 | `web_console/` | Web 编辑器、配置序列化、应用进程管理、实时画面和后台服务控制 |
 | `service/upload/` | 消费 `alarm_store` 持久化发件箱并投递到业务服务器或 Dify |
 | `service/model_update/` | 模型更新与 OTA 服务 |
@@ -60,7 +60,7 @@ C++ logic 不直接做 HTTP，不使用旧 Redis 报警队列，也不在 logic 
 
 ### 3.2 当前通道逻辑模块
 
-通道逻辑位于 `rk3588_yolo/src/logic/modules/<module_dir>/`，每个模块由 C++ 入口和 `logic.json` 共同定义。`REGISTER_LOGIC(logic_xxx)` 中的 C++ 函数名是唯一 logic ID；构建器自动把它写入 Web 清单。当前正式模块为：
+通道逻辑位于 `vision_analysis/src/logic/modules/<module_dir>/`，每个模块由 C++ 入口和 `logic.json` 共同定义。`REGISTER_LOGIC(logic_xxx)` 中的 C++ 函数名是唯一 logic ID；构建器自动把它写入 Web 清单。当前正式模块为：
 
 | 注册名 | 示例说明 |
 |---|---|
@@ -113,13 +113,13 @@ C++ logic 不直接做 HTTP，不使用旧 Redis 报警队列，也不在 logic 
 在具备对应依赖的开发环境中按改动范围执行：
 
 ```bash
-cd /userdata/sop_agent/rk3588_yolo
+cd /userdata/sop_agent/vision_analysis
 
 # 检查 manifest、函数注册、参数 Schema 和访问器
 python3 scripts/generate_logics_catalog.py --check
 
 # 编译后核对二进制中的真实注册名
-./rk3588_yolo --list-logics
+./vision_analysis --list-logics
 ```
 
 构建、安装、前端检查和告警链路验收命令，请继续进入相应 `SKILL.md`，不要把“清单校验通过”当成完整运行验收。

@@ -15,7 +15,7 @@ set -e
 
 PROJECT_DIR=$(cd "$(dirname "$0")"; pwd)
 REPO_ROOT=$(dirname "$PROJECT_DIR")
-TARGET="rk3588_yolo"
+TARGET="vision_analysis"
 
 # --- 默认配置 ---
 OUT_NAME=""          # 输出目录名, 由命令行传入 (--debug 模式无需指定)
@@ -144,7 +144,7 @@ if [ "$MODE" = "docker" ]; then
         -e HOST_GID=$(id -g) \
         "$IMAGE_NAME" bash << 'DOCKER_CMD'
 set -e
-TARGET="rk3588_yolo"
+TARGET="vision_analysis"
 DIST="${DIST_NAME:-dist}"   # 由宿主机 -e DIST_NAME 传入(单引号 heredoc, 在容器内展开)
 
 echo "  [cmake] 配置交叉编译工具链..."
@@ -317,7 +317,7 @@ sed -i 's/"enable_display"[ \t]*:[ \t]*[a-zA-Z0-9_"]*/"enable_display": 1/' "$CO
 ABS_PATH=$(cd "$(dirname "$0")"; pwd)
 export LD_LIBRARY_PATH="$ABS_PATH/libs:$LD_LIBRARY_PATH"
 export ASSETS_DIR="$ABS_PATH/assets"
-exec "$ABS_PATH/rk3588_yolo" "$CONFIG_PATH"
+exec "$ABS_PATH/vision_analysis" "$CONFIG_PATH"
 RUN_EOF
 chmod +x "$DIST_DIR/run.sh"
 
@@ -398,7 +398,7 @@ Type=simple
 WorkingDirectory=$ABS_PATH
 Environment=ASSETS_DIR=$ABS_PATH/assets
 Environment="LD_LIBRARY_PATH=$ABS_PATH/libs:/usr/lib:/usr/local/lib"
-ExecStart=$ABS_PATH/rk3588_yolo $CONFIG_PATH
+ExecStart=$ABS_PATH/vision_analysis $CONFIG_PATH
 Restart=always
 RestartSec=5
 User=root

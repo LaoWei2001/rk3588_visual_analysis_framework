@@ -1,6 +1,6 @@
 # logic_upload_teach — 统一图片/视频上报教学示例
 
-- 源码：`rk3588_yolo/src/logic/modules/logic_upload_teach/logic.cpp`
+- 源码：`vision_analysis/src/logic/modules/logic_upload_teach/logic.cpp`
 - 模块清单：同目录 `logic.json`
 - 事件类型：`upload_teach_demo`
 - 触发方式：Web 动作“立即生成教学事件”

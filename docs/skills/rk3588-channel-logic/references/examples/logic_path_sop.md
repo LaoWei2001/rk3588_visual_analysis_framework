@@ -1,6 +1,6 @@
 # logic_path_sop — 目标路径/SOP 合规检测
 
-- 源码：`rk3588_yolo/src/logic/modules/logic_path_sop/logic.cpp`
+- 源码：`vision_analysis/src/logic/modules/logic_path_sop/logic.cpp`
 - 配置入口：Web SOP 子画布
 - 注册：`REGISTER_LOGIC(logic_path_sop)` 和 `REGISTER_LOGIC_ACTION(logic_path_sop, ...)`
 

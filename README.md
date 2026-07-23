@@ -2,7 +2,7 @@
 
 本项目面向 RK3588 边缘设备的多路视频分析平台，提供视频采集、RKNN 推理、目标跟踪、业务逻辑扩展、可视化配置、事件录像、可靠上报、模型 OTA 和远程运维能力。
 
-项目仓库配有演示基本功能的demo便于二次开发者了解框架基本功能的构建。
+项目仓库配有演示基本功能的demo便于二次开发者了解框架基本功能的构建过程。
 
 项目由三层组成：
 
@@ -11,6 +11,11 @@
 - **业务应用**：通过 `logic_xxx` 模块和 JSON 配置构建的具体分析方案，仓库默认提供 SOP 路径合规检测应用。
 
 > 本项目不是通用的任意DAG（有向无环图）工作流引擎。Web 画布用于编排视频源、模型、ROI、业务逻辑和上报等固定角色，运行时将其转换为稳定的多通道分析管线。
+  
+本项目受到 GNU 计划与自由软件运动的启发，并向所有长期致力于软件自由、知识共享与技术公共化的开发者致敬。如果本项目对你有所帮助，欢迎为仓库点亮一颗⭐。这不仅是对项目的认可，也能帮助更多开发者发现、使用和推广这个项目。我们相信，软件不应只是封闭的工具，也应当成为可以被学习、理解、改进和传播的公共知识。开放源代码的意义，不仅在于可以让任何人出于任何目的使用软件，更在于让技术成果能够接受时间检验、持续演进，并服务更多的人。本项目希望在嵌入式视觉、边缘计算与人工智能应用领域，尽可能提供清晰、透明且可复现的实现，使开发者能够自由地研究代码、改进功能，并将有价值的成果继续传递下去。
+
+如有任何疑问或建议，请联系作者Sunny_Wei。Email：1927096839@qq.com。  
+祝朋友们编程愉快！ Happy coding :-)
 
 ## 核心能力
 
@@ -120,7 +125,7 @@ GStreamer appsink
 
 ```text
 .
-├── rk3588_yolo/                 # C++ 视觉分析运行框架与默认应用
+├── vision_analysis/             # C++ 视觉分析运行框架与默认应用
 │   ├── assets/                  # RKNN 模型、标签和示例配置
 │   ├── scripts/                 # logic 清单生成与一致性校验
 │   ├── src/
@@ -195,9 +200,9 @@ Rockchip RKNN/RGA 的头文件和运行库通常由板卡 BSP、系统镜像或�
 ### 3. 板端调试构建
 
 ```bash
-cd rk3588_yolo
+cd vision_analysis
 ./build.sh --debug
-./rk3588_yolo ./assets/config_sop.json
+./vision_analysis ./assets/config_sop.json
 ```
 
 `--debug` 只生成可执行文件，不创建完整应用包。默认示例配置是 SOP 路径合规检测，请根据设备修改视频源、模型和标签路径。
@@ -205,7 +210,7 @@ cd rk3588_yolo
 ### 4. 构建发布包
 
 ```bash
-cd rk3588_yolo
+cd vision_analysis
 ./build.sh dist
 ```
 
@@ -214,9 +219,9 @@ cd rk3588_yolo
 - AArch64/ARM：在板端原生编译；
 - x86_64：使用配置好的 `rk3588_builder` Docker 交叉编译镜像。
 
-发布目录 `rk3588_yolo/dist/` 包含：
+发布目录 `vision_analysis/dist/` 包含：
 
-- `rk3588_yolo` 可执行程序；
+- `vision_analysis` 可执行程序；
 - `assets/` 模型、标签和配置；
 - `logics.json` Web 能力清单；
 - `services/upload` 和 `services/model_update`；
@@ -225,7 +230,7 @@ cd rk3588_yolo
 前台运行发布包：
 
 ```bash
-cd rk3588_yolo/dist
+cd vision_analysis/dist
 bash setup_python.sh
 bash run.sh ./assets/config_sop.json
 ```
@@ -233,7 +238,7 @@ bash run.sh ./assets/config_sop.json
 注册为 systemd 服务：
 
 ```bash
-cd rk3588_yolo/dist
+cd vision_analysis/dist
 bash deploy.sh ./assets/config_sop.json
 ```
 
@@ -255,7 +260,7 @@ http://<RK3588-IP>:8080
 控制台默认从 `/opt/ai_apps/` 扫描应用包。将刚构建的应用包安装到控制台：
 
 ```bash
-cd rk3588_yolo
+cd vision_analysis
 sudo ./install_app.sh dist
 ```
 
@@ -315,7 +320,7 @@ sudo ./install_app.sh dist
 每个通道逻辑由一个 C++ 入口和一个模块清单组成：
 
 ```text
-rk3588_yolo/src/logic/modules/logic_people_count/
+vision_analysis/src/logic/modules/logic_people_count/
 ├── logic.cpp
 └── logic.json
 ```
@@ -439,14 +444,14 @@ channel logic
 校验所有 logic 注册、模块清单、参数 Schema 和 C++ 参数访问器：
 
 ```bash
-cd rk3588_yolo
+cd vision_analysis
 python3 scripts/generate_logics_catalog.py --check
 ```
 
 编译后查看二进制实际注册的通道逻辑：
 
 ```bash
-./rk3588_yolo --list-logics
+./vision_analysis --list-logics
 ```
 
 构建 Web 前端：

@@ -7,7 +7,7 @@
 每种通道逻辑位于一个独立模块目录：
 
 ```text
-rk3588_yolo/src/logic/modules/<module_dir>/
+vision_analysis/src/logic/modules/<module_dir>/
 ├── logic.cpp
 ├── logic.json
 └── ...
@@ -108,7 +108,7 @@ App 根目录 logics.json
 可以不编译 C++，单独执行：
 
 ```bash
-cd /userdata/sop_agent/rk3588_yolo
+cd /userdata/sop_agent/vision_analysis
 python3 scripts/generate_logics_catalog.py --check
 ```
 

@@ -4,7 +4,7 @@
 
 业务 logic 只负责判断“发生了什么事件”，并调用统一入口 `report_alarm()`。保存图片还是事件视频、媒体上叠加哪些信息、投递到哪个 Profile、字段如何映射，均由 Web 画布生成的 `report_policy` 决定。
 
-权威接口位于 `rk3588_yolo/src/alarm/alarm_report.h`：
+权威接口位于 `vision_analysis/src/alarm/alarm_report.h`：
 
 ```cpp
 std::string report_alarm(ChannelContext *ctx,
@@ -166,7 +166,7 @@ draw_text(ctx, "报警", {20, 50}, cv::Scalar(0, 0, 255),
 
 ### 1. 实现并注册
 
-新建 `rk3588_yolo/src/logic/modules/logic_xxx/logic.cpp`：
+新建 `vision_analysis/src/logic/modules/logic_xxx/logic.cpp`：
 
 ```cpp
 #include "logic/core/logic_common.h"
@@ -233,4 +233,4 @@ Schema 同时提供 C++ 默认值/范围校验、Web 控件和热重载策略。
 - Web 看不到新 logic：检查已安装 App 根目录的 `logics.json`，不要只修改源码目录副本；
 - logic 不执行：核对 `REGISTER_LOGIC()` 的函数名、生成 `logics.json` 的名称和通道 `logic` 配置。
 
-学习完整媒体分层和多投递时使用 `rk3588_yolo/src/logic/modules/logic_upload_teach/logic.cpp`，对应 [logic_upload_teach.md](examples/logic_upload_teach.md)；实现真实 ROI 进入报警时再参考 `logic_upload/logic.cpp` 和 [logic_upload.md](examples/logic_upload.md)。
+学习完整媒体分层和多投递时使用 `vision_analysis/src/logic/modules/logic_upload_teach/logic.cpp`，对应 [logic_upload_teach.md](examples/logic_upload_teach.md)；实现真实 ROI 进入报警时再参考 `logic_upload/logic.cpp` 和 [logic_upload.md](examples/logic_upload.md)。

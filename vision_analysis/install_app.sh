@@ -8,7 +8,7 @@
 # 交互式脚本，故不使用 set -e。
 
 APPS_ROOT="${APPS_ROOT:-/opt/ai_apps}"
-TARGET="rk3588_yolo"
+TARGET="vision_analysis"
 PROJECT_DIR="$(cd "$(dirname "$0")"; pwd)"
 
 PKG="$1"

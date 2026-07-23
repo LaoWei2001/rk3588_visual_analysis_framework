@@ -26,7 +26,7 @@ from services import runtime_state
 from services.app_scanner import scan_apps
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
-BINARY_NAME = os.environ.get("BINARY_NAME", "rk3588_yolo")
+BINARY_NAME = os.environ.get("BINARY_NAME", "vision_analysis")
 
 router = APIRouter()
 

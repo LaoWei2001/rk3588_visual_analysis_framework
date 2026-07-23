@@ -1,8 +1,8 @@
-# rk3588_yolo 当前架构图
+# vision_analysis 当前架构图
 
-> 配套说明：[rk3588_yolo_系统说明文档.md](rk3588_yolo_系统说明文档.md)
+> 配套说明：[vision_analysis_系统说明文档.md](vision_analysis_系统说明文档.md)
 
-本文只描述当前 `rk3588_yolo/src/` 实现。图中 C++ 数组旁的 `ch/slot` 指内部运行槽位；
+本文只描述当前 `vision_analysis/src/` 实现。图中 C++ 数组旁的 `ch/slot` 指内部运行槽位；
 HTTP、Socket、告警清单和 `ctx->chnId` 中的 `channel_id` 均指 `config.channels[].id`。
 
 ## 1. 总体模块图
@@ -19,7 +19,7 @@ HTTP、Socket、告警清单和 `ctx->chnId` 中的 `channel_id` 均指 `config.
  └───────────────┬───────────────────────────────┬─────────────────────┘
                  │ config.json                   │ Unix Socket
                  ▼                               ▼
- ┌──────────────────────── rk3588_yolo process ────────────────────────┐
+ ┌──────────────────────── vision_analysis process ────────────────────┐
  │                                                                    │
  │  config/ + core/                   control/channel_control          │
  │  ├─ 配置解析                       ├─ 系统动作                       │
@@ -215,7 +215,7 @@ logic draw_*()
   → Web 获取当前 logic 的 actions
   → 用户点击按钮
   → POST 控制 API
-  → backend 连接 rk3588_yolo Unix Socket
+  → backend 连接 vision_analysis Unix Socket
   → channel_control 解析请求
        ├─ 系统动作：直接执行上下线/重连等操作
        └─ 业务动作：记录 channel_id + logic_name + action + payload

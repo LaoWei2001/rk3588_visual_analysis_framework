@@ -67,7 +67,7 @@ App 启动
 
 ## 按钮声明：模块 `logic.json`
 
-在 `rk3588_yolo/src/logic/modules/logic_xxx/logic.json` 中增加 `actions`：
+在 `vision_analysis/src/logic/modules/logic_xxx/logic.json` 中增加 `actions`：
 
 ```json
 {
@@ -469,18 +469,18 @@ C++ 关键日志格式：
 
 | 文件 | 职责 |
 |---|---|
-| `rk3588_yolo/src/logic/modules/logic_xxx/logic.json` | 当前 logic 的按钮元数据源；打包后聚合给 Web |
-| `rk3588_yolo/src/logic/modules/logic_button_demo/logic.cpp` | 最小自定义按钮示例：`+1` / `-1` 修改每通道数字并显示到画面 |
-| `rk3588_yolo/src/logic/core/channel_logic.h` | `ChannelAction`、`ChannelActionResult`、handler 类型和注册宏 |
-| `rk3588_yolo/src/logic/core/channel_logic.cpp` | 普通 logic 与 action handler 两套注册表 |
-| `rk3588_yolo/src/control/channel_control.cpp` | Unix Socket 协议、系统动作、每通道队列和控制线程 |
-| `rk3588_yolo/src/analyzer/channel_pipeline.cpp` | 每帧取队列、logic 名校验、执行 handler 后再执行逐帧 logic |
-| `rk3588_yolo/src/main.cpp` | 控制服务初始化与退出清理 |
+| `vision_analysis/src/logic/modules/logic_xxx/logic.json` | 当前 logic 的按钮元数据源；打包后聚合给 Web |
+| `vision_analysis/src/logic/modules/logic_button_demo/logic.cpp` | 最小自定义按钮示例：`+1` / `-1` 修改每通道数字并显示到画面 |
+| `vision_analysis/src/logic/core/channel_logic.h` | `ChannelAction`、`ChannelActionResult`、handler 类型和注册宏 |
+| `vision_analysis/src/logic/core/channel_logic.cpp` | 普通 logic 与 action handler 两套注册表 |
+| `vision_analysis/src/control/channel_control.cpp` | Unix Socket 协议、系统动作、每通道队列和控制线程 |
+| `vision_analysis/src/analyzer/channel_pipeline.cpp` | 每帧取队列、logic 名校验、执行 handler 后再执行逐帧 logic |
+| `vision_analysis/src/main.cpp` | 控制服务初始化与退出清理 |
 | `web_console/backend/services/process_manager.py` | 启动 App 时设置 `RK_CHANNEL_CONTROL_SOCKET` |
 | `web_console/backend/routers/channel_control.py` | 动作清单 API、HTTP 到 Unix Socket 的桥接 |
 | `web_console/frontend/src/api/client.ts` | action TypeScript 类型与 API 封装 |
 | `web_console/frontend/src/pages/AppsPage.tsx` | 实时画面按钮渲染、确认、busy 状态和结果提示 |
-| `rk3588_yolo/build.sh` | 校验并聚合 `src/logic/modules/*/logic.json`，生成 App 根目录 `logics.json` |
+| `vision_analysis/build.sh` | 校验并聚合 `src/logic/modules/*/logic.json`，生成 App 根目录 `logics.json` |
 
 相关文档：
 

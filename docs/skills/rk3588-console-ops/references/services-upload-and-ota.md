@@ -5,7 +5,7 @@
 - `services/upload/`：消费统一事件发件箱，按 delivery 投递到业务服务器或 Dify；
 - `services/model_update/`：接收平台 OTA 指令，下载模型并修改目标配置文件。
 
-它们与 `rk3588_yolo` 主进程通过文件交接，不通过 Redis，也不被 channel logic 直接调用。
+它们与 `vision_analysis` 主进程通过文件交接，不通过 Redis，也不被 channel logic 直接调用。
 
 ## 1. 总体关系
 
@@ -388,7 +388,7 @@ ASSETS_DIR=/opt/ai_apps/<App>/assets python3 -u ota_agent.py
 ## 6. 新增第三个后台服务
 
 1. 在 `service/` 下增加源码目录、入口和配置文件；
-2. 修改 `rk3588_yolo/build.sh` 的 `PYTHON_SERVICES`，确保服务被打入程序包；
+2. 修改 `vision_analysis/build.sh` 的 `PYTHON_SERVICES`，确保服务被打入程序包；
 3. 在 `web_console/backend/routers/services.py` 的 `MANAGED` 中加入白名单和 unit 模板；
 4. 若需要网页配置，增加配置读写路由和前端表单；
 5. 明确它与 C++ 的交接协议，优先使用带原子写入和可恢复状态的文件/事件目录；不要照搬已经删除的 Redis uploader；

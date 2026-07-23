@@ -6,7 +6,7 @@
 以及热重载状态策略：
 
 ```bash
-cd rk3588_yolo/tests/test_logic_parameters
+cd vision_analysis/tests/test_logic_parameters
 bash build.sh
 ```
 
@@ -25,7 +25,7 @@ bash build.sh
 按项目约定，应在 RK3588 板端执行：
 
 ```bash
-cd rk3588_yolo/tests/test_alarm_report
+cd vision_analysis/tests/test_alarm_report
 cmake -S . -B build
 cmake --build build
 ./build/alarm_report_unit_test

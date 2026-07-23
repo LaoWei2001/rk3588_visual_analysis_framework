@@ -18,4 +18,4 @@ sed -i 's/"enable_display"[ \t]*:[ \t]*[a-zA-Z0-9_"]*/"enable_display": 1/' "$CO
 ABS_PATH=$(cd "$(dirname "$0")"; pwd)
 export LD_LIBRARY_PATH="$ABS_PATH/libs:$LD_LIBRARY_PATH"
 export ASSETS_DIR="$ABS_PATH/assets"
-exec "$ABS_PATH/rk3588_yolo" "$CONFIG_PATH"
+exec "$ABS_PATH/vision_analysis" "$CONFIG_PATH"

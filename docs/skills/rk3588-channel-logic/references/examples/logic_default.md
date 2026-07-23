@@ -1,6 +1,6 @@
 # logic_default — 空白逻辑示例
 
-- 源码：`rk3588_yolo/src/logic/modules/logic_default/logic.cpp`
+- 源码：`vision_analysis/src/logic/modules/logic_default/logic.cpp`
 - 上报：无
 - 参数、动作、状态：无
 

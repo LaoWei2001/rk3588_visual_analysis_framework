@@ -56,7 +56,7 @@ Type=simple
 WorkingDirectory=$ABS_PATH
 Environment=ASSETS_DIR=$ABS_PATH/assets
 Environment="LD_LIBRARY_PATH=$ABS_PATH/libs:/usr/lib:/usr/local/lib"
-ExecStart=$ABS_PATH/rk3588_yolo $CONFIG_PATH
+ExecStart=$ABS_PATH/vision_analysis $CONFIG_PATH
 Restart=always
 RestartSec=5
 User=root

@@ -1,7 +1,7 @@
 # logic_button_demo — Web 按钮加减数字演示
 
-- 源码：`rk3588_yolo/src/logic/modules/logic_button_demo/logic.cpp`
-- 按钮清单：`rk3588_yolo/src/logic/modules/logic_button_demo/logic.json`
+- 源码：`vision_analysis/src/logic/modules/logic_button_demo/logic.cpp`
+- 按钮清单：`vision_analysis/src/logic/modules/logic_button_demo/logic.json`
 - 注册：`REGISTER_LOGIC` + `REGISTER_LOGIC_ACTION`
 
 这是仓库中最简单的 Web 业务按钮示例。画面初始显示数字 `1`，实时画面的通道控制区显示两个按钮：

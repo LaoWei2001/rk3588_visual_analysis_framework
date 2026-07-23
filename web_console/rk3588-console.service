@@ -8,7 +8,7 @@ Type=simple
 User=root
 WorkingDirectory=/opt/ai_apps/_console/backend
 Environment=APPS_ROOT=/opt/ai_apps
-Environment=BINARY_NAME=rk3588_yolo
+Environment=BINARY_NAME=vision_analysis
 # network-online.target 在部分板卡镜像上并不等待 Wi-Fi DHCP 完成。
 # 最多等待 30 秒获得真实连接；超时仍启动控制台，视觉进程自身会继续重连。
 ExecStartPre=-/usr/bin/nm-online -q --timeout=30

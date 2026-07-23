@@ -1,6 +1,6 @@
 # logic_upload — 通用上报框架演示
 
-- 源码：`rk3588_yolo/src/logic/modules/logic_upload/logic.cpp`
+- 源码：`vision_analysis/src/logic/modules/logic_upload/logic.cpp`
 - 告警类型：`upload_demo_roi_entry`
 - 触发：任一目标进入任一已配置 ROI 时触发一次；所有目标离开全部 ROI 后复位
 - 状态：`UploadDemoState::latched`

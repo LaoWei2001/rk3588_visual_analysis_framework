@@ -2,7 +2,7 @@
 
 逻辑函数签名固定：`static void logic_xxx(ChannelContext *ctx)`。
 所有数据从 `ctx` 来，都是**本通道、本帧**的。坐标系 = 模型输入尺寸（通常 640×640）。
-权威定义见 `rk3588_yolo/src/logic/core/channel_logic.h`。
+权威定义见 `vision_analysis/src/logic/core/channel_logic.h`。
 
 ## ctx 字段
 
@@ -131,7 +131,7 @@ int yes = ctx->channel_has_logic(2, "logic_upload");
 
 ## AlgoResult（`ctx->results` 的元素）
 
-定义见 `rk3588_yolo/src/analyzer/algoProcess.h`。
+定义见 `vision_analysis/src/analyzer/algoProcess.h`。
 
 | 字段 | 含义 |
 |------|------|

@@ -9,7 +9,7 @@
 #
 # 说明：
 #   - Rockchip 厂商运行库 librknnrt.so / librga.so.2 由 build.sh
-#     打包进 dist/libs/（仓库 rk3588_yolo/test1/libs 里有现成的），不走 apt。
+#     打包进 dist/libs/（仓库 vision_analysis/test1/libs 里有现成的），不走 apt。
 #   - 主程序通过 LD_LIBRARY_PATH=dist/libs 加载上述库；GStreamer 插件是运行时
 #     动态加载、不会被打包，所以必须 apt 装插件。
 # ============================================================================
@@ -53,7 +53,7 @@ if [ "$WANT_BUILD" = true ]; then
         libopencv-dev libgtk-3-dev \
         libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstrtspserver-1.0-dev \
         libblas-dev liblapack-dev
-    echo "    注: RKNN/RGA 头文件来自 Rockchip BSP；运行库已在 rk3588_yolo/test1/libs。"
+    echo "    注: RKNN/RGA 头文件来自 Rockchip BSP；运行库已在 vision_analysis/test1/libs。"
 else
     echo ">>> [2/4] 跳过编译依赖（如需板端编译主程序，加 --build 重跑）"
 fi
@@ -118,4 +118,4 @@ echo "[OK] 依赖安装完成。"
 echo "  • Node: $(command -v node >/dev/null 2>&1 && node -v || echo '未安装(请检查上面的日志)')"
 echo "  • npm:  $(command -v npm  >/dev/null 2>&1 && npm -v  || echo '未安装')"
 echo "  • 控制台部署： cd web_console && bash install.sh"
-echo "  • 主程序 + 两个微服务部署： 见 rk3588_yolo build.sh 产物里的 deploy.sh"
+echo "  • 主程序 + 两个微服务部署： 见 vision_analysis build.sh 产物里的 deploy.sh"

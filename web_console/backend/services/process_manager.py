@@ -23,7 +23,7 @@ from typing import Dict, Iterator, Optional
 from services import runtime_state
 
 APPS_ROOT   = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
-BINARY_NAME = os.environ.get("BINARY_NAME", "rk3588_yolo")
+BINARY_NAME = os.environ.get("BINARY_NAME", "vision_analysis")
 
 
 @dataclass
@@ -322,7 +322,7 @@ def _discover_xauthority() -> Optional[str]:
 def _setup_display_env(env: dict) -> None:
     """让后台(systemd, 无图形会话)拉起的程序也能在板端 HDMI 上显示。
 
-    根因：rk3588_yolo 的 GTK 显示靠继承环境里的 DISPLAY+XAUTHORITY 连 :0；命令行启动能从已登录会话
+    根因：vision_analysis 的 GTK 显示靠继承环境里的 DISPLAY+XAUTHORITY 连 :0；命令行启动能从已登录会话
     继承到这些，而本服务(User=root, multi-user.target)没有 → 冷启动连不上 X，表现为“要先在命令行手动
     跑一次才显示”。这里补齐 DISPLAY / XAUTHORITY 并尽力放行本地 root。全程 best-effort，失败即退回原行为。
     """

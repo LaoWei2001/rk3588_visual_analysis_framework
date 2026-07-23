@@ -6,7 +6,7 @@ from services.process_manager import get_status
 from services.runtime_state import get_vision_settings
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
-BINARY_NAME = os.environ.get("BINARY_NAME", "rk3588_yolo")
+BINARY_NAME = os.environ.get("BINARY_NAME", "vision_analysis")
 CONSOLE_DIR = "_console"
 
 

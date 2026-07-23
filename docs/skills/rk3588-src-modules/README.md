@@ -1,8 +1,8 @@
-# rk3588_yolo `src/` 模块索引
+# vision_analysis `src/` 模块索引
 
 > 文档角色：C++ 源码参考索引，供已经明确模块边界的开发者深入查阅；不是项目总入口。上级导航：[docs 文档总入口](../../README.md) · [开发/运维知识库索引](../README.md)。
 
-本目录按当前 `rk3588_yolo/src/` 源码整理，供开发者查架构，也供大模型在二次开发前按需读取。路径均相对 `rk3588_yolo/`。不要把本文当作配置 Schema；字段真值以 `src/config/config.h`、`config_init.cpp` 和 `config_validator.cpp` 为准。
+本目录按当前 `vision_analysis/src/` 源码整理，供开发者查架构，也供大模型在二次开发前按需读取。路径均相对 `vision_analysis/`。不要把本文当作配置 Schema；字段真值以 `src/config/config.h`、`config_init.cpp` 和 `config_validator.cpp` 为准。
 
 ## 模块地图
 

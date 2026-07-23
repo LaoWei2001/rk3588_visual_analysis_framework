@@ -27,7 +27,7 @@ description: >-
 ├── _console/                     Web 控制台本体（FastAPI 后端 + React 前端）
 │      └ systemd: rk3588-console.service（User=root，:8080）
 ├── <App1>/  <App2>/ ...          每个"程序包"(build.sh 产物 install 进来的)
-│   ├── rk3588_yolo               C++ 推理二进制 ← 控制台 process_manager 用 subprocess 启停
+│   ├── vision_analysis           C++ 推理二进制 ← 控制台 process_manager 用 subprocess 启停
 │   ├── assets/  (config.json, *.rknn, labels/videos 等)
 │   ├── alarm_store/<event_id>/      统一告警事件发件箱（manifest + 图片/视频）
 │   └── services/                 两个 Python 微服务（随包带）
@@ -52,7 +52,7 @@ description: >-
 bash install_deps.sh              # 运行时依赖；加 --build 再装板端从源码编译 C++ 的 -dev 包
 
 # 1. 编译 C++ + 打包（产出 dist/：二进制 + assets + libs + services + deploy.sh 等）
-cd rk3588_yolo && ./build.sh dist
+cd vision_analysis && ./build.sh dist
 
 # 2. 把程序包装进控制台（复制 dist → /opt/ai_apps/dist/，重名会问覆盖/改名）
 sudo ./install_app.sh dist        # 之后该 App 在网页「程序管理」就能看到
@@ -102,8 +102,8 @@ cd ../web_console && bash install.sh
 | 路径 | 作用 |
 |------|------|
 | `install_deps.sh`（仓库根） | apt + Node + pip 一键装依赖（`--build` 加编译依赖） |
-| `rk3588_yolo/build.sh` | 编译 C++ + 打包 dist（含 services/、生成 run.sh/deploy.sh/setup_python.sh） |
-| `rk3588_yolo/install_app.sh` | 把 dist 复制进 `/opt/ai_apps/<名>/` 让控制台识别 |
+| `vision_analysis/build.sh` | 编译 C++ + 打包 dist（含 services/、生成 run.sh/deploy.sh/setup_python.sh） |
+| `vision_analysis/install_app.sh` | 把 dist 复制进 `/opt/ai_apps/<名>/` 让控制台识别 |
 | `web_console/install.sh` | 部署控制台（后端+前端→`/opt/ai_apps/_console`，装并起 `rk3588-console.service`） |
 | `web_console/stop.sh` | 停控制台（`systemctl stop rk3588-console`；`--disable` 取消自启） |
 | `dist/deploy.sh`（build 产物） | 交互式生成并注册 `vision_app`/`ota_agent`/`unified_upload` 三个 systemd 单元 |

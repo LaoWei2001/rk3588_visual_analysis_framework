@@ -51,7 +51,7 @@ async def console_info():
     return {
         "version": "1.0.0",
         "apps_root": str(APPS_ROOT),
-        "binary_name": os.environ.get("BINARY_NAME", "rk3588_yolo"),
+        "binary_name": os.environ.get("BINARY_NAME", "vision_analysis"),
         "known_global_logics": KNOWN_GLOBAL_LOGICS,
         "known_model_types": KNOWN_MODEL_TYPES,
     }
@@ -98,7 +98,7 @@ async def get_app_logics(name: str):
         errors.append("应用包中没有 logics.json")
 
     # 2. 尝试运行二进制 --list-logics
-    binary_name = os.environ.get("BINARY_NAME", "rk3588_yolo")
+    binary_name = os.environ.get("BINARY_NAME", "vision_analysis")
     binary_path = app_dir / binary_name
     if binary_path.exists():
         try:

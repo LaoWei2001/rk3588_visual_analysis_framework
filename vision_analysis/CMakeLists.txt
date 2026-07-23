@@ -189,6 +189,6 @@ aux_source_directory(${PROJECT_SOURCE_DIR}/src/alarm                    dir_srcs
 set(cjson_src ${PROJECT_SOURCE_DIR}/src/third_party/json/cJSON.c)
 # ========================== custom ============================
 
-add_executable(rk3588_yolo ${dir_srcs} ${api_srcs} ${cjson_src})
-target_include_directories(rk3588_yolo PRIVATE ${custom_inc} ${api_inc})
-target_link_libraries(rk3588_yolo ${custom_libs} ${sysLib_list})
+add_executable(vision_analysis ${dir_srcs} ${api_srcs} ${cjson_src})
+target_include_directories(vision_analysis PRIVATE ${custom_inc} ${api_inc})
+target_link_libraries(vision_analysis ${custom_libs} ${sysLib_list})

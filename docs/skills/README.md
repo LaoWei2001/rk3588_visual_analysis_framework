@@ -29,7 +29,7 @@
 | 给逻辑加一个网页能改的参数(半径/秒数/阈值)    | `…/references/adding-config-parameter.md`（模块 Schema + `ctx->param_*()` + Web 热重载） |
 | 给实时画面增加自定义按钮、理解按钮到 C++ 的动作链路 | `…/references/custom-button-actions.md`（声明、队列、handler、payload、排错） |
 | 逻辑提交统一告警，并由画布选择服务器 / Dify | `…/references/upload-and-wiring.md`                      |
-| 搞懂运行时(8 类线程、时序、帧与框同帧、坐标系)  | `…/references/rk3588_yolo_系统说明文档.md` + `…_架构图.md`        |
+| 搞懂运行时(8 类线程、时序、帧与框同帧、坐标系)  | `…/references/vision_analysis_系统说明文档.md` + `…_架构图.md`        |
 
 ### 部署 / 网页控制台 / 后台服务 / 运维 / 调试
 
@@ -69,8 +69,8 @@ docs/skills/
 │       ├── adding-config-parameter.md    加可调参数(代码+热重载+网页可配)
 │       ├── custom-button-actions.md      Web 自定义按钮(action 声明→Socket→logic handler)
 │       ├── upload-and-wiring.md          report_alarm + report_policy + 画布接线
-│       ├── rk3588_yolo_系统说明文档.md     运行时架构(文字详解)
-│       ├── rk3588_yolo_架构图.md          架构图
+│       ├── vision_analysis_系统说明文档.md 运行时架构(文字详解)
+│       ├── vision_analysis_架构图.md      架构图
 │       └── examples/                     当前六个源码示例(default/upload/upload_teach/
 │                                         button_demo/periodic_snapshot_demo/path_sop)
 │

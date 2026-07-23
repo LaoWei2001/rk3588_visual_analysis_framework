@@ -1,6 +1,6 @@
 # 上传服务边界（非当前 C++ 源码模块）
 
-当前 `rk3588_yolo/src/` 中没有 `uploader/` 目录，也没有“写 Redis 队列”的上传实现。C++ 端负责在 `alarm_store/<event_id>/` 建立持久化事件发件箱；项目中的独立上传服务读取 `manifest.json`，再向业务服务器或 Dify 投递。
+当前 `vision_analysis/src/` 中没有 `uploader/` 目录，也没有“写 Redis 队列”的上传实现。C++ 端负责在 `alarm_store/<event_id>/` 建立持久化事件发件箱；项目中的独立上传服务读取 `manifest.json`，再向业务服务器或 Dify 投递。
 
 因此二次开发时应区分：
 

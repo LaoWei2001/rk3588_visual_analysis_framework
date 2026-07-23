@@ -12,13 +12,13 @@ description: >-
 
 > 文档角色：单通道逐帧业务规则的任务入口。上级导航：[docs 文档总入口](../../README.md) · [开发/运维知识库索引](../README.md)。
 
-本说明以当前 `rk3588_yolo/src/` 为准。通道 logic 只负责逐帧业务判断、绘制和提交统一告警事件；图片/视频、投递目标、连接 Profile、字段映射和录像参数由 Web 生成的 `report_policy` 决定。
+本说明以当前 `vision_analysis/src/` 为准。通道 logic 只负责逐帧业务判断、绘制和提交统一告警事件；图片/视频、投递目标、连接 Profile、字段映射和录像参数由 Web 生成的 `report_policy` 决定。
 
 ## 当前产出约定
 
 实现一个新 `logic_xxx` 时通常修改：
 
-1. 新建 `rk3588_yolo/src/logic/modules/logic_xxx/logic.cpp`，顶部包含 `logic/core/logic_common.h`，末尾用 `REGISTER_LOGIC(logic_xxx)` 自注册；函数名是 config/Web/外部 API 的唯一 logic ID；
+1. 新建 `vision_analysis/src/logic/modules/logic_xxx/logic.cpp`，顶部包含 `logic/core/logic_common.h`，末尾用 `REGISTER_LOGIC(logic_xxx)` 自注册；函数名是 config/Web/外部 API 的唯一 logic ID；
 2. 在同目录 `logic.json` 声明 `label`、模块参数 Schema、`actions` 和 `report_fields`，不手写 `name`；
 3. 普通模块参数在 `logic.json.parameters` 声明，并通过 `ctx->param_*()` 读取，不增加 `ChannelConfig`/`REG_C` 中央字段；
 4. 构建脚本校验并聚合所有模块，正常打包自动生成 App 根目录 `logics.json`；
@@ -157,7 +157,7 @@ REGISTER_LOGIC(logic_xxx);
 1. `REGISTER_LOGIC(logic_xxx)` 的函数名会自动成为生成清单和运行配置中的 `channels[].logic`；源 `logic.json` 不写 `name`，模块目录建议与函数同名但不影响外部 ID；
 2. 需要投递时，从 logic 节点连接上报节点；一个上报节点代表一种 delivery，可配置图片到服务器、图片到 Dify 或视频到 Dify；
 3. 地址和密钥在 Web“服务配置”中管理，保存后重启 `unified_upload`；
-4. 修改 C++ 后执行 `cd rk3588_yolo && ./build.sh <名> && sudo ./install_app.sh <名>`，再重启对应 App；
+4. 修改 C++ 后执行 `cd vision_analysis && ./build.sh <名> && sudo ./install_app.sh <名>`，再重启对应 App；
 5. 修改 `config.json` 中普通字段、logic、ROI、模型、stream 或 global logic 时观察配置热重载日志；拓扑变化则重启；
 6. 上报验证先看 `alarm_store/<event_id>/manifest.json`，再看 `raw.jpg`、`snapshot.jpg`、`clip.mp4` 和 `journalctl -u unified_upload`；Web“未上报告警”页也读取这份发件箱。
 

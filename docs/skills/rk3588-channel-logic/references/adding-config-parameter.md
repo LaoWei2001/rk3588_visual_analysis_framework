@@ -1,13 +1,13 @@
 # 通道逻辑专有参数：Schema、C++ 调用、Web 配置与热重载
 
-本文面向在 `rk3588_yolo` 上新增或维护 `logic_xxx` 的二次开发者，说明当前已经落地的模块参数体系。本文以现行源码为准，替代旧的“修改 `ChannelConfig`、增加 `REG_C`、手写 `logics.json`”流程。
+本文面向在 `vision_analysis` 上新增或维护 `logic_xxx` 的二次开发者，说明当前已经落地的模块参数体系。本文以现行源码为准，替代旧的“修改 `ChannelConfig`、增加 `REG_C`、手写 `logics.json`”流程。
 
 ## 先记住结论
 
 给某个通道逻辑增加一个普通业务参数时，开发代码通常只修改该逻辑目录中的两个文件：
 
 ```text
-rk3588_yolo/src/logic/modules/logic_xxx/
+vision_analysis/src/logic/modules/logic_xxx/
 ├── logic.cpp       # ctx->param_*() 读取参数
 └── logic.json      # 参数 Schema、Web 文案和热重载策略
 ```
@@ -73,7 +73,7 @@ JSON 只在启动或热重载时解析，不在逐帧 logic 中重复解析。
 ### 1. 创建模块目录
 
 ```text
-rk3588_yolo/src/logic/modules/logic_person_dwell/
+vision_analysis/src/logic/modules/logic_person_dwell/
 ├── logic.cpp
 └── logic.json
 ```
@@ -315,7 +315,7 @@ Web 会预先拦截数字越界、`integer` 输入小数以及 `array/object` �
 ### 只校验模块，不编译 C++
 
 ```bash
-cd /userdata/sop_agent/rk3588_yolo
+cd /userdata/sop_agent/vision_analysis
 python3 scripts/generate_logics_catalog.py --check
 ```
 
@@ -375,11 +375,11 @@ const int usb_height = stream.usb_height;
 
 当前周期截图演示逻辑已经使用这套参数体系：
 
-- Schema：`rk3588_yolo/src/logic/modules/logic_periodic_snapshot_demo/logic.json`；
-- C++ 调用：`rk3588_yolo/src/logic/modules/logic_periodic_snapshot_demo/logic.cpp`；
-- 通用解析器：`rk3588_yolo/src/logic/core/logic_parameters.h/.cpp`；
-- 构建生成器：`rk3588_yolo/scripts/generate_logics_catalog.py`；
-- 热重载入口：`rk3588_yolo/src/core/app_ctrl.cpp`；
+- Schema：`vision_analysis/src/logic/modules/logic_periodic_snapshot_demo/logic.json`；
+- C++ 调用：`vision_analysis/src/logic/modules/logic_periodic_snapshot_demo/logic.cpp`；
+- 通用解析器：`vision_analysis/src/logic/core/logic_parameters.h/.cpp`；
+- 构建生成器：`vision_analysis/scripts/generate_logics_catalog.py`；
+- 热重载入口：`vision_analysis/src/core/app_ctrl.cpp`；
 - Web 表单：`web_console/frontend/src/components/NodeConfigPanel.tsx`；
 - Web 配置转换：`web_console/frontend/src/utils/configToGraph.ts`、`graphToConfig.ts`。
 

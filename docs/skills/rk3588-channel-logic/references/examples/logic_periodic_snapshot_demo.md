@@ -1,6 +1,6 @@
 # logic_periodic_snapshot_demo — 周期截图与参数热重载演示
 
-- 源码：`rk3588_yolo/src/logic/modules/logic_periodic_snapshot_demo/logic.cpp`
+- 源码：`vision_analysis/src/logic/modules/logic_periodic_snapshot_demo/logic.cpp`
 - 参数定义：同目录 `logic.json`
 - 事件类型：`periodic_snapshot_demo`
 

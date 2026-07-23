@@ -26,9 +26,9 @@ description: >-
 
 ## 当前修改点
 
-1. 在 `rk3588_yolo/src/logic/core/global_logic.cpp` 实现 `static void global_xxx(GlobalContext *gctx)`；
+1. 在 `vision_analysis/src/logic/core/global_logic.cpp` 实现 `static void global_xxx(GlobalContext *gctx)`；
 2. 在 `global_logic_register()` 中调用 `register_global_logic("global_xxx", global_xxx)`；函数定义靠后时加前置声明；
-3. 在 `rk3588_yolo/src/logic/catalog.json` 的 `global_logics` 数组保留名称、标签和参数元数据；
+3. 在 `vision_analysis/src/logic/catalog.json` 的 `global_logics` 数组保留名称、标签和参数元数据；
 4. 若要求 Web 的全局逻辑下拉可选，同步更新 `web_console/backend/routers/config_io.py::KNOWN_GLOBAL_LOGICS` 并重新部署 Web；
 5. 通过 Web 或运行配置的 `global.global_logics[]` 增加实例。
 
