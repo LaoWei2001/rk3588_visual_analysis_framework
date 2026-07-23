@@ -62,7 +62,8 @@ cd ../web_console && bash install.sh
 #    访问 http://板子IP:8080（SSH 账号密码登录）
 
 # 4. 起后台服务（任选其一）
-#    a) 网页「后台服务」面板：选 App → 安装并启动（会绑定该 App，默认不设开机自启）
+#    a) 先在网页启动视觉程序，再到「后台服务」点启动；服务会自动绑定当前视觉 App
+#       需要恢复上次运行状态时，在启动按钮旁勾选「开机自启」
 #    b) 命令行一键：在 dist 目录 bash deploy.sh ./assets/config.json
 ```
 

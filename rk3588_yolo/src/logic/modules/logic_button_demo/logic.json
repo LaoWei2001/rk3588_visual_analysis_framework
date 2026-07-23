@@ -1,75 +1,23 @@
 {
-    "label": "Web按钮交互演示",
+    "label": "按钮加减数字演示",
     "parameters": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {
-            "pulse_duration_sec": {
-                "type": "number",
-                "title": "红框持续时间",
-                "description": "点击触发红框或手动告警后，红框持续显示的秒数。",
-                "minimum": 0.1,
-                "maximum": 30,
-                "default": 3,
-                "x-unit": "秒",
-                "x-step": 0.1,
-                "x-hot-reload": "reset_state"
-            }
-        }
+        "properties": {}
     },
-    "report_fields": [
-        {
-            "key": "last_action",
-            "type": "string",
-            "label": "最后操作"
-        },
-        {
-            "key": "press_count",
-            "type": "number",
-            "label": "按钮点击次数"
-        },
-        {
-            "key": "alarm_count",
-            "type": "number",
-            "label": "手动告警次数"
-        },
-        {
-            "key": "hold_enabled",
-            "type": "boolean",
-            "label": "常驻显示已启用"
-        }
-    ],
+    "report_fields": [],
     "actions": [
         {
-            "id": "pulse_overlay",
-            "label": "触发红框",
+            "id": "increment",
+            "label": "+1",
             "style": "primary",
-            "help": "按该逻辑的“红框持续时间”参数显示红框，用于验证 Web 按钮到 C++ 逻辑的控制链路。"
+            "help": "将当前通道画面中的数字加 1。"
         },
         {
-            "id": "toggle_hold",
-            "label": "切换常驻显示",
+            "id": "decrement",
+            "label": "-1",
             "style": "default",
-            "help": "打开或关闭当前通道画面上的常驻绿色边框。"
-        },
-        {
-            "id": "trigger_alarm",
-            "label": "手动触发告警",
-            "style": "danger",
-            "confirm": "确定通过 Web 按钮触发一条演示告警吗？",
-            "help": "生成一条演示告警，用于验证告警发件箱和图片/视频上报链路。"
-        },
-        {
-            "id": "clear_state",
-            "label": "清空演示状态",
-            "style": "default",
-            "help": "清空按钮演示逻辑的点击次数和显示状态。"
-        },
-        {
-            "id": "infer_toggle",
-            "label": "推理开关",
-            "style": "default",
-            "help": "系统级动作: 翻转本通道YOLO推理的启停状态。点击一次关闭, 再点一次开启, 画面始终正常显示。"
+            "help": "将当前通道画面中的数字减 1，最小值保持为 1。"
         }
     ]
 }

@@ -13,12 +13,16 @@ services.py — 网页托管「板端后台微服务」(systemd 单元)。
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+from services import process_manager as pm
+from services import runtime_state
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 SYSTEMD_DIR = Path("/etc/systemd/system")
@@ -51,8 +55,18 @@ def _run(cmd: List[str], timeout: int = 15) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
 
-def _unit_content(key: str, app_dir: Path) -> str:
-    """生成与 deploy.sh 等价的单元内容(同名同义), 路径指向所选 App 的 services/ 子目录。"""
+def _systemd_env(value: str) -> str:
+    """转义 systemd Environment="..." 中的值。"""
+    return (value.replace("\\", "\\\\").replace('"', '\\"')
+            .replace("\n", "\\n").replace("\r", "\\r"))
+
+
+def _systemd_quote(value: str) -> str:
+    return f'"{_systemd_env(value)}"'
+
+
+def _unit_content(key: str, app_dir: Path, config_name: str) -> str:
+    """生成绑定当前视觉 App 的单元；OTA 同时绑定实际运行的配置文件。"""
     if key == "ota_agent":
         return (
             "[Unit]\n"
@@ -64,9 +78,12 @@ def _unit_content(key: str, app_dir: Path) -> str:
             "StartLimitBurst=5\n\n"
             "[Service]\n"
             "Type=simple\n"
-            f"WorkingDirectory={app_dir}/services/model_update\n"
-            f"Environment=ASSETS_DIR={app_dir}/assets\n"
-            f"ExecStart=/usr/bin/python3 -u {app_dir}/services/model_update/ota_agent.py\n"
+            # systemd 247 的 WorkingDirectory= 不剥离双引号，会把引号视为路径字符，
+            # 从而把 "/opt/..." 判定为非绝对路径；这里必须直接写绝对路径。
+            f"WorkingDirectory={app_dir / 'services/model_update'}\n"
+            f'Environment="ASSETS_DIR={_systemd_env(str(app_dir / "assets"))}"\n'
+            f'Environment="CONFIG_FILE={_systemd_env(config_name)}"\n'
+            f"ExecStart=/usr/bin/python3 -u {_systemd_quote(str(app_dir / 'services/model_update/ota_agent.py'))}\n"
             "Restart=always\n"
             "RestartSec=3\n"
             "User=root\n\n"
@@ -84,7 +101,7 @@ def _unit_content(key: str, app_dir: Path) -> str:
         "StartLimitBurst=5\n\n"
         "[Service]\n"
         "Type=simple\n"
-        f"WorkingDirectory={app_dir}/services/upload\n"
+        f"WorkingDirectory={app_dir / 'services/upload'}\n"
         "ExecStart=/usr/bin/python3 -u main.py\n"
         "Restart=always\n"
         "RestartSec=5\n"
@@ -94,16 +111,30 @@ def _unit_content(key: str, app_dir: Path) -> str:
     )
 
 
+def _environment_value(raw: str, name: str) -> Optional[str]:
+    try:
+        entries = shlex.split(raw)
+    except ValueError:
+        entries = raw.split()
+    prefix = name + "="
+    for entry in entries:
+        if entry.startswith(prefix):
+            return entry[len(prefix):]
+    return None
+
+
 def _status(key: str) -> Dict[str, Any]:
     unit = MANAGED[key]["unit"]
     props = ("LoadState,ActiveState,SubState,UnitFileState,NRestarts,"
-             "ActiveEnterTimestampMonotonic,WorkingDirectory")
+             "ActiveEnterTimestampMonotonic,WorkingDirectory,Environment")
+    intent = runtime_state.get_service_settings(key)
     try:
         r = _run(["systemctl", "show", unit, "--property=" + props])
     except Exception as e:  # systemctl 不存在(如开发机) → 视为未安装
         return {"installed": False, "active_state": "unknown", "sub_state": "",
                 "enabled": False, "uptime_seconds": None, "n_restarts": None,
-                "bound_app": None, "working_dir": None, "path_ok": False, "error": str(e)}
+                "bound_app": None, "bound_config": None, "working_dir": None,
+                "path_ok": False, **intent, "error": str(e)}
 
     kv: Dict[str, str] = {}
     for line in r.stdout.splitlines():
@@ -150,8 +181,10 @@ def _status(key: str) -> Dict[str, Any]:
         "uptime_seconds": uptime,
         "n_restarts": n_restarts,
         "bound_app": bound_app,
+        "bound_config": _environment_value(kv.get("Environment", ""), "CONFIG_FILE"),
         "working_dir": wd or None,
         "path_ok": path_ok,
+        **intent,
     }
 
 
@@ -167,42 +200,139 @@ class InstallReq(BaseModel):
     app: str
 
 
-@router.post("/services/{key}/install")
-async def install_service(key: str, req: InstallReq):
-    _svc(key)
-    app_dir = (APPS_ROOT / req.app).resolve()
-    if not str(app_dir).startswith(str(APPS_ROOT.resolve())) or not app_dir.is_dir():
-        raise HTTPException(status_code=404, detail=f"App 不存在: {req.app}")
-    subdir = app_dir / MANAGED[key]["subdir"]
+class AutostartReq(BaseModel):
+    enabled: bool
+
+
+def _running_context_or_409() -> Dict[str, Any]:
+    context = pm.get_running_app_context()
+    if context is None:
+        raise HTTPException(status_code=409, detail="没有正在运行的视觉程序，请先启动视觉程序")
+    return context
+
+
+def _write_and_start_unlocked(key: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    """调用方必须持有 pm.runtime_lock，保证查找和绑定之间视觉 App 不会切换。"""
+    meta = _svc(key)
+    app_name = str(context["app"])
+    app_dir = Path(context["app_dir"]).resolve()
+    config_name = str(context.get("config") or "config.json")
+    try:
+        app_dir.relative_to(APPS_ROOT.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"视觉程序目录不在 APPS_ROOT 下：{app_dir}")
+    subdir = app_dir / meta["subdir"]
     if not subdir.is_dir():
         raise HTTPException(
             status_code=400,
-            detail=f"{req.app} 下没有 {MANAGED[key]['subdir']}（该 App 未打包此服务）",
+            detail=f"{app_name} 下没有 {meta['subdir']}（该 App 未打包此服务）",
         )
 
-    unit = MANAGED[key]["unit"]
+    unit = meta["unit"]
     try:
-        # 强制覆盖单元文件 → WorkingDirectory/ExecStart 指向当前 App 的 services/
-        # （任何旧路径/失效单元，包括 deploy.sh 装的残留单元，都被直接改成程序包里的路径）
-        (SYSTEMD_DIR / unit).write_text(_unit_content(key, app_dir), encoding="utf-8")
-        rl = _run(["systemctl", "daemon-reload"])
-        if rl.returncode != 0:
-            raise HTTPException(status_code=500, detail=f"daemon-reload 失败: {rl.stderr.strip()}")
-        # 默认不开机自启：后台服务由用户在面板手动启动（崩溃循环时才不会一开机就疯狂重启）。
-        # 用 disable 主动清掉历史上 enable 过的自启 → “没手动点就不会自己跑”。
+        (SYSTEMD_DIR / unit).write_text(
+            _unit_content(key, app_dir, config_name), encoding="utf-8"
+        )
+        reloaded = _run(["systemctl", "daemon-reload"])
+        if reloaded.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"daemon-reload 失败: {reloaded.stderr.strip()}")
+        # 开机恢复由 Web 控制台统一编排，避免 unit 在视觉程序之前按旧路径独立启动。
         _run(["systemctl", "disable", unit])
-        _run(["systemctl", "reset-failed", unit])    # 清掉旧单元/失败留下的 failed 终态
-        st = _run(["systemctl", "restart", unit])    # 用新单元直接(重)启动 —— 点一次跑这一程，重启/关机后不自启
+        _run(["systemctl", "reset-failed", unit])
+        started = _run(["systemctl", "restart", unit])
     except PermissionError:
         raise HTTPException(status_code=500, detail="写入 systemd 单元失败：控制台需以 root 运行")
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    if st.returncode != 0:
-        raise HTTPException(status_code=500,
-                            detail="单元已写入并指向正确路径，但启动失败：" + (st.stderr or st.stdout or "").strip())
-    return {"ok": True, "unit": unit, "app": req.app, "started": True}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    if started.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail="单元已绑定当前视觉程序，但启动失败：" +
+                   (started.stderr or started.stdout or "").strip(),
+        )
+    runtime_state.mark_service_started(key)
+    return {
+        "ok": True,
+        "unit": unit,
+        "app": app_name,
+        "config": config_name if key == "ota_agent" else None,
+        "started": True,
+    }
+
+
+def start_for_running_app(key: str) -> Dict[str, Any]:
+    _svc(key)
+    with pm.runtime_lock():
+        return _write_and_start_unlocked(key, _running_context_or_409())
+
+
+def sync_services_for_running_app() -> Dict[str, List[str]]:
+    """视觉程序启动/切换后，迁移运行中的服务并恢复等待自启的服务。"""
+    updated: List[str] = []
+    errors: List[str] = []
+    with pm.runtime_lock():
+        context = pm.get_running_app_context()
+        if context is None:
+            return {"updated": updated, "errors": ["视觉程序启动后未能读取运行上下文"]}
+        for key in MANAGED:
+            status = _status(key)
+            active = status.get("active_state") in ("active", "activating", "reloading")
+            waiting_autostart = bool(status.get("autostart") and status.get("desired_running"))
+            ota_config_matches = (
+                key != "ota_agent" or status.get("bound_config") == context.get("config")
+            )
+            binding_matches = (
+                status.get("path_ok") and status.get("bound_app") == context.get("app")
+                and ota_config_matches
+            )
+            if active and binding_matches:
+                # 旧 deploy.sh 可能曾 enable 过该单元；Web 接管后统一关闭原生自启，
+                # 后续只按 autostart + desired_running 的组合恢复。
+                _run(["systemctl", "disable", MANAGED[key]["unit"]])
+                continue
+            if not active and not waiting_autostart:
+                continue
+            try:
+                _write_and_start_unlocked(key, context)
+                updated.append(key)
+            except HTTPException as exc:
+                errors.append(f"{MANAGED[key]['label']}：{exc.detail}")
+            except Exception as exc:
+                errors.append(f"{MANAGED[key]['label']}：{exc}")
+    return {"updated": updated, "errors": errors}
+
+
+@router.post("/services/{key}/install")
+async def install_service(key: str, req: InstallReq):
+    # 兼容旧前端接口，但不再信任手工选择：实际绑定必须跟随当前视觉程序。
+    with pm.runtime_lock():
+        context = _running_context_or_409()
+        if req.app and req.app != context["app"]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"当前运行的是 {context['app']}，后台服务不能绑定到 {req.app}",
+            )
+        return _write_and_start_unlocked(key, context)
+
+
+@router.post("/services/{key}/autostart")
+async def set_service_autostart(key: str, req: AutostartReq):
+    _svc(key)
+    with pm.runtime_lock():
+        settings = runtime_state.set_service_autostart(key, req.enabled)
+        # Web 使用统一编排恢复，不能让 systemd 绕过视觉 App 匹配独立拉起旧 unit。
+        _run(["systemctl", "disable", MANAGED[key]["unit"]])
+        # 兼容升级前已经在跑、但尚未写入 desired_running 的 systemd 服务。
+        if req.enabled and _status(key).get("active_state") == "active":
+            runtime_state.mark_service_started(key)
+            settings = runtime_state.get_service_settings(key)
+        elif req.enabled:
+            # 在停止/故障状态下勾选不安排下次启动。
+            runtime_state.mark_service_stopped(key)
+            settings = runtime_state.get_service_settings(key)
+    return {"ok": True, **settings}
 
 
 @router.post("/services/{key}/{action}")
@@ -210,18 +340,15 @@ async def control_service(key: str, action: str):
     _svc(key)
     if action not in ("start", "stop", "restart"):
         raise HTTPException(status_code=400, detail="action 仅支持 start/stop/restart")
-    unit = MANAGED[key]["unit"]
     if action in ("start", "restart"):
-        # 防御：单元工作目录失效(残留旧单元指向已删目录)→ 给明确提示，而不是底层 CHDIR 错
-        wd = _run(["systemctl", "show", unit, "--property=WorkingDirectory"]).stdout.partition("=")[2].strip()
-        if wd and not os.path.isdir(wd):
-            raise HTTPException(status_code=409,
-                detail=f"单元工作目录不存在：{wd}。该单元路径已失效，请在面板「重新安装」到当前程序包。")
-        # 清掉 failed 终态(systemd 放弃重试后), 否则可能拉不起来
-        _run(["systemctl", "reset-failed", unit])
-    r = _run(["systemctl", action, unit])
-    if r.returncode != 0:
-        raise HTTPException(status_code=500, detail=(r.stderr or r.stdout or "systemctl 失败").strip())
+        return start_for_running_app(key)
+
+    unit = MANAGED[key]["unit"]
+    with pm.runtime_lock():
+        r = _run(["systemctl", "stop", unit])
+        if r.returncode != 0:
+            raise HTTPException(status_code=500, detail=(r.stderr or r.stdout or "systemctl 失败").strip())
+        runtime_state.mark_service_stopped(key)
     return {"ok": True}
 
 

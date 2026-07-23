@@ -3,7 +3,14 @@
     "parameters": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {}
+        "properties": {
+            "test_string": {
+                "type": "string",
+                "title": "测试文本",
+                "description": "用于测试文本显示功能",
+                "default": "Hello RK3588"
+            }
+        }
     },
     "report_fields": []
 }

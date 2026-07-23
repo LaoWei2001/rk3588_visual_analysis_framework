@@ -373,11 +373,10 @@ const int usb_height = stream.usb_height;
 
 ## 真实参考实现
 
-当前按钮演示逻辑已经使用这套参数体系：
+当前周期截图演示逻辑已经使用这套参数体系：
 
-- Schema：`rk3588_yolo/src/logic/modules/logic_button_demo/logic.json`；
-- C++ 调用：`rk3588_yolo/src/logic/modules/logic_button_demo/logic.cpp`；
-- 通道配置示例：`rk3588_yolo/assets/config_button.json`；
+- Schema：`rk3588_yolo/src/logic/modules/logic_periodic_snapshot_demo/logic.json`；
+- C++ 调用：`rk3588_yolo/src/logic/modules/logic_periodic_snapshot_demo/logic.cpp`；
 - 通用解析器：`rk3588_yolo/src/logic/core/logic_parameters.h/.cpp`；
 - 构建生成器：`rk3588_yolo/scripts/generate_logics_catalog.py`；
 - 热重载入口：`rk3588_yolo/src/core/app_ctrl.cpp`；

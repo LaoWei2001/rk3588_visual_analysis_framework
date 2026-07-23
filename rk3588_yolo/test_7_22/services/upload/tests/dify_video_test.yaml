@@ -1,0 +1,17 @@
+# Dify 视频测试专用配置，不影响生产上传微服务的 config.yaml。
+dify:
+  scheme: http
+  host: 192.168.2.254
+  port: 8080
+  # Dify 部署在反向代理子路径时填写，例如 /dify；通常留空。
+  base_path: ""
+  api_key: "app-8MlL25wF1uQUbOiPhXsWdGaD"
+  timeout: 120
+  # Dify 用它隔离上传文件和工作流调用，不会作为工作流 inputs 变量。
+  user: "rk3588-dify-video-test"
+
+# 必须填写 Dify“用户输入/开始”节点中显示的变量标识，不是变量类型。
+workflow:
+  # 必须对应 Dify 开始节点中允许“图片+视频”的 File list 变量。
+  media_variable: "media_files"
+  prompt_variable: "prompt"

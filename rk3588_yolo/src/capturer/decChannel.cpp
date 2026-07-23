@@ -525,6 +525,38 @@ static void *busListen(void *para)
     pthread_exit(NULL);
 }
 
+/* RTSP 首次启动时网络/摄像机可能尚未就绪。此前 createVideoDecChannel()
+ * 的 TCP 预探测一旦失败，main 会删除 DecChannel，后续即使网络恢复也没有
+ * bus 线程负责重连，最终只剩一个空转的主进程。
+ *
+ * 这个线程复用断流后的 reconnect() 退避策略：先保留 DecChannel，再持续
+ * 尝试创建首个 pipeline；成功后直接转入原有 busListen() 生命周期。 */
+static void *initialRtspConnect(void *para)
+{
+    DecChannel *pThis = static_cast<DecChannel *>(para);
+    if (!pThis)
+        return nullptr;
+
+    g_printerr("[Ch%d] RTSP source unavailable at startup; waiting for network/camera and retrying\n",
+               pThis->channelId());
+
+    while (g_pCtrl && g_pCtrl->isRunning && !pThis->isStopRequested())
+    {
+        pThis->reconnect();
+        GstElement *pipeline = pThis->mGstChn.pipeline;
+        if (!pipeline)
+            continue;
+
+        for (int cid : pThis->mGstChn.chnIds)
+            analyzer_channel_online(cid);
+        g_print("[Ch%d] RTSP initial connection recovered; entering bus loop\n",
+                pThis->channelId());
+        return busListen(pipeline);
+    }
+
+    return nullptr;
+}
+
 /* ==================== 构造 / 析构 ==================== */
 
 DecChannel::DecChannel(int chnId, const SrcCfg_t &cfg)
@@ -563,7 +595,9 @@ bool DecChannel::hasChannel(int chnId) const
 
 void DecChannel::stop()
 {
-    if (!bObjIsInited)
+    /* bObjIsInited 在重连窗口会暂时为 false，不能据此跳过 join；否则首次
+     * 冷启动持续断网时删除 DecChannel 会留下仍访问 this 的重连线程。 */
+    if (!mThreadStarted)
         return;
 
     mStopRequested = true;
@@ -586,6 +620,7 @@ void DecChannel::stop()
         /* 正常退出 */
         mGstChn.pipeline = NULL;
         bObjIsInited = false;
+        mThreadStarted = false;
         return;
     }
 
@@ -600,6 +635,7 @@ void DecChannel::stop()
     {
         mGstChn.pipeline = NULL;
         bObjIsInited = false;
+        mThreadStarted = false;
         return;
     }
 
@@ -650,6 +686,14 @@ int DecChannel::createVideoDecChannel(bool start_thread)
     {
         g_printerr("[DecChannel ch%d] RTSP TCP probe failed for %s, skip pipeline build this round\n", channelId(),
                    mCfg.location.c_str());
+        if (start_thread && 0 == CreateJoinThread(initialRtspConnect, this, &mTid))
+        {
+            /* 线程本身就是该采集器的生命周期；即使 pipeline 尚未建立也必须
+             * 标记为已托管，让 main 保留对象并让 stop() 能 join 它。 */
+            bObjIsInited = true;
+            mThreadStarted = true;
+            return 0;
+        }
         return -1;
     }
 
@@ -716,7 +760,10 @@ int DecChannel::createVideoDecChannel(bool start_thread)
     if (start_thread)
     {
         if (0 == CreateJoinThread(busListen, mGstChn.pipeline, &mTid))
+        {
             bObjIsInited = true;
+            mThreadStarted = true;
+        }
     }
     else
     {
@@ -815,7 +862,10 @@ int DecChannel::createFileDecChannel(bool start_thread)
     if (start_thread)
     {
         if (0 == CreateJoinThread(busListen, mGstChn.pipeline, &mTid))
+        {
             bObjIsInited = true;
+            mThreadStarted = true;
+        }
     }
     else
     {
@@ -977,7 +1027,10 @@ int DecChannel::createUsbDecChannel(bool start_thread)
     if (start_thread)
     {
         if (0 == CreateJoinThread(busListen, mGstChn.pipeline, &mTid))
+        {
             bObjIsInited = true;
+            mThreadStarted = true;
+        }
     }
     else
     {

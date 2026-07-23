@@ -275,37 +275,41 @@ Web 后端 `routers/services.py` 只接受这两个白名单 key，不把用户�
 
 推理程序不属于这两个单元。Web 控制台通过 `process_manager` 直接管理 App 二进制；不要再同时启动指向同一 App 的 `vision_app.service`，否则可能双开。
 
-### 4.2 Web 的“安装并启动”
+### 4.2 Web 的自动绑定与启动
 
 Web 面板调用：
 
 ```text
-POST /api/services/{key}/install { app }
+POST /api/services/{key}/start
 ```
 
 后端实际执行：
 
 ```text
-校验 App 和 services 子目录
+在全局运行锁内查找当前唯一的视觉 App 和实际启动配置
+→ 校验该 App 的 services 子目录
 → 强制覆盖 /etc/systemd/system/<unit>
+→ OTA unit 写入 ASSETS_DIR 和 CONFIG_FILE=<视觉程序实际配置>
 → systemctl daemon-reload
 → systemctl disable <unit>
 → systemctl reset-failed <unit>
 → systemctl restart <unit>
 ```
 
-这里的“安装”是生成/更新 systemd 单元，不是复制 Python 代码。代码已经随 App 包存在。
+这里的“绑定”是生成/更新 systemd 单元，不是复制 Python 代码。代码已经随 App 包存在。没有视觉程序运行时，后台服务拒绝启动，不会猜测或绑定程序包列表中的第一个 App。
 
-Web 安装会主动 `disable`，因此服务只启动当前这一程，设备重启后不会自动启动。这样可以避免配置错误的后台服务在每次开机时进入失败循环。若明确需要开机自启，可在命令行执行 `systemctl enable <unit>`，但这不属于当前 Web 安装的默认行为。
+Web 仍会主动 `disable` 原生 unit 自启，设备启动顺序由 `rk3588-console` 统一编排。页面的「开机自启」勾选状态与用户最后一次启动/停止意图保存在 `/opt/ai_apps/.console_runtime_state.json`。只有 `autostart=true` 且 `desired_running=true` 时，控制台才会先恢复视觉程序，再绑定并恢复对应后台服务。
 
-### 4.3 Web 的“启动”与重新绑定
+### 4.3 启动、停止与视觉 App 切换
 
-当前前端在服务停止时提供 App 下拉框。“启动”按钮仍调用 `installService()`：
+前端不再提供后台服务绑定 App 下拉框：
 
-- 选择原绑定 App：重写同一单元并启动；
-- 选择其他 App：把 WorkingDirectory/ExecStart 重新绑定到新 App，再启动。
+- 启动后台服务：自动绑定当前运行的视觉 App；
+- 停止后台服务：停止 unit 并记录 `desired_running=false`，但保留自启勾选；
+- 启动/切换视觉 App：运行中但绑定不同 App 的后台服务会被自动停止、改绑并重启；
+- OTA 除了匹配 App，还必须匹配视觉程序实际加载的 `config*.json`。
 
-“停止”调用 `POST /api/services/{key}/stop`。后端也提供 `start/restart` API，但当前前端的停止态启动按钮采用重新安装/绑定流程。
+旧版 `POST /api/services/{key}/install {app}` 为兼容保留，但请求中的 App 必须等于当前运行的视觉 App，否则返回 409。
 
 ### 4.4 路径失效
 
@@ -314,7 +318,7 @@ Web 安装会主动 `disable`，因此服务只启动当前这一程，设备重
 - `path_ok=true`：工作目录存在；
 - `path_ok=false`：单元指向已删除或移动的旧 App。
 
-路径失效时，面板显示“修复并启动”。选择当前 App 后会覆盖旧单元，无需手动删除 unit 文件。
+路径失效时，面板显示“自动修复并启动”。后端会按当前运行的视觉 App 覆盖旧单元，无需手动删除 unit 文件。
 
 典型错误：
 
@@ -342,7 +346,8 @@ systemctl enable <service> --now
 因此：
 
 - `deploy.sh` 选中启动的服务默认开机自启；
-- Web 面板安装后台服务会 `disable`，默认不开机自启；
+- Web 面板默认不开机自启；勾选后由控制台按“勾选 + 最后运行意图”恢复；
+- Web 接管后台服务后会 `disable` unit 的原生自启，以保证视觉程序先恢复并正确匹配；
 - 两者操作的是同名 unit，后执行者会覆盖前一次单元内容和 enable 状态。
 
 不要把两种入口的自启行为混为一谈。

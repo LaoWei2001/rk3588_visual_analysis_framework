@@ -22,6 +22,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from services import process_manager as pm
+from services import runtime_state
 from services.app_scanner import scan_apps
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
@@ -164,4 +165,5 @@ async def delete_app(name: str):
         raise HTTPException(status_code=404, detail=f"程序不存在: {app_name}")
     pm.stop_app(app_name)                       # 删除前先停进程
     await run_in_threadpool(lambda: shutil.rmtree(dest, ignore_errors=True))
+    runtime_state.remove_vision_app(app_name)
     return {"ok": True}

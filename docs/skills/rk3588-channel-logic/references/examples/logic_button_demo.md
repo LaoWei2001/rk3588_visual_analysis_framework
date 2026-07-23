@@ -1,36 +1,45 @@
-# logic_button_demo — Web 动作与手动告警演示
+# logic_button_demo — Web 按钮加减数字演示
 
 - 源码：`rk3588_yolo/src/logic/modules/logic_button_demo/logic.cpp`
-- 告警类型：`button_demo_manual`
+- 按钮清单：`rk3588_yolo/src/logic/modules/logic_button_demo/logic.json`
 - 注册：`REGISTER_LOGIC` + `REGISTER_LOGIC_ACTION`
 
-该示例展示 Web 按钮如何修改 `ctx->state`，以及为什么依赖当前帧的告警要采用 pending 模式。
+这是仓库中最简单的 Web 业务按钮示例。画面初始显示数字 `1`，实时画面的通道控制区显示两个按钮：
 
-## 当前动作
+- `+1`：发送 `increment` 动作，数字增加 1；
+- `-1`：发送 `decrement` 动作，数字减少 1，最小保持为 1。
 
-动作和参数列表以同模块 `logic.json` 为准，打包时自动聚合给 Web。它包括计数、短脉冲、保持叠加、复位和手动告警等演示动作。handler 用 `button_demo_state(ctx)` 获取本通道状态，只执行快速字段更新。
+## 按钮声明
 
-`trigger_alarm` 不在 handler 中直接创建媒体，而是设置：
+按钮由模块 `logic.json` 的 `actions[]` 提供给 Web：
 
-```cpp
-state.pending_alarm = true;
+```json
+"actions": [
+  {
+    "id": "increment",
+    "label": "+1",
+    "style": "primary"
+  },
+  {
+    "id": "decrement",
+    "label": "-1",
+    "style": "default"
+  }
+]
 ```
 
-下一次 `logic_button_demo(ctx)` 拿到当前帧后调用：
+## C++ 处理
+
+按钮 ID 会原样成为 `action.name`。处理器使用基础 C++ 字符串比较判断动作并修改当前通道的状态：
 
 ```cpp
-const std::string event_id = report_alarm(
-    ctx,
-    "button_demo_manual",
-    "Web button triggered demo alarm",
-    {
-        alarm_field("last_action", state.last_action),
-        alarm_field("press_count", state.press_count),
-        alarm_field("alarm_count", state.alarm_count + 1),
-        alarm_field("hold_enabled", state.hold_enabled),
-    });
+if (action.name == "increment")
+    state->number += 1;
+
+if (action.name == "decrement" && state->number > 1)
+    state->number -= 1;
 ```
 
-只有返回非空事件 ID 时才增加 `alarm_count`。返回空表示未配置 delivery 或事件创建失败，并会显示对应消息。
+逐帧函数再通过 `draw_text()` 把 `state->number` 画到视频画面中央。动作处理器在当帧逐帧函数之前执行，因此按钮被消费后，新数字会直接出现在该通道的下一次逻辑画面中。
 
-四个字段已经在模块 `logic.json.report_fields` 声明，并会聚合到 Web 清单。按钮声明、Socket/FIFO 链路、payload 校验和 handler 约束详见 `../custom-button-actions.md`。
+`ButtonDemoState` 保存在 `ctx->state` 中，所以多个通道同时使用本逻辑时，每个通道分别维护自己的数字。按钮声明、Socket/FIFO 链路和 handler 约束详见 `../custom-button-actions.md`。

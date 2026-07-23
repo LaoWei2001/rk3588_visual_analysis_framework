@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterator, Optional
 
+from services import runtime_state
+
 APPS_ROOT   = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 BINARY_NAME = os.environ.get("BINARY_NAME", "rk3588_yolo")
 
@@ -51,7 +53,7 @@ class AppAlreadyRunningError(RuntimeError):
 
 @contextmanager
 def _exclusive_start_lock() -> Iterator[None]:
-    """跨线程、跨 worker 串行化启动检查与 PID 提交，防止并发启动两个 App。"""
+    """跨线程、跨 worker 串行化整个运行组合的变更。"""
     APPS_ROOT.mkdir(parents=True, exist_ok=True)
     with _start_thread_lock:
         with _start_lock_path.open("a+") as lock_file:
@@ -60,6 +62,17 @@ def _exclusive_start_lock() -> Iterator[None]:
                 yield
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def runtime_lock() -> Iterator[None]:
+    """供后台服务绑定流程复用的全局运行锁。
+
+    服务必须在“查找当前视觉 App → 重写 unit → 启动”的整个过程中持有此锁，
+    避免视觉 App 恰好切换而绑定到旧目录。
+    """
+    with _exclusive_start_lock():
+        yield
 
 
 def _app_path(app_name: str) -> Path:
@@ -71,6 +84,41 @@ def _read_pid(app_name: str) -> Optional[int]:
         return int((_app_path(app_name) / "run.pid").read_text().strip())
     except (OSError, ValueError):
         return None
+
+
+def _current_boot_id() -> str:
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return ""
+
+
+def _clear_stale_runtime_marker(app_name: str) -> None:
+    app_dir = _app_path(app_name)
+    (app_dir / "run.pid").unlink(missing_ok=True)
+    (app_dir / "run.control.sock").unlink(missing_ok=True)
+    (app_dir / "run.boot_id").unlink(missing_ok=True)
+
+
+def _pid_belongs_to_app(app_name: str, pid: int) -> bool:
+    """验证 PID 确实是该 App 的视觉进程，避免重启后 PID 被其他进程复用。"""
+    app_dir = _app_path(app_name)
+    boot_file = app_dir / "run.boot_id"
+    current_boot = _current_boot_id()
+    if boot_file.exists() and current_boot:
+        try:
+            if boot_file.read_text().strip() != current_boot:
+                return False
+        except OSError:
+            return False
+
+    try:
+        expected_exe = (app_dir / BINARY_NAME).resolve(strict=True)
+        actual_exe = Path(f"/proc/{pid}/exe").resolve(strict=True)
+        actual_cwd = Path(f"/proc/{pid}/cwd").resolve(strict=True)
+        return actual_exe == expected_exe and actual_cwd == app_dir.resolve(strict=True)
+    except OSError:
+        return False
 
 
 def _find_running_app(exclude: Optional[str] = None) -> Optional[ManagedProcess]:
@@ -97,13 +145,16 @@ def _recover_process(app_name: str, announce: bool = False) -> Optional[ManagedP
     pid = _read_pid(app_name)
     if pid is None:
         if pid_file.exists():
-            pid_file.unlink(missing_ok=True)
+            _clear_stale_runtime_marker(app_name)
         return None
 
     try:
         os.kill(pid, 0)
     except (ProcessLookupError, PermissionError):
-        pid_file.unlink(missing_ok=True)
+        _clear_stale_runtime_marker(app_name)
+        return None
+    if not _pid_belongs_to_app(app_name, pid):
+        _clear_stale_runtime_marker(app_name)
         return None
 
     mode_file = app_dir / "run.mode"
@@ -149,6 +200,24 @@ def _clear_runtime_files_if_pid(app_name: str, pid: int) -> None:
     app_dir = _app_path(app_name)
     (app_dir / "run.pid").unlink(missing_ok=True)
     (app_dir / "run.control.sock").unlink(missing_ok=True)
+    (app_dir / "run.boot_id").unlink(missing_ok=True)
+
+
+def get_running_app_context() -> Optional[dict]:
+    """返回当前唯一视觉程序的 App/配置上下文；需要强一致时由调用方持有 runtime_lock。"""
+    running = _find_running_app()
+    if running is None:
+        return None
+    status = get_status(running.app_name)
+    if status.get("status") != "running":
+        return None
+    return {
+        "app": running.app_name,
+        "app_dir": _app_path(running.app_name),
+        "pid": running.pid,
+        "mode": status.get("mode") or "deploy",
+        "config": status.get("config") or "config.json",
+    }
 
 
 def _normalize_config_name(config_name: Optional[str]) -> str:
@@ -294,7 +363,7 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
             raise AppAlreadyRunningError(running.app_name, running.pid)
 
         # 同一个 App 再次启动仍保持原来的“重启”语义，不会与其他 App 并存。
-        stop_app(app_name)
+        _stop_app_unlocked(app_name)
 
         # 根据启动模式自动同步 enable_display：部署=0，调试=1
         _patch_display(config, enable=(mode == "debug"))
@@ -307,6 +376,14 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
         env = os.environ.copy()
         control_sock.unlink(missing_ok=True)
         env["RK_CHANNEL_CONTROL_SOCKET"] = str(control_sock)
+        # 与程序包 run.sh / deploy.sh 保持一致，确保 Web 手动启动和开机恢复
+        # 都使用 App 自带依赖与 assets，而不是偶然命中板端另一版本的动态库。
+        env["ASSETS_DIR"] = str(assets_dir)
+        bundled_libs = str(app_dir / "libs")
+        existing_ld_path = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = (
+            f"{bundled_libs}:{existing_ld_path}" if existing_ld_path else bundled_libs
+        )
         # Debug 模式要在板端 HDMI 上显示：补齐 X 显示环境（DISPLAY + XAUTHORITY + 放行本地 root）。
         # 否则 systemd 服务(无图形会话)拉起的程序连不上 X，表现为“先得在命令行手动跑一次才显示”。
         if mode == "debug":
@@ -319,7 +396,7 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1,    # Python 侧行缓冲；C 侧因走管道是块缓冲，但不影响最终正确性
+            bufsize=1,    # Python 侧行缓冲；视觉程序 main() 也显式启用了 stdout 行缓冲
             env=env,
         )
 
@@ -345,7 +422,9 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
             (app_dir / "run.mode").write_text(mode)
             (app_dir / "run.config").write_text(config_name)
             (app_dir / "run.started_at").write_text(str(started_at))
+            (app_dir / "run.boot_id").write_text(_current_boot_id())
             (app_dir / "run.pid").write_text(str(proc.pid))
+            runtime_state.mark_vision_started(app_name, mode, config_name)
         except Exception:
             # 提交运行标记失败时不能留下一个无法被后续互斥检查发现的孤儿进程。
             _processes.pop(app_name, None)
@@ -361,6 +440,7 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
             # 当前仍持有全局启动锁，不可能误删另一个 worker 刚提交的新 PID。
             (app_dir / "run.pid").unlink(missing_ok=True)
             control_sock.unlink(missing_ok=True)
+            (app_dir / "run.boot_id").unlink(missing_ok=True)
             raise
 
         return proc.pid
@@ -368,7 +448,7 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
 
 # ── 停止 ─────────────────────────────────────────────────────────────────────
 
-def stop_app(app_name: str) -> bool:
+def _stop_app_unlocked(app_name: str) -> bool:
     mp = _processes.get(app_name)
     disk_pid = _read_pid(app_name)
     if disk_pid is not None and (mp is None or mp.pid != disk_pid):
@@ -416,6 +496,14 @@ def stop_app(app_name: str) -> bool:
     return True
 
 
+def stop_app(app_name: str) -> bool:
+    """停止视觉程序并持久化用户的“停止”意图。"""
+    with _exclusive_start_lock():
+        stopped = _stop_app_unlocked(app_name)
+        runtime_state.mark_vision_stopped(app_name)
+        return stopped
+
+
 # ── 状态查询 ─────────────────────────────────────────────────────────────────
 
 def get_status(app_name: str) -> dict:
@@ -437,9 +525,7 @@ def get_status(app_name: str) -> dict:
             _clear_runtime_files_if_pid(app_name, mp.pid)
             return stopped
     else:
-        try:
-            os.kill(mp.pid, 0)
-        except ProcessLookupError:
+        if not _pid_belongs_to_app(app_name, mp.pid):
             _processes.pop(app_name, None)
             _clear_runtime_files_if_pid(app_name, mp.pid)
             return stopped

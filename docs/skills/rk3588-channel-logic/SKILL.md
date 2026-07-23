@@ -146,7 +146,7 @@ REGISTER_LOGIC(logic_xxx);
 | 课程人员停留入门骨架 | `modules/logic_course_01/logics.cpp` | `../../二次开发课程大纲.md` |
 | 统一告警、ROI、上报专用叠加 | `modules/logic_upload/logic.cpp` | `references/examples/logic_upload.md` |
 | 单次事件多投递、五种绘制层、原始/叠加媒体 | `modules/logic_upload_teach/logic.cpp` | `references/examples/logic_upload_teach.md` |
-| Web action、模块参数、pending 告警 | `modules/logic_button_demo/logic.cpp` | `references/examples/logic_button_demo.md` |
+| Web `+1` / `-1` action 与每通道状态 | `modules/logic_button_demo/logic.cpp` | `references/examples/logic_button_demo.md` |
 | 周期截图、参数热重载、原始/叠加图片 | `modules/logic_periodic_snapshot_demo/logic.cpp` | `references/examples/logic_periodic_snapshot_demo.md` |
 | 多区域 SOP、分支/循环、统一告警 | `modules/logic_path_sop/logic.cpp` | `references/examples/logic_path_sop.md` |
 

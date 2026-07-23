@@ -43,15 +43,6 @@ def _logic_defs(app_dir: Path) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def _default_actions() -> List[Dict[str, Any]]:
-    return [{
-        "id": "default",
-        "label": "default action",
-        "style": "default",
-        "help": "Handled by the current C++ logic before the next logic frame",
-    }]
-
-
 def _enabled_channels(channels: Any) -> List[tuple[int, Dict[str, Any]]]:
     """Return enabled channels keyed only by their configured channel ID."""
     enabled: List[tuple[int, Dict[str, Any]]] = []
@@ -94,9 +85,9 @@ async def get_channel_actions(name: str):
             })
             continue
         logic_def = logic_defs.get(logic_name, {})
-        actions = logic_def.get("actions")
-        if not isinstance(actions, list) or not actions:
-            actions = _default_actions()
+        actions = logic_def.get("actions", [])
+        if not isinstance(actions, list):
+            actions = []
         out_channels.append({
             "channel_id": channel_id,
             "enabled": True,

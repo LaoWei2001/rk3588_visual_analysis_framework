@@ -12,16 +12,23 @@ export default function ServicesPage() {
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    fetchApps()
+    let active = true
+    const loadApps = () => fetchApps()
       .then(data => {
+        if (!active) return
         setApps(data)
         setSelectedApp(current => {
           if (current && data.some(app => app.name === current)) return current
           return data.find(app => app.status === 'running')?.name ?? data[0]?.name ?? ''
         })
       })
-      .catch(() => setToast({ msg: '加载程序包列表失败', type: 'err' }))
-      .finally(() => setLoading(false))
+      .catch(() => {
+        if (active) setToast({ msg: '加载程序包列表失败', type: 'err' })
+      })
+      .finally(() => { if (active) setLoading(false) })
+    loadApps()
+    const timer = setInterval(loadApps, 5000)
+    return () => { active = false; clearInterval(timer) }
   }, [])
 
   useEffect(() => () => {
@@ -69,7 +76,7 @@ export default function ServicesPage() {
             <section className="services-scope">
               <div>
                 <strong>服务文件所属程序包</strong>
-                <p>这里只用于定位 services 目录；下方设置不属于该程序的任何 assets/config*.json。</p>
+                <p>这里只用于编辑 services 配置；启动后台服务时会自动绑定当前运行的视觉程序。</p>
               </div>
               <select value={selectedApp} onChange={event => setSelectedApp(event.target.value)}>
                 {apps.map(app => <option key={app.name} value={app.name}>{app.name}</option>)}

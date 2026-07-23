@@ -1,7 +1,7 @@
 [Unit]
 Description=RK3588 Web Config Console
-After=network.target
-Wants=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -9,6 +9,9 @@ User=root
 WorkingDirectory=/opt/ai_apps/_console/backend
 Environment=APPS_ROOT=/opt/ai_apps
 Environment=BINARY_NAME=rk3588_yolo
+# network-online.target 在部分板卡镜像上并不等待 Wi-Fi DHCP 完成。
+# 最多等待 30 秒获得真实连接；超时仍启动控制台，视觉进程自身会继续重连。
+ExecStartPre=-/usr/bin/nm-online -q --timeout=30
 ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --log-level info
 Restart=always
 RestartSec=5

@@ -197,7 +197,7 @@ REGISTER_LOGIC_ACTION(logic_demo, logic_demo_action);
 - 重置计数器、状态机或计时器；
 - 写入一个 `pending_xxx` 标志，让紧随其后的 `logic_xxx(ctx)` 完成绘制、告警或依赖当前帧的操作。
 
-现成的 `modules/logic_button_demo/logic.cpp` 就采用这个模式：`trigger_alarm` 按钮只设置 `pending_alarm = true`，随后正常的逐帧函数调用 `report_alarm()`。这样按钮处理、画面业务和告警逻辑的职责更清楚。
+现成的 `modules/logic_button_demo/logic.cpp` 是更小的入门示例：`+1` / `-1` 按钮只修改 `ctx->state` 中的正整数，随后正常的逐帧函数把新数字画到画面。需要依赖当前帧创建告警时，再采用 `pending_xxx` 标志把工作交给紧随其后的逐帧函数。
 
 不要在 handler 中执行长时间阻塞的网络请求、休眠或重量级任务。handler 与该通道当帧逻辑处在同一处理路径，阻塞会直接拖慢通道处理。
 
@@ -416,14 +416,15 @@ curl -X POST \
 
 如果运行中更换配置或修改 `logics.json`，已打开的弹窗不会自动刷新按钮清单。关闭并重新打开实时画面，或刷新页面。
 
-### 关于当前的 `default action` 回退
+### 未声明动作时不显示按钮
 
-当前 FastAPI 实现中，如果一个 logic 没有声明 `actions` 或数组为空，会生成一个 `id=default` 的回退按钮。它只是框架占位，不代表该 logic 一定支持 `default`：
+FastAPI 只返回当前 logic 在 App 根目录 `logics.json` 中显式声明的 `actions[]`：
 
-- logic 没注册 handler：点击会在入队前返回 `current logic has no action handler`；
-- logic 注册了 handler、但不处理 `default`：HTTP 仍可能先返回 `accepted`，最终日志显示 `handled=0`。
+- logic 没有声明 `actions` 或数组为空：Web 不显示按钮；
+- logic 声明了 action、但没有注册 C++ handler：按钮仍会显示，点击后返回 `current logic has no action handler`；
+- logic 注册了 handler、但不处理该 action ID：HTTP 可能先返回 `accepted`，最终日志显示 `handled=0`。
 
-因此，正式业务逻辑应显式声明自己的 `actions[]`。若产品期望“未声明动作时完全不显示按钮”，应修改后端 `_default_actions()` / `get_channel_actions()` 的回退策略，而不是在各 logic 中被迫实现一个无意义的 `default`。
+因此，按钮是否显示由 `logic.json` 的 `actions[]` 决定，按钮是否具备实际功能由对应的 `REGISTER_LOGIC_ACTION` handler 决定。
 
 ## 排错清单
 
@@ -469,7 +470,7 @@ C++ 关键日志格式：
 | 文件 | 职责 |
 |---|---|
 | `rk3588_yolo/src/logic/modules/logic_xxx/logic.json` | 当前 logic 的按钮元数据源；打包后聚合给 Web |
-| `rk3588_yolo/src/logic/modules/logic_button_demo/logic.cpp` | 自定义按钮最完整的现成示例：画面、切换、清空、手动告警 |
+| `rk3588_yolo/src/logic/modules/logic_button_demo/logic.cpp` | 最小自定义按钮示例：`+1` / `-1` 修改每通道数字并显示到画面 |
 | `rk3588_yolo/src/logic/core/channel_logic.h` | `ChannelAction`、`ChannelActionResult`、handler 类型和注册宏 |
 | `rk3588_yolo/src/logic/core/channel_logic.cpp` | 普通 logic 与 action handler 两套注册表 |
 | `rk3588_yolo/src/control/channel_control.cpp` | Unix Socket 协议、系统动作、每通道队列和控制线程 |

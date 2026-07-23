@@ -75,6 +75,7 @@ protected:
 private:
     pthread_t mTid;
     int bObjIsInited;
+    bool mThreadStarted{false}; // pipeline 可暂时离线，但监听/重连线程仍必须被 stop() join
     int mReconnectCount;
     int mRecoverOkCount;
     int mRecoverFailCount;

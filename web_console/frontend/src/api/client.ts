@@ -43,6 +43,8 @@ export interface AppInfo {
   config_files: string[]        // assets/ 下可选作启动配置的 .json（排除 roi_zones.json）
   active_config: string         // 上次/默认启动所用的配置文件名
   unreported: number            // 本地发件箱里待上报的业务记录数
+  autostart: boolean            // 用户是否勾选“开机自启”
+  desired_running: boolean      // 用户最后一次操作是否要求保持运行
   status: 'running' | 'stopped' | 'unknown'
   mode: string | null
   pid: number | null
@@ -79,6 +81,9 @@ export const startApp = (name: string, mode: 'deploy' | 'debug', config?: string
 
 export const stopApp = (name: string) =>
   api.post(`/apps/${name}/stop`).then(r => r.data)
+
+export const setAppAutostart = (name: string, enabled: boolean) =>
+  api.post(`/apps/${name}/autostart`, { enabled }).then(r => r.data)
 
 export const fetchConfig = (name: string) =>
   api.get<Record<string, unknown> | null>(`/apps/${name}/config`).then(r => r.data)
@@ -298,8 +303,11 @@ export interface ServiceInfo {
   uptime_seconds: number | null
   n_restarts: number | null
   bound_app: string | null      // 单元当前绑定到哪个 App 的 services/
+  bound_config: string | null   // OTA 当前绑定的视觉启动配置
   working_dir: string | null    // 单元的 WorkingDirectory（用于判断是否失效）
   path_ok: boolean              // WorkingDirectory 是否真实存在；false=失效单元，需重装修正
+  autostart: boolean            // 用户是否勾选“开机自启”
+  desired_running: boolean      // 用户最后一次操作是否要求保持运行
 }
 
 export const fetchServices = () => api.get<ServiceInfo[]>('/services').then(r => r.data)
@@ -309,6 +317,9 @@ export const installService = (key: string, app: string) =>
 
 export const controlService = (key: string, action: 'start' | 'stop' | 'restart') =>
   api.post(`/services/${key}/${action}`).then(r => r.data)
+
+export const setServiceAutostart = (key: string, enabled: boolean) =>
+  api.post(`/services/${key}/autostart`, { enabled }).then(r => r.data)
 
 export const fetchServiceLogs = (key: string, lines = 200) =>
   api.get<{ lines: string[] }>(`/services/${key}/logs`, { params: { lines } }).then(r => r.data)

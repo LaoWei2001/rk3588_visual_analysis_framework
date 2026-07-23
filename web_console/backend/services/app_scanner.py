@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from services.process_manager import get_status
+from services.runtime_state import get_vision_settings
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 BINARY_NAME = os.environ.get("BINARY_NAME", "rk3588_yolo")
@@ -49,6 +50,7 @@ def scan_apps() -> List[Dict[str, Any]]:
                 pass
 
         status_info = get_status(entry.name)
+        runtime_settings = get_vision_settings(entry.name)
 
         # 待上报记录数 = 统一事件目录数，每条事件必须包含 manifest.json。
         # 只检查目录结构、不解析内容；上报全部成功后事件目录会被删除。
@@ -76,6 +78,8 @@ def scan_apps() -> List[Dict[str, Any]]:
             "config_files": config_files,
             "active_config": active_config,
             "unreported": unreported,
+            "autostart": runtime_settings["autostart"],
+            "desired_running": runtime_settings["desired_running"],
             **status_info,
         })
 

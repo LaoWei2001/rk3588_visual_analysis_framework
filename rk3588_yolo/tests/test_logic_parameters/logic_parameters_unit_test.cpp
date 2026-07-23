@@ -41,22 +41,9 @@ int main()
     assert(logic_parameters_resolve("logic_button_demo", "{}", &normalized,
                                     &defaults, &errors));
     assert(errors.empty());
-    assert(defaults.has("pulse_duration_sec"));
-    assert(std::fabs(defaults.get_float("pulse_duration_sec") - 3.0f) < 0.0001f);
-    assert(normalized == "{\"pulse_duration_sec\":3}");
-
-    LogicParameterSet configured;
-    assert(logic_parameters_resolve(
-        "logic_button_demo", "{\"pulse_duration_sec\":4.5}", nullptr,
-        &configured, &errors));
-    assert(std::fabs(configured.get_float("pulse_duration_sec") - 4.5f) < 0.0001f);
-
-    assert(logic_parameters_reload_impact(
-               "logic_button_demo", "{\"pulse_duration_sec\":3}",
-               "{\"pulse_duration_sec\":4.5}") ==
-           LogicReloadImpact::RESET_STATE);
-    assert(logic_parameters_reload_impact(
-               "logic_button_demo", "{}", "{\"pulse_duration_sec\":3}") ==
+    assert(!defaults.has("number"));
+    assert(normalized == "{}");
+    assert(logic_parameters_reload_impact("logic_button_demo", "{}", "{}") ==
            LogicReloadImpact::NONE);
 
     LogicParameterSet periodic_defaults;
@@ -88,7 +75,7 @@ int main()
            LogicReloadImpact::RESET_STATE);
 
     assert(!logic_parameters_resolve(
-        "logic_button_demo", "{\"pulse_duration_sec\":31}", nullptr,
+        "logic_periodic_snapshot_demo", "{\"report_interval_sec\":0}", nullptr,
         nullptr, &errors));
     assert(!errors.empty());
 
@@ -97,8 +84,8 @@ int main()
     assert(!errors.empty());
 
     assert(!logic_parameters_resolve(
-        "logic_button_demo",
-        "{\"pulse_duration_sec\":3,\"pulse_duration_sec\":4}",
+        "logic_periodic_snapshot_demo",
+        "{\"report_interval_sec\":10,\"report_interval_sec\":15}",
         nullptr, nullptr, &errors));
     assert(!errors.empty());
 

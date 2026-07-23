@@ -180,6 +180,11 @@ static void *fd_monitor_thread_func(void *arg)
 /*======================== main ========================*/
 int main(int argc, char **argv)
 {
+    /* Web 控制台通过 PIPE 捕获日志。stdout 连到管道时 libc 默认使用块缓冲，
+     * 冷启动/重连日志可能长时间不显示；统一改为逐行刷新。 */
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+
     if (argc == 2 && strcmp(argv[1], "--list-logics") == 0)
     {
         for (const auto &name : channel_logic_names())

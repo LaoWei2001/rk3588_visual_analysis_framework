@@ -1,7 +1,7 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
-import { fetchApps, fetchLogTail, fetchStreamHealth, startApp, stopApp, streamUrl, uploadApp, deleteApp, fetchConfig, loadConfigFile, fetchChannelControls, sendChannelAction, AppInfo, ChannelControlsResponse, LogicActionDef } from '../api/client'
+import { fetchApps, fetchLogTail, fetchStreamHealth, startApp, stopApp, setAppAutostart, streamUrl, uploadApp, deleteApp, fetchConfig, loadConfigFile, fetchChannelControls, sendChannelAction, AppInfo, ChannelControlsResponse, LogicActionDef } from '../api/client'
 import { loadLastConfig } from '../utils/lastConfig'
 import { useAuthStore } from '../store/authStore'
 import './AppsPage.css'
@@ -32,6 +32,7 @@ export default function AppsPage() {
   const [modes, setModes]     = useState<Record<string, 'deploy' | 'debug'>>({})
   const [cfgSel, setCfgSel]   = useState<Record<string, string>>({})   // 每个程序选中的启动配置文件名
   const [busy, setBusy]       = useState<Record<string, boolean>>({})
+  const [autostartBusy, setAutostartBusy] = useState<Record<string, boolean>>({})
   const [toast, setToast]     = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
   const [crashInfo, setCrashInfo] = useState<{ name: string; lines: string[] } | null>(null)
   const [viewApp, setViewApp]       = useState<string | null>(null)   // 正在查看实时画面的程序
@@ -269,8 +270,13 @@ export default function AppsPage() {
   const handleStart = async (name: string, config?: string) => {
     setBusy(b => ({ ...b, [name]: true }))
     try {
-      await startApp(name, modes[name] ?? 'deploy', config)
-      showToast(config && config !== 'config.json' ? `${name} 已使用配置 ${config} 启动` : `${name} 已启动`)
+      const result = await startApp(name, modes[name] ?? 'deploy', config)
+      const warnings = result?.service_sync?.errors as string[] | undefined
+      if (warnings?.length) {
+        showToast(`${name} 已启动，但后台服务同步失败：${warnings.join('；')}`, 'err')
+      } else {
+        showToast(config && config !== 'config.json' ? `${name} 已使用配置 ${config} 启动` : `${name} 已启动`)
+      }
       await load()
     } catch (e: unknown) {
       showToast(`启动失败：${errMsg(e)}`, 'err')
@@ -320,6 +326,20 @@ export default function AppsPage() {
       showToast(`删除失败：${errMsg(e)}`, 'err')
     } finally {
       setBusy(b => ({ ...b, [name]: false }))
+    }
+  }
+
+  const handleAutostart = async (name: string, enabled: boolean) => {
+    setAutostartBusy(current => ({ ...current, [name]: true }))
+    try {
+      await setAppAutostart(name, enabled)
+      setApps(current => current.map(app => app.name === name ? { ...app, autostart: enabled } : app))
+      showToast(`${name} 已${enabled ? '开启' : '关闭'}开机自启`)
+    } catch (e: unknown) {
+      showToast(`设置开机自启失败：${errMsg(e)}`, 'err')
+      await load()
+    } finally {
+      setAutostartBusy(current => ({ ...current, [name]: false }))
     }
   }
 
@@ -558,6 +578,15 @@ export default function AppsPage() {
                 </div>
 
                 <div className="action-btns">
+                  <label className="autostart-toggle" title="勾选后，仅当关机前最后状态为运行时才会在下次开机恢复">
+                    <input
+                      type="checkbox"
+                      checked={app.autostart}
+                      disabled={!!autostartBusy[app.name] || !!busy[app.name]}
+                      onChange={e => handleAutostart(app.name, e.target.checked)}
+                    />
+                    <span>{autostartBusy[app.name] ? '保存中' : '开机自启'}</span>
+                  </label>
                   {app.status !== 'running' ? (
                     <button
                       className="action-btn start"

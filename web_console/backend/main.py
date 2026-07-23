@@ -1,3 +1,4 @@
+import asyncio
 import os
 import random
 from contextlib import asynccontextmanager
@@ -11,7 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from routers import (apps, assets, auth, channel_control, config_io, logs, ota_config, process,
                      records, services, snapshot, stream, terminal, upload_config)
 from services.auth_service import get_session
-from services.process_manager import recover_processes
+from services import process_manager as process_manager
+from services import runtime_state
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
@@ -32,7 +34,37 @@ _PUBLIC_API = {"/api/auth/login"}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    recover_processes()
+    process_manager.recover_processes()
+
+    def restore_runtime() -> None:
+        target = runtime_state.get_vision_boot_target()
+        if target is None:
+            print("[Autostart] 没有满足条件的视觉程序，跳过运行组合恢复")
+            return
+        try:
+            current = process_manager.get_running_app_context()
+            if current is not None and current["app"] != target["app"]:
+                print(
+                    f"[Autostart] 已有视觉程序 {current['app']} 运行，"
+                    f"跳过目标 {target['app']}"
+                )
+                return
+            if current is None:
+                process_manager.start_app(target["app"], target["mode"], target["config"])
+                print(
+                    f"[Autostart] 已恢复视觉程序 {target['app']} "
+                    f"({target['mode']}, {target['config']})"
+                )
+            result = services.sync_services_for_running_app()
+            for message in result["errors"]:
+                print(f"[Autostart] 后台服务恢复失败：{message}")
+            if result["updated"]:
+                print(f"[Autostart] 已恢复/重新绑定后台服务：{', '.join(result['updated'])}")
+        except Exception as exc:
+            print(f"[Autostart] 运行组合恢复失败：{exc}")
+
+    # systemctl/Popen 都是阻塞调用，放入工作线程，避免卡住事件循环。
+    await asyncio.to_thread(restore_runtime)
     yield
 
 
