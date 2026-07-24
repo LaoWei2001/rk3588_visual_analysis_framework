@@ -49,6 +49,12 @@
                         "title": "测试文本",
                         "description": "用于测试文本显示功能",
                         "default": "Hello RK3588"
+                    },
+                    "test_num": {
+                        "type": "number",
+                        "title": "测试数字",
+                        "description": "用于测试数字显示功能",
+                        "default": 666
                     }
                 }
             },
@@ -62,6 +68,15 @@
                     "hot_reload": "preserve_state",
                     "label": "测试文本",
                     "help": "用于测试文本显示功能"
+                },
+                {
+                    "key": "test_num",
+                    "type": "float",
+                    "storage": "logic_parameters",
+                    "default": 666,
+                    "hot_reload": "preserve_state",
+                    "label": "测试数字",
+                    "help": "用于测试数字显示功能"
                 }
             ]
         },

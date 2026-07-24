@@ -1,0 +1,9 @@
+{
+    "label": "课程3: 模型推理结果获取示例",
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+    },
+    "report_fields": []
+}
