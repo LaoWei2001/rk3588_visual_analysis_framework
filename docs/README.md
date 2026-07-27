@@ -67,7 +67,7 @@ C++ logic 不直接做 HTTP，不使用旧 Redis 报警队列，也不在 logic 
 | `logic_default` | [可删除的空白逻辑示例](skills/rk3588-channel-logic/references/examples/logic_default.md) |
 | `logic_course_person_dwell` | [二次开发课程人员停留骨架](二次开发课程大纲.md) |
 | `logic_upload` | [ROI 告警示例](skills/rk3588-channel-logic/references/examples/logic_upload.md) |
-| `logic_upload_teach` | [统一上报教学示例](skills/rk3588-channel-logic/references/examples/logic_upload_teach.md) |
+| `logic_upload_teach` | [按钮上报告警示例](skills/rk3588-channel-logic/references/examples/logic_upload_teach.md) |
 | `logic_button_demo` | [Web 动作示例](skills/rk3588-channel-logic/references/examples/logic_button_demo.md) |
 | `logic_periodic_snapshot_demo` | [周期截图与参数热更新示例](skills/rk3588-channel-logic/references/examples/logic_periodic_snapshot_demo.md) |
 | `logic_path_sop` | [SOP 路径逻辑](skills/rk3588-channel-logic/references/examples/logic_path_sop.md) |

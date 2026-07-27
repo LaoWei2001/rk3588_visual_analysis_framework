@@ -29,8 +29,6 @@ function NumField({ label, value, def, onChange, step, min, max }: {
 }
 
 export interface GlobalSettingsData {
-  model_path: string
-  label_path: string
   enable_display: number
   disp_width: number
   disp_height: number
@@ -53,8 +51,6 @@ export interface GlobalSettingsData {
 }
 
 export const DEFAULT_GLOBAL_SETTINGS: GlobalSettingsData = {
-  model_path: 'assets/yolov8n.rknn',
-  label_path: 'assets/labels.txt',
   enable_display: 0,
   disp_width: 640, disp_height: 640,
   tile_rows: 1, tile_cols: 1,
@@ -88,17 +84,6 @@ export default function GlobalSettingsPanel({ settings: s, onChange }: Props) {
 
       {!collapsed && (
         <div className="gs-body">
-          <div className="gs-row">
-            <div className="gs-field gs-wide">
-              <label>全局模型路径</label>
-              <input value={String(s.model_path ?? '')} onChange={e => set('model_path', e.target.value)} />
-            </div>
-            <div className="gs-field gs-wide">
-              <label>标签文件路径</label>
-              <input value={String(s.label_path ?? '')} onChange={e => set('label_path', e.target.value)} />
-            </div>
-          </div>
-
           <div className="gs-row">
             <NumField label="显示宽度"     value={s.disp_width}      def={640} onChange={v => set('disp_width', v)} />
             <NumField label="显示高度"     value={s.disp_height}     def={640} onChange={v => set('disp_height', v)} />

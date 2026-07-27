@@ -25,7 +25,7 @@ const EMPTY_UPLOAD: UploadServiceConfig = {
   server: { url: '', timeout: 15 },
   profiles: {},
 }
-const EMPTY_OTA: OtaConfig = { platform_ws_host: 'tunnel.memanager.cn', target_config: 'config.json' }
+const EMPTY_OTA: OtaConfig = { platform_ws_host: 'tunnel.memanager.cn', target_config: 'active' }
 
 // 服务器上报不使用鉴权 Token；读取旧配置时一并剔除，下一次保存会清理历史残留字段。
 const stripServerTokens = (profiles: Record<string, UploadProfile>): Record<string, UploadProfile> =>
@@ -248,13 +248,14 @@ export default function ServiceConfigModal({ appName, onClose, onToast, embedded
                   onChange={e => setOta(s => ({ ...s, platform_ws_host: e.target.value }))}
                   placeholder="tunnel.memanager.cn" />
               </Field>
-              <Field label="目标配置文件名 (相对 assets/，默认 config.json)">
+              <Field label="目标配置文件名（active=跟随当前启动配置）">
                 <input style={inputStyle} value={ota.target_config}
                   onChange={e => setOta(s => ({ ...s, target_config: e.target.value }))}
-                  placeholder="config.json" />
+                  placeholder="active" />
               </Field>
               <div style={{ fontSize: 11, color: '#9aa4b2', lineHeight: 1.5 }}>
-                目标文件须与控制台/程序实际运行的那份一致（默认 <code>config.json</code>），否则 OTA 换的模型热重载不进正在跑的进程。
+                建议保持 <code>active</code>，OTA 会读取 App 根目录的 <code>run.config</code>；
+                也可显式填写 assets/ 下的配置文件名。
               </div>
             </>
           )}

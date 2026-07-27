@@ -35,8 +35,8 @@ def scan_apps() -> List[Dict[str, Any]]:
                     labels.append(rel)
                 elif f.suffix in (".mp4", ".avi", ".mkv"):
                     videos.append(rel)
-                elif f.suffix == ".json" and f.name != "roi_zones.json":
-                    config_files.append(rel)   # 可选作启动配置的 .json（排除 ROI 数据）
+                elif f.suffix == ".json":
+                    config_files.append(rel)
 
         # 上次启动所用的配置文件名（供「指定配置启动」下拉默认选中），缺省 config.json
         cfg_file = entry / "run.config"

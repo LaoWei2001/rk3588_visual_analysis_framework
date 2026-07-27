@@ -191,6 +191,19 @@
   font-size: 12px;
   padding: 3px 6px;
 }
+.roi-zone-input.duplicate {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.25);
+}
+.roi-name-error {
+  color: #fca5a5;
+  background: rgba(127, 29, 29, 0.25);
+  border: 1px solid #dc2626;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 6px 8px;
+}
 .roi-zone-pts {
   font-size: 10px;
   color: var(--text2);
@@ -266,3 +279,10 @@
 .roi-btn.danger:hover  { background: #7f1d1d; }
 .roi-btn.primary { background: #1e3a6b; border-color: #3b82f6; color: #93c5fd; }
 .roi-btn.primary:hover { background: #2563eb; color: white; }
+.roi-btn:disabled,
+.roi-btn:disabled:hover {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--surface2);
+  color: var(--text2);
+}

@@ -214,12 +214,13 @@ journalctl -u unified_upload -f
 ```json
 {
   "platform_ws_host": "tunnel.example.com",
-  "target_config": "config.json"
+  "target_config": "active"
 }
 ```
 
 - `platform_ws_host`：不带协议和路径；服务连接 `wss://<host>/ws/device/<DeviceID>`；
-- `target_config`：相对 App `assets/` 的配置文件名，必须与当前业务进程实际运行的配置一致。
+- `target_config`：推荐使用 `active`，每次操作动态读取 App 根目录的 `run.config`；
+  也可填写相对 App `assets/` 的明确配置文件名。
 
 环境变量优先级：
 
@@ -233,34 +234,33 @@ journalctl -u unified_upload -f
 
 ```text
 收到 UPDATE_COMMAND
-  → 根据 channel 查本地 version
+  → 根据 channel + model_id 查 models[].version
   → 版本一致则直接回报成功
-  → HTTPS 下载到 /tmp/model_update_chN.rknn
+  → HTTPS 下载到 /tmp/model_update_chN_<model_id>.rknn
   → MD5 校验
-  → 移入 assets/model_chN_<md5前8位>.rknn
-  → 按 channels[].id 查目标通道
-  → 更新 model_path / model_type / version
+  → 移入 assets/model_chN_<model_id>_<md5前8位>.rknn
+  → 按 channels[].id + models[].id 查目标模型
+  → 更新该 models[] 元素的 model_path / model_type / version
   → 写回目标配置
   → 回报进度
 ```
 
-C++ 配置监控检测到 `model_path/model_type` 改变后会热换模型，因此旧单模型配置通常无需停止业务进程。
+C++ 配置监控检测到 `models[]` 改变后会热换对应通道模型，无需停止业务进程。
 
-### 3.3 多模型限制
+### 3.3 多模型定位
 
-OTA 当前只更新通道顶层旧字段：
+OTA 指令必须携带 `model_id`，与通道内稳定的 `models[].id` 完全一致：
 
 ```json
 {
-  "model_path": "assets/model_ch0_xxxxxxxx.rknn",
-  "model_type": "yolov5",
+  "channel": 0,
+  "model_id": "detector",
+  "type": "yolov5",
   "version": "..."
 }
 ```
 
-当通道存在非空且有效的 `models[]` 时，推理优先使用 `models[]`。此时只修改顶层 `model_path` 可能会触发一次重载检查，但不会替换实际使用的子模型。
-
-因此当前 OTA 适用于旧单模型通道。若项目使用 `models[]`，需要扩展 OTA 指令和 `ota_agent.py`，明确要更新的 model ID，并修改对应 `models[]` 元素的路径、类型和版本信息。
+服务会先按通道 ID 定位通道，再按模型 ID 定位唯一元素。缺少 `model_id`、ID 不存在或 `models` 不是数组时直接回报失败，不猜测第一个模型。
 
 ## 4. systemd 与 Web 面板
 

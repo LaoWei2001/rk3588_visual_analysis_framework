@@ -145,12 +145,12 @@ REGISTER_LOGIC(logic_xxx);
 | 可删除的空白模块示例 | `modules/logic_default/logic.cpp` | `references/examples/logic_default.md` |
 | 课程人员停留入门骨架 | `modules/logic_course_01/logics.cpp` | `../../二次开发课程大纲.md` |
 | 统一告警、ROI、上报专用叠加 | `modules/logic_upload/logic.cpp` | `references/examples/logic_upload.md` |
-| 单次事件多投递、五种绘制层、原始/叠加媒体 | `modules/logic_upload_teach/logic.cpp` | `references/examples/logic_upload_teach.md` |
+| Web 按钮触发的图片/视频上报 | `modules/logic_upload_teach/logic.cpp` | `references/examples/logic_upload_teach.md` |
 | Web `+1` / `-1` action 与每通道状态 | `modules/logic_button_demo/logic.cpp` | `references/examples/logic_button_demo.md` |
 | 周期截图、参数热重载、原始/叠加图片 | `modules/logic_periodic_snapshot_demo/logic.cpp` | `references/examples/logic_periodic_snapshot_demo.md` |
 | 多区域 SOP、分支/循环、统一告警 | `modules/logic_path_sop/logic.cpp` | `references/examples/logic_path_sop.md` |
 
-不要把仓库中不存在的旧 `logic_server`、`logic_dify` 等名称写成现成可选逻辑。学习统一上报和绘制层先看 `logic_upload_teach`；实现真实 ROI 报警再从 `logic_upload` 的业务闩锁和本说明的 `ctx->state` 骨架扩展。
+不要把仓库中不存在的旧 `logic_server`、`logic_dify` 等名称写成现成可选逻辑。学习 Web 按钮触发统一上报先看 `logic_upload_teach`；实现真实 ROI 报警再从 `logic_upload` 的业务闩锁和本说明的 `ctx->state` 骨架扩展。
 
 ## 接线与验证
 

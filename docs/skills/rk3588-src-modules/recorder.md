@@ -15,7 +15,7 @@
 
 上述是 recorder 内部枚举的完整能力。当前 frame inlet 对配置值 `custom` 和 `all` 都映射为 `DISPLAY`，以实现 Web 的“与实时播放窗口画面一致/画面上叠加信息”；`none` 映射为原始模式。若以后要让 Web 分别暴露 CUSTOM/ALL，必须同步修改该映射，而不能只改枚举说明。
 
-用于直观看出 `DISPLAY/IMAGE/VIDEO/UPLOAD/ALL` 差异的可运行模块是 `logic_upload_teach`，操作说明见 `../rk3588-channel-logic/references/examples/logic_upload_teach.md`。
+用于验证 Web 按钮触发视频上报的可运行模块是 `logic_upload_teach`，操作说明见 `../rk3588-channel-logic/references/examples/logic_upload_teach.md`。
 
 ## 工作模型
 

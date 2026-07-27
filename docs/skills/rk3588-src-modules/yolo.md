@@ -19,7 +19,7 @@
 
 ## 单模型与多模型
 
-单模型配置经 `create_model(type, model_path, label_path, core_mask, obj, nms)` 生成 `shared_ptr<ModelBase>`。NPU core 允许 0、1、2；未指定时按实例轮转分配。
+`ChannelConfig.models[]` 是唯一模型配置入口。单个有效条目经 `create_model(type, model_path, label_path, core_mask, obj, nms)` 生成 `shared_ptr<ModelBase>`。NPU core 允许 0、1、2；未指定时按实例轮转分配。
 
 当 `ChannelConfig.models[]` 有多个有效条目时，推理层为每个条目创建子模型并包装为 `CompositeModel`。持久并行执行器让子模型在同一帧上运行，再由 `merge_child_results()`：
 

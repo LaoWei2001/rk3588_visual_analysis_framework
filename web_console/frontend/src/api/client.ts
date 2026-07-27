@@ -40,7 +40,7 @@ export interface AppInfo {
   models: string[]
   labels: string[]
   videos: string[]
-  config_files: string[]        // assets/ 下可选作启动配置的 .json（排除 roi_zones.json）
+  config_files: string[]        // assets/ 下可选作启动配置的 .json
   active_config: string         // 上次/默认启动所用的配置文件名
   unreported: number            // 本地发件箱里待上报的业务记录数
   autostart: boolean            // 用户是否勾选“开机自启”
@@ -97,21 +97,9 @@ export const saveConfigFile = (name: string, path: string, config: Record<string
     `/apps/${name}/config-file`, config, { params: { path } },
   ).then(r => r.data)
 
-// 删除 assets/ 下指定配置文件（roi_zones.json 受保护）。
+// 删除 assets/ 下指定配置文件。
 export const deleteConfigFile = (name: string, path: string) =>
   api.delete<{ ok: boolean }>(`/apps/${name}/config-file`, { params: { path } }).then(r => r.data)
-
-// 一个通道可有多个 ROI 区域: zones=全部区域(名字+多边形), polygon=首区域(向后兼容单 ROI)。
-export type RoiEntry = {
-  polygon?: number[][]
-  zones?: { name: string; polygon: number[][] }[]
-}
-
-export const fetchROI = (name: string) =>
-  api.get<Record<string, RoiEntry>>(`/apps/${name}/roi`).then(r => r.data)
-
-export const saveROI = (name: string, roi: Record<string, RoiEntry>) =>
-  api.post(`/apps/${name}/roi`, roi).then(r => r.data)
 
 export const fetchAssets = (name: string) =>
   api.get<AppAssets>(`/apps/${name}/assets`).then(r => r.data)
@@ -333,7 +321,13 @@ export const uploadApp = (
   const fd = new FormData()
   fd.append('file', file)
   if (name) fd.append('name', name)
-  return api.post<{ ok: boolean; name: string; has_binary: boolean; has_config: boolean }>(
+  return api.post<{
+    ok: boolean
+    name: string
+    has_binary: boolean
+    has_config: boolean
+    stopped_apps: string[]
+  }>(
     '/apps/upload', fd,
     { onUploadProgress: e => { if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100)) } },
   ).then(r => r.data)

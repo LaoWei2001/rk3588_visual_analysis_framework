@@ -947,7 +947,7 @@ function ReportForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ROI info — 一个 ROI 节点(=一个通道)可包含多个命名区域; 都在节点的绘制弹窗里管理。
+// ROI info — 一个 ROI 节点连接一个视频流通道，可包含多个命名区域。
 // ─────────────────────────────────────────────────────────────────────────────
 function ROIInfo({ node }: { node: Node }) {
   const zones = useROIStore(s => s.zones[node.id] ?? EMPTY_ZONES)
@@ -956,18 +956,19 @@ function ROIInfo({ node }: { node: Node }) {
   return (
     <div className="ncp-form">
       <div className={`ncp-roi-status ${n > 0 ? 'active' : ''}`}>
-        {n > 0 ? `✔ 已配置 ${n} 个 ROI 区域` : '🔲 未绘制 ROI — 推理时使用全屏'}
+        {n > 0 ? `✔ 已配置 ${n} 个 ROI 区域` : '🔲 尚未绘制 ROI 区域'}
       </div>
       {n > 0 && (
         <ul className="ncp-roi-zone-ul">
           {zones.map((z, i) => (
-            <li key={i}>{i + 1}. {z.name?.trim() || `区域${i + 1}`}（{Math.max(0, z.polygon.length - 1)} 顶点）</li>
+            <li key={i}>{i + 1}. {z.name?.trim() || `区域${i + 1}`}（{z.polygon.length} 顶点）</li>
           ))}
         </ul>
       )}
       <div className="ncp-hint" style={{ marginTop: 10 }}>
-        在画布的 ROI 节点上点「绘制/编辑 ROI 区域」，可在同一张画面上画多个区域并各自命名。
-        逻辑里用 ctx-&gt;rois / ctx-&gt;roi_by_name(...) 调用各区域。
+        将 ROI 节点连接到视频流节点后，点「绘制/编辑 ROI 区域」即可配置该通道的多个命名区域。
+        ROI 与模型推理解耦；无论是否连接模型，逻辑里都可用
+        ctx-&gt;rois / ctx-&gt;roi_by_name(...) 访问。
       </div>
     </div>
   )

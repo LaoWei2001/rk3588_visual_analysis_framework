@@ -31,9 +31,8 @@ import { graphToConfig }   from '../utils/graphToConfig'
 import { configToGraph }   from '../utils/configToGraph'
 import { saveLastConfig }  from '../utils/lastConfig'
 import {
-  fetchConfig, fetchROI, saveConfig, saveROI, saveConfigFile, deleteConfigFile,
+  fetchConfig, saveConfig, saveConfigFile, deleteConfigFile,
   fetchConfigFiles, loadConfigFile,
-  type RoiEntry,
 } from '../api/client'
 import GlobalLogicsPanel,  { GlobalLogicEntry }                    from '../components/GlobalLogicsPanel'
 import GlobalSettingsPanel, { GlobalSettingsData, DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
@@ -253,14 +252,9 @@ export default function EditorPage() {
     ;(async () => {
       try {
         let cfg: Record<string, unknown> | null = null
-        let roi: Record<string, RoiEntry> = {}
         if (isDefault) {
-          // 默认配置：沿用 roi_zones.json（编辑器 ROI 持久化），并恢复画布布局
-          const [c, r] = await Promise.all([fetchConfig(appName), fetchROI(appName)])
-          cfg = c as Record<string, unknown> | null
-          roi = r ?? {}
+          cfg = await fetchConfig(appName) as Record<string, unknown> | null
         } else {
-          // 其他配置：ROI 用文件自带的内嵌数据，不串用 roi_zones.json
           cfg = await loadConfigFile(appName, targetRel).catch(() => null)
         }
 
@@ -271,7 +265,7 @@ export default function EditorPage() {
           cfg = {}
         }
 
-        applyConfig(cfg, roi)
+        applyConfig(cfg)
       } catch { /* blank canvas */ }
     })()
   }, [appName, configParam]) // eslint-disable-line
@@ -281,11 +275,10 @@ export default function EditorPage() {
   // configToGraph 按「通道序号 + 角色」还原 —— 每份配置自带各自的布局，互不影响，无需 localStorage。
   const applyConfig = (
     cfg: Record<string, unknown>,
-    roi: Record<string, RoiEntry>,
     markAsSaved = true,
   ) => {
     const { nodes: n, edges: e, roiMapping, globalLogics: gl, globalSettings: gs } =
-      configToGraph(cfg, roi)
+      configToGraph(cfg)
 
     setNodes(n)
     setEdges(e)
@@ -345,6 +338,29 @@ export default function EditorPage() {
 
   // ── Colored edges based on source handle ──
   const onConnect = useCallback((params: Connection) => {
+    // ROI 与算法链路解耦：一个 ROI 节点只归属一个视频流，一个视频流也只接一个 ROI 节点。
+    if (params.sourceHandle === 'roi-out' || params.targetHandle === 'roi-in') {
+      const sourceNode = nodesRef.current.find(node => node.id === params.source)
+      const targetNode = nodesRef.current.find(node => node.id === params.target)
+      if (sourceNode?.type !== 'roi' || targetNode?.type !== 'stream') {
+        showToast('ROI 区域只能连接到视频流节点', false)
+        return
+      }
+      const roiAlreadyUsed = edgesRef.current.some(
+        e => e.source === params.source && e.sourceHandle === 'roi-out'
+      )
+      if (roiAlreadyUsed) {
+        showToast('一个 ROI 节点只能归属于一个视频流', false)
+        return
+      }
+      const streamAlreadyHasRoi = edgesRef.current.some(
+        e => e.target === params.target && e.targetHandle === 'roi-in'
+      )
+      if (streamAlreadyHasRoi) {
+        showToast('一个视频流只能连接一个 ROI 节点；一个节点内可以配置多个区域', false)
+        return
+      }
+    }
     // 一个视频流可连接多个模型；但“多模型推理”和“直连逻辑的无推理模式”不能混用。
     if (params.sourceHandle === 'stream-out') {
       const targetNode = nodesRef.current.find(node => node.id === params.target)
@@ -639,10 +655,8 @@ export default function EditorPage() {
     setShowImport(false)
     try {
       const cfg = await loadConfigFile(appName, filePath)
-      // 导入另一份配置: ROI 只用该配置自带的(ch.roi_polygon)，
-      // 不去拉本 App 当前的 roi_zones.json(那是上一份配置的 ROI，会串用)。
-      // 画布布局也用该文件自带的 _editor_layout（每份配置自带布局，互不串用）。
-      applyConfig(cfg, {})
+      // ROI 与画布布局都从当前配置文件恢复，每份配置互不串用。
+      applyConfig(cfg)
       setCurrentFile(filePath)   // 之后「保存」写回这份文件，不动 config.json
       showToast(`已加载 ${filePath}（保存将写入此文件）`)
     } catch (e: unknown) {
@@ -671,10 +685,8 @@ export default function EditorPage() {
 
       let fileName = file.name.replace(/\\/g, '/').split('/').pop() || 'config_imported.json'
       if (!fileName.toLowerCase().endsWith('.json')) fileName += '.json'
-      if (fileName.toLowerCase() === 'roi_zones.json') fileName = 'config_imported.json'
-
-      // ROI 从 channels[].roi_zones / roi_polygon 恢复；导出的配置本身已内嵌这些字段。
-      applyConfig(cfg, {}, false)
+      // ROI 只从 channels[].roi_zones 恢复。
+      applyConfig(cfg, false)
       setCurrentFile(`assets/${fileName}`)
       setShowImport(false)
       showToast(`已从电脑导入 ${fileName}，尚未写入板端；请点击保存或另存为`)
@@ -691,7 +703,6 @@ export default function EditorPage() {
     let fname = input.trim().replace(/\\/g, '/').split('/').pop() ?? ''
     if (!fname) { showToast('文件名不能为空', false); return }
     if (!fname.toLowerCase().endsWith('.json')) fname += '.json'
-    if (fname === 'roi_zones.json') { showToast('该文件名被占用，请换一个', false); return }
     const path = `assets/${fname}`
     if (importFiles.includes(path) || path === 'assets/config.json') {
       if (!window.confirm(`${fname} 已存在，覆盖为一个空配置？`)) return
@@ -699,7 +710,7 @@ export default function EditorPage() {
     setSaving(true)
     try {
       const r = await saveConfigFile(appName, path, {})
-      applyConfig({}, {})                // 空白画布
+      applyConfig({})                    // 空白画布
       setCurrentFile(r.path)             // 之后「保存」写到新文件
       setShowImport(false)
       showToast(`已新建 ${fname}，现在编辑的是空配置`)
@@ -736,7 +747,7 @@ export default function EditorPage() {
   }
 
   // ── 由当前画布生成配置（含校验）；失败时弹 toast 并返回 null ──
-  const buildConfig = (): { config: Record<string, unknown>; roi: Record<string, RoiEntry> } | null => {
+  const buildConfig = (): { config: Record<string, unknown> } | null => {
     if (!appName) { showToast('未选择程序', false); return null }
     // 每个视频流节点本身就是合法通道；模型和后处理 logic 都是可选步骤。
     const streamNodes = nodes.filter(n => n.type === 'stream')
@@ -756,6 +767,37 @@ export default function EditorPage() {
     if (dupNums.length > 0) {
       showToast(`通道号重复：Ch.${[...new Set(dupNums)].join('、')} — 请在视频流节点中修改后再保存`, false)
       return null
+    }
+
+    // 画了区域的 ROI 节点必须直接连接一路视频流，才能明确写入哪个通道的 roi_zones。
+    for (const roiNode of nodes.filter(n => n.type === 'roi')) {
+      const zones = roiZones[roiNode.id] ?? []
+      if (zones.length === 0) continue
+
+      const seenNames = new Set<string>()
+      const duplicateNames = new Set<string>()
+      zones.forEach(zone => {
+        const name = zone.name.trim()
+        if (!name) return
+        if (seenNames.has(name)) duplicateNames.add(name)
+        else seenNames.add(name)
+      })
+      if (duplicateNames.size > 0) {
+        showToast(
+          `ROI 区域名称重复：${[...duplicateNames].join('、')} — 同一通道内的区域名称必须唯一`,
+          false,
+        )
+        return null
+      }
+
+      const streamTargets = edges
+        .filter(e => e.source === roiNode.id && e.sourceHandle === 'roi-out' && e.targetHandle === 'roi-in')
+        .map(e => nodes.find(n => n.id === e.target))
+        .filter((n): n is Node => n?.type === 'stream')
+      if (streamTargets.length !== 1) {
+        showToast('已配置区域的 ROI 节点必须连接且只能连接一个视频流节点', false)
+        return null
+      }
     }
 
     // 同一视频流下的模型可以全部不接后处理；若接，则必须全部汇入同一个逻辑节点。
@@ -778,7 +820,7 @@ export default function EditorPage() {
 
     const result = graphToConfig(nodes, edges, roiZones, globalLogics, globalSettings)
     if (!result) { showToast('配置生成失败', false); return null }
-    return result as { config: Record<string, unknown>; roi: Record<string, RoiEntry> }
+    return result
   }
 
   // ── 保存（写入当前文件 currentFile）──
@@ -788,11 +830,8 @@ export default function EditorPage() {
     setSaving(true)
     try {
       if (currentFile === 'assets/config.json') {
-        // 默认配置：保持原行为，同时落 roi_zones.json（编辑器 ROI 持久化）
         await saveConfig(appName, result.config)
-        await saveROI(appName, result.roi)
       } else {
-        // 副本/非默认配置：只写该文件（ROI 已内嵌进 config，自带自足，不动 config.json）
         await saveConfigFile(appName, currentFile, result.config)
       }
       markClean()
@@ -814,7 +853,6 @@ export default function EditorPage() {
     let fname = input.trim().replace(/\\/g, '/').split('/').pop() ?? ''
     if (!fname) { showToast('文件名不能为空', false); return }
     if (!fname.toLowerCase().endsWith('.json')) fname += '.json'
-    if (fname === 'roi_zones.json') { showToast('该文件名被占用，请换一个', false); return }
     const path = `assets/${fname}`
     if (importFiles.includes(path) || path === 'assets/config.json') {
       if (!window.confirm(`${fname} 已存在，覆盖它？`)) return
@@ -1006,11 +1044,12 @@ export default function EditorPage() {
                 <div className="canvas-empty-hint">
                   从上方添加 <strong style={{color:'#3b82f6'}}>视频流</strong> 即可形成纯显示通道；
                   <strong style={{color:'#16a34a'}}> YOLO推理</strong>、
+                  <strong style={{color:'#ea580c'}}> ROI区域</strong>、
                   <strong style={{color:'#9333ea'}}>逻辑函数</strong>和
                   <strong style={{color:'#dc2626'}}>上报配置</strong>均按需连接。
                   <br />
                   <span style={{ opacity: 0.85 }}>
-                    模型可直接结束于推理节点并保留检测框绘制；传统 CV 则把视频流直接连接到逻辑函数。
+                    ROI 直接连接视频流且不依赖模型；传统 CV 可把视频流直接连接到逻辑函数。
                   </span>
                 </div>
               </Panel>

@@ -46,8 +46,9 @@ report_alarm(ctx, "inspection", "巡检异常", {
 画布保存时，`web_console/frontend/src/utils/graphToConfig.ts` 将上报节点序列化到本通道配置：
 
 - `report_policy`：投递方式、媒体种类、图片/视频叠加方式、录像前后时间、帧率、Profile 和字段映射；
-- `report_parameters`：通道级上报参数；
-- `event_video_pre_sec`、`event_video_post_sec`、`event_video_fps`、`event_video_overlay`：从策略派生的兼容字段。
+- `report_parameters`：通道级上报参数。
+
+录像参数没有独立的通道字段；C++ 加载 `report_policy` 时会生成非持久化运行参数，供预缓冲和事件录像使用。
 
 C++ 中对应字段为：
 

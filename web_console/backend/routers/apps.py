@@ -110,15 +110,20 @@ def _install_pkg(tmp_archive: Path, name: str) -> Dict[str, Any]:
             shutil.rmtree(dest_new, ignore_errors=True)
         shutil.move(str(root), str(dest_new))
 
-        pm.stop_app(name)                       # 同名在跑先停
-        if dest.exists():
-            shutil.rmtree(dest)
-        shutil.move(str(dest_new), str(dest))
+        # 本系统全局只允许一个视觉程序运行。无论上传包与当前运行 App 是否同名，
+        # 都先停止全部视觉进程，再在同一把运行锁内替换目录，避免上传期间另一请求
+        # 恰好启动程序，也避免覆盖仍被旧进程占用的可执行文件/工作目录。
+        with pm.runtime_lock():
+            stopped_apps = pm.stop_all_apps_for_install_unlocked()
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.move(str(dest_new), str(dest))
 
         return {
             "name": name,
             "has_binary": (dest / BINARY_NAME).exists(),
             "has_config": (dest / "assets" / "config.json").exists(),
+            "stopped_apps": stopped_apps,
         }
     finally:
         shutil.rmtree(staging, ignore_errors=True)

@@ -3,7 +3,8 @@ import { sopConfigToFlow } from './sopFlow'
 import type { GlobalLogicEntry } from '../components/GlobalLogicsPanel'
 import type { GlobalSettingsData } from '../components/GlobalSettingsPanel'
 import { DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
-import type { RoiZone } from './graphToConfig'
+import type { Zone as RoiZone } from '../store/roiStore'
+import { normalizeRoiPolygon } from './roiPolygon'
 
 // NOTE: _ctr is declared inside configToGraph() below so node IDs are local to each call.
 //       Canvas positions are restored from config._editor_layout (keyed by channel index +
@@ -12,16 +13,14 @@ import type { RoiZone } from './graphToConfig'
 
 // 模型节点字段；通道里除这些(及 stream/logic/上报运行字段)之外的键视为逻辑参数。
 const MODEL_KEYS = new Set([
-  'id', 'enable', 'infer_enable', 'npu_core', 'model_type', 'model_path', 'label_path',
-  'obj_thresh', 'nms_thresh', 'detect_classes', 'threads', 'max_fps',
+  'id', 'enable', 'infer_enable', 'threads', 'max_fps',
   'playback_fps', 'tracker_enable', 'tracker_iou_thresh', 'tracker_max_miss',
-  'tracker_min_hits', 'version', 'roi_polygon', 'roi_zones', 'models',
+  'tracker_min_hits', 'roi_zones', 'models',
 ])
 
 
 export function configToGraph(
   config: Record<string, unknown>,
-  roi: Record<string, { polygon?: number[][]; zones?: RoiZone[] }>,
 ): {
   nodes: Node[]
   edges: Edge[]
@@ -53,7 +52,8 @@ export function configToGraph(
   const edges: Edge[] = []
   const roiMapping: Record<string, RoiZone[]> = {}
 
-  const global   = (config.global ?? config) as Record<string, unknown>
+  const global = config.global && typeof config.global === 'object' && !Array.isArray(config.global)
+    ? config.global as Record<string, unknown> : {}
   const channels = (config.channels as Record<string, unknown>[]) ?? []
 
   // 画布坐标(由 graphToConfig 按「通道序号 + 角色」写入 _editor_layout)。
@@ -75,10 +75,10 @@ export function configToGraph(
   // Layout constants
   const STREAM_X  = 60
   const MODEL_X   = 380
-  const ROI_X     = 220  // above model
+  const ROI_X     = 60   // above stream: ROI belongs to the channel, not to a model
   const LOGIC_X   = 680
   const REPORT_X  = 940
-  const ROW_H     = 260  // vertical spacing per channel group
+  const ROW_H     = 360  // leave room for the ROI card above each stream
 
   let modelCoreIndex = 0
   channels.forEach((ch, idx) => {
@@ -89,28 +89,12 @@ export function configToGraph(
     const pos = (role: string, x: number, yy: number) => lay[role] ?? { x, y: yy }
     const stream = ch.stream as Record<string, unknown> ?? {}
 
-    // 该通道是否带 YOLO 模型节点: 配了 model_type 或 model_path → 画 model 节点
-    // (含“启用推理”关掉但仍配了模型的 YOLO 通道); 两者皆空 → 传统/无推理通道:
-    // 视频流直连逻辑函数, 不画 model 节点。graphToConfig 对传统通道刻意不写这两个字段。
-    const mType = typeof ch.model_type === 'string' ? (ch.model_type as string).trim() : ''
-    const mPath = typeof ch.model_path === 'string' ? (ch.model_path as string).trim() : ''
+    // 模型节点只来自 channels[].models[]；空数组表示传统/无推理通道。
     const configuredModels = Array.isArray(ch.models)
       ? (ch.models as Record<string, unknown>[]).filter(model =>
-          String(model.model_type ?? '').trim() !== '' || String(model.model_path ?? '').trim() !== '')
+          model != null && typeof model === 'object')
       : []
-    const modelConfigs = configuredModels.length > 0
-      ? configuredModels
-      : (mType !== '' || mPath !== '' ? [{
-          id: 'legacy_model',
-          enable: ch.infer_enable !== false,
-          model_type: ch.model_type,
-          model_path: ch.model_path,
-          label_path: ch.label_path,
-          obj_thresh: ch.obj_thresh,
-          nms_thresh: ch.nms_thresh,
-          detect_classes: ch.detect_classes,
-          npu_core: ch.npu_core,
-        }] : [])
+    const modelConfigs = configuredModels
     const hasModel = modelConfigs.length > 0
 
     // ── Stream node — 每个通道独立创建，不做去重 ──
@@ -126,6 +110,10 @@ export function configToGraph(
     // ── 通道字段分流：模型字段 → 模型节点；其余参数 → 逻辑节点 ──
     const {
       stream: _s, logic: _lg, logic_parameters: _logicParameters,
+      model_type: _legacyModelType, model_path: _legacyModelPath,
+      label_path: _legacyLabelPath, version: _legacyVersion,
+      obj_thresh: _legacyObjThresh, nms_thresh: _legacyNmsThresh,
+      detect_classes: _legacyDetectClasses, npu_core: _legacyNpuCore,
       event_video_enable: _eve, event_video_pre_sec: _evpre,
       event_video_post_sec: _evpost, event_video_fps: _evfps,
       event_video_overlay: _evOverlay,
@@ -166,33 +154,25 @@ export function configToGraph(
     }
 
     // ── ROI node (一个 ROI 节点 = 该通道的多个命名区域) ──
-    // Use sequential position (idx) as key — must match C++ load_roi_zones() which iterates
-    // channels by sorted position (ch=0,1,2…), NOT by channel id.
-    // 来源优先级: roi_zones.json 的 zones[] → 旧 polygon → 内嵌 ch.roi_zones → 内嵌 ch.roi_polygon。
-    const roiEntry = roi[String(idx)]
-    let zones: RoiZone[] = []
-    if (roiEntry?.zones && roiEntry.zones.length > 0) {
-      zones = roiEntry.zones
-    } else if (roiEntry?.polygon && roiEntry.polygon.length >= 3) {
-      zones = [{ name: '', polygon: roiEntry.polygon }]
-    } else if (Array.isArray(ch.roi_zones) && (ch.roi_zones as RoiZone[]).length > 0) {
-      zones = ch.roi_zones as RoiZone[]
-    } else if (Array.isArray(ch.roi_polygon) && (ch.roi_polygon as number[][]).length >= 3) {
-      zones = [{ name: '', polygon: ch.roi_polygon as number[][] }]
-    }
-    zones = zones.filter(z => Array.isArray(z.polygon) && z.polygon.length >= 3)
+    const zones: RoiZone[] = Array.isArray(ch.roi_zones)
+      ? (ch.roi_zones as RoiZone[])
+          .map(z => ({
+            name: z.name ?? '',
+            polygon: normalizeRoiPolygon(Array.isArray(z.polygon) ? z.polygon : []),
+          }))
+          .filter(z => z.polygon.length >= 3)
+      : []
     let roiId: string | null = null
     if (zones.length > 0) {
       roiId = uid('roi')
       nodes.push({
         id: roiId, type: 'roi',
-        position: pos('roi', ROI_X, y - 80),
+        position: pos('roi', ROI_X, y - 220),
         data: {},
       })
       roiMapping[roiId] = zones
-      // YOLO 通道此处即连 model; 传统通道的 roi→logic 连线在 logic 节点创建后补。
-      if (hasModel) modelIds.forEach(modelId =>
-        edges.push(edge(roiId!, 'roi-out', modelId, 'roi-in', '#f97316')))
+      // ROI 是通道级配置，始终直接连接视频流；与是否存在模型或逻辑无关。
+      edges.push(edge(roiId, 'roi-out', streamId, 'roi-in', '#f97316'))
     }
 
     // ── Logic / SOP node（可选）── 配置未声明 logic 时不创建后处理节点。
@@ -216,9 +196,8 @@ export function configToGraph(
         modelIds.forEach(modelId =>
           edges.push(edge(modelId, 'logic-out', logicId!, 'logic-in', isSop ? '#06b6d4' : '#a855f7')))
       } else {
-        // 传统/无推理通道: 视频流直连逻辑函数; 有 ROI 则 ROI 接到逻辑函数顶部
+        // 传统/无推理通道: 视频流直连逻辑函数；ROI 已独立连接视频流。
         edges.push(edge(streamId, 'stream-out', logicId, 'logic-in', '#3b82f6'))
-        if (roiId) edges.push(edge(roiId, 'roi-out', logicId, 'roi-in', '#f97316'))
       }
     }
 

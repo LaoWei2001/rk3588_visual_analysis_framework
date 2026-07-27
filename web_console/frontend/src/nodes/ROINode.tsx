@@ -5,6 +5,7 @@ import { useROIStore, type Zone } from '../store/roiStore'
 import { useEditorStore } from '../store/editorStore'
 import { captureSnapshot } from '../api/client'
 import { getSrcType } from '../utils/streamSource'
+import { normalizeRoiPolygon } from '../utils/roiPolygon'
 import './nodeStyles.css'
 import './ROINode.css'
 
@@ -26,14 +27,9 @@ function usbResolutionForFps(fps: number): { width: number; height: number } {
   return             { width: 1920, height: 1080 }
 }
 
-// 归一化多边形(存储为闭合: 首尾点相同) → 去掉重复的闭合点, 得到不重复顶点
+// 加载新旧配置时统一去掉末尾重复的闭合点，编辑期只保留实际顶点。
 function stripClose(poly: number[][]): [number, number][] {
-  if (poly.length >= 2) {
-    const a = poly[0], b = poly[poly.length - 1]
-    if (Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6)
-      return poly.slice(0, -1).map(p => [p[0], p[1]] as [number, number])
-  }
-  return poly.map(p => [p[0], p[1]] as [number, number])
+  return normalizeRoiPolygon(poly).map(p => [p[0], p[1]] as [number, number])
 }
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
@@ -58,21 +54,17 @@ export default function ROINode({ id, selected }: NodeProps) {
   const [showModal, setShowModal] = useState(false)
   const nZones = zones.length
 
-  // ── Get connected stream info + USB resolution hint by traversing the graph ──
+  // ── ROI 直接归属于视频流；从连接的视频流读取抓帧和 USB 分辨率信息。 ──
   const getStreamInfo = (): {
     streamData: Record<string, unknown> | null
     usbRes: { width: number; height: number } | null
   } => {
     const edges = rf.getEdges()
-    // ROI 可接到 YOLO 模型节点(经 stream-in 取流) 或 传统通道里被视频流直连的逻辑节点(经 logic-in 取流)。
-    const toAnchor = edges.find(e => e.source === id && e.sourceHandle === 'roi-out')
-    if (!toAnchor) return { streamData: null, usbRes: null }
     const toStream = edges.find(e =>
-      e.target === toAnchor.target &&
-      (e.targetHandle === 'stream-in' || e.targetHandle === 'logic-in') &&
-      rf.getNode(e.source)?.type === 'stream')
+      e.source === id && e.sourceHandle === 'roi-out' &&
+      e.targetHandle === 'roi-in' && rf.getNode(e.target)?.type === 'stream')
     if (!toStream) return { streamData: null, usbRes: null }
-    const streamData = (rf.getNode(toStream.source)?.data as Record<string, unknown>) ?? null
+    const streamData = (rf.getNode(toStream.target)?.data as Record<string, unknown>) ?? null
 
     let usbRes: { width: number; height: number } | null = null
     if (getSrcType(streamData) === 'usb') {
@@ -81,8 +73,13 @@ export default function ROINode({ id, selected }: NodeProps) {
       if (ew > 0 && eh > 0) {
         usbRes = { width: ew, height: eh }
       } else {
-        // 锚点可能是 model(带 playback_fps/max_fps) 或 logic(无 → 回退全局最大FPS)
-        const anchorData = rf.getNode(toAnchor.target)?.data as Record<string, unknown> | undefined
+        // 通道若连接了模型，沿用模型节点上的帧率设置；否则回退全局最大 FPS。
+        const streamOutput = edges.find(e =>
+          e.source === toStream.target && e.sourceHandle === 'stream-out' &&
+          rf.getNode(e.target)?.type === 'model')
+        const anchorData = streamOutput
+          ? rf.getNode(streamOutput.target)?.data as Record<string, unknown> | undefined
+          : undefined
         const playbackFps = Number(anchorData?.playback_fps ?? 0)
         const maxFps      = Number(anchorData?.max_fps      ?? 0)
         const fps = playbackFps > 0 ? playbackFps
@@ -99,13 +96,13 @@ export default function ROINode({ id, selected }: NodeProps) {
     <>
       <div className={`rf-node${selected ? ' selected' : ''}`} style={{ minWidth: 210 }}>
         <div className="rf-node-header header-roi">
-          <span>⬡</span><span>ROI 检测区域</span>
+          <span>⬡</span><span>ROI 区域</span>
           {nZones > 0 && <span className="roi-count-badge">{nZones}</span>}
         </div>
 
         <div className="rf-node-body">
           <div className={`roi-chip${nZones > 0 ? ' active' : ''}`}>
-            {nZones > 0 ? `✔ 已配置 ${nZones} 个区域` : '🔲 未配置 → 全屏检测'}
+            {nZones > 0 ? `✔ 已配置 ${nZones} 个区域` : '🔲 尚未配置区域'}
           </div>
           {nZones > 0 && (
             <div className="roi-zone-list">
@@ -157,6 +154,13 @@ interface ModalProps {
 // 编辑期内部表示: 顶点为归一化(0~1)、不含闭合重复点
 interface WZone { name: string; pts: [number, number][] }
 
+function nextDefaultZoneName(zones: WZone[]): string {
+  const usedNames = new Set(zones.map(z => z.name.trim()).filter(Boolean))
+  let index = 1
+  while (usedNames.has(`区域${index}`)) index++
+  return `区域${index}`
+}
+
 // 编辑(非绘制)态的拖拽: 拖某顶点, 或整块移动某区域
 type DragState =
   | { kind: 'vertex'; zi: number; vi: number }
@@ -186,6 +190,19 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
   const [sel,     setSel    ] = useState<number>(-1)
   const [drag,    setDrag   ] = useState<DragState>(null)              // 正在拖拽的顶点/区域
   const [hoverHit, setHoverHit] = useState<'vertex' | 'zone' | null>(null) // 悬停命中(驱动光标)
+
+  // ROI 名称在保存时会 trim，因此重复检查也按去除首尾空格后的名称进行。
+  const duplicateNames = (() => {
+    const seen = new Set<string>()
+    const duplicates = new Set<string>()
+    wzones.forEach(z => {
+      const name = z.name.trim()
+      if (!name) return
+      if (seen.has(name)) duplicates.add(name)
+      else seen.add(name)
+    })
+    return duplicates
+  })()
 
   // 画布显示尺寸(给右侧区域列表留出空间, 保持宽高比)
   const dispW = Math.max(360, Math.min(CANVAS_MAX_W, window.innerWidth - 380))
@@ -324,7 +341,7 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
   const commitDraft = (pts: [number, number][]) => {
     if (pts.length < 3) return
     const norm = pts.map(([x, y]) => [+(x / dispW).toFixed(5), +(y / dispH).toFixed(5)] as [number, number])
-    setWzones(prev => [...prev, { name: `区域${prev.length + 1}`, pts: norm }])
+    setWzones(prev => [...prev, { name: nextDefaultZoneName(prev), pts: norm }])
     setSel(wzones.length)   // 新区域的下标 = 添加前的长度
     setDraft([]); setDrawing(false); setHover(null)
   }
@@ -398,13 +415,13 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
   }
 
   const handleSave = () => {
+    if (duplicateNames.size > 0) return
     const out: Zone[] = wzones
       .filter(z => z.pts.length >= 3)
-      .map(z => {
-        const poly = z.pts.map(([x, y]) => [x, y] as number[])
-        poly.push([...poly[0]])  // 闭合(首尾相同), 与 C++/旧格式一致
-        return { name: z.name.trim(), polygon: poly }
-      })
+      .map(z => ({
+        name: z.name.trim(),
+        polygon: normalizeRoiPolygon(z.pts.map(([x, y]) => [x, y])),
+      }))
     if (out.length === 0) clearZones(nodeId)
     else                  setZones(nodeId, out, srcW, srcH)
     onClose()
@@ -479,16 +496,24 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
                 >
                   <span className="roi-zone-dot" style={{ background: ZONE_COLORS[i % ZONE_COLORS.length] }} />
                   <input
-                    className="roi-zone-input"
+                    className={`roi-zone-input${duplicateNames.has(z.name.trim()) ? ' duplicate' : ''}`}
                     value={z.name}
                     placeholder={`区域${i + 1}`}
                     onChange={e => renameZone(i, e.target.value)}
+                    aria-invalid={duplicateNames.has(z.name.trim())}
+                    title={duplicateNames.has(z.name.trim()) ? 'ROI 区域名称不能重复' : undefined}
                   />
                   <span className="roi-zone-pts">{z.pts.length}点</span>
                   <button className="roi-zone-del" title="删除该区域" onClick={() => deleteZone(i)}>🗑</button>
                 </div>
-              ))}
+                ))}
             </div>
+
+            {duplicateNames.size > 0 && (
+              <div className="roi-name-error">
+                ROI 区域名称不能重复：{[...duplicateNames].join('、')}。请修改后再保存。
+              </div>
+            )}
 
             {drawing ? (
               <div className="roi-draw-hint">
@@ -515,7 +540,14 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
             拖顶点改形状/大小 · 拖区域内部整体移动 · 右键顶点删点；坐标按比例存储，与分辨率解耦。
           </span>
           <div className="roi-actions">
-            <button className="roi-btn primary" onClick={handleSave}>保存</button>
+            <button
+              className="roi-btn primary"
+              onClick={handleSave}
+              disabled={duplicateNames.size > 0}
+              title={duplicateNames.size > 0 ? '请先修改重复的 ROI 区域名称' : undefined}
+            >
+              保存
+            </button>
           </div>
         </div>
       </div>

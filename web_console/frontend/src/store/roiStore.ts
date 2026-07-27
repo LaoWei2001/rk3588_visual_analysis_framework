@@ -1,11 +1,16 @@
 import { create } from 'zustand'
+import { normalizeRoiPolygon } from '../utils/roiPolygon'
 
-// 一个 ROI 区域: 名字(可空) + 多边形(归一化 0~1, 占画面比例, 闭合=首尾点相同)。
+// 一个 ROI 区域: 名字(可空) + 多边形实际顶点(归一化 0~1，不重复保存闭合首点)。
 // 一个通道(=一个 ROI 节点)可以有多个区域。
 export interface Zone {
   name: string
   polygon: number[][]
 }
+
+const normalizeZones = (zones: Zone[]): Zone[] => zones
+  .map(zone => ({ ...zone, polygon: normalizeRoiPolygon(zone.polygon) }))
+  .filter(zone => zone.polygon.length >= 3)
 
 interface ROIState {
   // key: React Flow node ID → 该节点(通道)的全部 ROI 区域
@@ -25,7 +30,7 @@ export const useROIStore = create<ROIState>((set) => ({
 
   setZones: (nodeId, zones, srcW, srcH) =>
     set(s => ({
-      zones: { ...s.zones, [nodeId]: zones },
+      zones: { ...s.zones, [nodeId]: normalizeZones(zones) },
       resolutions: (srcW && srcH)
         ? { ...s.resolutions, [nodeId]: [srcW, srcH] }
         : s.resolutions,
@@ -42,6 +47,11 @@ export const useROIStore = create<ROIState>((set) => ({
 
   // 加载/导入配置时整体替换 ROI：zones 用新配置的，resolutions 一并清空，
   // 避免上一份配置的分辨率按确定性节点 ID 串用到新配置。
-  setAll: (data) => set({ zones: data, resolutions: {} }),
+  setAll: (data) => set({
+    zones: Object.fromEntries(
+      Object.entries(data).map(([nodeId, zones]) => [nodeId, normalizeZones(zones)])
+    ),
+    resolutions: {},
+  }),
   clear: () => set({ zones: {}, resolutions: {} }),
 }))

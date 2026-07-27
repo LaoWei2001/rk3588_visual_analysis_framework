@@ -46,11 +46,32 @@ export default function AppsPage() {
   const streamLoadingRef = useRef(true)                               // 供卡流看门狗读取最新加载状态
   const logWsRef  = useRef<WebSocket | null>(null)
   const logBoxRef = useRef<HTMLDivElement>(null)
-  // 日志距底部 40px 内自动跟随；向上滚动时暂停，回到底部后恢复。
+  const pendingStreamLogsRef = useRef<string[]>([])
+  // 日志距底部 40px 内自动跟随；向上滚动时冻结当前列表，新日志先进入缓冲区。
   const logAutoScrollRef = useRef(true)
+  const resumeStreamLogScroll = () => {
+    logAutoScrollRef.current = true
+    const pending = pendingStreamLogsRef.current
+    pendingStreamLogsRef.current = []
+    if (pending.length > 0) {
+      setStreamLogs(prev => [...prev, ...pending].slice(-1000))
+    }
+    setTimeout(() => {
+      const el = logBoxRef.current
+      if (el && logAutoScrollRef.current) el.scrollTop = el.scrollHeight
+    }, 0)
+  }
   const onStreamLogScroll = () => {
     const el = logBoxRef.current
-    if (el) logAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+    if (!el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+    if (nearBottom) {
+      if (!logAutoScrollRef.current || pendingStreamLogsRef.current.length > 0) {
+        resumeStreamLogScroll()
+      }
+    } else {
+      logAutoScrollRef.current = false
+    }
   }
   const fileRef   = useRef<HTMLInputElement>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -80,6 +101,8 @@ export default function AppsPage() {
     setViewControls(controls)
     setChannelActionBusy({})
     setStreamErr(false); setStreamLoading(true); streamRetryRef.current = 0
+    pendingStreamLogsRef.current = []
+    logAutoScrollRef.current = true
     setStreamLogs([]); setViewNonce(Date.now()); setViewApp(app.name)
   }
 
@@ -192,6 +215,7 @@ export default function AppsPage() {
     if (!viewApp) return
     const app = viewApp
     logAutoScrollRef.current = true   // 每次打开弹窗时默认跟随到底部
+    pendingStreamLogsRef.current = []
     // 用户查看历史日志时暂停自动滚动。
     const stick = () => { const el = logBoxRef.current; if (el && logAutoScrollRef.current) el.scrollTop = el.scrollHeight }
 
@@ -208,15 +232,22 @@ export default function AppsPage() {
       if (!text) return                                   // 蹇冭烦绌哄抚
       const add = text.split('\n').filter(l => l !== '')
       if (add.length) {
-        // 自动跟随时保留 1000 行；查看历史时最多保留 5000 行，避免视口跳动。
-        setStreamLogs(prev => {
-          const next = [...prev, ...add]
-          return logAutoScrollRef.current ? next.slice(-1000) : next.slice(-5000)
-        })
-        setTimeout(stick, 10)
+        if (logAutoScrollRef.current) {
+          setStreamLogs(prev => [...prev, ...add].slice(-1000))
+          setTimeout(stick, 10)
+        } else {
+          // 回看期间不修改当前 DOM，彻底避免头部截断造成的滚动位置跳动。
+          // 缓冲区只保存最新 5000 行；回到底部时一次性并入并恢复自动跟随。
+          pendingStreamLogsRef.current =
+            [...pendingStreamLogsRef.current, ...add].slice(-5000)
+        }
       }
     }
-    return () => { ws.close(); logWsRef.current = null }
+    return () => {
+      ws.close()
+      logWsRef.current = null
+      pendingStreamLogsRef.current = []
+    }
   }, [viewApp])
 
   // 关闭弹窗或切换程序时清理重试定时器。
@@ -306,7 +337,10 @@ export default function AppsPage() {
     try {
       const r = await uploadApp(f, undefined, pct => setUploading({ name: f.name, pct }))
       const warn = `${r.has_binary ? '' : '（缺少可执行文件）'}${r.has_config ? '' : '（尚无 config.json）'}`
-      showToast(`程序 ${r.name} 上传成功${warn}`)
+      const stopped = r.stopped_apps.length > 0
+        ? `；已停止视觉程序：${r.stopped_apps.join('、')}`
+        : ''
+      showToast(`程序 ${r.name} 上传成功${warn}${stopped}`)
       await load()
     } catch (err: unknown) {
       showToast(`上传失败：${errMsg(err)}`, 'err')

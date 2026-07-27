@@ -19,13 +19,13 @@
 云端平台（WebSocket Server）
     │  wss://tunnel.memanager.cn/ws/device/{DeviceID}
     │
-    │  指令：{ "action": "UPDATE_COMMAND", "channel": 0,
+    │  指令：{ "action": "UPDATE_COMMAND", "channel": 0, "model_id": "detector",
     │           "version": "1.2", "url": "/models/xxx.rknn",
     │           "md5": "abc123...", "type": "yolov5" }
     ▼
 ota_agent.py（asyncio 事件循环）
     │
-    ├─ 1. 版本比对（读本地 config.json 中的 version 字段）
+    ├─ 1. 版本比对（按 channel + model_id 读取 models[].version）
     │       └─ 版本一致 → 直接反馈成功，跳过下载
     │
     ├─ 2. 反馈"开始下载"（status=0）
@@ -34,7 +34,7 @@ ota_agent.py（asyncio 事件循环）
     │       ├─ HTTPS 下载 .rknn 文件到 /tmp/
     │       ├─ MD5 校验
     │       ├─ 移动到 assets/ 目录（新文件名含 MD5 前 8 位）
-    │       ├─ 更新 config.json 中对应通道的 model_path/model_type/version
+    │       ├─ 更新 config.json 中对应 channels[].models[] 元素
     │       └─ 反馈成功（status=1）或失败（status=-1）
     │
     └─ 主程序热重载（config.json 变化 → config_monitor_thread 检测到 →
@@ -65,9 +65,14 @@ OTA 服务直接读写主程序的配置文件（**默认 `assets/config.json`**
   "channels": [
     {
       "id": 0,
-      "model_path": "assets/model_ch0_f537e873.rknn",
-      "model_type": "yolov5",
-      "version": "1.1"
+      "models": [
+        {
+          "id": "detector",
+          "model_path": "assets/model_ch0_detector_f537e873.rknn",
+          "model_type": "yolov5",
+          "version": "1.1"
+        }
+      ]
     }
   ]
 }
@@ -78,9 +83,14 @@ OTA 升级后，该通道的配置会更新为：
 ```json
 {
   "id": 0,
-  "model_path": "assets/model_ch0_abcd1234.rknn",
-  "model_type": "yolov5",
-  "version": "1.2"
+  "models": [
+    {
+      "id": "detector",
+      "model_path": "assets/model_ch0_detector_abcd1234.rknn",
+      "model_type": "yolov5",
+      "version": "1.2"
+    }
+  ]
 }
 ```
 
@@ -122,13 +132,14 @@ ASSETS_DIR=/path/to/dist/assets python3 ota_agent.py
 ```json
 {
   "platform_ws_host": "tunnel.memanager.cn",
-  "target_config": "config.json"
+  "target_config": "active"
 }
 ```
 
 连接地址格式为：`wss://{platform_ws_host}/ws/device/{DeviceID}`
 
-> 对应环境变量：`PLATFORM_WS_HOST`、`CONFIG_FILE`（覆盖 target_config）。
+`active` 会在每次 OTA 操作时读取 App 根目录的 `run.config`，自动跟随控制台当前启动配置。
+也可以填写明确的配置文件名。对应环境变量：`PLATFORM_WS_HOST`、`CONFIG_FILE`（覆盖 target_config）。
 
 ---
 
@@ -140,6 +151,7 @@ ASSETS_DIR=/path/to/dist/assets python3 ota_agent.py
 {
   "action":  "UPDATE_COMMAND",
   "channel": 0,
+  "model_id": "detector",
   "version": "1.2",
   "url":     "/api/models/abc.rknn",
   "md5":     "d41d8cd98f00b204e9800998ecf8427e",
@@ -150,10 +162,11 @@ ASSETS_DIR=/path/to/dist/assets python3 ota_agent.py
 | 字段 | 说明 |
 |------|------|
 | `channel` | 目标通道 ID（与 config.json 中的 `id` 对应） |
+| `model_id` | 目标模型 ID（与该通道 `models[].id` 对应） |
 | `version` | 新模型版本号 |
 | `url` | 模型文件的相对路径（拼接到 `https://{PLATFORM_WS_HOST}` 前缀） |
 | `md5` | 文件 MD5 校验值（小写十六进制） |
-| `type` | 模型类型（写入 `model_type` 字段） |
+| `type` | 模型类型（写入目标 `models[].model_type`） |
 
 ### 设备 → 平台（进度反馈）
 
@@ -169,7 +182,7 @@ ASSETS_DIR=/path/to/dist/assets python3 ota_agent.py
 |-----------|------|
 | `0` | 开始下载 |
 | `1` | 升级成功 |
-| `-1` | 升级失败（MD5 校验失败、下载超时、配置文件找不到对应 channel 等） |
+| `-1` | 升级失败（MD5 校验失败、下载超时、找不到对应 channel/model_id 等） |
 
 ---
 

@@ -7,8 +7,8 @@ import SopFlowModal from '../components/SopFlowModal'
 import { type SopFlow, DEFAULT_SOP_FLOW } from '../utils/sopFlow'
 import './nodeStyles.css'
 
-// SOP 流程节点: 接在 YOLO 节点之后(model.logic-out → 本节点 logic-in), 右侧接「上报配置」。
-// 模型/区域沿用上游: 检测来自 model, 区域名来自 model 连的 ROI 节点 —— 与常规通道同一套架构。
+// SOP 流程节点: 可接在 YOLO 节点之后，也可由视频流直连；右侧接「上报配置」。
+// ROI 始终归属于本通道的视频流，与是否使用模型推理解耦。
 // 点「配置流程」进入流程弹窗, 配置目标 + 各步骤(选区域 + 独立参数) + 结束判定。
 export default function SopNode({ id, data, selected }: NodeProps) {
   const flow  = { ...DEFAULT_SOP_FLOW, ...(data as Partial<SopFlow>) }
@@ -21,12 +21,21 @@ export default function SopNode({ id, data, selected }: NodeProps) {
   // 弹窗打开期间, 告知主画布暂停 Delete 删节点(否则按 Delete 删的是这个 SOP 节点本身)
   useEffect(() => { setFlowOpen(open); return () => setFlowOpen(false) }, [open, setFlowOpen])
 
-  // 取上游 ROI 节点里的区域名: sop --logic-in--> model --roi-in--> roi
+  // 先沿 logic-in 找到所属视频流，再从视频流的 roi-in 找到通道 ROI。
   const availableZones = (): string[] => {
     const edges = rf.getEdges()
-    const toModel = edges.find(e => e.target === id && e.targetHandle === 'logic-in')
-    if (!toModel) return []
-    const toRoi = edges.find(e => e.target === toModel.source && e.targetHandle === 'roi-in')
+    const logicInput = edges.find(e => e.target === id && e.targetHandle === 'logic-in')
+    if (!logicInput) return []
+    const inputNode = rf.getNode(logicInput.source)
+    const streamId = inputNode?.type === 'stream'
+      ? inputNode.id
+      : edges.find(e =>
+          e.target === inputNode?.id && e.targetHandle === 'stream-in' &&
+          rf.getNode(e.source)?.type === 'stream')?.source
+    if (!streamId) return []
+    const toRoi = edges.find(e =>
+      e.target === streamId && e.targetHandle === 'roi-in' &&
+      rf.getNode(e.source)?.type === 'roi')
     if (!toRoi) return []
     return (zonesByNode[toRoi.source] ?? [])
       .map(z => z.name?.trim())
@@ -39,7 +48,7 @@ export default function SopNode({ id, data, selected }: NodeProps) {
   return (
     <>
       <div className={`rf-node rf-node-compact${selected ? ' selected' : ''}`} style={{ minWidth: 190 }}>
-        {/* 接 YOLO 推理(model.logic-out) */}
+        {/* 接 YOLO 推理(model.logic-out) 或视频流(stream-out) */}
         <Handle type="target" position={Position.Left} id="logic-in" />
 
         <div className="rf-node-header header-sop">

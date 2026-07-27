@@ -124,16 +124,13 @@ REGISTER_LOGIC(logic_xxx);
 
 ## 6. ROI
 
-当前 C++ 从每个通道的 `config.json` 中读取：
+当前 C++ 只从每个通道的 `roi_zones[]` 读取多个带名称的归一化多边形。
 
-- `roi_zones`：多个带名称的归一化多边形；
-- `roi_polygon`：旧单区域兼容字段。
-
-加载时，归一化坐标乘以模型输入尺寸，生成 `ChannelState::roi_zones`。当前运行路径不依赖外部 `roi_zones.json`。
+加载时，归一化坐标乘以模型输入尺寸，生成运行时 ROI 列表。
 
 配置监控检测到文件变化后会显式复制 ROI 字段，并调用 `load_roi_zones_from_config()` 重建运行时 ROI，因此 ROI 支持热更新，无需停止程序。
 
-`ctx->roi` 指向第一个区域，仅用于兼容旧逻辑；新逻辑应使用 `ctx->rois`、`roi_find()`、`roi_contains()` 等多区域 API。`ROI_ALL=-1`，`ROI_NONE=-2`。
+逻辑应使用 `ctx->rois`、`roi_find()`、`roi_contains()` 等多区域 API。`ROI_ALL=-1`，`ROI_NONE=-2`。
 
 ## 7. 配置加载与热重载
 
@@ -156,7 +153,7 @@ REGISTER_LOGIC(logic_xxx);
 
 以下内容不完全依赖注册表，而由配置监控显式处理：
 
-- `roi_zones/roi_polygon`：复制后重建运行时 ROI；
+- `roi_zones`：复制后重建运行时 ROI；
 - `models`：比较模型配置并按需重新加载；
 - `stream`：检测源类型、地址、USB 参数等变化并重建采集器；
 - `logic`：切换运行逻辑并清理该通道旧 `logic_state`、结果和绘制状态；
@@ -289,7 +286,7 @@ HTTP 返回 `accepted` 只表示动作成功进入队列，不代表业务 handl
 
 - 不要引用已删除的 `alarm_uploader`；
 - 不要把服务地址或密钥硬编码进 logic；
-- 不要从外部 `roi_zones.json` 读取当前运行 ROI；
+- 不要在当前运行配置之外另建 ROI 数据源；
 - 不要用 `static` 保存每通道状态；
 - 不要直接读取其他通道的内部状态，使用 `get_channel_snapshot()`；
 - 不要把 HTTP `accepted` 当成业务动作完成。

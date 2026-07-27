@@ -151,7 +151,7 @@ async def _mjpeg_stream(request: Request, name: str, rtsp_url: str, codec: str, 
 
 
 @router.get("/apps/{name}/stream")
-async def stream_app(name: str, request: Request, fps: int = 10):
+async def stream_app(name: str, request: Request, fps: int = 25):
     if not (APPS_ROOT / name).exists():
         raise HTTPException(404, f"App '{name}' not found")
     if shutil.which("gst-launch-1.0") is None:

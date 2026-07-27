@@ -62,7 +62,7 @@ REGISTER_LOGIC(logic_person);
 
 ## 告警
 
-使用 `report_alarm()`，字段元数据同步写入模块 `logic.json.report_fields`。同一次调用可以由 Web 配成服务器图片、Dify 图片和 Dify 视频多条 delivery；业务 logic 不选择投递地址，也不直接执行 HTTP/Dify。见 [alarm.md](alarm.md) 和统一上报教学示例 `../rk3588-channel-logic/references/examples/logic_upload_teach.md`。
+使用 `report_alarm()`，如需让 Dify 映射业务字段，再同步把字段元数据写入模块 `logic.json.report_fields`。同一次调用可以由 Web 配成服务器图片、Dify 图片和 Dify 视频多条 delivery；业务 logic 不选择投递地址，也不直接执行 HTTP/Dify。按钮触发上报的最小示例见 [alarm.md](alarm.md) 和 `../rk3588-channel-logic/references/examples/logic_upload_teach.md`。
 
 ## 模块参数
 

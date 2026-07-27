@@ -18,8 +18,8 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=rk3588-console
-# Critical: only kill uvicorn, not its child inference processes
-KillMode=process
+# 视觉分析进程由控制台创建为独立 transient service，不属于本服务 cgroup。
+KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=10
 

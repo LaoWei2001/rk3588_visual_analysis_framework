@@ -140,9 +140,14 @@ int yes = ctx->channel_has_logic(2, "logic_upload");
 | `r.class_id` | `int` 类别下标 |
 | `r.score` | `float` 置信度 |
 | `r.track_id` | `int` 跟踪 ID（跟踪器赋值，跨帧稳定；<0 表示未确认） |
+| `r.model_id` | `std::string` 来源模型 ID（对应 `ctx->config->models[].id`） |
+| `r.model_type` | `std::string` 来源模型类型 |
+| `r.model_index` | `int` 来源模型在本次有效模型列表中的序号 |
 | `r.box_color` | `cv::Scalar` 设它可改这个框的显示颜色（默认 -1,-1,-1） |
 | `r.keypoints` | `vector<Point2f>` 姿态点（pose 模型） |
 | `r.boxMask` | `cv::Mat` 分割掩码（seg 模型） |
+
+`model_id/model_type/model_index` 由多模型合并路径填写。业务若要枚举当前通道配置的全部模型（包括本帧没有产出结果的模型），应读取只读的 `ctx->config->models`。
 
 便捷方法：`r.box_center()` → 框中心 `cv::Point`；`r.box_contains(pt)`；`r.dist_sq_to(pt)` → 中心到点距离平方（省 sqrt，适合阈值比较）。
 

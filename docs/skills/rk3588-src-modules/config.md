@@ -3,7 +3,7 @@
 ## 文件职责
 
 - `config.h`：`AppConfig`、`ChannelConfig`、流、模型、ROI 和全局 logic 的结构定义及 C++ 默认值。
-- `config.cpp`：解析 schema v2 JSON、兼容少量旧字段、继承全局默认、排序启用通道。
+- `config.cpp`：解析 JSON、解析统一的 `models[]`、`roi_zones[]` 和 `report_policy`，继承运行默认并排序启用通道。
 - `config_init.cpp`：用 `REG_G`/`REG_C` 注册可做通用同步的字段。
 - `config_registry.*`：按类型从 cJSON 读取字段，并在热重载时同步已注册字段。
 - `config_validator.*`：首次加载完整校验；热重载使用 critical 校验。
@@ -12,7 +12,6 @@
 
 ```json
 {
-  "schema_version": 2,
   "global": {
     "enable_display": true,
     "max_fps": 30,
@@ -41,11 +40,11 @@
 
 ## 继承与多模型
 
-通道的阈值、线程、FPS、tracker 等用负值表达“继承 global”。`models[]` 中存在至少一个启用且路径/类型完整的条目时，推理层使用多模型模式，并忽略旧单模型字段；旧字段仍用于兼容单模型配置。`infer_enable=false` 时不进入 NPU，但仍解码和显示；只有配置了 `logic` 才会以空结果逐帧执行传统 CV 后处理。
+模型类型、路径、标签、版本、阈值、类别过滤和 NPU 核心只存在于 `channels[].models[]`。一个条目就是单模型，多个有效条目会在同一帧运行并合并结果；空数组表示无模型通道。模型阈值缺省时继承 `global.obj_thresh/nms_thresh/detect_classes`。`infer_enable=false` 是整个通道的推理总开关；`models[].enable` 控制单个模型。旧的通道顶层模型字段会被明确拒绝。
 
-ROI 的现代格式是 `roi_zones[]`，顶点为 0–1 归一化坐标；`roi_polygon` 是旧单 ROI 兼容格式。加载后由 analyzer 按模型输入尺寸生成 `RoiZone`。
+ROI 唯一格式是 `channels[].roi_zones[]`，顶点为 0–1 归一化坐标。加载后由 analyzer 按模型输入尺寸生成 `RoiZone`。
 
-`report_policy` 和 `report_parameters` 以通用 JSON 保存到字符串字段，允许 Web 增加上报参数而不扩充 C++ 结构。录像派生字段默认 `event_video_pre_sec=3`、`post_sec=3`、`fps=15`、`overlay=custom`。
+`report_policy` 和 `report_parameters` 以通用 JSON 保存到字符串字段，允许 Web 增加上报参数而不扩充 C++ 结构。录像开关、前后时长、帧率和叠加方式只保存在 `report_policy`，加载时派生为非持久化运行参数；默认值分别为 3 秒、3 秒、15 FPS 和 `custom`。
 
 ## 新增公共配置字段
 

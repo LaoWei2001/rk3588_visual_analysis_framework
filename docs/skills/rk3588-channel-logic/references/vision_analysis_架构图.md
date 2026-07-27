@@ -112,8 +112,7 @@ Web ROI 节点
    │ 保存归一化坐标 0~1
    ▼
 config.json / channels[ch]
-   ├─ roi_zones[]     多个命名区域
-   └─ roi_polygon     单区域兼容字段
+   └─ roi_zones[]     多个命名区域
           │
           ▼
 config.cpp 解析到 ChannelConfig
@@ -122,8 +121,7 @@ config.cpp 解析到 ChannelConfig
 load_roi_zones_from_config()
           │ × 模型输入宽高
           ▼
-ChannelState::roi_zones（模型坐标系）
-          ├─ ctx->roi   第一个区域，旧逻辑兼容
+运行时 roi_zones（模型坐标系）
           ├─ ctx->rois  全部区域
           └─ 显示/图片/视频叠加
 ```
@@ -133,12 +131,12 @@ ChannelState::roi_zones（模型坐标系）
 ```text
 config mtime 变化
   → 重新解析
-  → 显式复制 roi_zones / roi_polygon
+  → 显式复制 roi_zones
   → load_roi_zones_from_config()
   → 下一批逻辑帧使用新 ROI
 ```
 
-当前 C++ 不依赖外部 `roi_zones.json`，ROI 支持热更新。
+ROI 只保存在当前运行配置的 `channels[].roi_zones[]` 中，并支持热更新。
 
 ## 5. Logic 注册与 Web 声明
 

@@ -44,11 +44,41 @@ def _load_ota_config():
 
 _OTA_CFG = _load_ota_config()
 
-# 目标配置文件：默认 config.json —— 必须与控制台/ C++ 实际运行的那份一致。
-# （历史上写死 config_mux16_v5.json，导致 OTA 换的模型热重载不进正在跑的进程，此处修正）
-# 优先级：环境变量 CONFIG_FILE > ota_config.json > 默认 config.json
-_TARGET_CONFIG = os.environ.get("CONFIG_FILE") or _OTA_CFG.get("target_config") or "config.json"
-CONFIG_PATH = os.path.join(ASSETS_DIR, _TARGET_CONFIG)
+# 目标配置文件。默认 active：每次操作都读取 App 根目录的 run.config，
+# 避免用户切换启动配置后 OTA 仍改写旧文件。
+# 优先级：环境变量 CONFIG_FILE > ota_config.json > active。
+_TARGET_CONFIG = os.environ.get("CONFIG_FILE") or _OTA_CFG.get("target_config") or "active"
+
+
+def _config_path_for_name(name):
+    name = str(name or "").strip()
+    if name.startswith("assets/"):
+        name = name[len("assets/"):]
+    if not name or os.path.basename(name) != name or not name.endswith(".json"):
+        raise ValueError(f"非法目标配置文件名: {name!r}")
+    return os.path.join(ASSETS_DIR, name)
+
+
+def resolve_config_path():
+    """解析本次操作的目标配置；active 模式动态跟随 run.config。"""
+    if str(_TARGET_CONFIG).strip().lower() != "active":
+        return _config_path_for_name(_TARGET_CONFIG)
+
+    app_root = os.path.dirname(ASSETS_DIR)
+    run_config = os.path.join(app_root, "run.config")
+    try:
+        with open(run_config, "r", encoding="utf-8") as f:
+            selected = f.read().strip()
+        if selected:
+            return _config_path_for_name(selected)
+    except OSError:
+        pass
+
+    for fallback in ("config.json", "config_sop.json", "config_button.json"):
+        candidate = _config_path_for_name(fallback)
+        if os.path.isfile(candidate):
+            return candidate
+    return _config_path_for_name("config.json")
 
 # 平台 WebSocket 基础地址。优先级：环境变量 PLATFORM_WS_HOST > ota_config.json > 默认
 PLATFORM_WS_HOST = (os.environ.get("PLATFORM_WS_HOST")
@@ -64,27 +94,53 @@ def get_device_id():
     device_id = hashlib.md5(raw_mac.encode('utf-8')).hexdigest().upper()
     return device_id
 
-def get_local_version(channel_id):
-    """从本地读取指定通道的模型版本号（通过匹配 id）"""
+def _find_model(config, channel_id, model_id):
+    """按稳定的通道 ID + 模型 ID 定位 models[] 元素。"""
+    for channel in config.get("channels", []):
+        if channel.get("id") != channel_id:
+            continue
+        models = channel.get("models", [])
+        if not isinstance(models, list):
+            return channel, None
+        for model in models:
+            if isinstance(model, dict) and model.get("id") == model_id:
+                return channel, model
+        return channel, None
+    return None, None
+
+
+def get_local_version(channel_id, model_id):
+    """读取指定通道、指定模型的本地版本号。"""
     try:
-        with open(CONFIG_PATH, 'r') as f:
+        with open(resolve_config_path(), 'r', encoding='utf-8') as f:
             config = json.load(f)
-            # 遍历 channels 列表，找到对应 id 的对象
-            for ch in config.get('channels', []):
-                if ch.get('id') == channel_id:
-                    return str(ch.get('version', ''))
-            return "" # 如果没有找到对应通道，返回空
+        _, model = _find_model(config, channel_id, model_id)
+        return str(model.get("version", "")) if model else None
     except Exception:
-        return ""
+        return None
 
 def execute_update(data, ws_ip_port, ws_loop, websocket):
     """
     数据流管道：在独立线程中异步执行 HTTP 下载、校验、替换与热重载生效。
     """
-    version = data.get("version", "")
-    model_type = data.get("type", "yolov5")
+    version = str(data.get("version", "")).strip()
+    model_id = str(data.get("model_id", "")).strip()
+    model_type = str(data.get("type", "")).strip()
     
     try:
+        config_path = resolve_config_path()
+        if not model_id:
+            print("[OTA] 严重异常：缺少 model_id，无法定位 channels[].models[]")
+            send_feedback_safe(ws_loop, websocket, -1, version)
+            return
+        if not model_type:
+            print("[OTA] 严重异常：缺少 type")
+            send_feedback_safe(ws_loop, websocket, -1, version)
+            return
+        if not version:
+            print("[OTA] 严重异常：缺少 version")
+            send_feedback_safe(ws_loop, websocket, -1, version)
+            return
         url_path = data.get('url')
         target_md5 = data.get('md5')
         if not target_md5:
@@ -108,7 +164,10 @@ def execute_update(data, ws_ip_port, ws_loop, websocket):
         print(f"[OTA] 启动数据通道，正在从 {download_url} 拉取模型...")
         
         # 2. 下载至虚拟磁盘
-        temp_file = f"/tmp/model_update_ch{channel_id}.rknn"
+        safe_model_id = "".join(
+            ch if ch.isalnum() or ch in "-_" else "_" for ch in model_id
+        )[:48] or "model"
+        temp_file = f"/tmp/model_update_ch{channel_id}_{safe_model_id}.rknn"
         
         with requests.get(download_url, stream=True, timeout=60) as r:
             r.raise_for_status()
@@ -130,24 +189,22 @@ def execute_update(data, ws_ip_port, ws_loop, websocket):
             return
 
         # 4. 准备替换文件，读取配置文件
-        with open(CONFIG_PATH, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
 
-        # ====== 核心修改：通过 id 查找目标通道配置 ======
-        target_channel = None
-        for ch in config.get('channels', []):
-            if ch.get('id') == channel_id:
-                target_channel = ch
-                break
-        
+        target_channel, target_model = _find_model(config, channel_id, model_id)
         if target_channel is None:
             print(f"[OTA] 严重异常：配置文件中未找到 id 为 {channel_id} 的通道！")
             os.remove(temp_file)
             send_feedback_safe(ws_loop, websocket, -1, version)
             return
-        # ===============================================
+        if target_model is None:
+            print(f"[OTA] 严重异常：通道 {channel_id} 中未找到模型 id={model_id}！")
+            os.remove(temp_file)
+            send_feedback_safe(ws_loop, websocket, -1, version)
+            return
 
-        old_model_path = target_channel.get('model_path', '')
+        old_model_path = target_model.get('model_path', '')
         if old_model_path:
             # 旧模型路径相对于 assets 的父目录 (即项目根或 dist 根)
             project_root = os.path.dirname(ASSETS_DIR)
@@ -155,21 +212,21 @@ def execute_update(data, ws_ip_port, ws_loop, websocket):
             if os.path.exists(old_full_path):
                 print(f"[OTA] 发现旧模型: {old_full_path}，已按要求保留不删除。")
 
-        new_file_name = f"model_ch{channel_id}_{local_md5[:8]}.rknn"
+        new_file_name = f"model_ch{channel_id}_{safe_model_id}_{local_md5[:8]}.rknn"
         target_path = os.path.join(ASSETS_DIR, new_file_name)
         shutil.move(temp_file, target_path)
 
-        # 5. 更新 config.json 配置文件中的目标通道字典
+        # 5. 更新 config.json 中目标 models[] 元素
         # 保持与原有配置的相对路径格式一致 "assets/..."
-        target_channel['model_path'] = f"assets/{new_file_name}"
-        target_channel['version'] = str(version)
-        target_channel['model_type'] = model_type
+        target_model['model_path'] = f"assets/{new_file_name}"
+        target_model['version'] = str(version)
+        target_model['model_type'] = model_type
         
         # 写回配置文件
-        with open(CONFIG_PATH, 'w') as f:
-            json.dump(config, f, indent=4)
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=4)
             
-        print(f"[OTA] 底层替换完成。模型路径: {new_file_name}, 类型: {model_type}")
+        print(f"[OTA] 底层替换完成。模型: {model_id}, 路径: {new_file_name}, 类型: {model_type}")
 
         # 6. 主动上报成功状态
         send_feedback_safe(ws_loop, websocket, 1, version)
@@ -193,7 +250,7 @@ def send_feedback_safe(loop, websocket, status, version):
 async def ota_daemon():
     """边缘端主守护进程"""
     device_id = get_device_id()
-    print(f"[Sys] 配置文件路径: {CONFIG_PATH}")
+    print(f"[Sys] 配置目标: {_TARGET_CONFIG}; 当前路径: {resolve_config_path()}")
     ws_url = f"wss://{PLATFORM_WS_HOST}/ws/device/{device_id}"
     ws_ip_port = PLATFORM_WS_HOST
     
@@ -214,14 +271,32 @@ async def ota_daemon():
                         continue
                     
                     if data.get("action") == "UPDATE_COMMAND":
-                        target_version = data.get("version")
+                        target_version = str(data.get("version", "")).strip()
+                        model_id = str(data.get("model_id", "")).strip()
                         
                         # 解析通道号并转换为 int
                         raw_channel = data.get('channel')
                         ch_id = int(raw_channel) if raw_channel not in [None, ""] else 0
 
-                        local_version = get_local_version(ch_id)
-                        print(f"[Sys] 指令解析 -> 通道: {ch_id}, 目标版本: {target_version}, 本地版本: {local_version}")
+                        if not model_id or not target_version:
+                            print("[Sys] UPDATE_COMMAND 缺少 model_id/version，已拒绝")
+                            await websocket.send(json.dumps({
+                                "action": "UPDATE_COMMAND_PROGRESS",
+                                "status": -1,
+                                "version": target_version
+                            }))
+                            continue
+
+                        local_version = get_local_version(ch_id, model_id)
+                        if local_version is None:
+                            print(f"[Sys] 通道 {ch_id} 中找不到模型 {model_id}，已拒绝")
+                            await websocket.send(json.dumps({
+                                "action": "UPDATE_COMMAND_PROGRESS",
+                                "status": -1,
+                                "version": target_version
+                            }))
+                            continue
+                        print(f"[Sys] 指令解析 -> 通道: {ch_id}, 模型: {model_id}, 目标版本: {target_version}, 本地版本: {local_version}")
 
                         if str(target_version) == str(local_version):
                             print(f"[Sys] 版本一致，跳过下载。")

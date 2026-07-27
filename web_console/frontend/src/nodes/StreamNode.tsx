@@ -16,6 +16,8 @@ export default function StreamNode({ data, selected }: NodeProps) {
 
   return (
     <div className={`rf-node rf-node-compact${selected ? ' selected' : ''}`}>
+      {/* ROI 是通道级区域配置，直接归属于视频流，不依赖模型或逻辑。 */}
+      <Handle type="target" position={Position.Top} id="roi-in" />
       <div className="rf-node-header header-stream">
         <span>◈</span>
         <span>视频流</span>

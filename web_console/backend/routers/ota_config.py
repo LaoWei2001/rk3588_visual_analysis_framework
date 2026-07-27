@@ -5,8 +5,7 @@ ota_config.py — 网页管理「模型 OTA 升级服务」的配置。
 
 字段:
   platform_ws_host : 云平台 WebSocket 地址（不含协议/路径）
-  target_config    : OTA 要改写的配置文件名（相对 assets/），默认 config.json
-                     —— 必须与控制台/ C++ 实际运行的那份一致, 否则换的模型热重载不进进程
+  target_config    : OTA 要改写的配置文件名；默认 active，动态跟随 run.config
 
 文件位置: APPS_ROOT/{name}/services/model_update/ota_config.json
 """
@@ -24,7 +23,7 @@ router = APIRouter()
 
 DEFAULT_OTA_CONFIG: Dict[str, Any] = {
     "platform_ws_host": "tunnel.memanager.cn",
-    "target_config": "config.json",
+    "target_config": "active",
 }
 
 

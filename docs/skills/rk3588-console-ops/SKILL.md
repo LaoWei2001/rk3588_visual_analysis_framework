@@ -79,7 +79,7 @@ cd ../web_console && bash install.sh
 | 程序列表/启停/监看 | `apps.py` / `process.py`(process_manager) / `stream.py`(MJPEG) | 进程；`run.pid` |
 | **上传/删除程序包** | `apps.py`(`POST /apps/upload`,`DELETE /apps/{name}`) | `/opt/ai_apps/<App>/` |
 | 配置编辑器（画布）保存 | `config_io.py` | `<App>/assets/config.json` |
-| ROI 绘制 | `config_io.py`(`/roi`) + 配置保存 | C++ 使用 `<App>/assets/config.json` 通道内嵌的 `roi_zones/roi_polygon`；`/roi` 仍维护 `assets/roi_zones.json` 作为 Web 兼容副本 |
+| ROI 绘制 | `config_io.py` 配置保存 | 当前配置文件中的 `channels[].roi_zones[]` |
 | 「服务配置」弹窗 | `upload_config.py` / `ota_config.py` | `<App>/services/upload/config.yaml` / `…/model_update/ota_config.json` |
 | 「后台服务」面板（装/启停/健康/日志） | `services.py` | systemd 单元 + `systemctl`/`journalctl` |
 | 登录（SSH 账号） | `auth.py`(PAM) | — |
@@ -90,8 +90,8 @@ cd ../web_console && bash install.sh
 
 - **后台服务起不来 `CHDIR ... No such file or directory` / `Failed at step CHDIR`**：单元里的 `WorkingDirectory` 指向的目录不存在。多为**残留旧单元**（如旧的 `deploy.sh` 装的，指向已删的 `/userdata/.../dist/...`）或该 App 没带 `services/`。**网页「后台服务」面板会自动把这种单元标成「⚠ 路径失效」**，选当前 App 点「🔧 修复并启动」即可——后端强制重写单元指向 `/opt/ai_apps/<App>/services/...` 并直接启动，不用手动 rm。命令行核对：`systemctl cat ota_agent | grep WorkingDirectory` → `ls -ld 那个路径`。详见 `references/services-upload-and-ota.md` §7。
 - **USB 摄像头 ROI 偏移、且不同 max_fps 视野不同**：USB 帧率绑分辨率（fps 档→不同分辨率+不同视野），ROI 抓帧分辨率与推理实际跑的对不上。修：视频流节点把「采集分辨率」设成**固定值**（方案B，与 fps 解耦），重画 ROI。
-- **改了 ROI 不生效**：当前 C++ 从运行配置的通道 `roi_zones/roi_polygon` 加载，并支持热更新。先确认网页保存的是正在运行的配置文件；再查配置监控是否因通道数量、顺序或 id 改变而拒绝整次热重载。不要只修改兼容用的外部 `roi_zones.json`。
-- **OTA 升级后模型没换上 / 推理还是旧模型**：`ota_config.json` 的 `target_config` 必须等于 C++ 实际在跑的配置；通道 `id` 必须匹配。另需检查该通道是否使用非空 `models[]`：当前 OTA 只更新顶层旧单模型字段，不能替换 `models[]` 子模型。
+- **改了 ROI 不生效**：当前 C++ 只从运行配置的 `channels[].roi_zones[]` 加载，并支持热更新。先确认网页保存的是正在运行的配置文件；再查配置监控是否因通道数量、顺序或 id 改变而拒绝整次热重载。
+- **OTA 升级后模型没换上 / 推理还是旧模型**：`target_config=active` 时先核对 App 根目录 `run.config`；显式文件名模式则必须等于 C++ 实际运行配置。指令中的通道 `id` 和 `model_id` 必须分别匹配 `channels[].id` 与对应的 `models[].id`。
 - **`apt update` 报 `bullseye-backports ... 404`**：失效的第三方源。`install_deps.sh` 已用 `|| true` 容错不致命；要根治就注释掉 `/etc/apt/sources.list` 里那行。
 - **国内装 Node 失败/超时**：`install_deps.sh` 已优先用 npmmirror 预编译 tarball；手动可 `npm config set registry https://registry.npmmirror.com`。
 - **网页改了配置但服务/程序行为没变**：分清谁热重载——config.json 的普通字段及内嵌 ROI 由 C++ 热重载；服务配置（config.yaml/ota_config.json）要重启对应后台服务。

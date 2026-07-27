@@ -31,7 +31,7 @@ def _atomic_write(path: Path, data: Any) -> None:
 def _safe_config_target(app_dir: Path, path: str) -> Path:
     """把前端传入的相对路径解析为 assets/ 下的一个合法配置文件路径。
 
-    约束（防路径穿越/误写）：必须落在 assets/ 内、后缀 .json、且不是 ROI 数据文件。
+    约束（防路径穿越/误写）：必须落在 assets/ 内且后缀为 .json。
     接受 'config.json' / 'assets/config.json' 两种写法。
     """
     name = (path or "").strip().replace("\\", "/")
@@ -41,8 +41,8 @@ def _safe_config_target(app_dir: Path, path: str) -> Path:
     target = (assets / name).resolve()
     if assets != target.parent:
         raise HTTPException(status_code=400, detail="配置文件必须直接位于 assets/ 目录下")
-    if target.suffix != ".json" or target.name == "roi_zones.json":
-        raise HTTPException(status_code=400, detail="只允许保存非 ROI 的 .json 配置文件")
+    if target.suffix != ".json":
+        raise HTTPException(status_code=400, detail="只允许保存 .json 配置文件")
     return target
 
 
@@ -136,16 +136,14 @@ async def get_app_logics(name: str):
 
 @router.get("/apps/{name}/config-files")
 async def list_config_files(name: str):
-    """List importable JSON config files from assets/ (excludes only roi_zones.json)."""
+    """List importable JSON config files from assets/."""
     app_dir    = _app_dir(name)
     assets_dir = app_dir / "assets"
     if not assets_dir.exists():
         return []
-    # 只排除 ROI 数据文件，config.json 及其他所有 JSON 均可导入
     files = sorted(
         str(f.relative_to(app_dir))
         for f in assets_dir.glob("*.json")
-        if f.name != "roi_zones.json"
     )
     return files
 
@@ -196,7 +194,7 @@ async def save_config_file(name: str, path: str, body: Dict[str, Any]):
 
 @router.delete("/apps/{name}/config-file")
 async def delete_config_file(name: str, path: str):
-    """删除 assets/ 下指定配置文件（roi_zones.json 受保护，不可删）。"""
+    """删除 assets/ 下指定配置文件。"""
     app_dir = _app_dir(name)
     target  = _safe_config_target(app_dir, path)
     if not target.exists():
@@ -209,22 +207,4 @@ async def delete_config_file(name: str, path: str):
             run_cfg.unlink()
     except OSError:
         pass
-    return {"ok": True}
-
-
-@router.get("/apps/{name}/roi")
-async def get_roi(name: str):
-    app_dir  = _app_dir(name)
-    roi_file = app_dir / "assets" / "roi_zones.json"
-    if not roi_file.exists():
-        return {}
-    return json.loads(roi_file.read_text(encoding="utf-8"))
-
-
-@router.post("/apps/{name}/roi")
-async def save_roi(name: str, body: Dict[str, Any]):
-    app_dir    = _app_dir(name)
-    assets_dir = app_dir / "assets"
-    assets_dir.mkdir(exist_ok=True)
-    _atomic_write(assets_dir / "roi_zones.json", body)
     return {"ok": True}

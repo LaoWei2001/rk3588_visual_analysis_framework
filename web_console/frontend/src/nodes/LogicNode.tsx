@@ -13,8 +13,6 @@ export default function LogicNode({ id, data, selected }: NodeProps) {
 
   return (
     <div className={`rf-node rf-node-compact${selected ? ' selected' : ''}`}>
-      {/* top: ROI input — 传统通道也可直接连 ROI 区域 */}
-      <Handle type="target" position={Position.Top}  id="roi-in"   />
       {/* left: 来自 YOLO 推理节点(logic-out) 或 直接来自视频流(stream-out) */}
       <Handle type="target" position={Position.Left} id="logic-in" />
 

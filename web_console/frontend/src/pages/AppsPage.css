@@ -323,7 +323,7 @@
   background: #14161f;   /* 回退实底 */
   border: 1px solid var(--accent);
   border-radius: 10px;
-  width: min(1320px, 96vw);
+  width: 99vw;
   max-height: 92vh;
   display: flex;
   flex-direction: column;
@@ -534,8 +534,8 @@
 
 /* 右侧实时日志滚动区 */
 .stream-logs {
-  flex: 0 0 360px;
-  width: 360px;
+  flex: 0 1 clamp(440px, 40vw, 640px);
+  width: clamp(440px, 40vw, 640px);
   max-height: calc(92vh - 130px);
   overflow-y: auto;
   background: #0d0f1a;

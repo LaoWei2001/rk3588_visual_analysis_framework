@@ -10,8 +10,6 @@ export default function ModelNode({ data, selected }: NodeProps) {
 
   return (
     <div className={`rf-node rf-node-compact${selected ? ' selected' : ''}`}>
-      {/* top: ROI input */}
-      <Handle type="target" position={Position.Top}  id="roi-in"    />
       {/* left: stream input */}
       <Handle type="target" position={Position.Left} id="stream-in" />
 

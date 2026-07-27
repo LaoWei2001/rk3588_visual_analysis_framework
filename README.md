@@ -1,4 +1,4 @@
-# RK3588 可扩展视觉分析运行框架与管理平台
+# RK3588 可扩展多路视觉分析运行框架与管理平台
 
 本项目是一个运行于 RK3588 边缘设备的可扩展多路视频分析框架并配备可视化的web程序管理界面，具有多路视频采集、RKNN 推理、目标跟踪、利用推理结果进行自定义的算法编排等功能。主要解决了过去视觉算法开发中遇到的如下问题：
 - 多路视频流在性能受限的边缘端难以同时进行高性能的采集和分析。
@@ -274,11 +274,13 @@ sudo ./install_app.sh dist
 
 ## 配置示例
 
-配置采用 `schema_version = 2`。`stream.src_type` 必须显式指定，不能只依赖 URL 自动推断。
+配置不使用版本号字段。模型只允许写在 `channels[].models[]`，ROI 只允许写在
+`channels[].roi_zones[]`，录像设置只保存在 `report_policy`；`stream.src_type` 必须显式指定。
+Web 画布中 ROI 节点直接连接视频流节点，表示它归属于该视频通道；ROI 与模型推理和
+后处理算法解耦，即使通道没有配置模型，仍可保存、显示并通过 `ChannelContext` 读取。
 
 ```json
 {
-  "schema_version": 2,
   "global": {
     "enable_display": false,
     "enable_rtsp": true,
@@ -301,9 +303,20 @@ sudo ./install_app.sh dist
         "url": "rtsp://192.168.1.10/live",
         "video_enc": "h264"
       },
-      "model_type": "yolov8_det",
-      "model_path": "assets/yolov8n.rknn",
-      "label_path": "assets/labels.txt",
+      "models": [
+        {
+          "id": "detector",
+          "enable": true,
+          "model_type": "yolov8_det",
+          "model_path": "assets/yolov8n.rknn",
+          "label_path": "assets/labels.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 0
+        }
+      ],
       "logic": "logic_upload",
       "logic_parameters": {},
       "roi_zones": [
@@ -322,6 +335,12 @@ sudo ./install_app.sh dist
 ```
 
 通道 `id` 是运行时、Web API、告警、录像和控制动作共同使用的唯一身份，必须唯一且位于 `[0, 15)`。
+
+只校验配置而不启动视频、NPU 和后台线程：
+
+```bash
+./vision_analysis --validate-config assets/config_sop.json
+```
 
 ## 开发新的通道逻辑
 
@@ -388,7 +407,7 @@ REGISTER_LOGIC(logic_people_count);
 |---|---|
 | `logic_path_sop` | SOP 路径、顺序、停留、分支、环路和耗时合规检测 |
 | `logic_upload` | ROI 目标告警与统一上报示例 |
-| `logic_upload_teach` | 统一图片/视频/JSON 上报教学示例 |
+| `logic_upload_teach` | Web 按钮触发的图片/视频上报告警示例 |
 | `logic_button_demo` | Web `+1` / `-1` 按钮与画面数字变化演示 |
 | `logic_periodic_snapshot_demo` | 周期截图与参数热重载演示 |
 | `logic_save_frame_pair` | 保存原始分辨率帧和模型输入帧 |

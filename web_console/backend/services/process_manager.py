@@ -3,14 +3,16 @@ process_manager.py — App 进程生命周期管理
 
 变更说明：
   - 日志不再写入任何文件（run.log 已移除）；
-    subprocess.PIPE 捕获 stdout+stderr，由后台线程推入内存缓冲（log_buffer）。
-  - config.json / roi_zones.json 统一位于 assets/ 子目录；
+    systemd-run --pipe 捕获 stdout+stderr，由后台线程推入内存缓冲（log_buffer）。
+  - 运行配置统一位于 assets/ 子目录，ROI 保存在 channels[].roi_zones；
     启动时把 assets/config.json 作为命令行参数传给二进制。
 """
 
 import fcntl
+import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -32,8 +34,10 @@ class ManagedProcess:
     pid:        int
     mode:       str
     started_at: float
-    proc:       subprocess.Popen   # None when recovered (no pipe)
+    proc:       Optional[subprocess.Popen]  # None when recovered or managed by systemd
     config:     str = "config.json"  # 本次启动所用的配置文件名（assets/ 下）
+    unit_name:  Optional[str] = None
+    launcher:   Optional[subprocess.Popen] = None  # systemd-run --pipe 日志代理
 
 
 _processes: Dict[str, ManagedProcess] = {}
@@ -79,6 +83,21 @@ def _app_path(app_name: str) -> Path:
     return APPS_ROOT / app_name
 
 
+def _app_unit_name(app_name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", app_name).strip(".-")[:40] or "app"
+    digest = hashlib.sha256(app_name.encode("utf-8")).hexdigest()[:12]
+    return f"rk3588-app-{slug}-{digest}.service"
+
+
+def _read_unit_name(app_name: str) -> Optional[str]:
+    try:
+        unit_name = (_app_path(app_name) / "run.systemd_unit").read_text().strip()
+    except OSError:
+        return None
+    expected = _app_unit_name(app_name)
+    return unit_name if unit_name == expected else None
+
+
 def _read_pid(app_name: str) -> Optional[int]:
     try:
         return int((_app_path(app_name) / "run.pid").read_text().strip())
@@ -98,6 +117,7 @@ def _clear_stale_runtime_marker(app_name: str) -> None:
     (app_dir / "run.pid").unlink(missing_ok=True)
     (app_dir / "run.control.sock").unlink(missing_ok=True)
     (app_dir / "run.boot_id").unlink(missing_ok=True)
+    (app_dir / "run.systemd_unit").unlink(missing_ok=True)
 
 
 def _pid_belongs_to_app(app_name: str, pid: int) -> bool:
@@ -180,8 +200,9 @@ def _recover_process(app_name: str, announce: bool = False) -> Optional[ManagedP
         pid=pid,
         mode=mode or "deploy",
         started_at=started_at,
-        proc=None,  # type: ignore[arg-type]
+        proc=None,
         config=config or "config.json",
+        unit_name=_read_unit_name(app_name),
     )
     _processes[app_name] = managed
 
@@ -201,6 +222,7 @@ def _clear_runtime_files_if_pid(app_name: str, pid: int) -> None:
     (app_dir / "run.pid").unlink(missing_ok=True)
     (app_dir / "run.control.sock").unlink(missing_ok=True)
     (app_dir / "run.boot_id").unlink(missing_ok=True)
+    (app_dir / "run.systemd_unit").unlink(missing_ok=True)
 
 
 def get_running_app_context() -> Optional[dict]:
@@ -248,16 +270,12 @@ def _patch_display(config_path: Path, enable: bool) -> None:
 
     target = 1 if enable else 0
 
-    # 兼容两种 schema：顶层 global 对象 / 或字段直接在根
-    changed = False
-    if isinstance(cfg.get("global"), dict):
-        if cfg["global"].get("enable_display") != target:
-            cfg["global"]["enable_display"] = target
-            changed = True
-    elif "enable_display" in cfg:
-        if cfg["enable_display"] != target:
-            cfg["enable_display"] = target
-            changed = True
+    global_config = cfg.get("global")
+    if not isinstance(global_config, dict):
+        return
+    changed = global_config.get("enable_display") != target
+    if changed:
+        global_config["enable_display"] = target
 
     if not changed:
         return
@@ -338,6 +356,132 @@ def _setup_display_env(env: dict) -> None:
         pass
 
 
+def _systemd_main_pid(unit_name: str) -> Optional[int]:
+    try:
+        result = subprocess.run(
+            ["systemctl", "show", unit_name, "-p", "MainPID", "--value"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        pid = int(result.stdout.strip())
+        return pid if pid > 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+def _wait_for_systemd_main_pid(
+    unit_name: str,
+    launcher: subprocess.Popen,
+    timeout: float = 10.0,
+) -> Optional[int]:
+    """等待 transient service 进入运行态，但不等待视觉程序退出。
+
+    ``systemd-run --pipe`` 会在服务整个生命周期内保持运行，用来把 stdout/stderr
+    转发到控制台的内存日志缓冲。不能对 launcher 调用 ``wait(timeout=...)`` 来
+    判断“启动完成”，否则所有正常的长驻视觉程序都会被误判为启动超时。
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if launcher.poll() is not None:
+            return None
+        pid = _systemd_main_pid(unit_name)
+        if pid is not None:
+            return pid
+        time.sleep(0.1)
+    return None
+
+
+def _list_running_app_units() -> list[str]:
+    """返回所有仍有 MainPID 的 Web 托管视觉 transient service。"""
+    try:
+        result = subprocess.run(
+            [
+                "systemctl", "list-units", "--type=service", "--all",
+                "--plain", "--no-legend", "rk3588-app-*.service",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+
+    units = []
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        unit_name = fields[0]
+        if not re.fullmatch(r"rk3588-app-[A-Za-z0-9_.-]+\.service", unit_name):
+            continue
+        if _systemd_main_pid(unit_name) is not None:
+            units.append(unit_name)
+    return sorted(set(units))
+
+
+def _stop_systemd_unit(unit_name: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["systemctl", "stop", unit_name],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _terminate_pid(pid: int) -> None:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.2)
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _start_systemd_app(binary: Path, config: Path, app_dir: Path, env: dict, unit_name: str) -> subprocess.Popen:
+    command = [
+        "systemd-run",
+        f"--unit={unit_name}",
+        "--collect",
+        "--quiet",
+        "--pipe",
+        "--service-type=exec",
+        "--property=KillMode=control-group",
+        "--property=TimeoutStopSec=10",
+        f"--working-directory={app_dir}",
+    ]
+    for key, value in sorted(env.items()):
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            command.append(f"--setenv={key}={value}")
+    command.extend([str(binary), str(config)])
+    return subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+
 def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> int:
     app_dir     = _app_path(app_name)
     binary      = app_dir / BINARY_NAME
@@ -389,32 +533,51 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
         if mode == "debug":
             _setup_display_env(env)
 
-        # 用 PIPE 捕获 stdout+stderr，不落盘
-        proc = subprocess.Popen(
-            [str(binary), str(config)],
-            cwd=str(app_dir),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,    # Python 侧行缓冲；视觉程序 main() 也显式启用了 stdout 行缓冲
-            env=env,
-        )
+        unit_name = _app_unit_name(app_name)
+        # run.pid 可能因程序目录被外部覆盖而丢失；固定名称的旧 transient unit
+        # 仍可能存活。启动前必须先清掉，否则 systemd-run 会因同名 unit 已存在而
+        # 失败，而状态查询又可能误取旧 unit 的 MainPID。
+        if _systemd_main_pid(unit_name) is not None:
+            if not _stop_systemd_unit(unit_name):
+                raise RuntimeError(f"无法停止同名残留视觉进程服务: {unit_name}")
 
-        # 后台 reader 线程：从管道逐行读取，推入内存缓冲
+        try:
+            launcher = _start_systemd_app(binary, config, app_dir, env, unit_name)
+        except FileNotFoundError as exc:
+            raise RuntimeError("找不到 systemd-run，无法启动独立视觉进程服务") from exc
+
         def _pipe_reader() -> None:
             try:
-                for line in proc.stdout:            # type: ignore[union-attr]
+                for line in launcher.stdout:        # type: ignore[union-attr]
                     buf.push(line.rstrip("\n"))
             except Exception:
+                pass
+            try:
+                launcher.wait(timeout=1)
+            except (subprocess.TimeoutExpired, ProcessLookupError):
                 pass
             buf.push("[进程已停止]")
 
         threading.Thread(target=_pipe_reader, daemon=True, name=f"log-reader-{app_name}").start()
 
+        pid = _wait_for_systemd_main_pid(unit_name, launcher)
+        if pid is None:
+            launcher.poll()
+            _stop_systemd_unit(unit_name)
+            if launcher.poll() is None:
+                launcher.terminate()
+            if launcher.returncode not in (None, 0):
+                raise RuntimeError("创建视觉进程服务失败")
+            raise RuntimeError("视觉进程服务未能启动")
+        if not _pid_belongs_to_app(app_name, pid):
+            _stop_systemd_unit(unit_name)
+            raise RuntimeError("视觉进程已启动，但其可执行文件或工作目录与当前程序包不一致")
+
         started_at = time.time()
         _processes[app_name] = ManagedProcess(
-            app_name=app_name, pid=proc.pid, mode=mode,
-            started_at=started_at, proc=proc, config=config_name,
+            app_name=app_name, pid=pid, mode=mode,
+            started_at=started_at, proc=None, config=config_name,
+            unit_name=unit_name, launcher=launcher,
         )
 
         try:
@@ -423,27 +586,19 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
             (app_dir / "run.config").write_text(config_name)
             (app_dir / "run.started_at").write_text(str(started_at))
             (app_dir / "run.boot_id").write_text(_current_boot_id())
-            (app_dir / "run.pid").write_text(str(proc.pid))
+            (app_dir / "run.systemd_unit").write_text(unit_name)
+            (app_dir / "run.pid").write_text(str(pid))
             runtime_state.mark_vision_started(app_name, mode, config_name)
         except Exception:
-            # 提交运行标记失败时不能留下一个无法被后续互斥检查发现的孤儿进程。
             _processes.pop(app_name, None)
-            try:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-            except ProcessLookupError:
-                pass
-            # 当前仍持有全局启动锁，不可能误删另一个 worker 刚提交的新 PID。
+            _stop_systemd_unit(unit_name)
             (app_dir / "run.pid").unlink(missing_ok=True)
             control_sock.unlink(missing_ok=True)
             (app_dir / "run.boot_id").unlink(missing_ok=True)
+            (app_dir / "run.systemd_unit").unlink(missing_ok=True)
             raise
 
-        return proc.pid
+        return pid
 
 
 # ── 停止 ─────────────────────────────────────────────────────────────────────
@@ -454,46 +609,81 @@ def _stop_app_unlocked(app_name: str) -> bool:
     if disk_pid is not None and (mp is None or mp.pid != disk_pid):
         mp = _recover_process(app_name)
     if not mp:
-        # 没有 Popen 句柄时，尝试通过 PID 文件杀进程
-        pid_file = _app_path(app_name) / "run.pid"
-        if pid_file.exists():
-            try:
-                pid = int(pid_file.read_text().strip())
-                os.kill(pid, signal.SIGTERM)
-                time.sleep(0.5)
-                try:
-                    os.kill(pid, 0)
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            except (ValueError, ProcessLookupError):
-                pass
-            pid_file.unlink(missing_ok=True)
-            (_app_path(app_name) / "run.control.sock").unlink(missing_ok=True)
-        return False
+        # 程序包被外部覆盖后，run.pid 和内存状态可能已经丢失，但固定名称的
+        # transient unit 仍在运行。Web 停止/覆盖流程必须能清理这种孤儿进程。
+        unit_name = _app_unit_name(app_name)
+        stopped = (
+            _systemd_main_pid(unit_name) is not None
+            and _stop_systemd_unit(unit_name)
+        )
+        _clear_stale_runtime_marker(app_name)
+        return stopped
 
+    stopped = False
     try:
-        if mp.proc is not None:
+        if mp.unit_name is not None:
+            stopped = _stop_systemd_unit(mp.unit_name)
+        if not stopped and mp.proc is not None:
             mp.proc.send_signal(signal.SIGTERM)
             try:
                 mp.proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 mp.proc.kill()
                 mp.proc.wait()
-        else:
-            os.kill(mp.pid, signal.SIGTERM)
-            time.sleep(5)
-            try:
-                os.kill(mp.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            stopped = True
+        elif not stopped:
+            _terminate_pid(mp.pid)
+            stopped = True
     except ProcessLookupError:
-        pass
+        stopped = True
     finally:
         _processes.pop(app_name, None)
         _clear_runtime_files_if_pid(app_name, mp.pid)
 
-    return True
+    return stopped
+
+
+def stop_all_apps_for_install_unlocked() -> list[str]:
+    """停止所有 Web 托管视觉程序；调用方必须已持有 ``runtime_lock``。
+
+    上传程序包会在停止和目录替换期间持有同一把全局锁，保证另一请求不能在
+    “检查完运行状态”后立即启动程序。除正常的 run.pid 状态外，这里也扫描固定
+    前缀的 transient unit，用于清理目录曾被覆盖后遗留的孤儿视觉进程。
+    """
+    stopped_labels: set[str] = set()
+    app_names: set[str] = set(_processes)
+    unit_to_app: Dict[str, str] = {}
+
+    if APPS_ROOT.exists():
+        try:
+            for entry in APPS_ROOT.iterdir():
+                if not entry.is_dir() or entry.name.startswith((".", "_")):
+                    continue
+                app_names.add(entry.name)
+                unit_to_app[_app_unit_name(entry.name)] = entry.name
+        except OSError:
+            pass
+
+    for app_name in sorted(app_names):
+        if _stop_app_unlocked(app_name):
+            stopped_labels.add(app_name)
+
+    # 兜底清理已经找不到 App 目录、因而无法从名称扫描到的 transient unit。
+    for unit_name in _list_running_app_units():
+        if not _stop_systemd_unit(unit_name):
+            raise RuntimeError(f"无法停止正在运行的视觉进程服务: {unit_name}")
+        stopped_labels.add(unit_to_app.get(unit_name, unit_name))
+
+    remaining = _list_running_app_units()
+    if remaining:
+        raise RuntimeError(f"仍有视觉进程未停止: {', '.join(remaining)}")
+
+    # 上传意味着用户明确要求当前视觉任务停止，避免控制台重启后又按旧意图恢复。
+    for app_name in sorted(app_names):
+        runtime_state.mark_vision_stopped(app_name)
+        _clear_stale_runtime_marker(app_name)
+
+    return sorted(stopped_labels)
 
 
 def stop_app(app_name: str) -> bool:

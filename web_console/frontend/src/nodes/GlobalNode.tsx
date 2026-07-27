@@ -24,19 +24,6 @@ export default function GlobalNode({ id, data, selected }: NodeProps) {
         <div className="rf-node-body">
           <div className="node-row">
             <div className="node-field">
-              <label>全局模型路径</label>
-              <input value={String(d.model_path ?? '')} onChange={e => set('model_path', e.target.value)} />
-            </div>
-          </div>
-          <div className="node-field">
-            <label>标签文件路径</label>
-            <input value={String(d.label_path ?? '')} onChange={e => set('label_path', e.target.value)} />
-          </div>
-
-          <hr className="node-divider" />
-
-          <div className="node-row">
-            <div className="node-field">
               <label>显示宽度</label>
               <NumberField def={1920} value={d.disp_width} onChange={v => set('disp_width', v ?? 1920)} />
             </div>
