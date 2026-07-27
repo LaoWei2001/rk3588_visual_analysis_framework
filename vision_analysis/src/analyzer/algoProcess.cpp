@@ -97,10 +97,11 @@ int algorithm_init(const AppConfig &cfg)
             for (const auto &model : channel.models)
                 if (model.enable && !model.model_path.empty() && !model.model_type.empty())
                 { single = &model; break; }
-            g_algo.obj_thresh[channel_id] = single ? single->obj_thresh : channel.obj_thresh;
-            g_algo.nms_thresh[channel_id] = single ? single->nms_thresh : channel.nms_thresh;
-            const std::vector<std::string> &classes = single ? single->detect_classes : channel.detect_classes;
-            const std::string &labels = single ? single->label_path : channel.label_path;
+            if (!single) continue;
+            g_algo.obj_thresh[channel_id] = single->obj_thresh;
+            g_algo.nms_thresh[channel_id] = single->nms_thresh;
+            const std::vector<std::string> &classes = single->detect_classes;
+            const std::string &labels = single->label_path;
             g_algo.detect_classes[channel_id] = std::make_shared<const std::set<int>>(
                 names_to_class_ids(classes, labels));
         }
@@ -167,23 +168,18 @@ int algorithm_init(const AppConfig &cfg)
                 }
                 else
                 {
-                    const ChannelModelConfig *spec = active_models.empty() ? nullptr : &active_models[0];
-                    const std::string type = spec ? spec->model_type : chn_cfg.model_type;
-                    const std::string path = spec ? spec->model_path : chn_cfg.model_path;
-                    const std::string labels = spec ? spec->label_path :
-                        (chn_cfg.label_path.empty() ? cfg.label_path : chn_cfg.label_path);
-                    const float obj = spec ? spec->obj_thresh : chn_cfg.obj_thresh;
-                    const float nms = spec ? spec->nms_thresh : chn_cfg.nms_thresh;
-                    const int requested_core = spec ? spec->npu_core : chn_cfg.npu_core;
+                    const ChannelModelConfig &spec = active_models[0];
+                    const int requested_core = spec.npu_core;
                     const int core_id = (requested_core >= 0 && requested_core <= 2)
                         ? requested_core : (auto_model_instances++ % 3);
                     const int mask = core_masks[core_id];
-                    model = create_model(type, path, labels, mask, obj, nms);
+                    model = create_model(spec.model_type, spec.model_path, spec.label_path,
+                                         mask, spec.obj_thresh, spec.nms_thresh);
                     if (!model)
                     { printf("[Algo] Unsupported model_type '%s' for channel %d\n",
-                             type.c_str(), channel_id); continue; }
+                             spec.model_type.c_str(), channel_id); continue; }
                     log_printf_threadsafe("[Algo] Created %s instance for ch%d (Core %d, thread %d/%d)\n",
-                                          type.c_str(), channel_id, core_id, t, threads_for_chn);
+                                          spec.model_type.c_str(), channel_id, core_id, t, threads_for_chn);
                 }
 
                 if (loaded_models_count == 0)
@@ -416,8 +412,12 @@ void algorithm_update_thresh(int chnId, const ChannelConfig &config)
         g_algo.nms_thresh[chnId] = 1.0f;
         return;
     }
-    const float obj_thresh = config.obj_thresh;
-    const float nms_thresh = config.nms_thresh;
+    const ChannelModelConfig *single = nullptr;
+    for (const auto &model : models)
+        if (model.enable && !model.model_path.empty() && !model.model_type.empty())
+        { single = &model; break; }
+    const float obj_thresh = single ? single->obj_thresh : 0.0f;
+    const float nms_thresh = single ? single->nms_thresh : 1.0f;
     printf("[AlgoProcess] Updating thresh for channel %d: obj=%.2f, nms=%.2f\n",
            chnId, obj_thresh, nms_thresh);
     g_algo.obj_thresh[chnId] = obj_thresh;
@@ -452,8 +452,13 @@ void algorithm_update_detect_classes(int chnId, const ChannelConfig &config)
         pthread_mutex_unlock(&g_algo.detect_classes_mtx);
         return;
     }
+    const ChannelModelConfig *single = nullptr;
+    for (const auto &model : models)
+        if (model.enable && !model.model_path.empty() && !model.model_type.empty())
+        { single = &model; break; }
     auto ids = std::make_shared<const std::set<int>>(
-        names_to_class_ids(config.detect_classes, config.label_path));
+        single ? names_to_class_ids(single->detect_classes, single->label_path)
+               : std::set<int>());
     pthread_mutex_lock(&g_algo.detect_classes_mtx);
     g_algo.detect_classes[chnId] = std::move(ids);
     pthread_mutex_unlock(&g_algo.detect_classes_mtx);
@@ -475,8 +480,8 @@ bool algorithm_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
     }
     TaskQueue *tq = g_algo.task_queues[q_idx].get();
 
-    log_printf_threadsafe("[Algo] Reloading model for ch%d: configured_models=%zu legacy_type=%s\n",
-                          chnId, new_cfg.models.size(), new_cfg.model_type.c_str());
+    log_printf_threadsafe("[Algo] Reloading model for ch%d: configured_models=%zu\n",
+                          chnId, new_cfg.models.size());
 
     int worker_start = 0;
     for (int i = 0; i < chnId; ++i) worker_start += (int)g_algo.models_per_chn[i].size();
@@ -633,17 +638,12 @@ bool algorithm_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
             }
             else
             {
-                const ChannelModelConfig *spec = active_models.empty() ? nullptr : &active_models[0];
-                const std::string type = spec ? spec->model_type : new_cfg.model_type;
-                const std::string path = spec ? spec->model_path : new_cfg.model_path;
-                std::string labels = spec ? spec->label_path : new_cfg.label_path;
-                if (labels.empty() && g_pCtrl) labels = g_pCtrl->config.label_path;
-                const float obj = spec ? spec->obj_thresh : new_cfg.obj_thresh;
-                const float nms = spec ? spec->nms_thresh : new_cfg.nms_thresh;
-                const int requested_core = spec ? spec->npu_core : new_cfg.npu_core;
+                const ChannelModelConfig &spec = active_models[0];
+                const int requested_core = spec.npu_core;
                 const int core_id = (requested_core >= 0 && requested_core <= 2)
                     ? requested_core : ((worker_start + t) % 3);
-                model = create_model(type, path, labels, core_masks[core_id], obj, nms);
+                model = create_model(spec.model_type, spec.model_path, spec.label_path,
+                                     core_masks[core_id], spec.obj_thresh, spec.nms_thresh);
             }
             if (!model)
                 continue;
@@ -672,18 +672,16 @@ bool algorithm_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
     {
         const bool multi = active_models.size() > 1;
         g_algo.obj_thresh[chnId] = multi ? 0.0f :
-            (active_models.empty() ? new_cfg.obj_thresh : active_models[0].obj_thresh);
+            active_models[0].obj_thresh;
         g_algo.nms_thresh[chnId] = multi ? 1.0f :
-            (active_models.empty() ? new_cfg.nms_thresh : active_models[0].nms_thresh);
+            active_models[0].nms_thresh;
         pthread_mutex_lock(&g_algo.detect_classes_mtx);
         if (multi)
             g_algo.detect_classes[chnId] = std::make_shared<const std::set<int>>();
         else
         {
-            const std::vector<std::string> &classes = active_models.empty()
-                ? new_cfg.detect_classes : active_models[0].detect_classes;
-            const std::string &labels = active_models.empty()
-                ? new_cfg.label_path : active_models[0].label_path;
+            const std::vector<std::string> &classes = active_models[0].detect_classes;
+            const std::string &labels = active_models[0].label_path;
             g_algo.detect_classes[chnId] = std::make_shared<const std::set<int>>(
                 names_to_class_ids(classes, labels));
         }
@@ -696,7 +694,7 @@ bool algorithm_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
             return false;
         }
         log_printf_threadsafe("[Algo] ch%d model reload complete (%zu configured models)\n",
-                              chnId, active_models.empty() ? size_t(1) : active_models.size());
+                              chnId, active_models.size());
     }
     pthread_rwlock_unlock(&g_algo.dispatch_mtx);
     return true;

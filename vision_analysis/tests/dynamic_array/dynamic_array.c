@@ -189,3 +189,8 @@ void dynamic_array_clear(DynamicArray *array)
     }
     array->size = 0;
 }
+
+int copy_element(void *dst, const void *src, size_t element_size)
+{
+    
+}

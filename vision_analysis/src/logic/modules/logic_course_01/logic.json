@@ -1,5 +1,5 @@
 {
-    "label": "课程1：文字叠加",
+    "label": "课程1：自定义文字和图形叠加",
     "parameters": {
         "type": "object",
         "additionalProperties": false,

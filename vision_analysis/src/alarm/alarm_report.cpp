@@ -574,6 +574,11 @@ std::string alarm_report(ChannelContext *ctx, const AlarmRequest &input)
     enforce_outbox_cap();
     const ChannelConfig &cfg = *ctx->config;
     cJSON *policy = parse_object_or_empty(cfg.report_policy_json);
+    if (cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(policy, "enabled")))
+    {
+        cJSON_Delete(policy);
+        return "";
+    }
     uint32_t routes = policy_routes(policy);
 
     cJSON *configured_deliveries = cJSON_GetObjectItemCaseSensitive(policy, "deliveries");
@@ -596,9 +601,9 @@ std::string alarm_report(ChannelContext *ctx, const AlarmRequest &input)
 
     float merge_sec = (float)policy_number(policy, "merge_window_sec", 5.0);
     merge_sec = std::max(0.0f, std::min(60.0f, merge_sec));
-    const float video_pre_sec = (float)policy_number(policy, "video_pre_sec", cfg.event_video_pre_sec);
-    const float video_post_sec = (float)policy_number(policy, "video_post_sec", cfg.event_video_post_sec);
-    const int video_fps = (int)policy_number(policy, "video_fps", cfg.event_video_fps);
+    const float video_pre_sec = cfg.event_video.pre_sec;
+    const float video_post_sec = cfg.event_video.post_sec;
+    const int video_fps = cfg.event_video.fps;
     const std::string image_overlay = policy_string(policy, "image_overlay", "custom");
     /* 普通告警按“同通道 + 同报警类型”合并；SOP正式结果一轮一条，不参与合并。 */
     std::string merge_key = std::to_string(ctx->chnId) + ":" + input.type;

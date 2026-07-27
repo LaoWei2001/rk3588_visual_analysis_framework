@@ -17,7 +17,7 @@
 
 /**
  * @file main.cpp
- * @brief 多路 RTSP YOLO 推理主入口 — C/pthread 风格重构
+ * @brief 多路 RTSP YOLO 推理主入口 — C/pthread 重构
  *
  * === 线程一览 (全部清晰可见) ===
  *
@@ -189,6 +189,15 @@ int main(int argc, char **argv)
     {
         for (const auto &name : channel_logic_names())
             printf("%s\n", name.c_str());
+        return 0;
+    }
+    if (argc == 3 && strcmp(argv[1], "--validate-config") == 0)
+    {
+        AppConfig config;
+        if (!load_config(argv[2], config))
+            return 1;
+        printf("[Config] validation passed: %s (%zu channels)\n",
+               argv[2], config.channels.size());
         return 0;
     }
 

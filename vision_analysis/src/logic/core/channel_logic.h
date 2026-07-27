@@ -150,7 +150,7 @@ struct ChannelContext
 
     /* ---- 当前帧数据 ---- */
     /* BGR, 模型输入尺寸(通常 640×640); 检测框/ROI 均在此坐标系 */
-    const cv::Mat *frame; 
+    const cv::Mat *frame;
     /* 原始视频分辨率(摄像头/视频源解码出的真实尺寸, 如 1920×1080)。
      * 与 ctx->frame 的区别: frame 是缩放后的"模型输入尺寸"; 下面这两个才是视频源的真实宽高。
      * 首帧解码前可能为 0, 逻辑里用前可自行判一下 > 0。 */
@@ -171,9 +171,9 @@ struct ChannelContext
     // 帧号
     int64_t frame_id;
     /* 单调时钟(ms): 只用于算间隔, 不是日历时间 */
-    uint64_t timestamp_ms; 
+    uint64_t timestamp_ms;
     /* Unix epoch 毫秒(UTC 基准, 即本帧墙钟; 三源统一): 除以1000 可得到秒; 配 time_hms()/time_str() */
-    uint64_t unix_ms = 0;  
+    uint64_t unix_ms = 0;
     // 当前一帧与上一帧的间隔(毫秒)
     float dt_ms;
     // 推理结果
@@ -281,7 +281,7 @@ struct ChannelContext
     int channel_has_logic(int configuredId, const char *logicName) const;
 };
 
-/*======================== ROI 查询 (C 风格自由函数, 传 ctx 指针) ========================
+/*======================== ROI 便捷查询 (C 风格自由函数, 传 ctx 指针) ========================
  * 与 ctx->roi_count()/roi_at()/roi_index_of() 等成员函数的区别主要是 API 形式：
  * 成员函数隐式接收 this；下面的组合查询显式接收 ctx，能先判空，并用统一 idx
  * 处理 ROI_ALL/具体区域/ROI_NONE。“C 风格”不表示这些 C++ 类型接口具有 C ABI。
@@ -297,10 +297,18 @@ enum
     ROI_NONE = -2
 };
 
+// 判断检测框 box 是否属于编号为 idx 的 ROI
 int roi_contains(const ChannelContext *ctx, const cv::Rect &box, int idx);
+
+// 判断编号为 idx 的 ROI 中是否存在类别名称为 label 的检测目标
 int roi_has_target(const ChannelContext *ctx, const char *label, int idx);
+
+// 统计编号为 idx 的 ROI 中，类别名称等于 label 的检测目标数量
 int roi_count_target(const ChannelContext *ctx, const char *label, int idx);
+
+// 根据 ROI 名称 name 查询该 ROI 的编号
 int roi_find(const ChannelContext *ctx, const char *name); /* 名字→序号; 找不到=ROI_NONE */
+
 
 /*======================== 绘制辅助函数 ========================*/
 /* 矩形/圆: thickness=-1(负数) = 填充; alpha<1 = 半透明叠加(目标/画面可透出来, 适合高亮报警区)。
@@ -382,5 +390,5 @@ struct LogicActionRegistrar
         register_logic_action(name, func);
     }
 };
-#define REGISTER_LOGIC_ACTION(logic_func, func) \
+#define REGISTER_LOGIC_ACTION(logic_func, func)                                                                        \
     static const LogicActionRegistrar _logic_action_reg_##func(#logic_func, func)

@@ -1,18 +1,17 @@
 #include "config_validator.h"
 #include <sys/stat.h>
+#include <set>
 
 namespace {
 bool is_supported_model_type(const std::string& model_type) {
-    return model_type == "yolo" ||
-           model_type == "yolov5" ||
+    return model_type == "yolov5" ||
            model_type == "yolov5_seg" ||
            model_type == "yolov8_pose" ||
            model_type == "yolov8_det";
 }
 
 bool model_type_requires_label(const std::string& model_type) {
-    return model_type == "yolo" ||
-           model_type == "yolov5" ||
+    return model_type == "yolov5" ||
            model_type == "yolov5_seg" ||
            model_type == "yolov8_det";
 }
@@ -43,24 +42,6 @@ bool ConfigValidator::validate(const AppConfig& cfg, std::vector<ValidationError
 
 bool ConfigValidator::validate_global(const AppConfig& cfg, std::vector<ValidationError>& errors) {
     bool valid = true;
-
-    // 模型路径（可选，配置了才检查）
-    if (!cfg.model_path.empty() && !file_exists(cfg.model_path)) {
-        errors.push_back({"global.model_path", "文件不存在: " + cfg.model_path});
-        valid = false;
-    }
-
-    // 标签路径（可选，配置了才检查）
-    if (!cfg.label_path.empty() && !file_exists(cfg.label_path)) {
-        errors.push_back({"global.label_path", "文件不存在: " + cfg.label_path});
-        valid = false;
-    }
-
-    // 模型类型（可选，配置了才检查）
-    if (!cfg.model_type.empty() && !is_supported_model_type(cfg.model_type)) {
-        errors.push_back({"global.model_type", "无效的模型类型: " + cfg.model_type});
-        valid = false;
-    }
 
     // 显示配置
     if (cfg.disp_width <= 0) {
@@ -163,66 +144,40 @@ bool ConfigValidator::validate_channels(const AppConfig& cfg, std::vector<Valida
             valid = false;
         }
 
-        // 新多模型配置：每个模型独立校验路径、类型、标签和阈值。
-        if (!ch.models.empty()) {
-            for (size_t model_index = 0; model_index < ch.models.size(); ++model_index) {
-                const auto& model = ch.models[model_index];
-                if (!model.enable) continue;
-                const std::string mp = prefix + ".models[" + std::to_string(model_index) + "]";
-                if (model.model_path.empty() || !file_exists(model.model_path)) {
-                    errors.push_back({mp + ".model_path", "文件不存在: " + model.model_path});
-                    valid = false;
-                }
-                const std::string type = config_utils::to_lower_copy(model.model_type);
-                if (type.empty() || !is_supported_model_type(type)) {
-                    errors.push_back({mp + ".model_type", "无效的模型类型: " + type});
-                    valid = false;
-                }
-                if (model_type_requires_label(type) && model.label_path.empty()) {
-                    errors.push_back({mp + ".label_path", "该模型类型需要label_path"});
-                    valid = false;
-                } else if (!model.label_path.empty() && !file_exists(model.label_path)) {
-                    errors.push_back({mp + ".label_path", "文件不存在: " + model.label_path});
-                    valid = false;
-                }
-                if (model.obj_thresh < 0.0f || model.obj_thresh > 1.0f ||
-                    model.nms_thresh < 0.0f || model.nms_thresh > 1.0f) {
-                    errors.push_back({mp + ".threshold", "obj_thresh/nms_thresh必须在[0,1]范围内"});
-                    valid = false;
-                }
+        // 模型只允许出现在 models[]，每个启用项独立校验。
+        std::set<std::string> model_ids;
+        for (size_t model_index = 0; model_index < ch.models.size(); ++model_index) {
+            const auto& model = ch.models[model_index];
+            const std::string mp = prefix + ".models[" + std::to_string(model_index) + "]";
+            if (model.id.empty()) {
+                errors.push_back({mp + ".id", "模型ID不能为空"});
+                valid = false;
+            } else if (!model_ids.insert(model.id).second) {
+                errors.push_back({mp + ".id", "模型ID在当前通道内重复: " + model.id});
+                valid = false;
             }
-            continue;
-        }
-
-        // 旧单模型配置：仅当指定 model_path 时启用 YOLO 推理。
-        if (ch.model_path.empty()) {
-            continue;
-        }
-
-        std::string model_type = ch.model_type.empty() ? cfg.model_type : config_utils::to_lower_copy(ch.model_type);
-        if (model_type.empty()) {
-            errors.push_back({prefix + ".model_type", "启用YOLO时必须指定model_type（或设置global.model_type）"});
-            valid = false;
-            continue;
-        }
-
-        if (!is_supported_model_type(model_type)) {
-            errors.push_back({prefix + ".model_type", "无效的模型类型: " + model_type});
-            valid = false;
-        }
-
-        if (!file_exists(ch.model_path)) {
-            errors.push_back({prefix + ".model_path", "文件不存在: " + ch.model_path});
-            valid = false;
-        }
-
-        std::string label_path = ch.label_path.empty() ? cfg.label_path : ch.label_path;
-        if (model_type_requires_label(model_type) && label_path.empty()) {
-            errors.push_back({prefix + ".label_path", "该模型类型需要label_path（通道或global）"});
-            valid = false;
-        } else if (!label_path.empty() && !file_exists(label_path)) {
-            errors.push_back({prefix + ".label_path", "文件不存在: " + label_path});
-            valid = false;
+            if (!model.enable) continue;
+            if (model.model_path.empty() || !file_exists(model.model_path)) {
+                errors.push_back({mp + ".model_path", "文件不存在: " + model.model_path});
+                valid = false;
+            }
+            const std::string type = config_utils::to_lower_copy(model.model_type);
+            if (type.empty() || !is_supported_model_type(type)) {
+                errors.push_back({mp + ".model_type", "无效的模型类型: " + type});
+                valid = false;
+            }
+            if (model_type_requires_label(type) && model.label_path.empty()) {
+                errors.push_back({mp + ".label_path", "该模型类型需要label_path"});
+                valid = false;
+            } else if (!model.label_path.empty() && !file_exists(model.label_path)) {
+                errors.push_back({mp + ".label_path", "文件不存在: " + model.label_path});
+                valid = false;
+            }
+            if (model.obj_thresh < 0.0f || model.obj_thresh > 1.0f ||
+                model.nms_thresh < 0.0f || model.nms_thresh > 1.0f) {
+                errors.push_back({mp + ".threshold", "obj_thresh/nms_thresh必须在[0,1]范围内"});
+                valid = false;
+            }
         }
     }
 
@@ -261,65 +216,39 @@ bool ConfigValidator::validate_channels_critical(const AppConfig& cfg, std::vect
         const auto& ch = cfg.channels[i];
         std::string prefix = "channels[" + std::to_string(i) + "]";
 
-        if (!ch.models.empty()) {
-            for (size_t model_index = 0; model_index < ch.models.size(); ++model_index) {
-                const auto& model = ch.models[model_index];
-                if (!model.enable) continue;
-                const std::string mp = prefix + ".models[" + std::to_string(model_index) + "]";
-                if (model.model_path.empty() || !file_exists(model.model_path)) {
-                    errors.push_back({mp + ".model_path", "文件不存在: " + model.model_path});
-                    valid = false;
-                }
-                const std::string type = config_utils::to_lower_copy(model.model_type);
-                if (type.empty() || !is_supported_model_type(type)) {
-                    errors.push_back({mp + ".model_type", "无效的模型类型: " + type});
-                    valid = false;
-                }
-                if (!model.label_path.empty() && !file_exists(model.label_path)) {
-                    errors.push_back({mp + ".label_path", "文件不存在: " + model.label_path});
-                    valid = false;
-                }
-                if (model.obj_thresh < 0.0f || model.obj_thresh > 1.0f ||
-                    model.nms_thresh < 0.0f || model.nms_thresh > 1.0f) {
-                    errors.push_back({mp + ".threshold", "obj_thresh/nms_thresh必须在[0,1]范围内"});
-                    valid = false;
-                }
+        std::set<std::string> model_ids;
+        for (size_t model_index = 0; model_index < ch.models.size(); ++model_index) {
+            const auto& model = ch.models[model_index];
+            const std::string mp = prefix + ".models[" + std::to_string(model_index) + "]";
+            if (model.id.empty()) {
+                errors.push_back({mp + ".id", "模型ID不能为空"});
+                valid = false;
+            } else if (!model_ids.insert(model.id).second) {
+                errors.push_back({mp + ".id", "模型ID在当前通道内重复: " + model.id});
+                valid = false;
             }
-            continue;
-        }
-
-        // 仅检查启用了旧单模型推理的通道
-        if (ch.model_path.empty())
-            continue;
-
-        // 模型文件必须存在 — 阻断型
-        if (!file_exists(ch.model_path)) {
-            errors.push_back({prefix + ".model_path", "文件不存在: " + ch.model_path});
-            valid = false;
-        }
-
-        // 模型类型必须合法 — 阻断型
-        std::string model_type = ch.model_type.empty() ? cfg.model_type : config_utils::to_lower_copy(ch.model_type);
-        if (!model_type.empty() && !is_supported_model_type(model_type)) {
-            errors.push_back({prefix + ".model_type", "无效的模型类型: " + model_type});
-            valid = false;
-        }
-
-        // 标签文件
-        std::string label_path = ch.label_path.empty() ? cfg.label_path : ch.label_path;
-        if (!label_path.empty() && !file_exists(label_path)) {
-            errors.push_back({prefix + ".label_path", "文件不存在: " + label_path});
-            valid = false;
-        }
-
-        // 阈值范围
-        if (ch.obj_thresh < 0.0f || ch.obj_thresh > 1.0f) {
-            errors.push_back({prefix + ".obj_thresh", "必须在[0, 1]范围内"});
-            valid = false;
-        }
-        if (ch.nms_thresh < 0.0f || ch.nms_thresh > 1.0f) {
-            errors.push_back({prefix + ".nms_thresh", "必须在[0, 1]范围内"});
-            valid = false;
+            if (!model.enable) continue;
+            if (model.model_path.empty() || !file_exists(model.model_path)) {
+                errors.push_back({mp + ".model_path", "文件不存在: " + model.model_path});
+                valid = false;
+            }
+            const std::string type = config_utils::to_lower_copy(model.model_type);
+            if (type.empty() || !is_supported_model_type(type)) {
+                errors.push_back({mp + ".model_type", "无效的模型类型: " + type});
+                valid = false;
+            }
+            if (model_type_requires_label(type) && model.label_path.empty()) {
+                errors.push_back({mp + ".label_path", "该模型类型需要label_path"});
+                valid = false;
+            } else if (!model.label_path.empty() && !file_exists(model.label_path)) {
+                errors.push_back({mp + ".label_path", "文件不存在: " + model.label_path});
+                valid = false;
+            }
+            if (model.obj_thresh < 0.0f || model.obj_thresh > 1.0f ||
+                model.nms_thresh < 0.0f || model.nms_thresh > 1.0f) {
+                errors.push_back({mp + ".threshold", "obj_thresh/nms_thresh必须在[0,1]范围内"});
+                valid = false;
+            }
         }
     }
 

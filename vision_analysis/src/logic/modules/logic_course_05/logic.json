@@ -1,0 +1,16 @@
+{
+    "label": "课程5:ROI区域与检测框的交互(前4节课的内容总结)",
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "roi_name": {
+                "type": "string",
+                "title": "roi区域名称",
+                "description": "把该区域内部的目标找出来",
+                "default": ""
+            }
+        }
+    },
+    "report_fields": []
+}

@@ -57,13 +57,62 @@ bool is_channel_infer_enabled(const ChannelConfig &ch_cfg)
      * infer_enable=false → 跳过 NPU 推理但仍解码/显示；若配置了后处理则以空结果逐帧调用。 */
     if (!ch_cfg.infer_enable)
         return false;
-    if (!ch_cfg.models.empty())
-        return std::any_of(ch_cfg.models.begin(), ch_cfg.models.end(),
-                           [](const ChannelModelConfig &model)
-                           { return model.enable && !model.model_path.empty() && !model.model_type.empty(); });
-    return !ch_cfg.model_path.empty() && !ch_cfg.model_type.empty();
+    return std::any_of(ch_cfg.models.begin(), ch_cfg.models.end(),
+                       [](const ChannelModelConfig &model)
+                       { return model.enable && !model.model_path.empty() && !model.model_type.empty(); });
 }
 } // namespace config_utils
+
+namespace
+{
+EventVideoRuntimeConfig event_video_from_report_policy(cJSON *policy)
+{
+    EventVideoRuntimeConfig runtime;
+    if (!cJSON_IsObject(policy))
+        return runtime;
+
+    cJSON *value = cJSON_GetObjectItemCaseSensitive(policy, "video_pre_sec");
+    if (cJSON_IsNumber(value))
+        runtime.pre_sec = std::max(0.0f, static_cast<float>(value->valuedouble));
+
+    value = cJSON_GetObjectItemCaseSensitive(policy, "video_post_sec");
+    if (cJSON_IsNumber(value))
+        runtime.post_sec = std::max(0.0f, static_cast<float>(value->valuedouble));
+
+    value = cJSON_GetObjectItemCaseSensitive(policy, "video_fps");
+    if (cJSON_IsNumber(value))
+        runtime.fps = std::max(1, std::min(30, value->valueint));
+
+    value = cJSON_GetObjectItemCaseSensitive(policy, "video_overlay");
+    if (cJSON_IsString(value) && value->valuestring)
+    {
+        const std::string overlay = value->valuestring;
+        if (overlay == "none" || overlay == "custom" || overlay == "all")
+            runtime.overlay = overlay;
+    }
+
+    cJSON *policy_enabled = cJSON_GetObjectItemCaseSensitive(policy, "enabled");
+    if (cJSON_IsFalse(policy_enabled))
+        return runtime;
+
+    cJSON *deliveries = cJSON_GetObjectItemCaseSensitive(policy, "deliveries");
+    cJSON *delivery = nullptr;
+    cJSON_ArrayForEach(delivery, deliveries)
+    {
+        if (!cJSON_IsObject(delivery))
+            continue;
+        cJSON *enabled = cJSON_GetObjectItemCaseSensitive(delivery, "enabled");
+        cJSON *media = cJSON_GetObjectItemCaseSensitive(delivery, "media");
+        if (!cJSON_IsFalse(enabled) && cJSON_IsString(media) &&
+            std::string(media->valuestring) == "video")
+        {
+            runtime.enable = true;
+            break;
+        }
+    }
+    return runtime;
+}
+} // namespace
 
 bool load_config(const std::string &path, AppConfig &cfg)
 {
@@ -94,17 +143,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
         return false;
     }
 
-    int schema_ver = 2;
-    cJSON *sv = cJSON_GetObjectItemCaseSensitive(root, "schema_version");
-    if (cJSON_IsNumber(sv))
-        schema_ver = sv->valueint;
-    if (schema_ver != 1 && schema_ver != 2)
-    {
-        fprintf(stderr, "[Config] unsupported schema_version: %d\n", schema_ver);
-        cJSON_Delete(root);
-        return false;
-    }
-
     cfg.config_path = path;
     cfg.channels.clear();
 
@@ -131,6 +169,21 @@ bool load_config(const std::string &path, AppConfig &cfg)
         fprintf(stderr, "[Config] missing global\n");
         cJSON_Delete(root);
         return false;
+    }
+
+    static const char *removed_global_model_fields[] = {
+        "model_type", "model_path", "label_path"
+    };
+    for (const char *field : removed_global_model_fields)
+    {
+        if (cJSON_GetObjectItemCaseSensitive(global, field))
+        {
+            fprintf(stderr,
+                    "[Config] global field '%s' is not allowed; configure it in channels[].models[]\n",
+                    field);
+            cJSON_Delete(root);
+            return false;
+        }
     }
 
     if (!g_cfg_reg.parse_global(global, &cfg))
@@ -215,58 +268,48 @@ bool load_config(const std::string &path, AppConfig &cfg)
         ch.id = seq_idx;
         ch.enable = true;
         ch.stream.video_enc = "h264";
-        ch.obj_thresh = -1.0f;
-        ch.nms_thresh = -1.0f;
         ch.threads = -1;
         ch.playback_fps = -1;
         ch.max_fps = -1;
-        ch.npu_core = -1;
         ch.tracker_enable = -1;
 
         // 解析stream对象
-        if (schema_ver >= 2)
+        cJSON *stream_obj = cJSON_GetObjectItemCaseSensitive(item, "stream");
+        if (stream_obj && cJSON_IsObject(stream_obj))
         {
-            cJSON *stream_obj = cJSON_GetObjectItemCaseSensitive(item, "stream");
-            if (stream_obj && cJSON_IsObject(stream_obj))
-            {
-                cJSON *src_type = cJSON_GetObjectItemCaseSensitive(stream_obj, "src_type");
-                if (cJSON_IsString(src_type) && src_type->valuestring)
-                    ch.stream.src_type = src_type->valuestring;
-                cJSON *url = cJSON_GetObjectItemCaseSensitive(stream_obj, "url");
-                if (cJSON_IsString(url) && url->valuestring)
-                    ch.stream.url = url->valuestring;
-                cJSON *device = cJSON_GetObjectItemCaseSensitive(stream_obj, "device");
-                if (cJSON_IsString(device) && device->valuestring)
-                    ch.stream.device = device->valuestring;
-                cJSON *enc = cJSON_GetObjectItemCaseSensitive(stream_obj, "video_enc");
-                if (cJSON_IsString(enc) && enc->valuestring)
-                    ch.stream.video_enc = enc->valuestring;
-                cJSON *loop = cJSON_GetObjectItemCaseSensitive(stream_obj, "loop");
-                if (cJSON_IsBool(loop))
-                    ch.stream.loop = cJSON_IsTrue(loop);
-                cJSON *uw = cJSON_GetObjectItemCaseSensitive(stream_obj, "usb_width");
-                if (cJSON_IsNumber(uw))
-                    ch.stream.usb_width = uw->valueint;
-                cJSON *uh = cJSON_GetObjectItemCaseSensitive(stream_obj, "usb_height");
-                if (cJSON_IsNumber(uh))
-                    ch.stream.usb_height = uh->valueint;
-            }
-        }
-        else
-        {
-            cJSON *rtsp = cJSON_GetObjectItemCaseSensitive(item, "rtsp");
-            if (cJSON_IsString(rtsp) && rtsp->valuestring)
-                ch.stream.url = rtsp->valuestring;
-            cJSON *enc = cJSON_GetObjectItemCaseSensitive(item, "video_enc");
+            cJSON *src_type = cJSON_GetObjectItemCaseSensitive(stream_obj, "src_type");
+            if (cJSON_IsString(src_type) && src_type->valuestring)
+                ch.stream.src_type = src_type->valuestring;
+            cJSON *url = cJSON_GetObjectItemCaseSensitive(stream_obj, "url");
+            if (cJSON_IsString(url) && url->valuestring)
+                ch.stream.url = url->valuestring;
+            cJSON *device = cJSON_GetObjectItemCaseSensitive(stream_obj, "device");
+            if (cJSON_IsString(device) && device->valuestring)
+                ch.stream.device = device->valuestring;
+            cJSON *enc = cJSON_GetObjectItemCaseSensitive(stream_obj, "video_enc");
             if (cJSON_IsString(enc) && enc->valuestring)
                 ch.stream.video_enc = enc->valuestring;
+            cJSON *loop = cJSON_GetObjectItemCaseSensitive(stream_obj, "loop");
+            if (cJSON_IsBool(loop))
+                ch.stream.loop = cJSON_IsTrue(loop);
+            cJSON *uw = cJSON_GetObjectItemCaseSensitive(stream_obj, "usb_width");
+            if (cJSON_IsNumber(uw))
+                ch.stream.usb_width = uw->valueint;
+            cJSON *uh = cJSON_GetObjectItemCaseSensitive(stream_obj, "usb_height");
+            if (cJSON_IsNumber(uh))
+                ch.stream.usb_height = uh->valueint;
         }
 
-        /* 解析通道 ROI 区域 (roi_zones / roi_polygon, 归一化坐标 0~1) */
+        /* 解析唯一 ROI 配置入口 roi_zones（归一化坐标 0~1）。 */
         ch.roi_zones.clear();
-        ch.roi_polygon.clear();
         {
             cJSON *rz = cJSON_GetObjectItemCaseSensitive(item, "roi_zones");
+            if (rz && !cJSON_IsArray(rz))
+            {
+                fprintf(stderr, "[Config] channel %d roi_zones must be an array\n", ch.id);
+                cJSON_Delete(root);
+                return false;
+            }
             if (cJSON_IsArray(rz))
             {
                 cJSON *zone = nullptr;
@@ -291,27 +334,52 @@ bool load_config(const std::string &path, AppConfig &cfg)
                             }
                         }
                     }
+                    /* 多边形由渲染和命中算法自动闭合。兼容旧配置中
+                     * [首点, ..., 首点] 的写法，但运行配置只保留实际顶点。 */
+                    while (zc.polygon.size() > 1 &&
+                           zc.polygon.front() == zc.polygon.back())
+                        zc.polygon.pop_back();
                     if (!zc.polygon.empty())
                         ch.roi_zones.push_back(std::move(zc));
-                }
-            }
-            cJSON *rp = cJSON_GetObjectItemCaseSensitive(item, "roi_polygon");
-            if (cJSON_IsArray(rp))
-            {
-                cJSON *pt = nullptr;
-                cJSON_ArrayForEach(pt, rp)
-                {
-                    if (cJSON_IsArray(pt) && cJSON_GetArraySize(pt) >= 2)
-                    {
-                        double x = cJSON_GetArrayItem(pt, 0)->valuedouble;
-                        double y = cJSON_GetArrayItem(pt, 1)->valuedouble;
-                        ch.roi_polygon.emplace_back(x, y);
-                    }
                 }
             }
         }
 
         g_cfg_reg.parse_channel(item, &ch);
+
+        static const char *removed_model_fields[] = {
+            "model_type", "model_path", "label_path",
+            "obj_thresh", "nms_thresh", "detect_classes", "npu_core", "version"
+        };
+        for (const char *field : removed_model_fields)
+        {
+            if (cJSON_GetObjectItemCaseSensitive(item, field))
+            {
+                fprintf(stderr,
+                        "[Config] channel %d field '%s' is not allowed; move it into models[]\n",
+                        ch.id, field);
+                cJSON_Delete(root);
+                return false;
+            }
+        }
+
+        static const char *removed_channel_fields[] = {
+            "roi_polygon",
+            "event_video_enable", "event_video_pre_sec", "event_video_post_sec",
+            "event_video_fps", "event_video_overlay"
+        };
+        for (const char *field : removed_channel_fields)
+        {
+            if (cJSON_GetObjectItemCaseSensitive(item, field))
+            {
+                fprintf(stderr,
+                        "[Config] channel %d field '%s' is not allowed; "
+                        "use roi_zones[] or report_policy\n",
+                        ch.id, field);
+                cJSON_Delete(root);
+                return false;
+            }
+        }
 
         cJSON *logic_parameters_item =
             cJSON_GetObjectItemCaseSensitive(item, "logic_parameters");
@@ -324,19 +392,34 @@ bool load_config(const std::string &path, AppConfig &cfg)
             return false;
         }
 
-        /* 新多模型格式：models[] 非空时由推理引擎在同一帧上依次执行并合并结果。
-         * 旧 model_type/model_path 字段继续保留，确保历史配置完全兼容。 */
+        cJSON *report_policy_item =
+            cJSON_GetObjectItemCaseSensitive(item, "report_policy");
+        if (report_policy_item && !cJSON_IsObject(report_policy_item))
+        {
+            fprintf(stderr,
+                    "[Config] channel %d report_policy must be a JSON object\n",
+                    ch.id);
+            cJSON_Delete(root);
+            return false;
+        }
+        ch.event_video = event_video_from_report_policy(report_policy_item);
+
+        /* 唯一模型格式。一个条目是单模型，多个条目在同一帧合并结果。 */
         ch.models.clear();
         cJSON *models = cJSON_GetObjectItemCaseSensitive(item, "models");
+        if (models && !cJSON_IsArray(models))
+        {
+            fprintf(stderr, "[Config] channel %d models must be an array\n", ch.id);
+            cJSON_Delete(root);
+            return false;
+        }
         if (cJSON_IsArray(models))
         {
             cJSON *model_item = nullptr;
-            int model_index = 0;
             cJSON_ArrayForEach(model_item, models)
             {
                 if (!cJSON_IsObject(model_item)) continue;
                 ChannelModelConfig model;
-                model.id = "model_" + std::to_string(model_index++);
                 cJSON *v = cJSON_GetObjectItemCaseSensitive(model_item, "id");
                 if (cJSON_IsString(v) && v->valuestring) model.id = v->valuestring;
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "enable");
@@ -347,6 +430,8 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 if (cJSON_IsString(v) && v->valuestring) model.model_path = v->valuestring;
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "label_path");
                 if (cJSON_IsString(v) && v->valuestring) model.label_path = v->valuestring;
+                v = cJSON_GetObjectItemCaseSensitive(model_item, "version");
+                if (cJSON_IsString(v) && v->valuestring) model.version = v->valuestring;
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "obj_thresh");
                 if (cJSON_IsNumber(v)) model.obj_thresh = static_cast<float>(v->valuedouble);
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "nms_thresh");
@@ -384,30 +469,14 @@ bool load_config(const std::string &path, AppConfig &cfg)
             }
             ch.logic_parameters_json = std::move(normalized_parameters);
         }
-        // 如果模型路径存在但模型类型是空的, 就分配全局设置的模型类型
-        if (!ch.model_path.empty() && ch.model_type.empty())
-            ch.model_type = cfg.model_type;
-        
-        // 如果模型路径存在但标签是空的, 就分配全局设置的标签
-        if (!ch.model_path.empty() && ch.label_path.empty())
-            ch.label_path = cfg.label_path;
-        if (ch.obj_thresh < 0.0f)
-            ch.obj_thresh = cfg.obj_thresh;
-        if (ch.nms_thresh < 0.0f)
-            ch.nms_thresh = cfg.nms_thresh;
         for (auto &model : ch.models)
         {
-            if (!model.model_path.empty() && model.model_type.empty()) model.model_type = cfg.model_type;
-            if (!model.model_path.empty() && model.label_path.empty()) model.label_path = cfg.label_path;
-            if (model.obj_thresh < 0.0f) model.obj_thresh = ch.obj_thresh;
-            if (model.nms_thresh < 0.0f) model.nms_thresh = ch.nms_thresh;
-            if (model.detect_classes.empty()) model.detect_classes = ch.detect_classes.empty()
-                ? cfg.detect_classes : ch.detect_classes;
+            if (model.obj_thresh < 0.0f) model.obj_thresh = cfg.obj_thresh;
+            if (model.nms_thresh < 0.0f) model.nms_thresh = cfg.nms_thresh;
+            if (model.detect_classes.empty()) model.detect_classes = cfg.detect_classes;
         }
         if (ch.threads < 0)
             ch.threads = cfg.channel_threads;
-        if (ch.detect_classes.empty())
-            ch.detect_classes = cfg.detect_classes;
         if (ch.max_fps <= 0)
             ch.max_fps = (cfg.max_fps > 0) ? cfg.max_fps : 30;
         // 注意不要级联 playback_fps！ playback_fps = -1 对于实时流（RTSP/USB）表示不节流！
@@ -438,12 +507,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
             ch.tracker_min_hits = 100;
         if (ch.threads < 1)
             ch.threads = 1;
-        if (ch.obj_thresh > 1.0f)
-            ch.obj_thresh = 1.0f;
-        if (ch.nms_thresh > 1.0f)
-            ch.nms_thresh = 1.0f;
-        if (ch.npu_core > 2)
-            ch.npu_core = 2;
 
         // 校验
         if (ch.id < 0 || ch.id >= MAX_CHANNEL_NUM)

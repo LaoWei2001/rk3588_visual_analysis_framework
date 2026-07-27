@@ -10,9 +10,6 @@ void init_config_fields(AppConfig &cfg)
     (void)cfg;
 
     // 全局配置
-    REG_G("model_type", STRING, model_type);
-    REG_G("model_path", STRING, model_path);
-    REG_G("label_path", STRING, label_path);
     REG_G("enable_display", BOOL, enable_display);
     REG_G("disp_width", INT, disp_width);
     REG_G("disp_height", INT, disp_height);
@@ -48,17 +45,10 @@ void init_config_fields(AppConfig &cfg)
     REG_C("infer_enable", BOOL, infer_enable);
     REG_C("swap_rb", BOOL, swap_rb);
     REG_C("logic", STRING, logic);
-    REG_C("model_type", STRING, model_type);
-    REG_C("model_path", STRING, model_path);
-    REG_C("label_path", STRING, label_path);
-    REG_C("obj_thresh", FLOAT, obj_thresh);
-    REG_C("nms_thresh", FLOAT, nms_thresh);
-    REG_C("detect_classes", STRING_ARRAY, detect_classes);
     REG_C("logic_parameters", JSON, logic_parameters_json);
     REG_C("threads", INT, threads);
     REG_C("playback_fps", INT, playback_fps);
     REG_C("max_fps", INT, max_fps);
-    REG_C("npu_core", INT, npu_core);
     REG_C("tracker_enable", INT, tracker_enable);
     REG_C("tracker_iou_thresh", FLOAT, tracker_iou_thresh);
     REG_C("tracker_max_miss", INT, tracker_max_miss);
@@ -86,12 +76,6 @@ void init_config_fields(AppConfig &cfg)
     REG_C("path_trigger_mode", STRING, path_trigger_mode);
     REG_C("path_trigger_mandatory", BOOL, path_trigger_mandatory);
     REG_C("path_report_normal", BOOL, path_report_normal);
-    // 由 report_policy 派生，供原始分辨率录像环形缓冲使用。
-    REG_C("event_video_enable", BOOL, event_video_enable);
-    REG_C("event_video_pre_sec", FLOAT, event_video_pre_sec);
-    REG_C("event_video_post_sec", FLOAT, event_video_post_sec);
-    REG_C("event_video_fps", INT, event_video_fps);
-    REG_C("event_video_overlay", STRING, event_video_overlay);
     REG_C("report_policy", JSON, report_policy_json);
     REG_C("report_parameters", JSON, report_parameters_json);
 }

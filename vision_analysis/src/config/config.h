@@ -7,7 +7,7 @@
  * - 通道独立配置 (RTSP源、逻辑名称、阈值)
  * - 配置热加载 (文件变更自动重载)
  *
- * 配置文件格式: JSON (schema_version = 2)
+ * 配置文件格式: JSON
  */
 #pragma once
 
@@ -41,14 +41,25 @@ struct RoiZoneConfig
     std::vector<std::pair<double, double>> polygon;
 };
 
+/*======================== report_policy 派生的事件录像运行参数 ========================*/
+struct EventVideoRuntimeConfig
+{
+    bool enable = false;
+    float pre_sec = 3.0f;
+    float post_sec = 3.0f;
+    int fps = 15;
+    std::string overlay = "custom"; /* none=源帧；custom/all=按实时播放规则渲染 */
+};
+
 /*======================== 单通道模型配置 ========================*/
 struct ChannelModelConfig
 {
-    std::string id;                           /* Web画布模型节点ID，仅用于区分同通道模型 */
+    std::string id;                           /* 通道内稳定模型ID；Web画布与 OTA 均使用 */
     bool enable = true;
     std::string model_type;
     std::string model_path;
     std::string label_path;
+    std::string version;                      /* OTA 版本；空表示未设置 */
     float obj_thresh = -1.0f;
     float nms_thresh = -1.0f;
     std::vector<std::string> detect_classes;
@@ -59,7 +70,8 @@ inline bool operator==(const ChannelModelConfig &a, const ChannelModelConfig &b)
 {
     return a.id == b.id && a.enable == b.enable &&
            a.model_type == b.model_type && a.model_path == b.model_path &&
-           a.label_path == b.label_path && a.obj_thresh == b.obj_thresh &&
+           a.label_path == b.label_path && a.version == b.version &&
+           a.obj_thresh == b.obj_thresh &&
            a.nms_thresh == b.nms_thresh && a.detect_classes == b.detect_classes &&
            a.npu_core == b.npu_core;
 }
@@ -74,22 +86,14 @@ struct ChannelConfig
     bool swap_rb = false;                    /* 仅显示: 1=该通道画面 R/B 互换显示(跳过显示前 BGR→RGB);不影响推理/上报 */
     StreamConfig stream;
     std::string logic = "";                  /* 可选后处理模块；空=不执行模块，仅保留视频/模型结果绘制 */
-    std::string model_type = "";             /* 模型类型: "yolov5"/"yolov8_det"/"yolov8_pose"/"yolov5_seg" */
-    std::string model_path = "";             /* 模型路径，为空表示该通道不做YOLO推理 */
-    std::string label_path = "";             /* 标签路径（检测/分割模型需要） */
-    std::vector<ChannelModelConfig> models;   /* 多模型配置；非空时优先于上面的旧单模型字段 */
-    float obj_thresh = -1.0f;                /* <0 表示使用全局值 */
-    float nms_thresh = -1.0f;                /* <0 表示使用全局值 */
-    std::vector<std::string> detect_classes; /* 检测类别名称列表, 空=全部 */
+    std::vector<ChannelModelConfig> models;   /* 唯一模型配置入口；空表示该通道不做模型推理 */
     std::vector<RoiZoneConfig> roi_zones;     /* 多ROI区域(名称+归一化顶点), 空=无区域 */
-    std::vector<std::pair<double, double>> roi_polygon; /* 单ROI区域(归一化顶点), 兼容旧配置 */
     /* 逻辑模块专有参数：由模块 logic.json Schema 统一定义和校验。
      * 配置文件键为 logic_parameters；新增普通逻辑参数不再扩展 ChannelConfig。 */
     std::string logic_parameters_json = "{}";
     int threads = -1;                        /* 单通道并发线程数, <0表示使用全局设置 */
     int playback_fps = -1;                   /* 播放/处理帧率上限，<0表示不限制(本地文件默认25) */
     int max_fps = -1;                        /* 推理帧率上限，<0表示继承全局设置 */
-    int npu_core = -1;                       /* 指定NPU核心绑定(0,1,2)，<0表示自动分配 */
 
     /* 跟踪器 (全局默认, 可被通道覆盖) */
     int tracker_enable = -1;         /* -1=未指定(继承全局), 0=关闭, 1=开启 */
@@ -119,16 +123,10 @@ struct ChannelConfig
     std::string path_trigger_mode = "auto";   /* 起点触发方式: "auto"=目标进入即开始; "external"=等待sop_trigger外部信号 */
     bool path_trigger_mandatory = false;       /* 仅 external 模式有效: 未触发而进入区域 → 报 sop_untracked_entry */
     bool path_report_normal = false;           /* 一轮正式结算且完全合规时是否上报 sop_normal；默认关闭以兼容旧配置 */
-    /* 报警事件视频内部运行参数；由 report_policy 派生，供源帧预缓冲使用。 */
-    bool event_video_enable = false;
-    float event_video_pre_sec = 3.0f;
-    float event_video_post_sec = 3.0f;
-    int event_video_fps = 15;                 /* 环形缓冲采样/输出帧率 */
-    std::string event_video_overlay = "custom"; /* none=原始源帧；custom/all=按实时播放规则独立渲染 */
-
     /* 通用告警配置：Web 直接保存对象/数组，C++ 以 JSON 文本解析，新增参数无需改结构体。 */
     std::string report_policy_json = "{}";
     std::string report_parameters_json = "{}";
+    EventVideoRuntimeConfig event_video;       /* 仅运行时使用，不对应独立 JSON 字段 */
 };
 
 /*======================== 全局逻辑配置 (支持多个并行实例) ========================*/
@@ -156,11 +154,6 @@ inline bool operator!=(const GlobalLogicConfig &a, const GlobalLogicConfig &b)
 /*======================== 全局配置 ========================*/
 struct AppConfig
 {
-    /* 模型 (全局默认) */
-    std::string model_type = "yolo";
-    std::string model_path;
-    std::string label_path;
-
     /* 显示 */
     bool enable_display = true;
     int disp_width = 1920;

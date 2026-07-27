@@ -1,0 +1,9 @@
+{
+    "label": "课程4:ROI区域信息获取示例",
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+    },
+    "report_fields": []
+}

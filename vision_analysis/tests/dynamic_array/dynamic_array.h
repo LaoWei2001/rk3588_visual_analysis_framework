@@ -11,9 +11,8 @@ typedef struct
     size_t capacity;
 } DynamicArray;
 
-
 // 创建并初始化一个空动态数组
-int dynamic_array_init(DynamicArray *array);
+int dynamic_array_init(void *array);
 
 // 释放这个动态数组申请的所有内存，使它不再占用堆内存
 void dynamic_array_destroy(DynamicArray *array);
@@ -41,5 +40,9 @@ int dynamic_array_empty(const DynamicArray *array);
 
 // 清空动态数组中的所有元素
 void dynamic_array_clear(DynamicArray *array);
+
+/*=====================================================================*/
+//  
+int copy_element(void *dst, const void *src, size_t element_size);
 
 #endif

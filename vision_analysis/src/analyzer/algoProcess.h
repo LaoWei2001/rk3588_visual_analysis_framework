@@ -16,8 +16,8 @@ struct AlgoResult
     uint64_t timestamp_ms = 0; // wall clock in milliseconds
     std::string model_id;      // 同通道多模型来源ID
     std::string model_type;    // yolov8_det / yolov8_pose / ...
-    int model_index = 0;       // 在通道models[]中的顺序
-
+    int model_index = 0;       // 在本次有效模型列表中的顺序
+    // int roi_belong = -1;       // 目标属于哪个roi区域
     cv::Scalar box_color = cv::Scalar(-1, -1, -1); // (-1,-1,-1) means use default color
 
     /* 卡尔曼速度 (模型输入像素/推理帧), 由 tracker 写入。

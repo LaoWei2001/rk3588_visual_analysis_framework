@@ -80,10 +80,12 @@ int ChannelContext::channel_has_logic(int configuredId, const char *logicName) c
 
 int ChannelContext::has_target(const char *label) const
 {
-    if (!results) return 0;
+    if (!results)
+        return 0;
     std::string s(label);
     for (const auto &r : *results)
-        if (r.label == s) return 1;
+        if (r.label == s)
+            return 1;
     return 0;
 }
 
@@ -93,75 +95,94 @@ int ChannelContext::has_target(const char *label) const
 
 int roi_find(const ChannelContext *ctx, const char *name)
 {
-    if (!ctx || !ctx->rois || !name) return ROI_NONE;
+    if (!ctx || !ctx->rois || !name)
+        return ROI_NONE;
     std::string s(name);
     for (int i = 0; i < static_cast<int>(ctx->rois->size()); ++i)
-        if ((*ctx->rois)[i].name == s) return i;
+        if ((*ctx->rois)[i].name == s)
+            return i;
     return ROI_NONE;
 }
 
 int roi_contains(const ChannelContext *ctx, const cv::Rect &box, int idx)
 {
-    if (!ctx) return 0;
-    if (idx == ROI_ALL)                            /* 所有区域 */
+    if (!ctx)
+        return 0;
+    if (idx == ROI_ALL) /* 所有区域 */
     {
-        if (!ctx->rois || ctx->rois->empty()) return 1;        /* 没画区域 → 不设限 */
+        if (!ctx->rois || ctx->rois->empty())
+            return 1; /* 没画区域 → 不设限 */
         return ctx->roi_index_of(box) >= 0 ? 1 : 0;
     }
-    if (idx < 0) return 0;                          /* ROI_NONE / 非法 */
-    const std::vector<cv::Point> *poly = ctx->roi_polygon_at(idx);   /* 指定区域 */
+    if (idx < 0)
+        return 0;                                                  /* ROI_NONE / 非法 */
+    const std::vector<cv::Point> *poly = ctx->roi_polygon_at(idx); /* 指定区域 */
     return (poly && poly->size() >= 3) ? ChannelContext::point_box_in_poly(poly, box) : 0;
 }
 
 int roi_has_target(const ChannelContext *ctx, const char *label, int idx)
 {
-    if (!ctx || !ctx->results) return 0;
-    if (idx == ROI_ALL)                            /* 所有区域 */
+    if (!ctx || !ctx->results)
+        return 0;
+    if (idx == ROI_ALL) /* 所有区域 */
     {
-        if (!ctx->rois || ctx->rois->empty()) return ctx->has_target(label);   /* 无区域 → 整帧 */
+        if (!ctx->rois || ctx->rois->empty())
+            return ctx->has_target(label); /* 无区域 → 整帧 */
         std::string s(label);
         for (const auto &r : *ctx->results)
-            if (r.label == s && ctx->roi_index_of(r.box) >= 0) return 1;
+            if (r.label == s && ctx->roi_index_of(r.box) >= 0)
+                return 1;
         return 0;
     }
-    if (idx < 0) return 0;                          /* ROI_NONE / 非法 */
-    const std::vector<cv::Point> *poly = ctx->roi_polygon_at(idx);   /* 指定区域 */
-    if (!poly || poly->size() < 3) return 0;
+    if (idx < 0)
+        return 0;                                                  /* ROI_NONE / 非法 */
+    const std::vector<cv::Point> *poly = ctx->roi_polygon_at(idx); /* 指定区域 */
+    if (!poly || poly->size() < 3)
+        return 0;
     std::string s(label);
     for (const auto &r : *ctx->results)
-        if (r.label == s && ChannelContext::point_box_in_poly(poly, r.box)) return 1;
+        if (r.label == s && ChannelContext::point_box_in_poly(poly, r.box))
+            return 1;
     return 0;
 }
 
 int roi_count_target(const ChannelContext *ctx, const char *label, int idx)
 {
-    if (!ctx || !ctx->results) return 0;
-    if (idx == ROI_ALL)                            /* 所有区域(并集, 重叠不重复计) */
+    if (!ctx || !ctx->results)
+        return 0;
+    if (idx == ROI_ALL) /* 所有区域(并集, 重叠不重复计) */
     {
-        if (!ctx->rois || ctx->rois->empty()) return ctx->target_count(label); /* 无区域 → 整帧 */
+        if (!ctx->rois || ctx->rois->empty())
+            return ctx->target_count(label); /* 无区域 → 整帧 */
         std::string s(label);
         int n = 0;
         for (const auto &r : *ctx->results)
-            if (r.label == s && ctx->roi_index_of(r.box) >= 0) ++n;
+            if (r.label == s && ctx->roi_index_of(r.box) >= 0)
+                ++n;
         return n;
     }
-    if (idx < 0) return 0;                          /* ROI_NONE / 非法 */
-    const std::vector<cv::Point> *poly = ctx->roi_polygon_at(idx);   /* 指定区域 */
-    if (!poly || poly->size() < 3) return 0;
+    if (idx < 0)
+        return 0;                                                  /* ROI_NONE / 非法 */
+    const std::vector<cv::Point> *poly = ctx->roi_polygon_at(idx); /* 指定区域 */
+    if (!poly || poly->size() < 3)
+        return 0;
     std::string s(label);
     int n = 0;
     for (const auto &r : *ctx->results)
-        if (r.label == s && ChannelContext::point_box_in_poly(poly, r.box)) ++n;
+        if (r.label == s && ChannelContext::point_box_in_poly(poly, r.box))
+            ++n;
     return n;
 }
 
 int ChannelContext::target_count(const char *label) const
 {
-    if (!results) return 0;
+    if (!results)
+        return 0;
     std::string s(label);
     int n = 0;
     for (const auto &r : *results)
-        if (r.label == s) ++n;
+        if (r.label == s)
+            ++n;
     return n;
 }
 
@@ -189,16 +210,19 @@ const char *ChannelContext::roi_name_at(int idx) const
 
 const RoiZone *ChannelContext::roi_by_name(const char *name) const
 {
-    if (!rois || !name) return nullptr;
+    if (!rois || !name)
+        return nullptr;
     std::string s(name);
     for (const auto &z : *rois)
-        if (z.name == s) return &z;
+        if (z.name == s)
+            return &z;
     return nullptr;
 }
 
 int ChannelContext::point_box_in_poly(const std::vector<cv::Point> *poly, const cv::Rect &box)
 {
-    if (!poly || poly->size() < 3) return 1;
+    if (!poly || poly->size() < 3)
+        return 1;
     cv::Point c(box.x + box.width / 2, box.y + box.height / 2);
     return cv::pointPolygonTest(*poly, c, false) >= 0 ? 1 : 0;
 }
@@ -209,12 +233,14 @@ int ChannelContext::point_box_in_poly(const std::vector<cv::Point> *poly, const 
 
 int ChannelContext::roi_index_of(const cv::Rect &box) const
 {
-    if (!rois) return ROI_NONE;
+    if (!rois)
+        return ROI_NONE;
     cv::Point c(box.x + box.width / 2, box.y + box.height / 2);
     for (int i = 0; i < static_cast<int>(rois->size()); ++i)
     {
         const std::vector<cv::Point> &poly = (*rois)[i].polygon;
-        if (poly.size() >= 3 && cv::pointPolygonTest(poly, c, false) >= 0) return i;
+        if (poly.size() >= 3 && cv::pointPolygonTest(poly, c, false) >= 0)
+            return i;
     }
     return ROI_NONE;
 }
@@ -268,10 +294,10 @@ FrameTime ChannelContext::datetime() const
     struct tm tmv;
     localtime_r(&sec, &tmv);
     FrameTime t;
-    t.year   = tmv.tm_year + 1900;
-    t.month  = tmv.tm_mon + 1;
-    t.day    = tmv.tm_mday;
-    t.hour   = tmv.tm_hour;
+    t.year = tmv.tm_year + 1900;
+    t.month = tmv.tm_mon + 1;
+    t.day = tmv.tm_mday;
+    t.hour = tmv.tm_hour;
     t.minute = tmv.tm_min;
     t.second = tmv.tm_sec;
     t.millis = static_cast<int>(unix_ms % 1000);
@@ -281,22 +307,21 @@ FrameTime ChannelContext::datetime() const
 RenderParams ChannelContext::render_params(int64_t result_age_ms) const
 {
     RenderParams p;
-    p.chnId         = chnId;
-    p.inputW        = frame ? frame->cols : 0;
-    p.inputH        = frame ? frame->rows : 0;
-    p.disp_fps      = disp_fps;
-    p.infer_fps     = infer_fps;
+    p.chnId = chnId;
+    p.inputW = frame ? frame->cols : 0;
+    p.inputH = frame ? frame->rows : 0;
+    p.disp_fps = disp_fps;
+    p.infer_fps = infer_fps;
     p.result_age_ms = result_age_ms;
-    p.roi_zones     = rois;
-    p.results       = results;
-    p.draw_cmds     = draw_cmds;
+    p.roi_zones = rois;
+    p.results = results;
+    p.draw_cmds = draw_cmds;
     return p;
 }
 
 /*======================== 绘制辅助函数实现 ========================*/
-void draw_rect(ChannelContext *ctx, const cv::Rect &rect,
-               const cv::Scalar &color, int thickness,
-               double alpha, DrawCommand::Target target)
+void draw_rect(ChannelContext *ctx, const cv::Rect &rect, const cv::Scalar &color, int thickness, double alpha,
+               DrawCommand::Target target)
 {
     if (!ctx || !ctx->draw_cmds)
         return;
@@ -310,8 +335,7 @@ void draw_rect(ChannelContext *ctx, const cv::Rect &rect,
     ctx->draw_cmds->push_back(cmd);
 }
 
-void draw_circle(ChannelContext *ctx, const cv::Point &center, int radius,
-                 const cv::Scalar &color, int thickness,
+void draw_circle(ChannelContext *ctx, const cv::Point &center, int radius, const cv::Scalar &color, int thickness,
                  double alpha, DrawCommand::Target target)
 {
     if (!ctx || !ctx->draw_cmds)
@@ -327,8 +351,7 @@ void draw_circle(ChannelContext *ctx, const cv::Point &center, int radius,
     ctx->draw_cmds->push_back(cmd);
 }
 
-void draw_line(ChannelContext *ctx, const cv::Point &pt1, const cv::Point &pt2,
-               const cv::Scalar &color, int thickness,
+void draw_line(ChannelContext *ctx, const cv::Point &pt1, const cv::Point &pt2, const cv::Scalar &color, int thickness,
                DrawCommand::Target target)
 {
     if (!ctx || !ctx->draw_cmds)
@@ -343,9 +366,8 @@ void draw_line(ChannelContext *ctx, const cv::Point &pt1, const cv::Point &pt2,
     ctx->draw_cmds->push_back(cmd);
 }
 
-void draw_text(ChannelContext *ctx, const char *text, const cv::Point &pos,
-               const cv::Scalar &color, double font_scale, int thickness,
-               DrawCommand::Target target)
+void draw_text(ChannelContext *ctx, const char *text, const cv::Point &pos, const cv::Scalar &color, double font_scale,
+               int thickness, DrawCommand::Target target)
 {
     if (!ctx || !ctx->draw_cmds || !text)
         return;
@@ -360,10 +382,8 @@ void draw_text(ChannelContext *ctx, const char *text, const cv::Point &pos,
     ctx->draw_cmds->push_back(cmd);
 }
 
-void draw_polyline(ChannelContext *ctx, const std::vector<cv::Point> &points,
-                   const cv::Scalar &color, int thickness,
-                   double alpha, bool closed,
-                   DrawCommand::Target target)
+void draw_polyline(ChannelContext *ctx, const std::vector<cv::Point> &points, const cv::Scalar &color, int thickness,
+                   double alpha, bool closed, DrawCommand::Target target)
 {
     if (!ctx || !ctx->draw_cmds || points.size() < 2)
         return;
@@ -378,8 +398,7 @@ void draw_polyline(ChannelContext *ctx, const std::vector<cv::Point> &points,
     ctx->draw_cmds->push_back(cmd);
 }
 
-void draw_poly_filled(ChannelContext *ctx, const std::vector<cv::Point> &points,
-                      const cv::Scalar &color, double alpha,
+void draw_poly_filled(ChannelContext *ctx, const std::vector<cv::Point> &points, const cv::Scalar &color, double alpha,
                       DrawCommand::Target target)
 {
     if (!ctx || !ctx->draw_cmds || points.size() < 3)
@@ -395,7 +414,7 @@ void draw_poly_filled(ChannelContext *ctx, const std::vector<cv::Point> &points,
 
 /*======================== 逻辑分发表 ========================*/
 static LogicEntry g_logic_registry[MAX_LOGIC_FUNCS];
-static int        g_logic_count = 0;
+static int g_logic_count = 0;
 
 struct LogicActionEntry
 {
@@ -403,7 +422,7 @@ struct LogicActionEntry
     ChannelActionFunc func = nullptr;
 };
 static LogicActionEntry g_action_registry[MAX_LOGIC_FUNCS];
-static int              g_action_count = 0;
+static int g_action_count = 0;
 
 void register_logic(const char *name, ChannelLogicFunc func)
 {
@@ -446,7 +465,8 @@ std::vector<std::string> channel_logic_names()
 
 void register_logic_action(const char *name, ChannelActionFunc func)
 {
-    if (!name || !func) return;
+    if (!name || !func)
+        return;
     for (int i = 0; i < g_action_count; ++i)
         if (g_action_registry[i].name && strcmp(g_action_registry[i].name, name) == 0)
         {

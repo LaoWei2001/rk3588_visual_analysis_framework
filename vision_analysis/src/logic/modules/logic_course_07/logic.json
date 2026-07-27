@@ -1,0 +1,9 @@
+{
+    "label": "空白逻辑示例",
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+    },
+    "report_fields": []
+}

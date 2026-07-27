@@ -1,38 +1,16 @@
 {
-    "label": "统一上报教学示例",
+    "label": "按钮上报告警示例",
     "parameters": {
         "type": "object",
         "additionalProperties": false,
         "properties": {}
     },
-    "report_fields": [
-        {
-            "key": "event_sequence",
-            "type": "number",
-            "label": "教学事件序号"
-        },
-        {
-            "key": "trigger_source",
-            "type": "string",
-            "label": "触发来源"
-        },
-        {
-            "key": "one_call_many_deliveries",
-            "type": "boolean",
-            "label": "一次调用支持多投递"
-        },
-        {
-            "key": "draw_targets",
-            "type": "json",
-            "label": "演示的绘制目标"
-        }
-    ],
     "actions": [
         {
             "id": "trigger_teach_report",
-            "label": "立即生成教学事件",
+            "label": "生成报警事件",
             "style": "primary",
-            "help": "在下一业务帧调用一次统一 alarm_report；服务器图片、Dify图片和Dify视频由当前连接的上报节点共同决定。"
+            "help": "点击后按当前连接的告警节点配置生成图片或视频上报事件。"
         }
     ]
 }

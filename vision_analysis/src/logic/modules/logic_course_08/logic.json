@@ -1,0 +1,9 @@
+{
+    "label": "课程8:如何定时上报图片",
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+    },
+    "report_fields": []
+}

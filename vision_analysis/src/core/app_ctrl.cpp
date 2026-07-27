@@ -34,24 +34,16 @@ static bool model_runtime_changed(const ChannelConfig &old_channel,
                                   const ChannelConfig &new_channel)
 {
     return old_channel.infer_enable != new_channel.infer_enable ||
-           old_channel.model_path != new_channel.model_path ||
-           old_channel.model_type != new_channel.model_type ||
-           old_channel.label_path != new_channel.label_path ||
            old_channel.models != new_channel.models ||
-           old_channel.threads != new_channel.threads ||
-           old_channel.npu_core != new_channel.npu_core;
+           old_channel.threads != new_channel.threads;
 }
 
 static void restore_model_runtime(ChannelConfig &channel,
                                   const ChannelConfig &old_channel)
 {
     channel.infer_enable = old_channel.infer_enable;
-    channel.model_path = old_channel.model_path;
-    channel.model_type = old_channel.model_type;
-    channel.label_path = old_channel.label_path;
     channel.models = old_channel.models;
     channel.threads = old_channel.threads;
-    channel.npu_core = old_channel.npu_core;
 }
 
 static bool roi_config_equal(const std::vector<RoiZoneConfig> &lhs,
@@ -69,7 +61,6 @@ static bool logic_runtime_changed(const ChannelConfig &old_channel,
 {
     return old_channel.logic != new_channel.logic ||
            !roi_config_equal(old_channel.roi_zones, new_channel.roi_zones) ||
-           old_channel.roi_polygon != new_channel.roi_polygon ||
            old_channel.path_sequence != new_channel.path_sequence ||
            old_channel.path_target_label != new_channel.path_target_label ||
            old_channel.path_enter_sec != new_channel.path_enter_sec ||
@@ -128,27 +119,26 @@ std::shared_ptr<const AppRuntimeSnapshot> app_ctrl_build_runtime_snapshot(
         auto &runtime_rois = snapshot->roi_zones[channel.id];
         auto add_zone = [&](const std::string &name,
                             const std::vector<std::pair<double, double>> &polygon) {
-            if (polygon.size() < 3 || input_w <= 0 || input_h <= 0)
+            size_t point_count = polygon.size();
+            while (point_count > 1 && polygon.front() == polygon[point_count - 1])
+                --point_count;
+            if (point_count < 3 || input_w <= 0 || input_h <= 0)
                 return;
             RoiZone zone;
             zone.name = name;
-            zone.polygon.reserve(polygon.size());
-            for (const auto &point : polygon)
+            zone.polygon.reserve(point_count);
+            for (size_t i = 0; i < point_count; ++i)
+            {
+                const auto &point = polygon[i];
                 zone.polygon.emplace_back(
                     static_cast<int>(point.first * input_w + 0.5),
                     static_cast<int>(point.second * input_h + 0.5));
+            }
             runtime_rois.push_back(std::move(zone));
         };
 
-        if (!channel.roi_zones.empty())
-        {
-            for (const auto &zone : channel.roi_zones)
-                add_zone(zone.name, zone.polygon);
-        }
-        else if (!channel.roi_polygon.empty())
-        {
-            add_zone(std::string(), channel.roi_polygon);
-        }
+        for (const auto &zone : channel.roi_zones)
+            add_zone(zone.name, zone.polygon);
     }
     return snapshot;
 }
@@ -430,12 +420,12 @@ extern "C" void *config_monitor_thread_func(void *arg)
                 ctrl->config.global_logics = new_cfg.global_logics;
             }
 
-            /* ROI 区域同步: 不在注册表内, 须显式复制 */
+            /* ROI、模型及 report_policy 派生字段不在注册表内，须显式复制。 */
             for (size_t i = 0; i < update_cnt; ++i)
             {
-                ctrl->config.channels[i].roi_zones   = new_cfg.channels[i].roi_zones;
-                ctrl->config.channels[i].roi_polygon = new_cfg.channels[i].roi_polygon;
-                ctrl->config.channels[i].models      = new_cfg.channels[i].models;
+                ctrl->config.channels[i].roi_zones  = new_cfg.channels[i].roi_zones;
+                ctrl->config.channels[i].models     = new_cfg.channels[i].models;
+                ctrl->config.channels[i].event_video = new_cfg.channels[i].event_video;
             }
 
             pthread_rwlock_unlock(&ctrl->mtx);
@@ -463,8 +453,8 @@ extern "C" void *config_monitor_thread_func(void *arg)
 
         for (const auto &channel : base_applied_cfg.channels)
         {
-            printf("[ConfigMonitor] Updating channel %d: obj=%.2f, nms=%.2f\n",
-                   channel.id, channel.obj_thresh, channel.nms_thresh);
+            printf("[ConfigMonitor] Updating channel %d model filters (%zu configured)\n",
+                   channel.id, channel.models.size());
             algorithm_update_thresh(channel.id, channel);
             algorithm_update_detect_classes(channel.id, channel);
         }

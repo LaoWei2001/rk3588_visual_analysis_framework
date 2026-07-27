@@ -79,10 +79,10 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
     int record_fps = 5;
     float record_pre_sec = 5.0f;
     std::string record_overlay = "none";
-    record_enabled = channel_config->event_video_enable;
-    record_fps = channel_config->event_video_fps;
-    record_pre_sec = channel_config->event_video_pre_sec;
-    record_overlay = channel_config->event_video_overlay;
+    record_enabled = channel_config->event_video.enable;
+    record_fps = channel_config->event_video.fps;
+    record_pre_sec = channel_config->event_video.pre_sec;
+    record_overlay = channel_config->event_video.overlay;
     /* 所有录像模式都从解码源帧进入独立录像队列。DISPLAY 模式由录像工作线程
      * 使用与实时播放相同的尺寸和渲染函数，不依赖 display/RTSP 是否启用。 */
     if (record_enabled)

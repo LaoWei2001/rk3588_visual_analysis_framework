@@ -1,3 +1,6 @@
+// 课程2：ctx变量调用
+// 实现效果:在屏幕上显示自定义的文字(注意与课程1的区别),在控制台显示自定义的数字
+// 难度:★★☆☆☆
 #include "logic/core/logic_common.h"
 
 static void logic_course_02(ChannelContext *ctx)
