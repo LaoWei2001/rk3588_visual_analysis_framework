@@ -1,5 +1,5 @@
 {
-    "label": "空白逻辑示例",
+    "label": "课程6:如何保存跨帧状态变量",
     "parameters": {
         "type": "object",
         "additionalProperties": false,

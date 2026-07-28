@@ -34,7 +34,7 @@ HTTP/Socket、logic、告警、录像和 C++ 固定数组索引。配置加载�
 ## 新增一个业务级动作（带按钮）
 
 1. 在 `src/logic/modules/<module_dir>/logic.json` 中新增 `actions`
-2. 在对应 `logic_xxx.cpp` 里实现一个 `ChannelActionFunc`
+2. 在对应模块的 `logic.cpp` 里实现一个 `ChannelActionFunc`
 3. 用 `REGISTER_LOGIC_ACTION(logic_xxx, your_action_func);` 注册，第一参数是已传给 `REGISTER_LOGIC(logic_xxx)` 的入口函数
 
 `actions` 示例：
@@ -52,10 +52,15 @@ HTTP/Socket、logic、告警、录像和 C++ 固定数组索引。配置加载�
 `logic` 侧示例：
 
 ```cpp
-static ChannelActionResult logic_demo_action(ChannelContext *ctx, const ChannelAction &action)
+static ChannelActionResult logic_demo_action(ChannelContext *ctx, const ChannelAction *action)
 {
     ChannelActionResult result;
-    if (action.name == "reset")
+    if (!ctx || !ctx->state || !action)
+    {
+        result.message = "ctx or action is null";
+        return result;
+    }
+    if (action->name == "reset")
     {
         *ctx->state = std::make_shared<DemoState>();
         result.handled = true;

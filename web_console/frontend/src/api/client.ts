@@ -265,9 +265,10 @@ export const saveOtaConfig = (name: string, cfg: OtaConfig) =>
 
 // ── Live MJPEG stream URL (用于 <img src>) ─────────────────────────────────
 // <img> 无法携带 Authorization 头，token 走查询参数 (后端 auth_middleware 已放行)。
-export const streamUrl = (name: string, fps = 10): string => {
+// 默认 15 FPS；需要对比时可改成 20。传入 0 表示不主动限帧。
+export const streamUrl = (name: string, fps = 25): string => {
   const token = useAuthStore.getState().token ?? ''
-  return `/api/apps/${encodeURIComponent(name)}/stream?fps=${fps}&token=${encodeURIComponent(token)}`
+  return `/api/apps/${encodeURIComponent(name)}/stream?fps=${Math.max(0, Math.floor(fps))}&token=${encodeURIComponent(token)}`
 }
 
 export interface StreamHealth {

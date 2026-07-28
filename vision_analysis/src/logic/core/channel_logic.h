@@ -140,7 +140,8 @@ struct FrameTime
 struct ChannelContext;
 class LogicParameterSet;
 typedef void (*ChannelLogicFunc)(struct ChannelContext *ctx);
-typedef ChannelActionResult (*ChannelActionFunc)(struct ChannelContext *ctx, const ChannelAction &action);
+/* action 是仅在本次 handler 调用期间有效的只读借用指针；业务代码应先检查非空，不得跨帧保存。 */
+typedef ChannelActionResult (*ChannelActionFunc)(struct ChannelContext *ctx, const ChannelAction *action);
 typedef const cv::Mat *(*ChannelSourceFrameFunc)(void *opaque);
 
 struct ChannelContext
@@ -170,7 +171,7 @@ struct ChannelContext
     void *source_frame_opaque = nullptr;
     // 帧号
     int64_t frame_id;
-    /* 单调时钟(ms): 只用于算间隔, 不是日历时间 */
+    /* 近似系统开机后运行的毫秒数 */
     uint64_t timestamp_ms;
     /* Unix epoch 毫秒(UTC 基准, 即本帧墙钟; 三源统一): 除以1000 可得到秒; 配 time_hms()/time_str() */
     uint64_t unix_ms = 0;

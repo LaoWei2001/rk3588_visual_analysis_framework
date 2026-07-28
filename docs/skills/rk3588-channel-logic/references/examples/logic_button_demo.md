@@ -30,13 +30,13 @@
 
 ## C++ 处理
 
-按钮 ID 会原样成为 `action.name`。处理器使用基础 C++ 字符串比较判断动作并修改当前通道的状态：
+按钮 ID 会原样成为 `action->name`。处理器接收只读 `ChannelAction` 指针，检查非空后使用基础 C++ 字符串比较判断动作并修改当前通道的状态：
 
 ```cpp
-if (action.name == "increment")
+if (action && action->name == "increment")
     state->number += 1;
 
-if (action.name == "decrement" && state->number > 1)
+if (action && action->name == "decrement" && state->number > 1)
     state->number -= 1;
 ```
 

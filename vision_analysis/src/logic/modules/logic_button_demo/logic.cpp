@@ -24,9 +24,15 @@ static ButtonDemoState *get_button_demo_state(ChannelContext *ctx)
 }
 
 /* Web 点击按钮后，框架会在下一次处理该通道画面时调用这个函数。 */
-static ChannelActionResult logic_button_demo_action(ChannelContext *ctx, const ChannelAction &action)
+static ChannelActionResult logic_button_demo_action(ChannelContext *ctx, const ChannelAction *action)
 {
     ChannelActionResult result;
+    if (action == nullptr)
+    {
+        result.message = "action is null";
+        return result;
+    }
+
     ButtonDemoState *state = get_button_demo_state(ctx);
 
     if (state == nullptr)
@@ -35,7 +41,7 @@ static ChannelActionResult logic_button_demo_action(ChannelContext *ctx, const C
         return result;
     }
 
-    if (action.name == "increment")
+    if (action->name == "increment")
     {
         if (state->number < INT_MAX)
             state->number += 1;
@@ -45,7 +51,7 @@ static ChannelActionResult logic_button_demo_action(ChannelContext *ctx, const C
         return result;
     }
 
-    if (action.name == "decrement")
+    if (action->name == "decrement")
     {
         if (state->number > 1)
             state->number -= 1;
@@ -55,7 +61,7 @@ static ChannelActionResult logic_button_demo_action(ChannelContext *ctx, const C
         return result;
     }
 
-    result.message = "unsupported action: " + action.name;
+    result.message = "unsupported action: " + action->name;
     return result;
 }
 

@@ -332,7 +332,7 @@ static void invoke_channel_logic(int chnId,
                        chnId, logic_name.c_str(), action.name.c_str(), action.request_id.c_str());
                 continue;
             }
-            ChannelActionResult result = action_fn(&ctx, action);
+            ChannelActionResult result = action_fn(&ctx, &action);
             printf("[ChannelAction][ch%02d][%s] action=%s request=%s handled=%d msg=%s\n",
                    chnId, logic_name.c_str(), action.name.c_str(), action.request_id.c_str(),
                    result.handled ? 1 : 0, result.message.c_str());

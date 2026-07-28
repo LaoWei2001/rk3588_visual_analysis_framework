@@ -22,12 +22,12 @@ JSON，不再暴露内部槽位或别名；每通道队列最多 64 条，满时
 
 系统级动作在 socket 线程直接处理，不依赖 logic。当前只有 `infer_toggle`，它翻转 `ChannelState::infer_runtime_enable`，仅停止/恢复 NPU 推理，画面与非推理 logic 仍运行。
 
-业务级动作入队时记录当前 `logic_name`。`channel_pipeline` 在下一帧调用 logic 前取走动作；若期间切换了 logic，旧 logic 的动作不会误交给新 logic。动作处理函数签名为 `ChannelActionResult(ChannelContext *, const ChannelAction &)`。
+业务级动作入队时记录当前 `logic_name`。`channel_pipeline` 在下一帧调用 logic 前取走动作；若期间切换了 logic，旧 logic 的动作不会误交给新 logic。动作处理函数签名为 `ChannelActionResult(ChannelContext *, const ChannelAction *)`。
 
 ## 新增 Web 业务按钮
 
 1. 在 `src/logic/modules/logic_xxx/logic.json` 的 `actions` 中声明 `id`、`label`，可选 `style`、`confirm`、`help`。
-2. 在同模块 C++ 中实现动作函数，并处理 `action.name`/`payload_json`。
+2. 在同模块 C++ 中实现动作函数，先检查 `action` 指针，再处理 `action->name`/`action->payload_json`。
 3. 使用 `REGISTER_LOGIC_ACTION(logic_xxx, handler)` 注册；第一参数必须是已传给 `REGISTER_LOGIC(logic_xxx)` 的入口函数。
 
 动作函数与逐帧 logic 在同一通道处理路径执行，可安全修改 `*ctx->state`，但不得阻塞做长耗时网络或磁盘操作。完整 Web/API 侧约定见 `../rk3588-channel-logic/`。

@@ -18,17 +18,17 @@ UploadTeachState &upload_teach_state(ChannelContext *ctx)
     return *std::static_pointer_cast<UploadTeachState>(*ctx->state);
 }
 
-ChannelActionResult logic_upload_teach_action(ChannelContext *ctx, const ChannelAction &action)
+ChannelActionResult logic_upload_teach_action(ChannelContext *ctx, const ChannelAction *action)
 {
     ChannelActionResult result;
-    if (!ctx || !ctx->state)
+    if (!ctx || !ctx->state || !action)
     {
-        result.message = "ctx is null";
+        result.message = "ctx or action is null";
         return result;
     }
-    if (action.name != "trigger_teach_report")
+    if (action->name != "trigger_teach_report")
     {
-        result.message = "unsupported action: " + action.name;
+        result.message = "unsupported action: " + action->name;
         return result;
     }
 

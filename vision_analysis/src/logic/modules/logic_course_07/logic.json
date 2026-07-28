@@ -1,9 +1,23 @@
 {
-    "label": "空白逻辑示例",
+    "label": "课程7:如何添加一个带自定义功能的按钮",
     "parameters": {
         "type": "object",
         "additionalProperties": false,
         "properties": {}
     },
-    "report_fields": []
+    "report_fields": [],
+    "actions": [
+        {
+            "id": "increment",
+            "label": "+1",
+            "style": "primary",
+            "help": "将当前通道画面中的数字加 1。"
+        },
+        {
+            "id": "decrement",
+            "label": "-1",
+            "style": "default",
+            "help": "将当前通道画面中的数字减 1，最小值保持为 1。"
+        }
+    ]
 }

@@ -58,7 +58,7 @@ REGISTER_LOGIC(logic_person);
 
 ## 通道动作
 
-实现 `ChannelActionResult handler(ChannelContext*, const ChannelAction&)` 并用 `REGISTER_LOGIC_ACTION` 注册。动作名和按钮元数据位于模块 `logic.json`；处理器负责验证 `payload_json` 和返回 `handled/message`。详细链路见 [control.md](control.md)。
+实现 `ChannelActionResult handler(ChannelContext*, const ChannelAction*)` 并用 `REGISTER_LOGIC_ACTION` 注册。动作名和按钮元数据位于模块 `logic.json`；处理器先检查 `action` 指针，再验证 `action->payload_json` 并返回 `handled/message`。详细链路见 [control.md](control.md)。
 
 ## 告警
 

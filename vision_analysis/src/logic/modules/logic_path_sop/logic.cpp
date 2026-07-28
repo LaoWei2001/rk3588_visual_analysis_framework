@@ -167,16 +167,16 @@ struct PathSopState
     uint64_t end_zone_since_ms = 0;    /* 本次连续进入终点区域的起始时刻 */
 };
 
-static ChannelActionResult logic_path_sop_action(ChannelContext *ctx, const ChannelAction &action)
+static ChannelActionResult logic_path_sop_action(ChannelContext *ctx, const ChannelAction *action)
 {
     ChannelActionResult result;
-    if (!ctx)
+    if (!ctx || !ctx->state || !action)
     {
-        result.message = "ctx is null";
+        result.message = "ctx or action is null";
         return result;
     }
 
-    if (action.name == "start_new_run" || action.name == "reset")
+    if (action->name == "start_new_run" || action->name == "reset")
     {
         *ctx->state = std::make_shared<PathSopState>();
         result.handled = true;
@@ -184,7 +184,7 @@ static ChannelActionResult logic_path_sop_action(ChannelContext *ctx, const Chan
         return result;
     }
 
-    if (action.name == "sop_trigger")
+    if (action->name == "sop_trigger")
     {
         if (!*ctx->state)
             *ctx->state = std::make_shared<PathSopState>();
@@ -195,7 +195,7 @@ static ChannelActionResult logic_path_sop_action(ChannelContext *ctx, const Chan
         return result;
     }
 
-    if (action.name == "sop_end_trigger")
+    if (action->name == "sop_end_trigger")
     {
         if (!*ctx->state)
             *ctx->state = std::make_shared<PathSopState>();
@@ -206,7 +206,7 @@ static ChannelActionResult logic_path_sop_action(ChannelContext *ctx, const Chan
         return result;
     }
 
-    result.message = std::string("unsupported action: ") + action.name;
+    result.message = std::string("unsupported action: ") + action->name;
     return result;
 }
 

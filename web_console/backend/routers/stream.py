@@ -3,8 +3,10 @@ GET /api/apps/{name}/stream — 把 App 的 RTSP 拼接画面转成浏览器可�
 
 用 GStreamer(gst-launch-1.0) 硬件解码, 取代原来的 cv2 软解:
   rtspsrc → rtph26xdepay → h26xparse → decodebin(自动选硬解/软解)
-         → videorate(限帧) → videoconvert → jpegenc → multipartmux → fdsink(stdout)
+         → leaky queue(只留最新帧) → videorate(默认15 FPS)
+         → videoconvert → jpegenc → multipartmux → fdsink(stdout)
 后端把子进程 stdout(已是 multipart/x-mixed-replace 字节流)直接转发给 <img>。
+处理速度跟不上时主动丢弃旧帧，优先保持低延迟，避免积压后出现“慢动作”。
 用 decodebin 而非显式 mppvideodec: 当 C++ 侧 RTSP 源解码已占 MPP 硬解槽位时,
 decodebin 自动回退软解, 避免 MPP 资源争抢导致 gst-launch 卡死 → 黑屏重连。
 
@@ -68,20 +70,30 @@ def _rtsp_info(name: str):
 
 
 def _build_gst_args(rtsp_url: str, codec: str, fps: int, quality: int = 75):
-    """显式用 mppvideodec 强制硬解(不靠 decodebin 选, 避免被软解 avdec 抢)。"""
+    """构造 RTSP → MJPEG 管线；fps<=0 时不插入限帧环节。"""
     h265 = codec in ("h265", "hevc")
     depay = "rtph265depay" if h265 else "rtph264depay"
     parse = "h265parse" if h265 else "h264parse"
-    return [
+    args = [
         "gst-launch-1.0", "-q",
         "rtspsrc", f"location={rtsp_url}", "protocols=tcp", "latency=100",
+        "drop-on-latency=true",
         "!", depay, "!", parse, "!", "decodebin",
-        "!", "videorate", "!", f"video/x-raw,framerate={fps}/1",
+        "!", "queue", "max-size-buffers=1", "max-size-bytes=0",
+        "max-size-time=0", "leaky=downstream",
+    ]
+    if fps > 0:
+        args.extend([
+            "!", "videorate", "drop-only=true",
+            "!", f"video/x-raw,framerate={fps}/1",
+        ])
+    args.extend([
         "!", "videoconvert",
         "!", "jpegenc", f"quality={quality}",
         "!", "multipartmux", "boundary=frame",
-        "!", "fdsink", "fd=1",
-    ]
+        "!", "fdsink", "fd=1", "sync=false",
+    ])
+    return args
 
 
 async def _terminate_process(proc: asyncio.subprocess.Process) -> None:
@@ -151,14 +163,15 @@ async def _mjpeg_stream(request: Request, name: str, rtsp_url: str, codec: str, 
 
 
 @router.get("/apps/{name}/stream")
-async def stream_app(name: str, request: Request, fps: int = 25):
+async def stream_app(name: str, request: Request, fps: int = 15):
     if not (APPS_ROOT / name).exists():
         raise HTTPException(404, f"App '{name}' not found")
     if shutil.which("gst-launch-1.0") is None:
         raise HTTPException(500, "未找到 gst-launch-1.0（需要 gstreamer1.0-tools）")
 
     url, codec = _rtsp_info(name)
-    fps = max(1, min(int(fps), 25))
+    # fps<=0 表示不额外限帧；正数保留兼容的 1~25 FPS 主动限帧模式。
+    fps = 0 if int(fps) <= 0 else min(int(fps), 25)
     return StreamingResponse(
         _mjpeg_stream(request, name, url, codec, fps),
         media_type="multipart/x-mixed-replace; boundary=frame",
