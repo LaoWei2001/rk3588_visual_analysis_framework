@@ -9,17 +9,42 @@ struct ChannelContext;
 
 class AlarmValue
 {
-public:
-    enum Type { STRING, NUMBER, BOOLEAN, JSON };
+  public:
+    enum Type
+    {
+        STRING,
+        NUMBER,
+        BOOLEAN,
+        JSON
+    };
     AlarmValue() = default;
-    explicit AlarmValue(const std::string &v, Type type = STRING) : type_(type), text_(v) {}
-    explicit AlarmValue(double v) : type_(NUMBER), number_(v) {}
-    explicit AlarmValue(bool v) : type_(BOOLEAN), boolean_(v) {}
-    Type type() const { return type_; }
-    const std::string &text() const { return text_; }
-    double number() const { return number_; }
-    bool boolean() const { return boolean_; }
-private:
+    explicit AlarmValue(const std::string &v, Type type = STRING) : type_(type), text_(v)
+    {
+    }
+    explicit AlarmValue(double v) : type_(NUMBER), number_(v)
+    {
+    }
+    explicit AlarmValue(bool v) : type_(BOOLEAN), boolean_(v)
+    {
+    }
+    Type type() const
+    {
+        return type_;
+    }
+    const std::string &text() const
+    {
+        return text_;
+    }
+    double number() const
+    {
+        return number_;
+    }
+    bool boolean() const
+    {
+        return boolean_;
+    }
+
+  private:
     Type type_ = STRING;
     std::string text_;
     double number_ = 0.0;
@@ -28,21 +53,41 @@ private:
 
 class AlarmFields
 {
-public:
-    void set_value(const std::string &key, const AlarmValue &value) { values_[key] = value; }
-    void set_string(const std::string &key, const std::string &value) { values_[key] = AlarmValue(value); }
-    void set_number(const std::string &key, double value) { values_[key] = AlarmValue(value); }
-    void set_bool(const std::string &key, bool value) { values_[key] = AlarmValue(value); }
-    void set_json(const std::string &key, const std::string &json) { values_[key] = AlarmValue(json, AlarmValue::JSON); }
-    const std::map<std::string, AlarmValue> &values() const { return values_; }
-private:
+  public:
+    void set_value(const std::string &key, const AlarmValue &value)
+    {
+        values_[key] = value;
+    }
+    void set_string(const std::string &key, const std::string &value)
+    {
+        values_[key] = AlarmValue(value);
+    }
+    void set_number(const std::string &key, double value)
+    {
+        values_[key] = AlarmValue(value);
+    }
+    void set_bool(const std::string &key, bool value)
+    {
+        values_[key] = AlarmValue(value);
+    }
+    void set_json(const std::string &key, const std::string &json)
+    {
+        values_[key] = AlarmValue(json, AlarmValue::JSON);
+    }
+    const std::map<std::string, AlarmValue> &values() const
+    {
+        return values_;
+    }
+
+  private:
     std::map<std::string, AlarmValue> values_;
 };
 
 struct AlarmField
 {
-    AlarmField(const std::string &field_key, const AlarmValue &field_value)
-        : key(field_key), value(field_value) {}
+    AlarmField(const std::string &field_key, const AlarmValue &field_value) : key(field_key), value(field_value)
+    {
+    }
 
     std::string key;
     AlarmValue value;
@@ -63,10 +108,9 @@ inline AlarmField alarm_field(const std::string &key, bool value)
     return AlarmField(key, AlarmValue(value));
 }
 
-template<typename T>
-inline typename std::enable_if<
-    std::is_arithmetic<T>::value && !std::is_same<typename std::decay<T>::type, bool>::value,
-    AlarmField>::type
+template <typename T>
+inline typename std::enable_if<std::is_arithmetic<T>::value && !std::is_same<typename std::decay<T>::type, bool>::value,
+                               AlarmField>::type
 alarm_field(const std::string &key, T value)
 {
     return AlarmField(key, AlarmValue(static_cast<double>(value)));
@@ -91,7 +135,6 @@ struct AlarmRequest
 
     /* 每轮SOP结果必须保持一轮一条；普通连续告警仍可按策略窗口合并。 */
     bool merge_enabled = true;
-
 };
 
 /*
@@ -102,9 +145,7 @@ struct AlarmRequest
 std::string alarm_report(ChannelContext *ctx, const AlarmRequest &request);
 
 /* 任意业务逻辑使用的简化入口：字段名称和数量不固定，数值类型自动转换。 */
-std::string report_alarm(ChannelContext *ctx,
-                         const std::string &type,
-                         const std::string &message,
+std::string report_alarm(ChannelContext *ctx, const std::string &type, const std::string &message,
                          std::initializer_list<AlarmField> fields);
 
 /* 录像模块完成MP4后调用。 */

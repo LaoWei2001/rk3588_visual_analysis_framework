@@ -130,11 +130,11 @@
 
 #pragma once
 
-#include <string>
-#include <vector>
 #include <cstdint>
 #include <memory>
 #include <opencv2/opencv.hpp>
+#include <string>
+#include <vector>
 
 struct AlgoResult;
 #include "config/config.h"
@@ -261,11 +261,15 @@ struct GlobalContext
 
     /** @brief 获取指定通道的推理帧率（EMA 平滑值）。*/
     float get_channel_infer_fps(int configuredId) const
-    { return app_ctrl_get_infer_fps(configuredId); }
+    {
+        return app_ctrl_get_infer_fps(configuredId);
+    }
 
     /** @brief 获取指定通道的显示帧率（EMA 平滑值）。*/
     float get_channel_disp_fps(int configuredId) const
-    { return app_ctrl_get_disp_fps(configuredId); }
+    {
+        return app_ctrl_get_disp_fps(configuredId);
+    }
 
     /**
      * @brief 快速查询指定通道在 max_age_ms 内是否有指定标签的目标。
@@ -312,10 +316,10 @@ struct GlobalContext
      *   });
      * @endcode
      */
-    template <typename Func>
-    void for_each_channel(Func &&fn) const
+    template <typename Func> void for_each_channel(Func &&fn) const
     {
-        if (!channel_ids) return;
+        if (!channel_ids)
+            return;
         for (size_t i = 0; i < channel_ids->size(); ++i)
             fn((*channel_ids)[i], (int)i);
     }
@@ -339,7 +343,7 @@ typedef void (*GlobalLogicFunc)(GlobalContext *gctx);
  * 由 analyzer_init 调用一次；热重载时由 config_monitor 按需重启受影响实例。
  * @return 成功启动的实例数（启动失败的实例跳过，不影响其余实例）
  */
-int  global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs);
+int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs);
 
 /**
  * @brief 停止所有全局逻辑实例（发送退出信号并 join 线程）。
@@ -350,7 +354,7 @@ void global_logic_stop_all(void);
 
 /**
  * @brief 获取当前运行的全局逻辑实例数量（供 main 诊断打印）。*/
-int  global_logic_get_instance_count(void);
+int global_logic_get_instance_count(void);
 
 /** @brief 全局逻辑线程入口（由 global_logic_start_all 内部调用，不需要外部直接使用）。*/
 void *global_logic_thread_func(void *arg);

@@ -1,7 +1,7 @@
 #pragma once
+#include <opencv2/opencv.hpp>
 #include <stdbool.h>
 #include <stdint.h>
-#include <opencv2/opencv.hpp>
 
 /* RenderParams 定义在 channel_logic.h（DrawCommand / AlgoResult 也在那里）
  * 这里只做前置声明，避免循环 include：

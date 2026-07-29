@@ -1,45 +1,46 @@
 #include "alarm_report.h"
 
-#include "logic/core/channel_logic.h"
 #include "../config/config.h"
 #include "../player/display.h"
 #include "../recorder/event_video_recorder.h"
 #include "../third_party/json/cJSON.h"
+#include "logic/core/channel_logic.h"
 
-#include <opencv2/imgcodecs.hpp>
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
-#include <cerrno>
-#include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <ctime>
 #include <dirent.h>
 #include <fstream>
 #include <iterator>
+#include <opencv2/imgcodecs.hpp>
 #include <pthread.h>
 #include <queue>
-#include <utility>
-#include <vector>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <ctime>
+#include <utility>
+#include <vector>
 
-namespace {
+namespace
+{
 
 enum AlarmRoute : uint32_t
 {
-    ALARM_ROUTE_NONE         = 0,
-    ALARM_IMAGE_TO_SERVER    = 1u << 0,
-    ALARM_IMAGE_TO_DIFY      = 1u << 1,
-    ALARM_VIDEO_TO_DIFY      = 1u << 2
+    ALARM_ROUTE_NONE = 0,
+    ALARM_IMAGE_TO_SERVER = 1u << 0,
+    ALARM_IMAGE_TO_DIFY = 1u << 1,
+    ALARM_VIDEO_TO_DIFY = 1u << 2
 };
 
 enum AlarmMedia : uint32_t
 {
-    ALARM_MEDIA_NONE  = 0,
+    ALARM_MEDIA_NONE = 0,
     ALARM_MEDIA_IMAGE = 1u << 0,
     ALARM_MEDIA_VIDEO = 1u << 1
 };
@@ -76,27 +77,36 @@ static unsigned long g_seq = 0;
 
 static uint64_t steady_now_ms()
 {
-    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count());
 }
 
 static int mkdir_p(const std::string &path)
 {
-    if (path.empty()) return -1;
+    if (path.empty())
+        return -1;
     std::string cur;
     size_t start = 0;
-    if (path[0] == '/') { cur = "/"; start = 1; }
+    if (path[0] == '/')
+    {
+        cur = "/";
+        start = 1;
+    }
     while (start <= path.size())
     {
         size_t slash = path.find('/', start);
         std::string part = path.substr(start, slash == std::string::npos ? std::string::npos : slash - start);
         if (!part.empty())
         {
-            if (!cur.empty() && cur.back() != '/') cur += '/';
+            if (!cur.empty() && cur.back() != '/')
+                cur += '/';
             cur += part;
-            if (::mkdir(cur.c_str(), 0755) != 0 && errno != EEXIST) return -1;
+            if (::mkdir(cur.c_str(), 0755) != 0 && errno != EEXIST)
+                return -1;
         }
-        if (slash == std::string::npos) break;
+        if (slash == std::string::npos)
+            break;
         start = slash + 1;
     }
     return 0;
@@ -114,14 +124,17 @@ static long long directory_bytes(const std::string &dir)
 {
     long long total = 0;
     DIR *dp = opendir(dir.c_str());
-    if (!dp) return 0;
+    if (!dp)
+        return 0;
     struct dirent *entry;
     while ((entry = readdir(dp)) != nullptr)
     {
-        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
         std::string path = dir + "/" + entry->d_name;
         struct stat st;
-        if (stat(path.c_str(), &st) != 0) continue;
+        if (stat(path.c_str(), &st) != 0)
+            continue;
         total += S_ISDIR(st.st_mode) ? directory_bytes(path) : (long long)st.st_size;
     }
     closedir(dp);
@@ -131,15 +144,21 @@ static long long directory_bytes(const std::string &dir)
 static void remove_tree(const std::string &dir)
 {
     DIR *dp = opendir(dir.c_str());
-    if (!dp) return;
+    if (!dp)
+        return;
     struct dirent *entry;
     while ((entry = readdir(dp)) != nullptr)
     {
-        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
         std::string path = dir + "/" + entry->d_name;
         struct stat st;
-        if (lstat(path.c_str(), &st) != 0) continue;
-        if (S_ISDIR(st.st_mode)) remove_tree(path); else unlink(path.c_str());
+        if (lstat(path.c_str(), &st) != 0)
+            continue;
+        if (S_ISDIR(st.st_mode))
+            remove_tree(path);
+        else
+            unlink(path.c_str());
     }
     closedir(dp);
     rmdir(dir.c_str());
@@ -152,38 +171,32 @@ static bool manifest_has_active_work(const std::string &manifest_path)
     std::ifstream manifest(manifest_path);
     if (!manifest)
     {
-        fprintf(stderr, "[alarm_outbox] cannot read manifest; skip eviction: %s\n",
-                manifest_path.c_str());
+        fprintf(stderr, "[alarm_outbox] cannot read manifest; skip eviction: %s\n", manifest_path.c_str());
         return true;
     }
 
-    const std::string text((std::istreambuf_iterator<char>(manifest)),
-                           std::istreambuf_iterator<char>());
+    const std::string text((std::istreambuf_iterator<char>(manifest)), std::istreambuf_iterator<char>());
     cJSON *root = cJSON_Parse(text.c_str());
     if (!cJSON_IsObject(root))
     {
-        fprintf(stderr, "[alarm_outbox] invalid manifest JSON; skip eviction: %s\n",
-                manifest_path.c_str());
+        fprintf(stderr, "[alarm_outbox] invalid manifest JSON; skip eviction: %s\n", manifest_path.c_str());
         cJSON_Delete(root);
         return true;
     }
 
     bool active = false;
     const cJSON *state = cJSON_GetObjectItemCaseSensitive(root, "state");
-    if (cJSON_IsString(state) && state->valuestring &&
-        strcmp(state->valuestring, "collecting") == 0)
+    if (cJSON_IsString(state) && state->valuestring && strcmp(state->valuestring, "collecting") == 0)
         active = true;
 
     /* 当前 schema 的上传状态位于 deliveries[].status；同时兼容旧 manifest
      * 可能存在的顶层 status 字段。 */
     const cJSON *status = cJSON_GetObjectItemCaseSensitive(root, "status");
-    if (cJSON_IsString(status) && status->valuestring &&
-        strcmp(status->valuestring, "uploading") == 0)
+    if (cJSON_IsString(status) && status->valuestring && strcmp(status->valuestring, "uploading") == 0)
         active = true;
 
     const cJSON *upload = cJSON_GetObjectItemCaseSensitive(root, "upload");
-    const cJSON *upload_status = cJSON_IsObject(upload)
-        ? cJSON_GetObjectItemCaseSensitive(upload, "status") : nullptr;
+    const cJSON *upload_status = cJSON_IsObject(upload) ? cJSON_GetObjectItemCaseSensitive(upload, "status") : nullptr;
     if (cJSON_IsString(upload_status) && upload_status->valuestring &&
         strcmp(upload_status->valuestring, "uploading") == 0)
         active = true;
@@ -194,8 +207,7 @@ static bool manifest_has_active_work(const std::string &manifest_path)
         const cJSON *delivery = nullptr;
         cJSON_ArrayForEach(delivery, deliveries)
         {
-            const cJSON *delivery_status =
-                cJSON_GetObjectItemCaseSensitive(delivery, "status");
+            const cJSON *delivery_status = cJSON_GetObjectItemCaseSensitive(delivery, "status");
             if (cJSON_IsString(delivery_status) && delivery_status->valuestring &&
                 strcmp(delivery_status->valuestring, "uploading") == 0)
             {
@@ -217,20 +229,28 @@ static void enforce_outbox_cap()
     const long long cap_bytes = cap_env && *cap_env ? atoll(cap_env) : OUTBOX_CAP_BYTES;
     const long long min_free_bytes = free_env && *free_env ? atoll(free_env) : OUTBOX_MIN_FREE_BYTES;
     struct statvfs fsinfo;
-    long long free_bytes = statvfs(root.c_str(), &fsinfo) == 0
-        ? (long long)fsinfo.f_bavail * (long long)fsinfo.f_frsize : min_free_bytes;
-    struct Candidate { std::string path; time_t mtime; long long bytes; };
+    long long free_bytes =
+        statvfs(root.c_str(), &fsinfo) == 0 ? (long long)fsinfo.f_bavail * (long long)fsinfo.f_frsize : min_free_bytes;
+    struct Candidate
+    {
+        std::string path;
+        time_t mtime;
+        long long bytes;
+    };
     std::vector<Candidate> events;
     long long total = 0;
     DIR *dp = opendir(root.c_str());
-    if (!dp) return;
+    if (!dp)
+        return;
     struct dirent *entry;
     while ((entry = readdir(dp)) != nullptr)
     {
-        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
         std::string path = root + "/" + entry->d_name;
         struct stat st;
-        if (stat(path.c_str(), &st) != 0) continue;
+        if (stat(path.c_str(), &st) != 0)
+            continue;
         if (S_ISDIR(st.st_mode) && access((path + "/manifest.json").c_str(), F_OK) == 0)
         {
             long long bytes = directory_bytes(path);
@@ -243,7 +263,8 @@ static void enforce_outbox_cap()
     std::sort(events.begin(), events.end(), [](const Candidate &a, const Candidate &b) { return a.mtime < b.mtime; });
     for (const auto &event : events)
     {
-        if (total <= cap_bytes && free_bytes >= min_free_bytes) break;
+        if (total <= cap_bytes && free_bytes >= min_free_bytes)
+            break;
         fprintf(stderr, "[alarm_outbox] cap exceeded; evict oldest pending event: %s\n", event.path.c_str());
         remove_tree(event.path);
         total -= event.bytes;
@@ -261,8 +282,7 @@ static std::string make_event_id(int channel_id)
     char stamp[32];
     strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tmv);
     char id[128];
-    snprintf(id, sizeof(id), "ch%d_%s_%03ld_%lu", channel_id, stamp,
-             ts.tv_nsec / 1000000L, ++g_seq);
+    snprintf(id, sizeof(id), "ch%d_%s_%03ld_%lu", channel_id, stamp, ts.tv_nsec / 1000000L, ++g_seq);
     return id;
 }
 
@@ -279,8 +299,10 @@ static cJSON *fields_to_json(const AlarmFields &fields)
         else if (v.type() == AlarmValue::JSON)
         {
             cJSON *parsed = cJSON_Parse(v.text().c_str());
-            if (parsed) cJSON_AddItemToObject(obj, entry.first.c_str(), parsed);
-            else cJSON_AddStringToObject(obj, entry.first.c_str(), v.text().c_str());
+            if (parsed)
+                cJSON_AddItemToObject(obj, entry.first.c_str(), parsed);
+            else
+                cJSON_AddStringToObject(obj, entry.first.c_str(), v.text().c_str());
         }
         else
             cJSON_AddStringToObject(obj, entry.first.c_str(), v.text().c_str());
@@ -302,16 +324,18 @@ static cJSON *parse_object_or_empty(const std::string &text)
 static bool policy_has_delivery(cJSON *policy, const char *media, const char *target)
 {
     cJSON *arr = cJSON_GetObjectItemCaseSensitive(policy, "deliveries");
-    if (!cJSON_IsArray(arr)) return false;
+    if (!cJSON_IsArray(arr))
+        return false;
     cJSON *item = nullptr;
     cJSON_ArrayForEach(item, arr)
     {
         cJSON *m = cJSON_GetObjectItemCaseSensitive(item, "media");
         cJSON *t = cJSON_GetObjectItemCaseSensitive(item, "target");
         cJSON *enabled = cJSON_GetObjectItemCaseSensitive(item, "enabled");
-        if (cJSON_IsFalse(enabled)) continue;
-        if (cJSON_IsString(m) && cJSON_IsString(t) &&
-            strcmp(m->valuestring, media) == 0 && strcmp(t->valuestring, target) == 0)
+        if (cJSON_IsFalse(enabled))
+            continue;
+        if (cJSON_IsString(m) && cJSON_IsString(t) && strcmp(m->valuestring, media) == 0 &&
+            strcmp(t->valuestring, target) == 0)
             return true;
     }
     return false;
@@ -328,12 +352,17 @@ static void add_delivery_statuses(cJSON *policy, cJSON *root)
         cJSON_ArrayForEach(item, arr)
         {
             cJSON *enabled = cJSON_GetObjectItemCaseSensitive(item, "enabled");
-            if (cJSON_IsFalse(enabled)) { ++index; continue; }
+            if (cJSON_IsFalse(enabled))
+            {
+                ++index;
+                continue;
+            }
             cJSON *copy = cJSON_Duplicate(item, 1);
             cJSON *id = cJSON_GetObjectItemCaseSensitive(copy, "id");
             if (!cJSON_IsString(id))
             {
-                char generated[32]; snprintf(generated, sizeof(generated), "delivery_%d", index);
+                char generated[32];
+                snprintf(generated, sizeof(generated), "delivery_%d", index);
                 cJSON_AddStringToObject(copy, "id", generated);
             }
             cJSON_AddStringToObject(copy, "status", "pending");
@@ -352,24 +381,39 @@ static bool atomic_write_json(const std::string &path, cJSON *root)
      * 统一使用格式化 JSON，并在文件末尾保留换行，确保命令行和编辑器都能直接阅读。
      * 后续所有 C++ 更新（媒体就绪、合并告警等）都会继续走此函数，不会重新压成一行。 */
     char *text = cJSON_Print(root);
-    if (!text) return false;
+    if (!text)
+        return false;
     std::string tmp = path + ".tmp";
     FILE *fp = fopen(tmp.c_str(), "wb");
     const size_t text_len = strlen(text);
     bool ok = fp && fwrite(text, 1, text_len, fp) == text_len;
     if (ok && (text_len == 0 || text[text_len - 1] != '\n'))
         ok = fwrite("\n", 1, 1, fp) == 1;
-    if (fp) { fflush(fp); fsync(fileno(fp)); fclose(fp); }
+    if (fp)
+    {
+        fflush(fp);
+        fsync(fileno(fp));
+        fclose(fp);
+    }
     cJSON_free(text);
-    if (!ok) { ::unlink(tmp.c_str()); return false; }
-    if (::rename(tmp.c_str(), path.c_str()) != 0) { ::unlink(tmp.c_str()); return false; }
+    if (!ok)
+    {
+        ::unlink(tmp.c_str());
+        return false;
+    }
+    if (::rename(tmp.c_str(), path.c_str()) != 0)
+    {
+        ::unlink(tmp.c_str());
+        return false;
+    }
     return true;
 }
 
 static cJSON *read_manifest(const std::string &event_dir)
 {
     std::ifstream in(event_dir + "/manifest.json");
-    if (!in) return nullptr;
+    if (!in)
+        return nullptr;
     std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     return cJSON_Parse(text.c_str());
 }
@@ -387,7 +431,7 @@ static bool record_merged_trigger(const std::string &event_id, uint64_t trigger_
         const int next_count = cJSON_IsNumber(count) ? count->valueint + 1 : 2;
         cJSON_ReplaceItemInObjectCaseSensitive(root, "trigger_count", cJSON_CreateNumber(next_count));
         cJSON_ReplaceItemInObjectCaseSensitive(root, "last_trigger_unix_ms",
-                                                cJSON_CreateNumber((double)trigger_unix_ms));
+                                               cJSON_CreateNumber((double)trigger_unix_ms));
         cJSON_ReplaceItemInObjectCaseSensitive(root, "end_time", cJSON_CreateString(trigger_time.c_str()));
         if (!fields.values().empty())
             cJSON_ReplaceItemInObjectCaseSensitive(root, "fields", fields_to_json(fields));
@@ -412,7 +456,8 @@ static void clear_active_event(const std::string &merge_key, const std::string &
 {
     pthread_mutex_lock(&g_mtx);
     auto found = g_active.find(merge_key);
-    if (found != g_active.end() && found->second.event_id == event_id) g_active.erase(found);
+    if (found != g_active.end() && found->second.event_id == event_id)
+        g_active.erase(found);
     pthread_mutex_unlock(&g_mtx);
 }
 
@@ -423,7 +468,11 @@ static void update_media_ready(const std::string &event_dir, const char *key, co
     if (root)
     {
         cJSON *media = cJSON_GetObjectItemCaseSensitive(root, "media");
-        if (!cJSON_IsObject(media)) { media = cJSON_CreateObject(); cJSON_AddItemToObject(root, "media", media); }
+        if (!cJSON_IsObject(media))
+        {
+            media = cJSON_CreateObject();
+            cJSON_AddItemToObject(root, "media", media);
+        }
         cJSON_ReplaceItemInObjectCaseSensitive(media, key, cJSON_CreateString(filename));
         cJSON *requested = cJSON_GetObjectItemCaseSensitive(root, "media_requested");
         cJSON *want_image = cJSON_GetObjectItemCaseSensitive(requested, "image");
@@ -431,11 +480,9 @@ static void update_media_ready(const std::string &event_dir, const char *key, co
         cJSON *snapshot = cJSON_GetObjectItemCaseSensitive(media, "snapshot");
         cJSON *raw = cJSON_GetObjectItemCaseSensitive(media, "raw");
         cJSON *video = cJSON_GetObjectItemCaseSensitive(media, "video");
-        const bool image_ready = !cJSON_IsTrue(want_image) ||
-                                 (cJSON_IsString(snapshot) && snapshot->valuestring[0] &&
-                                  cJSON_IsString(raw) && raw->valuestring[0]);
-        const bool video_ready = !cJSON_IsTrue(want_video) ||
-                                 (cJSON_IsString(video) && video->valuestring[0]);
+        const bool image_ready = !cJSON_IsTrue(want_image) || (cJSON_IsString(snapshot) && snapshot->valuestring[0] &&
+                                                               cJSON_IsString(raw) && raw->valuestring[0]);
+        const bool video_ready = !cJSON_IsTrue(want_video) || (cJSON_IsString(video) && video->valuestring[0]);
         if (image_ready && video_ready)
             cJSON_ReplaceItemInObjectCaseSensitive(root, "state", cJSON_CreateString("pending"));
         atomic_write_json(event_dir + "/manifest.json", root);
@@ -450,8 +497,13 @@ static void *image_worker(void *)
     {
         ImageJob job;
         pthread_mutex_lock(&g_mtx);
-        while (g_image_jobs.empty() && g_running) pthread_cond_wait(&g_cv, &g_mtx);
-        if (g_image_jobs.empty() && !g_running) { pthread_mutex_unlock(&g_mtx); break; }
+        while (g_image_jobs.empty() && g_running)
+            pthread_cond_wait(&g_cv, &g_mtx);
+        if (g_image_jobs.empty() && !g_running)
+        {
+            pthread_mutex_unlock(&g_mtx);
+            break;
+        }
         job = std::move(g_image_jobs.front());
         g_image_jobs.pop();
         pthread_mutex_unlock(&g_mtx);
@@ -475,7 +527,8 @@ static void *image_worker(void *)
 
 static bool ensure_worker_locked()
 {
-    if (g_worker_started) return true;
+    if (g_worker_started)
+        return true;
     g_running = true;
     if (pthread_create(&g_worker_tid, nullptr, image_worker, nullptr) != 0)
     {
@@ -489,9 +542,12 @@ static bool ensure_worker_locked()
 static uint32_t policy_routes(cJSON *policy)
 {
     uint32_t routes = ALARM_ROUTE_NONE;
-    if (policy_has_delivery(policy, "image", "server")) routes |= ALARM_IMAGE_TO_SERVER;
-    if (policy_has_delivery(policy, "image", "dify")) routes |= ALARM_IMAGE_TO_DIFY;
-    if (policy_has_delivery(policy, "video", "dify")) routes |= ALARM_VIDEO_TO_DIFY;
+    if (policy_has_delivery(policy, "image", "server"))
+        routes |= ALARM_IMAGE_TO_SERVER;
+    if (policy_has_delivery(policy, "image", "dify"))
+        routes |= ALARM_IMAGE_TO_DIFY;
+    if (policy_has_delivery(policy, "video", "dify"))
+        routes |= ALARM_VIDEO_TO_DIFY;
     return routes;
 }
 
@@ -517,9 +573,12 @@ static void synthesize_deliveries(cJSON *policy, uint32_t routes)
         cJSON_AddStringToObject(d, "target", target);
         cJSON_AddItemToArray(arr, d);
     };
-    if (routes & ALARM_IMAGE_TO_SERVER) add("image_server", "image", "server");
-    if (routes & ALARM_IMAGE_TO_DIFY) add("image_dify", "image", "dify");
-    if (routes & ALARM_VIDEO_TO_DIFY) add("video_dify", "video", "dify");
+    if (routes & ALARM_IMAGE_TO_SERVER)
+        add("image_server", "image", "server");
+    if (routes & ALARM_IMAGE_TO_DIFY)
+        add("image_dify", "image", "dify");
+    if (routes & ALARM_VIDEO_TO_DIFY)
+        add("video_dify", "video", "dify");
     cJSON_DeleteItemFromObjectCaseSensitive(policy, "deliveries");
     cJSON_AddItemToObject(policy, "deliveries", arr);
 }
@@ -529,7 +588,8 @@ static void synthesize_deliveries(cJSON *policy, uint32_t routes)
 static bool configure_dify_json_delivery(cJSON *policy)
 {
     cJSON *configured = cJSON_GetObjectItemCaseSensitive(policy, "deliveries");
-    if (!cJSON_IsArray(configured)) return false;
+    if (!cJSON_IsArray(configured))
+        return false;
 
     cJSON *source = nullptr;
     cJSON *item = nullptr;
@@ -537,17 +597,18 @@ static bool configure_dify_json_delivery(cJSON *policy)
     {
         cJSON *enabled = cJSON_GetObjectItemCaseSensitive(item, "enabled");
         cJSON *target = cJSON_GetObjectItemCaseSensitive(item, "target");
-        if (!cJSON_IsFalse(enabled) && cJSON_IsString(target) &&
-            strcmp(target->valuestring, "dify") == 0)
+        if (!cJSON_IsFalse(enabled) && cJSON_IsString(target) && strcmp(target->valuestring, "dify") == 0)
         {
             source = item;
             break;
         }
     }
-    if (!source) return false;
+    if (!source)
+        return false;
 
     cJSON *delivery = cJSON_Duplicate(source, 1);
-    if (!delivery) return false;
+    if (!delivery)
+        return false;
     cJSON_DeleteItemFromObjectCaseSensitive(delivery, "media");
     cJSON_AddStringToObject(delivery, "media", "json");
     cJSON_DeleteItemFromObjectCaseSensitive(delivery, "file_variable");
@@ -570,7 +631,8 @@ static bool configure_dify_json_delivery(cJSON *policy)
 
 std::string alarm_report(ChannelContext *ctx, const AlarmRequest &input)
 {
-    if (!ctx || !ctx->config || input.type.empty()) return "";
+    if (!ctx || !ctx->config || input.type.empty())
+        return "";
     enforce_outbox_cap();
     const ChannelConfig &cfg = *ctx->config;
     cJSON *policy = parse_object_or_empty(cfg.report_policy_json);
@@ -594,9 +656,15 @@ std::string alarm_report(ChannelContext *ctx, const AlarmRequest &input)
     uint32_t media_flags = ALARM_MEDIA_NONE;
     if (!input.dify_json_only)
     {
-        if (routes & (ALARM_IMAGE_TO_SERVER | ALARM_IMAGE_TO_DIFY)) media_flags |= ALARM_MEDIA_IMAGE;
-        if (routes & ALARM_VIDEO_TO_DIFY) media_flags |= ALARM_MEDIA_VIDEO;
-        if (media_flags == ALARM_MEDIA_NONE) { cJSON_Delete(policy); return ""; }
+        if (routes & (ALARM_IMAGE_TO_SERVER | ALARM_IMAGE_TO_DIFY))
+            media_flags |= ALARM_MEDIA_IMAGE;
+        if (routes & ALARM_VIDEO_TO_DIFY)
+            media_flags |= ALARM_MEDIA_VIDEO;
+        if (media_flags == ALARM_MEDIA_NONE)
+        {
+            cJSON_Delete(policy);
+            return "";
+        }
     }
 
     float merge_sec = (float)policy_number(policy, "merge_window_sec", 5.0);
@@ -627,7 +695,8 @@ std::string alarm_report(ChannelContext *ctx, const AlarmRequest &input)
         }
         pthread_mutex_lock(&g_mtx);
         auto stale = g_active.find(merge_key);
-        if (stale != g_active.end() && stale->second.event_id == existing) g_active.erase(stale);
+        if (stale != g_active.end() && stale->second.event_id == existing)
+            g_active.erase(stale);
     }
 
     if (media_flags != ALARM_MEDIA_NONE && !ensure_worker_locked())
@@ -659,8 +728,7 @@ std::string alarm_report(ChannelContext *ctx, const AlarmRequest &input)
     cJSON_AddStringToObject(root, "event_id", event_id.c_str());
     cJSON_AddNumberToObject(root, "channel_id", ctx->chnId);
     cJSON_AddStringToObject(root, "alarm_type", input.type.c_str());
-    cJSON_AddStringToObject(root, "record_kind",
-                            input.record_kind.empty() ? "alarm" : input.record_kind.c_str());
+    cJSON_AddStringToObject(root, "record_kind", input.record_kind.empty() ? "alarm" : input.record_kind.c_str());
     cJSON_AddStringToObject(root, "delivery_mode", input.dify_json_only ? "json_only" : "media");
     cJSON_AddStringToObject(root, "message", input.message.c_str());
     cJSON_AddNumberToObject(root, "ts", (double)time(nullptr));
@@ -671,8 +739,7 @@ std::string alarm_report(ChannelContext *ctx, const AlarmRequest &input)
     cJSON_AddStringToObject(root, "snap_time", snap_time.c_str());
     cJSON_AddStringToObject(root, "end_time", snap_time.c_str());
     cJSON_AddItemToObject(root, "merged_triggers", cJSON_CreateArray());
-    cJSON_AddStringToObject(root, "state",
-                            media_flags == ALARM_MEDIA_NONE ? "pending" : "collecting");
+    cJSON_AddStringToObject(root, "state", media_flags == ALARM_MEDIA_NONE ? "pending" : "collecting");
     cJSON_AddItemToObject(root, "fields", fields_to_json(input.fields));
     cJSON_AddItemToObject(root, "channel_parameters", parse_object_or_empty(cfg.report_parameters_json));
     cJSON *media = cJSON_CreateObject();
@@ -709,13 +776,15 @@ std::string alarm_report(ChannelContext *ctx, const AlarmRequest &input)
             job.render_params.show_fps = 0;
             /* 上报图片自动复用实时画面的完整叠加层；同时允许开发者额外声明
              * IMAGE 专用指令。业务 logic 不需要再在原图上重复画框/文字。 */
-            job.render_params.target_mask = static_cast<uint8_t>(
-                DrawCommand::DISPLAY | DrawCommand::IMAGE);
+            job.render_params.target_mask = static_cast<uint8_t>(DrawCommand::DISPLAY | DrawCommand::IMAGE);
             job.render_params.show_system_overlays = true;
             job.render_params.show_custom_overlays = true;
-            if (ctx->rois) job.rois = *ctx->rois;
-            if (ctx->results) job.results = *ctx->results;
-            if (ctx->draw_cmds) job.commands = *ctx->draw_cmds;
+            if (ctx->rois)
+                job.rois = *ctx->rois;
+            if (ctx->results)
+                job.results = *ctx->results;
+            if (ctx->draw_cmds)
+                job.commands = *ctx->draw_cmds;
             job.render_params.roi_zones = nullptr;
             job.render_params.results = nullptr;
             job.render_params.draw_cmds = nullptr;
@@ -741,9 +810,7 @@ std::string alarm_report(ChannelContext *ctx, const AlarmRequest &input)
     return event_id;
 }
 
-std::string report_alarm(ChannelContext *ctx,
-                         const std::string &type,
-                         const std::string &message,
+std::string report_alarm(ChannelContext *ctx, const std::string &type, const std::string &message,
                          std::initializer_list<AlarmField> fields)
 {
     AlarmRequest request;
@@ -757,11 +824,13 @@ std::string report_alarm(ChannelContext *ctx,
 void alarm_report_video_ready(const std::string &event_id, const std::string &video_path)
 {
     size_t slash = video_path.find_last_of('/');
-    if (slash == std::string::npos) return;
+    if (slash == std::string::npos)
+        return;
     const std::string event_dir = video_path.substr(0, slash);
     size_t dir_slash = event_dir.find_last_of('/');
     const std::string dir_name = dir_slash == std::string::npos ? event_dir : event_dir.substr(dir_slash + 1);
-    if (dir_name != event_id) return;
+    if (dir_name != event_id)
+        return;
     update_media_ready(event_dir, "video", video_path.substr(slash + 1).c_str());
     enforce_outbox_cap();
 }
@@ -769,7 +838,11 @@ void alarm_report_video_ready(const std::string &event_id, const std::string &vi
 void alarm_report_deinit(void)
 {
     pthread_mutex_lock(&g_mtx);
-    if (!g_worker_started) { pthread_mutex_unlock(&g_mtx); return; }
+    if (!g_worker_started)
+    {
+        pthread_mutex_unlock(&g_mtx);
+        return;
+    }
     g_running = false;
     pthread_cond_broadcast(&g_cv);
     pthread_mutex_unlock(&g_mtx);

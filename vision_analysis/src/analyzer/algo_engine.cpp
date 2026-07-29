@@ -11,35 +11,35 @@
  * 公有 API（algorithm_init / algorithm_process_mat / …）在 algoProcess.cpp。
  */
 
-#include <string>
-#include <cstdio>
-#include <vector>
-#include <queue>
-#include <pthread.h>
-#include <chrono>
-#include <memory>
 #include <algorithm>
-#include <cstdint>
-#include <set>
-#include <map>
-#include <fstream>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <cstdint>
+#include <cstdio>
 #include <exception>
+#include <fstream>
+#include <map>
+#include <memory>
 #include <mutex>
-#include <thread>
 #include <opencv2/opencv.hpp>
+#include <pthread.h>
+#include <queue>
+#include <set>
+#include <string>
+#include <thread>
+#include <vector>
 
-#include "algoProcess.h"
-#include "algo_internal.h"
+#include "../core/app_ctrl.h"
+#include "../core/pause_ctrl.h"
+#include "../system.h"
+#include "../yolo/composite_model.h"
 #include "../yolo/yolo.h"
 #include "../yolo/yolopose.h"
 #include "../yolo/yoloseg.h"
 #include "../yolo/yolov8det.h"
-#include "../yolo/composite_model.h"
-#include "../system.h"
-#include "../core/app_ctrl.h"
-#include "../core/pause_ctrl.h"
+#include "algoProcess.h"
+#include "algo_internal.h"
 #include "frame_pipeline.h"
 
 /* compute_iou 声明在 algoProcess.h / yolo.h 全局命名空间，此处显式引入供 nms_inplace 使用 */
@@ -47,8 +47,8 @@ using ::compute_iou;
 
 /*======================== 全局状态定义（唯一定义，其余文件通过 extern 访问）========================*/
 
-AlgoEngine   g_algo;
-FpsTracker   g_fps[MAX_CHANNEL_NUM];
+AlgoEngine g_algo;
+FpsTracker g_fps[MAX_CHANNEL_NUM];
 PerfCounters g_perf[MAX_CHANNEL_NUM];
 
 /*======================== 私有辅助（仅本文件可见）========================*/
@@ -56,19 +56,22 @@ PerfCounters g_perf[MAX_CHANNEL_NUM];
 /** @brief 跳过已被 NMS 抑制的候选框，就地过滤。*/
 static void nms_inplace(std::vector<AlgoResult> &dets, float nms_thresh)
 {
-    std::sort(dets.begin(), dets.end(),
-              [](const AlgoResult &a, const AlgoResult &b) { return a.score > b.score; });
+    std::sort(dets.begin(), dets.end(), [](const AlgoResult &a, const AlgoResult &b) { return a.score > b.score; });
     std::vector<AlgoResult> out;
     std::vector<char> removed(dets.size(), 0);
     for (size_t i = 0; i < dets.size(); ++i)
     {
-        if (removed[i]) continue;
+        if (removed[i])
+            continue;
         out.push_back(dets[i]);
         for (size_t j = i + 1; j < dets.size(); ++j)
         {
-            if (removed[j]) continue;
-            if (dets[i].class_id != dets[j].class_id) continue;
-            if (compute_iou(dets[i].box, dets[j].box) > nms_thresh) removed[j] = 1;
+            if (removed[j])
+                continue;
+            if (dets[i].class_id != dets[j].class_id)
+                continue;
+            if (compute_iou(dets[i].box, dets[j].box) > nms_thresh)
+                removed[j] = 1;
         }
     }
     dets.swap(out);
@@ -82,7 +85,8 @@ int get_queue_idx_for_chn(int chnId)
     {
         if (!g_algo.models_per_chn[i].empty())
         {
-            if (i == chnId) return q_idx;
+            if (i == chnId)
+                return q_idx;
             q_idx++;
         }
     }
@@ -91,45 +95,50 @@ int get_queue_idx_for_chn(int chnId)
 
 /*======================== 跨文件辅助函数实现 ========================*/
 
-std::set<int> names_to_class_ids(const std::vector<std::string> &names,
-                                   const std::string &label_path)
+std::set<int> names_to_class_ids(const std::vector<std::string> &names, const std::string &label_path)
 {
     std::set<int> ids;
-    if (names.empty() || label_path.empty()) return ids;
+    if (names.empty() || label_path.empty())
+        return ids;
 
     std::vector<std::string> local_labels;
     std::ifstream ifs(label_path);
     if (!ifs.is_open())
     {
-        log_printf_threadsafe("[Algo] Warning: cannot open label_path %s for class filtering\n",
-                              label_path.c_str());
+        log_printf_threadsafe("[Algo] Warning: cannot open label_path %s for class filtering\n", label_path.c_str());
         return ids;
     }
     std::string line;
     while (std::getline(ifs, line))
     {
-        while (!line.empty() &&
-               (line.back() == '\r' || line.back() == '\n' || line.back() == ' '))
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' '))
             line.pop_back();
-        if (!line.empty()) local_labels.push_back(line);
+        if (!line.empty())
+            local_labels.push_back(line);
     }
 
     for (const auto &name : names)
         for (size_t i = 0; i < local_labels.size(); ++i)
-            if (local_labels[i] == name) { ids.insert((int)i); break; }
+            if (local_labels[i] == name)
+            {
+                ids.insert((int)i);
+                break;
+            }
     return ids;
 }
 
-std::shared_ptr<ModelBase> create_model(const std::string &type,
-                                          const std::string &model_path,
-                                          const std::string &label_path,
-                                          int core_mask,
-                                          float obj_thresh, float nms_thresh)
+std::shared_ptr<ModelBase> create_model(const std::string &type, const std::string &model_path,
+                                        const std::string &label_path, int core_mask, float obj_thresh,
+                                        float nms_thresh)
 {
-    if (type == "yolov8_pose") return std::make_shared<YoloPose>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
-    if (type == "yolov5_seg")  return std::make_shared<YoloSeg>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
-    if (type == "yolov5")      return std::make_shared<YOLO>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
-    if (type == "yolov8_det")  return std::make_shared<YoloV8Det>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
+    if (type == "yolov8_pose")
+        return std::make_shared<YoloPose>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
+    if (type == "yolov5_seg")
+        return std::make_shared<YoloSeg>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
+    if (type == "yolov5")
+        return std::make_shared<YOLO>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
+    if (type == "yolov8_det")
+        return std::make_shared<YoloV8Det>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
     return nullptr;
 }
 
@@ -141,18 +150,16 @@ std::shared_ptr<ModelBase> create_model(const std::string &type,
  * 单模型 worker 与多模型子线程共用此函数，保证两条路径都优先使用
  * DMA-BUF -> RGA -> RKNN input memory 的零拷贝路径；失败时才回退 CPU Mat。
  */
-static bool run_model_task(int chnId, const AlgoTask &task,
-                           const std::shared_ptr<ModelBase> &model,
-                           std::vector<AlgoResult> &results,
-                           YoloPerfStat &perf, float &lock_wait_ms)
+static bool run_model_task(int chnId, const AlgoTask &task, const std::shared_ptr<ModelBase> &model,
+                           std::vector<AlgoResult> &results, YoloPerfStat &perf, float &lock_wait_ms)
 {
-    if (!model) return false;
+    if (!model)
+        return false;
 
     auto lock_before = std::chrono::steady_clock::now();
     pthread_mutex_lock(&model->infer_mtx);
     auto lock_after = std::chrono::steady_clock::now();
-    lock_wait_ms = std::chrono::duration<float, std::milli>(
-        lock_after - lock_before).count();
+    lock_wait_ms = std::chrono::duration<float, std::milli>(lock_after - lock_before).count();
 
     bool ret = false;
     try
@@ -162,15 +169,13 @@ static bool run_model_task(int chnId, const AlgoTask &task,
         {
             auto pre_begin = std::chrono::steady_clock::now();
             const int cached_handle = model->get_input_rga_handle();
-            const bool rga_ok = rga_convert_resize_handle(
-                chnId, *task.src_buf, model_fd,
-                model->input_width(), model->input_height(),
-                model->input_width(), model->input_height(),
-                RK_FORMAT_RGB_888, cached_handle);
+            const bool rga_ok = rga_convert_resize_handle(chnId, *task.src_buf, model_fd, model->input_width(),
+                                                          model->input_height(), model->input_width(),
+                                                          model->input_height(), RK_FORMAT_RGB_888, cached_handle);
             auto pre_end = std::chrono::steady_clock::now();
-            perf.preprocess_ms = std::chrono::duration<float, std::milli>(
-                pre_end - pre_begin).count();
-            if (rga_ok) ret = model->infer_zero_copy(results, &perf);
+            perf.preprocess_ms = std::chrono::duration<float, std::milli>(pre_end - pre_begin).count();
+            if (rga_ok)
+                ret = model->infer_zero_copy(results, &perf);
         }
 
         if (!ret && !task.img.empty())
@@ -185,8 +190,7 @@ static bool run_model_task(int chnId, const AlgoTask &task,
         static std::atomic<unsigned int> error_count{0};
         const unsigned int count = ++error_count;
         if (count <= 10 || (count % 100) == 0)
-            log_printf_threadsafe("[Algo] ch%d model inference exception (%u): %s\n",
-                                  chnId, count, e.what());
+            log_printf_threadsafe("[Algo] ch%d model inference exception (%u): %s\n", chnId, count, e.what());
         ret = false;
     }
     catch (...)
@@ -194,8 +198,7 @@ static bool run_model_task(int chnId, const AlgoTask &task,
         static std::atomic<unsigned int> unknown_error_count{0};
         const unsigned int count = ++unknown_error_count;
         if (count <= 10 || (count % 100) == 0)
-            log_printf_threadsafe("[Algo] ch%d unknown model inference exception (%u)\n",
-                                  chnId, count);
+            log_printf_threadsafe("[Algo] ch%d unknown model inference exception (%u)\n", chnId, count);
         ret = false;
     }
 
@@ -210,7 +213,7 @@ static bool run_model_task(int chnId, const AlgoTask &task,
  */
 class ParallelCompositeExecutor
 {
-public:
+  public:
     ParallelCompositeExecutor(int chnId, std::shared_ptr<CompositeModel> composite)
         : chnId_(chnId), composite_(std::move(composite))
     {
@@ -224,11 +227,15 @@ public:
         child_succeeded_.resize(count, 0);
     }
 
-    ~ParallelCompositeExecutor() { shutdown(); }
+    ~ParallelCompositeExecutor()
+    {
+        shutdown();
+    }
 
     bool start()
     {
-        if (!composite_ || slots_.size() < 2) return false;
+        if (!composite_ || slots_.size() < 2)
+            return false;
         try
         {
             for (size_t i = 0; i < slots_.size(); ++i)
@@ -238,21 +245,20 @@ public:
         }
         catch (const std::exception &e)
         {
-            log_printf_threadsafe("[Algo] ch%d cannot start parallel model workers: %s\n",
-                                  chnId_, e.what());
+            log_printf_threadsafe("[Algo] ch%d cannot start parallel model workers: %s\n", chnId_, e.what());
             shutdown();
             return false;
         }
     }
 
-    bool run(const AlgoTask &task, std::vector<AlgoResult> &results,
-             YoloPerfStat &perf, float &lock_wait_ms)
+    bool run(const AlgoTask &task, std::vector<AlgoResult> &results, YoloPerfStat &perf, float &lock_wait_ms)
     {
-        if (!started_) return false;
+        if (!started_)
+            return false;
 
         for (size_t i = 0; i < slots_.size(); ++i)
         {
-            child_results_[i].clear();       // 保留上一帧容量，避免热路径重复分配
+            child_results_[i].clear(); // 保留上一帧容量，避免热路径重复分配
             child_perf_[i] = YoloPerfStat{};
             child_lock_wait_ms_[i] = 0.0f;
             child_succeeded_[i] = 0;
@@ -279,12 +285,12 @@ public:
         }
 
         lock_wait_ms = 0.0f;
-        for (float child_wait : child_lock_wait_ms_) lock_wait_ms += child_wait;
-        return composite_->merge_child_results(
-            child_results_, child_succeeded_, child_perf_, results, &perf);
+        for (float child_wait : child_lock_wait_ms_)
+            lock_wait_ms += child_wait;
+        return composite_->merge_child_results(child_results_, child_succeeded_, child_perf_, results, &perf);
     }
 
-private:
+  private:
     struct Slot
     {
         std::mutex mtx;
@@ -304,22 +310,27 @@ private:
             {
                 std::unique_lock<std::mutex> lock(slot.mtx);
                 slot.cv.wait(lock, [&] { return slot.stop || slot.has_job; });
-                if (slot.stop) return;
+                if (slot.stop)
+                    return;
                 task = slot.task;
                 slot.has_job = false;
             }
 
             if (task)
             {
-                child_succeeded_[index] = run_model_task(
-                    chnId_, *task, composite_->entries()[index].model,
-                    child_results_[index], child_perf_[index], child_lock_wait_ms_[index]) ? 1 : 0;
+                child_succeeded_[index] =
+                    run_model_task(chnId_, *task, composite_->entries()[index].model, child_results_[index],
+                                   child_perf_[index], child_lock_wait_ms_[index])
+                        ? 1
+                        : 0;
             }
 
             {
                 std::lock_guard<std::mutex> lock(done_mtx_);
-                if (remaining_ > 0) --remaining_;
-                if (remaining_ == 0) done_cv_.notify_one();
+                if (remaining_ > 0)
+                    --remaining_;
+                if (remaining_ == 0)
+                    done_cv_.notify_one();
             }
         }
     }
@@ -336,7 +347,8 @@ private:
             slot.cv.notify_one();
         }
         for (auto &slot_ptr : slots_)
-            if (slot_ptr->thread.joinable()) slot_ptr->thread.join();
+            if (slot_ptr->thread.joinable())
+                slot_ptr->thread.join();
         started_ = false;
     }
 
@@ -368,8 +380,8 @@ void *worker_thread_func(void *arg)
         model_group_size = composite->entries().size();
         parallel_executor.reset(new ParallelCompositeExecutor(chnId, composite));
         if (parallel_executor->start())
-            log_printf_threadsafe("[Algo] ch%d parallel multi-model executor started (%zu models)\n",
-                                  chnId, composite->entries().size());
+            log_printf_threadsafe("[Algo] ch%d parallel multi-model executor started (%zu models)\n", chnId,
+                                  composite->entries().size());
         else
             parallel_executor.reset();
     }
@@ -391,15 +403,17 @@ void *worker_thread_func(void *arg)
             pthread_mutex_unlock(&tq_ptr->mtx);
         }
 
-        if (pause_ctrl::is_paused()) continue;
-        if (!g_algo.running || g_algo.chn_reload_stop[chnId]) break;
+        if (pause_ctrl::is_paused())
+            continue;
+        if (!g_algo.running || g_algo.chn_reload_stop[chnId])
+            break;
 
         ModelBase *model = model_ptr.get();
-        if (!model) continue;
+        if (!model)
+            continue;
 
         auto work_begin = std::chrono::steady_clock::now();
-        float queue_wait_ms = std::chrono::duration<float, std::milli>(
-            work_begin - task.enqueue_tp).count();
+        float queue_wait_ms = std::chrono::duration<float, std::milli>(work_begin - task.enqueue_tp).count();
 
         std::vector<AlgoResult> results;
         YoloPerfStat perf;
@@ -409,8 +423,7 @@ void *worker_thread_func(void *arg)
         if (parallel_executor)
             ret = parallel_executor->run(task, results, perf, lock_wait_ms);
         else
-            ret = run_model_task(task.chnId, task, model_ptr,
-                                 results, perf, lock_wait_ms);
+            ret = run_model_task(task.chnId, task, model_ptr, results, perf, lock_wait_ms);
 
         if (ret)
         {
@@ -423,7 +436,8 @@ void *worker_thread_func(void *arg)
             {
                 filtered.reserve(results.size());
                 for (const auto &d : results)
-                    if (d.score >= obj_thresh_v) filtered.push_back(d);
+                    if (d.score >= obj_thresh_v)
+                        filtered.push_back(d);
             }
             else
                 filtered = std::move(results);
@@ -439,32 +453,40 @@ void *worker_thread_func(void *arg)
                 std::vector<AlgoResult> class_filtered;
                 class_filtered.reserve(filtered.size());
                 for (const auto &d : filtered)
-                    if (allowed_classes->count(d.class_id)) class_filtered.push_back(d);
+                    if (allowed_classes->count(d.class_id))
+                        class_filtered.push_back(d);
                 filtered.swap(class_filtered);
             }
 
-            if (!model->nms_done()) nms_inplace(filtered, nms_thresh_v);
+            if (!model->nms_done())
+                nms_inplace(filtered, nms_thresh_v);
 
             /* 多模型通道的每个子模型最多保留20个结果；合并后不能仍截断为20，
              * 否则排在后面的姿态模型结果可能被第一个检测模型完全挤掉。 */
             const size_t MAX_DET_PER_FRAME = 100;
-            if (filtered.size() > MAX_DET_PER_FRAME) filtered.resize(MAX_DET_PER_FRAME);
+            if (filtered.size() > MAX_DET_PER_FRAME)
+                filtered.resize(MAX_DET_PER_FRAME);
             auto filter_end = std::chrono::steady_clock::now();
 
             uint64_t ts_ms = algo_steady_now_ms();
-            int64_t  seq   = task.frame_seq;
+            int64_t seq = task.frame_seq;
             for (auto &r : filtered)
-            { r.track_id = -1; r.chn_id = task.chnId; r.frame_id = seq; r.timestamp_ms = ts_ms; }
+            {
+                r.track_id = -1;
+                r.chn_id = task.chnId;
+                r.frame_id = seq;
+                r.timestamp_ms = ts_ms;
+            }
 
             int wrote_new = 0;
             {
                 pthread_mutex_lock(&g_algo.channel_results[task.chnId].mtx);
                 if (seq > g_algo.channel_results[task.chnId].latest_seq)
                 {
-                    g_algo.channel_results[task.chnId].data       = std::move(filtered);
+                    g_algo.channel_results[task.chnId].data = std::move(filtered);
                     g_algo.channel_results[task.chnId].data_frame = task.img;
                     g_algo.channel_results[task.chnId].latest_seq = seq;
-                    g_algo.channel_results[task.chnId].has_new    = 1;
+                    g_algo.channel_results[task.chnId].has_new = 1;
                     wrote_new = 1;
                 }
                 pthread_mutex_unlock(&g_algo.channel_results[task.chnId].mtx);
@@ -480,21 +502,17 @@ void *worker_thread_func(void *arg)
 
             g_fps[task.chnId].tick();
 
-            float filter_nms_ms = std::chrono::duration<float, std::milli>(
-                filter_end - filter_begin).count();
-            float total_ms = std::chrono::duration<float, std::milli>(
-                filter_end - work_begin).count();
+            float filter_nms_ms = std::chrono::duration<float, std::milli>(filter_end - filter_begin).count();
+            float total_ms = std::chrono::duration<float, std::milli>(filter_end - work_begin).count();
             g_perf[task.chnId].accumulate(
-                (uint64_t)(std::max(0.0f, queue_wait_ms)   * 1000.0f),
-                (uint64_t)(std::max(0.0f, lock_wait_ms)    * 1000.0f),
+                (uint64_t)(std::max(0.0f, queue_wait_ms) * 1000.0f), (uint64_t)(std::max(0.0f, lock_wait_ms) * 1000.0f),
                 (uint64_t)(std::max(0.0f, perf.preprocess_ms) * 1000.0f),
-                (uint64_t)(std::max(0.0f, perf.infer_ms)   * 1000.0f),
+                (uint64_t)(std::max(0.0f, perf.infer_ms) * 1000.0f),
                 (uint64_t)(std::max(0.0f, perf.postprocess_ms) * 1000.0f),
-                (uint64_t)(std::max(0.0f, filter_nms_ms)   * 1000.0f),
-                (uint64_t)(std::max(0.0f, total_ms)        * 1000.0f));
+                (uint64_t)(std::max(0.0f, filter_nms_ms) * 1000.0f), (uint64_t)(std::max(0.0f, total_ms) * 1000.0f));
 
             /* 周期性 Perf 日志 */
-            uint64_t now_ms  = algo_steady_now_ms();
+            uint64_t now_ms = algo_steady_now_ms();
             PerfCounters::Snapshot snap{};
             if (g_perf[task.chnId].reset_if_due(now_ms, PERF_LOG_WINDOW_MS, snap))
             {
@@ -502,15 +520,13 @@ void *worker_thread_func(void *arg)
                 {
                     float div = (float)snap.samples * 1000.0f;
                     /* parallel 模式下 pre/npu/post 是各模型工作量之和；total 是同帧并行后的真实墙钟耗时。 */
-                    log_printf_threadsafe(
-                        "[Perf][ch%02d][5s] fps=%.1f mode=%s models=%zu | "
-                        "wait_q=%.2f lock=%.2f pre=%.2f npu=%.2f post=%.2f nms=%.2f | total=%.2fms\n",
-                        task.chnId, g_fps[task.chnId].value(),
-                        parallel_executor ? "parallel" : "single", model_group_size,
-                        (float)snap.wait / div,        (float)snap.lock / div,
-                        (float)snap.pre  / div,        (float)snap.npu  / div,
-                        (float)snap.post / div,        (float)snap.filter_nms / div,
-                        (float)snap.total / div);
+                    log_printf_threadsafe("[Perf][ch%02d][5s] fps=%.1f mode=%s models=%zu | "
+                                          "wait_q=%.2f lock=%.2f pre=%.2f npu=%.2f post=%.2f nms=%.2f | total=%.2fms\n",
+                                          task.chnId, g_fps[task.chnId].value(),
+                                          parallel_executor ? "parallel" : "single", model_group_size,
+                                          (float)snap.wait / div, (float)snap.lock / div, (float)snap.pre / div,
+                                          (float)snap.npu / div, (float)snap.post / div, (float)snap.filter_nms / div,
+                                          (float)snap.total / div);
                 }
             }
         }

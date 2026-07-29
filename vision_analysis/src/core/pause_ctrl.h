@@ -26,7 +26,8 @@
 #pragma once
 #include <atomic>
 
-namespace pause_ctrl {
+namespace pause_ctrl
+{
 
 /** 是否启用暂停键功能 (程序启动时根据配置设置, 之后不再修改) */
 extern std::atomic<bool> g_enabled;

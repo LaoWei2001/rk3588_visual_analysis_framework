@@ -52,8 +52,7 @@ void close_fd(int &fd)
     }
 }
 
-std::string make_response(bool ok, const char *request_id, int channel_id,
-                          const char *action, const char *logic_name,
+std::string make_response(bool ok, const char *request_id, int channel_id, const char *action, const char *logic_name,
                           const char *message)
 {
     cJSON *root = cJSON_CreateObject();
@@ -130,15 +129,13 @@ void handle_client(int client_fd)
 
     if (!app_ctrl_has_channel(channel_id))
     {
-        send_all(client_fd, make_response(false, req_id, channel_id,
-                                          action_name, "", "unknown channel_id"));
+        send_all(client_fd, make_response(false, req_id, channel_id, action_name, "", "unknown channel_id"));
         cJSON_Delete(root);
         return;
     }
     if (!action_name || !action_name[0])
     {
-        send_all(client_fd, make_response(false, req_id, channel_id,
-                                          "", "", "empty action"));
+        send_all(client_fd, make_response(false, req_id, channel_id, "", "", "empty action"));
         cJSON_Delete(root);
         return;
     }
@@ -153,8 +150,7 @@ void handle_client(int client_fd)
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[channel_id]);
 
         const char *msg = new_state ? "inference enabled" : "inference disabled";
-        send_all(client_fd, make_response(true, req_id, channel_id,
-                                          action_name, "", msg));
+        send_all(client_fd, make_response(true, req_id, channel_id, action_name, "", msg));
         cJSON_Delete(root);
         return;
     }
@@ -162,16 +158,14 @@ void handle_client(int client_fd)
     const std::string logic_name = current_logic_name(channel_id);
     if (logic_name.empty())
     {
-        send_all(client_fd, make_response(false, req_id, channel_id,
-                                          action_name, "", "logic is empty"));
+        send_all(client_fd, make_response(false, req_id, channel_id, action_name, "", "logic is empty"));
         cJSON_Delete(root);
         return;
     }
 
     if (!channel_logic_action_get(logic_name.c_str()))
     {
-        send_all(client_fd, make_response(false, req_id, channel_id,
-                                          action_name, logic_name.c_str(),
+        send_all(client_fd, make_response(false, req_id, channel_id, action_name, logic_name.c_str(),
                                           "current logic has no action handler"));
         cJSON_Delete(root);
         return;
@@ -190,8 +184,7 @@ void handle_client(int client_fd)
         cJSON_free(payload_text);
 
     enqueue_action(action, channel_id);
-    send_all(client_fd, make_response(true, req_id, channel_id,
-                                      action_name, logic_name.c_str(), "accepted"));
+    send_all(client_fd, make_response(true, req_id, channel_id, action_name, logic_name.c_str(), "accepted"));
     cJSON_Delete(root);
 }
 
@@ -199,7 +192,9 @@ void server_loop()
 {
     while (g_running.load())
     {
-        struct pollfd pfd{};
+        struct pollfd pfd
+        {
+        };
         pfd.fd = g_server_fd;
         pfd.events = POLLIN;
         const int pr = poll(&pfd, 1, 200);
@@ -212,7 +207,9 @@ void server_loop()
         if (client_fd < 0)
             continue;
 
-        struct timeval tv{};
+        struct timeval tv
+        {
+        };
         tv.tv_sec = 2;
         tv.tv_usec = 0;
         setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));

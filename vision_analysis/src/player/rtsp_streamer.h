@@ -27,20 +27,21 @@
 #pragma once
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-/**
- * @brief 按配置启动 RTSP 服务。
- *
- * enable_rtsp=false 时直接返回 0(不做任何事)。
- * 必须在 g_disp 显示缓冲已分配之后调用 (依赖 *g_pCtrl->pDispBuffer)。
- * @return 0 = 成功或未启用; -1 = 启动失败 (调用方可忽略, 继续无 RTSP 运行)。
- */
-int  rtsp_streamer_init(void);
+    /**
+     * @brief 按配置启动 RTSP 服务。
+     *
+     * enable_rtsp=false 时直接返回 0(不做任何事)。
+     * 必须在 g_disp 显示缓冲已分配之后调用 (依赖 *g_pCtrl->pDispBuffer)。
+     * @return 0 = 成功或未启用; -1 = 启动失败 (调用方可忽略, 继续无 RTSP 运行)。
+     */
+    int rtsp_streamer_init(void);
 
-/** @brief 停止 RTSP 服务与推流线程 (幂等; 未启用时为空操作)。 */
-void rtsp_streamer_deinit(void);
+    /** @brief 停止 RTSP 服务与推流线程 (幂等; 未启用时为空操作)。 */
+    void rtsp_streamer_deinit(void);
 
 #ifdef __cplusplus
 }

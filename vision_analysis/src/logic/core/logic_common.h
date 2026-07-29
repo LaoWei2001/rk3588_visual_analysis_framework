@@ -12,15 +12,15 @@
 
 #include <opencv2/opencv.hpp>
 
-#include "channel_logic.h"
-#include "analyzer/algoProcess.h"
-#include "core/app_ctrl.h"
 #include "alarm/alarm_report.h"
+#include "analyzer/algoProcess.h"
+#include "channel_logic.h"
+#include "core/app_ctrl.h"
 #include "player/text_overlay.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <cmath>
 #include <string>
 #include <vector>

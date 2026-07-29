@@ -1,5 +1,5 @@
 /* 本项目设计了若干节基础教程 logic_course_xx 帮助开发者快速上手本项目中视觉程序的开发 */
-/* 
+/*
     注意: 尽管本算法引擎的设计已经极大降低开发的难度，但是对于开发者来说需要
     具备以下基础：
     1. 具备 C/C++ 基础知识。
@@ -25,8 +25,7 @@ static void logic_course_01(ChannelContext *ctx)
         return;
 
     // 叠加自定义文字, 支持中文
-    draw_text(ctx, "course1 logic running, 正在运行", cv::Point(30, 50), cv::Scalar(255, 0, 0), 1, 1,
-              DrawCommand::ALL);
+    draw_text(ctx, "course1 logic running, 正在运行", cv::Point(30, 50), cv::Scalar(255, 0, 0), 1, 1, DrawCommand::ALL);
     // 画一个圆
     draw_circle(ctx, cv::Point(320, 320), 100, cv::Scalar(255, 0, 0));
 }

@@ -17,17 +17,17 @@
 
 #pragma once
 
-#include <vector>
-#include <string>
-#include <cstdint>
-#include <map>
-#include <atomic>
-#include <opencv2/opencv.hpp>
-#include <pthread.h>
 #include "../config/config.h"
+#include "../player/display.h"
 #include "logic/core/channel_logic.h"
 #include "logic/core/logic_parameters.h"
-#include "../player/display.h"
+#include <atomic>
+#include <cstdint>
+#include <map>
+#include <opencv2/opencv.hpp>
+#include <pthread.h>
+#include <string>
+#include <vector>
 
 class DecChannel; /* 前置声明, 底层 C++ 类型 */
 
@@ -118,7 +118,8 @@ struct ChannelState
     std::shared_ptr<void> logic_state;
     cv::Mat last_frame;
     cv::Mat last_logic_frame;
-    cv::Mat logic_display_frame;      /* logic 经 display_canvas() 自绘的显示底图(640×640 BGR)；空=不覆盖，显示走实时采集帧 */
+    cv::Mat
+        logic_display_frame; /* logic 经 display_canvas() 自绘的显示底图(640×640 BGR)；空=不覆盖，显示走实时采集帧 */
     uint64_t logic_display_ts_ms = 0; /* 上面那帧的产生时刻(steady ms)，显示端据此判新鲜度，过期回退实时帧 */
     int64_t logic_frame_id = 0;
     int64_t input_frame_seq = 0;
@@ -164,8 +165,8 @@ struct APP_CTRL
     uint64_t config_generation = 1;
 
     /*!< 2. 显示子系统 */
-    Display_t dispDesc;   /*!< 显示窗口描述符 */
-    char **pDispBuffer;   /*!< 双缓冲指针 (front buffer) */
+    Display_t dispDesc;                        /*!< 显示窗口描述符 */
+    char **pDispBuffer;                        /*!< 双缓冲指针 (front buffer) */
     std::atomic<bool> disp_thread_exit{false}; /*!< 显示线程退出标志 */
 
     /*!< 3. 采集子系统 */
@@ -184,14 +185,14 @@ struct APP_CTRL
     pthread_mutex_t cv_config_mtx;            /*!< 配合 cv_config 的互斥锁 */
     pthread_cond_t cv_config;                 /*!< 配置监控线程条件变量 */
     pthread_mutex_t chn_mtx[MAX_CHANNEL_NUM]; /*!< 通道独立锁 */
-    std::atomic<bool> isRunning{false};        /*!< 全局运行标志: false=退出 */
+    std::atomic<bool> isRunning{false};       /*!< 全局运行标志: false=退出 */
 
     /*!< 7. 线程句柄 (main 中 pthread_create 填充) */
     pthread_t config_monitor_tid; /*!< 配置热加载监控线程 */
     pthread_t fd_monitor_tid;     /*!< fd 使用量监控线程 */
 
     /*!< 8. 配置热加载与线程退出标志 */
-    uint64_t configLastMtime; /*!< 配置文件上次修改时间 */
+    uint64_t configLastMtime;                     /*!< 配置文件上次修改时间 */
     std::atomic<bool> config_monitor_exit{false}; /*!< 配置监控线程退出标志 */
     std::atomic<bool> fd_monitor_exit{false};     /*!< fd 监控线程退出标志 */
 };
@@ -220,14 +221,13 @@ extern "C"
     int app_ctrl_get_channel_display_order(int channel_id);
 
     std::shared_ptr<const AppRuntimeSnapshot> app_ctrl_get_runtime_snapshot(void);
-    std::shared_ptr<const AppRuntimeSnapshot> app_ctrl_build_runtime_snapshot(
-        const AppConfig &config, int input_w, int input_h, uint64_t generation);
-    void app_ctrl_store_runtime_snapshot(
-        const std::shared_ptr<const AppRuntimeSnapshot> &snapshot);
-    const ChannelConfig *app_ctrl_runtime_channel_config(
-        const std::shared_ptr<const AppRuntimeSnapshot> &snapshot, int channel_id);
-    const std::vector<RoiZone> *app_ctrl_runtime_channel_rois(
-        const std::shared_ptr<const AppRuntimeSnapshot> &snapshot, int channel_id);
+    std::shared_ptr<const AppRuntimeSnapshot> app_ctrl_build_runtime_snapshot(const AppConfig &config, int input_w,
+                                                                              int input_h, uint64_t generation);
+    void app_ctrl_store_runtime_snapshot(const std::shared_ptr<const AppRuntimeSnapshot> &snapshot);
+    const ChannelConfig *app_ctrl_runtime_channel_config(const std::shared_ptr<const AppRuntimeSnapshot> &snapshot,
+                                                         int channel_id);
+    const std::vector<RoiZone> *app_ctrl_runtime_channel_rois(const std::shared_ptr<const AppRuntimeSnapshot> &snapshot,
+                                                              int channel_id);
     const LogicParameterSet *app_ctrl_runtime_logic_parameters(
         const std::shared_ptr<const AppRuntimeSnapshot> &snapshot, int channel_id);
 

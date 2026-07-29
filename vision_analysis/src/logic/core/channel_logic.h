@@ -47,7 +47,9 @@ struct ChannelAction
 
 struct ChannelActionResult
 {
+    // 这次按钮的请求是否被处理
     bool handled = false;
+    // 对处理结果的文字说明，默认是空字符串
     std::string message;
 };
 
@@ -258,7 +260,7 @@ struct ChannelContext
     /* 本帧墙钟时间(unix_ms 按本地时区格式化) */
     std::string time_hms() const; /* "HH:MM:SS" —— 查看时间用这个 */
     std::string time_str() const; /* "YYYY-MM-DD HH:MM:SS" —— 上报/记录用 */
-    FrameTime datetime() const;   /* 拆成年月日时分秒独立 int(见 FrameTime), 不是字符串, 而是结构体元素 */
+    FrameTime datetime() const; /* 拆成年月日时分秒独立 int(见 FrameTime), 不是字符串, 而是结构体元素 */
 
     cv::Mat snapshot() const;
 
@@ -309,7 +311,6 @@ int roi_count_target(const ChannelContext *ctx, const char *label, int idx);
 
 // 根据 ROI 名称 name 查询该 ROI 的编号
 int roi_find(const ChannelContext *ctx, const char *name); /* 名字→序号; 找不到=ROI_NONE */
-
 
 /*======================== 绘制辅助函数 ========================*/
 /* 矩形/圆: thickness=-1(负数) = 填充; alpha<1 = 半透明叠加(目标/画面可透出来, 适合高亮报警区)。

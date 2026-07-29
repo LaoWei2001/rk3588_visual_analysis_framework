@@ -10,21 +10,21 @@
  *     两条路径: 推理通道 (new_results 非空) / 非推理直通通道
  */
 
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <memory>
-#include <vector>
-#include <string>
-#include <chrono>
-#include <algorithm>
-#include <pthread.h>
 #include <opencv2/opencv.hpp>
+#include <pthread.h>
+#include <string>
+#include <vector>
 
-#include "analyzer_internal.h"
-#include "analyzer.h"
-#include "tracker.h"
 #include "../control/channel_control.h"
 #include "../core/image_utils.h"
+#include "analyzer.h"
+#include "analyzer_internal.h"
 #include "logic/core/channel_logic.h"
+#include "tracker.h"
 
 /*======================== 跟踪器 (每通道一个实例) ========================*/
 
@@ -38,13 +38,12 @@ static Tracker *get_tracker(int chnId, const ChannelConfig *ch_cfg)
         return nullptr;
     }
     if (!g_trackers[chnId])
-        g_trackers[chnId] = std::make_unique<Tracker>(
-            ch_cfg->tracker_iou_thresh, ch_cfg->tracker_max_miss, ch_cfg->tracker_min_hits);
+        g_trackers[chnId] =
+            std::make_unique<Tracker>(ch_cfg->tracker_iou_thresh, ch_cfg->tracker_max_miss, ch_cfg->tracker_min_hits);
     return g_trackers[chnId].get();
 }
 
-static void update_tracker_locked(int chnId, const ChannelConfig &next,
-                                  const ChannelConfig *previous, bool force_reset)
+static void update_tracker_locked(int chnId, const ChannelConfig &next, const ChannelConfig *previous, bool force_reset)
 {
     if (!next.tracker_enable)
     {
@@ -52,12 +51,11 @@ static void update_tracker_locked(int chnId, const ChannelConfig &next,
         return;
     }
 
-    const bool min_hits_changed = previous &&
-        previous->tracker_min_hits != next.tracker_min_hits;
+    const bool min_hits_changed = previous && previous->tracker_min_hits != next.tracker_min_hits;
     if (!g_trackers[chnId] || min_hits_changed)
     {
-        g_trackers[chnId] = std::make_unique<Tracker>(
-            next.tracker_iou_thresh, next.tracker_max_miss, next.tracker_min_hits);
+        g_trackers[chnId] =
+            std::make_unique<Tracker>(next.tracker_iou_thresh, next.tracker_max_miss, next.tracker_min_hits);
     }
     else
     {
@@ -83,7 +81,8 @@ void trackers_deinit(void)
 /* 公开接口: 供 config_monitor 热重载时更新跟踪器参数 */
 void analyzer_update_tracker(int chnId, const ChannelConfig *ch)
 {
-    if (!ch || chnId < 0 || chnId >= MAX_CHANNEL_NUM) return;
+    if (!ch || chnId < 0 || chnId >= MAX_CHANNEL_NUM)
+        return;
     pthread_mutex_lock(&g_process_mtx[chnId]);
     update_tracker_locked(chnId, *ch, nullptr, false);
     pthread_mutex_unlock(&g_process_mtx[chnId]);
@@ -91,7 +90,8 @@ void analyzer_update_tracker(int chnId, const ChannelConfig *ch)
 
 void analyzer_reset_tracker_ids(int chnId)
 {
-    if (chnId < 0 || chnId >= MAX_CHANNEL_NUM) return;
+    if (chnId < 0 || chnId >= MAX_CHANNEL_NUM)
+        return;
     pthread_mutex_lock(&g_process_mtx[chnId]);
     if (g_trackers[chnId])
     {
@@ -101,16 +101,16 @@ void analyzer_reset_tracker_ids(int chnId)
     pthread_mutex_unlock(&g_process_mtx[chnId]);
 }
 
-bool analyzer_publish_runtime_snapshot(
-    const AppConfig &config, uint64_t generation,
-    const std::vector<int> &logic_changed_channels,
-    const std::vector<int> &tracker_reset_channels)
+bool analyzer_publish_runtime_snapshot(const AppConfig &config, uint64_t generation,
+                                       const std::vector<int> &logic_changed_channels,
+                                       const std::vector<int> &tracker_reset_channels)
 {
-    if (!g_pCtrl) return false;
+    if (!g_pCtrl)
+        return false;
 
-    auto next = app_ctrl_build_runtime_snapshot(
-        config, g_pCtrl->inputW, g_pCtrl->inputH, generation);
-    if (!next) return false;
+    auto next = app_ctrl_build_runtime_snapshot(config, g_pCtrl->inputW, g_pCtrl->inputH, generation);
+    if (!next)
+        return false;
     auto previous = app_ctrl_get_runtime_snapshot();
 
     bool logic_changed[MAX_CHANNEL_NUM]{};
@@ -139,11 +139,10 @@ bool analyzer_publish_runtime_snapshot(
 
     for (int channel_id : channel_ids)
     {
-        const ChannelConfig *next_channel =
-            app_ctrl_runtime_channel_config(next, channel_id);
-        const ChannelConfig *previous_channel =
-            app_ctrl_runtime_channel_config(previous, channel_id);
-        if (!next_channel) continue;
+        const ChannelConfig *next_channel = app_ctrl_runtime_channel_config(next, channel_id);
+        const ChannelConfig *previous_channel = app_ctrl_runtime_channel_config(previous, channel_id);
+        if (!next_channel)
+            continue;
 
         const bool reset_tracker = tracker_reset[channel_id] || logic_changed[channel_id];
         update_tracker_locked(channel_id, *next_channel, previous_channel, reset_tracker);
@@ -186,17 +185,17 @@ struct SourceFrameAccess
 static const cv::Mat *get_source_frame_bgr(void *opaque)
 {
     SourceFrameAccess *access = static_cast<SourceFrameAccess *>(opaque);
-    if (!access || !access->raw) return nullptr;
-    if (access->attempted) return access->bgr.empty() ? nullptr : &access->bgr;
+    if (!access || !access->raw)
+        return nullptr;
+    if (access->attempted)
+        return access->bgr.empty() ? nullptr : &access->bgr;
     access->attempted = true;
 
     const ChannelRawFrame &raw = *access->raw;
-    if (!raw.source_data || raw.width <= 0 || raw.height <= 0 ||
-        raw.source_hstride <= 0 || raw.source_vstride <= 0)
+    if (!raw.source_data || raw.width <= 0 || raw.height <= 0 || raw.source_hstride <= 0 || raw.source_vstride <= 0)
         return nullptr;
 
-    if (!raw_to_bgr_mat(raw.source_data, raw.width, raw.height,
-                        raw.source_hstride, raw.source_vstride,
+    if (!raw_to_bgr_mat(raw.source_data, raw.width, raw.height, raw.source_hstride, raw.source_vstride,
                         raw.source_format, access->bgr))
         return nullptr;
     return access->bgr.empty() ? nullptr : &access->bgr;
@@ -222,23 +221,16 @@ static const cv::Mat *get_source_frame_bgr(void *opaque)
  * @param infer_enabled   本通道是否开启推理（透传给 ctx）
  * @param raw_frame       当前同步解码源帧；异步推理路径中不含有效 source_data
  */
-static void invoke_channel_logic(int chnId,
-                                  const cv::Mat &frame_for_logic,
-                                  std::vector<AlgoResult> &current_results,
-                                  int64_t frame_id,
-                                  uint64_t timestamp_ms,
-                                  float dt_ms,
-                                  int infer_enabled,
-                                  const ChannelRawFrame *raw_frame,
-                                  const std::shared_ptr<const AppRuntimeSnapshot> &runtime)
+static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std::vector<AlgoResult> &current_results,
+                                 int64_t frame_id, uint64_t timestamp_ms, float dt_ms, int infer_enabled,
+                                 const ChannelRawFrame *raw_frame,
+                                 const std::shared_ptr<const AppRuntimeSnapshot> &runtime)
 {
-    const ChannelConfig *channel_config =
-        app_ctrl_runtime_channel_config(runtime, chnId);
-    const std::vector<RoiZone> *runtime_rois =
-        app_ctrl_runtime_channel_rois(runtime, chnId);
-    const LogicParameterSet *runtime_logic_parameters =
-        app_ctrl_runtime_logic_parameters(runtime, chnId);
-    if (!channel_config || !runtime_rois || !runtime_logic_parameters) return;
+    const ChannelConfig *channel_config = app_ctrl_runtime_channel_config(runtime, chnId);
+    const std::vector<RoiZone> *runtime_rois = app_ctrl_runtime_channel_rois(runtime, chnId);
+    const LogicParameterSet *runtime_logic_parameters = app_ctrl_runtime_logic_parameters(runtime, chnId);
+    if (!channel_config || !runtime_rois || !runtime_logic_parameters)
+        return;
     const std::string &logic_name = channel_config->logic;
 
     /* 未配置后处理模块：不构造 ChannelContext，也不调用任何业务函数。
@@ -247,10 +239,10 @@ static void invoke_channel_logic(int chnId,
     {
         ChannelState &ch_state = g_pCtrl->channels_state[chnId];
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-        ch_state.last_logic_frame  = frame_for_logic;
+        ch_state.last_logic_frame = frame_for_logic;
         ch_state.logic_state.reset();
-        ch_state.last_results      = current_results;
-        ch_state.result_frame_seq  = frame_id;
+        ch_state.last_results = current_results;
+        ch_state.result_frame_seq = frame_id;
         ch_state.last_result_ts_ms = steady_now_ms();
         ch_state.draw_cmds.clear();
         ch_state.logic_display_frame.release();
@@ -259,39 +251,40 @@ static void invoke_channel_logic(int chnId,
     }
 
     ChannelLogicFunc fn = channel_logic_get(logic_name.c_str());
-    if (!fn) return;
+    if (!fn)
+        return;
 
     ChannelState &ch_state = g_pCtrl->channels_state[chnId];
     std::shared_ptr<void> logic_state;
 
     /* 构造 ChannelContext（栈上，logic 函数只在本次调用内使用）*/
     ChannelContext ctx;
-    ctx.chnId         = chnId;
-    ctx.frame         = &frame_for_logic;
+    ctx.chnId = chnId;
+    ctx.frame = &frame_for_logic;
     pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-    ctx.src_width     = ch_state.src_w_now;   /* 原始视频分辨率(解码源帧尺寸, 如 1920×1080) */
-    ctx.src_height    = ch_state.src_h_now;
-    ctx.disp_fps      = ch_state.disp_fps;
-    logic_state       = ch_state.logic_state;
+    ctx.src_width = ch_state.src_w_now; /* 原始视频分辨率(解码源帧尺寸, 如 1920×1080) */
+    ctx.src_height = ch_state.src_h_now;
+    ctx.disp_fps = ch_state.disp_fps;
+    logic_state = ch_state.logic_state;
     pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
-    ctx.frame_id      = frame_id;
-    ctx.timestamp_ms  = timestamp_ms;
+    ctx.frame_id = frame_id;
+    ctx.timestamp_ms = timestamp_ms;
     /* 墙上时钟(epoch ms): RTSP/USB/文件 三源统一在此盖一次, logic 读 ctx->unix_ms / time_hms()
      * 即得本帧真实时间。这是"处理本帧的时刻", 与采集相差一个管线延迟(对 HH:MM:SS 显示无感)。 */
-    ctx.unix_ms       = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count());
-    ctx.dt_ms         = dt_ms;
-    ctx.results       = &current_results;
-    ctx.config        = channel_config;
+    ctx.unix_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count());
+    ctx.dt_ms = dt_ms;
+    ctx.results = &current_results;
+    ctx.config = channel_config;
     ctx.logic_parameters = runtime_logic_parameters;
     /* 多 ROI: ctx.rois = 本通道全部区域; ctx.roi = 第一个区域(兼容老逻辑, 无区域时为 nullptr)。
      * 顶点已是模型坐标系(归一化加载时即是; 旧像素格式由下方 process_channel_results 缩放后填入)。*/
-    ctx.rois          = runtime_rois;
-    ctx.roi           = runtime_rois->empty() ? nullptr : &(*runtime_rois)[0].polygon;
-    ctx.state         = &logic_state;
+    ctx.rois = runtime_rois;
+    ctx.roi = runtime_rois->empty() ? nullptr : &(*runtime_rois)[0].polygon;
+    ctx.state = &logic_state;
     ctx.infer_enabled = infer_enabled;
-    ctx.infer_fps     = algorithm_get_infer_fps(chnId);
+    ctx.infer_fps = algorithm_get_infer_fps(chnId);
 
     /* 原始帧只绑定短生命周期的惰性转换器。传统 CV 通道与 videoOutHandle 同步执行，
      * raw_frame.source_data 在 fn(&ctx) 返回前有效；异步推理路径没有该借用视图。 */
@@ -309,8 +302,8 @@ static void invoke_channel_logic(int chnId,
     ctx.draw_cmds = &draw_cmds;
     /* 显示画布(可选): logic 调 ctx->display_canvas() 才会启用并克隆，不调则零开销 */
     cv::Mat canvas_buf;
-    bool    show_canvas = false;
-    ctx.canvas      = &canvas_buf;
+    bool show_canvas = false;
+    ctx.canvas = &canvas_buf;
     ctx.show_canvas = &show_canvas;
     std::vector<ChannelAction> pending_actions;
     channel_control_take(chnId, pending_actions);
@@ -321,40 +314,40 @@ static void invoke_channel_logic(int chnId,
         {
             if (action.logic_name != logic_name)
             {
-                printf("[ChannelAction][ch%02d][%s] drop action=%s request=%s (queued for %s)\n",
-                       chnId, logic_name.c_str(), action.name.c_str(),
-                       action.request_id.c_str(), action.logic_name.c_str());
+                printf("[ChannelAction][ch%02d][%s] drop action=%s request=%s (queued for %s)\n", chnId,
+                       logic_name.c_str(), action.name.c_str(), action.request_id.c_str(), action.logic_name.c_str());
                 continue;
             }
             if (!action_fn)
             {
-                printf("[ChannelAction][ch%02d][%s] no handler for action=%s request=%s\n",
-                       chnId, logic_name.c_str(), action.name.c_str(), action.request_id.c_str());
+                printf("[ChannelAction][ch%02d][%s] no handler for action=%s request=%s\n", chnId, logic_name.c_str(),
+                       action.name.c_str(), action.request_id.c_str());
                 continue;
             }
             ChannelActionResult result = action_fn(&ctx, &action);
-            printf("[ChannelAction][ch%02d][%s] action=%s request=%s handled=%d msg=%s\n",
-                   chnId, logic_name.c_str(), action.name.c_str(), action.request_id.c_str(),
-                   result.handled ? 1 : 0, result.message.c_str());
+            printf("[ChannelAction][ch%02d][%s] action=%s request=%s handled=%d msg=%s\n", chnId, logic_name.c_str(),
+                   action.name.c_str(), action.request_id.c_str(), result.handled ? 1 : 0, result.message.c_str());
         }
     }
     fn(&ctx);
 
-
     /* 原子写回共享状态：get_channel_snapshot() 在同一把锁内读出，三者必定同帧。*/
     {
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-        ch_state.last_logic_frame  = frame_for_logic;
-        ch_state.logic_state       = std::move(logic_state);
-        ch_state.last_results      = current_results;
-        ch_state.result_frame_seq  = frame_id;
+        ch_state.last_logic_frame = frame_for_logic;
+        ch_state.logic_state = std::move(logic_state);
+        ch_state.last_results = current_results;
+        ch_state.result_frame_seq = frame_id;
         ch_state.last_result_ts_ms = steady_now_ms();
-        ch_state.draw_cmds         = std::move(draw_cmds);
+        ch_state.draw_cmds = std::move(draw_cmds);
         /* logic 拦截了整帧 → 存为本通道显示底图；否则清掉，显示回到实时采集帧 */
-        if (show_canvas && !canvas_buf.empty()) {
+        if (show_canvas && !canvas_buf.empty())
+        {
             ch_state.logic_display_frame = std::move(canvas_buf);
             ch_state.logic_display_ts_ms = steady_now_ms();
-        } else {
+        }
+        else
+        {
             ch_state.logic_display_frame.release();
         }
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
@@ -372,19 +365,17 @@ static void invoke_channel_logic(int chnId,
  * 调用者需在 g_process_mtx[chnId] 保护下调用，防止两条路径并发
  * （videoOutHandle 非推理直通 / dispatch_worker 推理完成通知 可能同时触发）。
  */
-std::vector<AlgoResult> process_channel_results(
-    int chnId,
-    const ChannelRawFrame &raw_frame,
-    std::vector<AlgoResult> *new_results,
-    cv::Mat                 *infer_frame,
-    int64_t                  result_frame_id)
+std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame &raw_frame,
+                                                std::vector<AlgoResult> *new_results, cv::Mat *infer_frame,
+                                                int64_t result_frame_id)
 {
-    if (!g_pCtrl) return {};
+    if (!g_pCtrl)
+        return {};
     ChannelState &ch_state = g_pCtrl->channels_state[chnId];
     const auto runtime = app_ctrl_get_runtime_snapshot();
-    const ChannelConfig *channel_config =
-        app_ctrl_runtime_channel_config(runtime, chnId);
-    if (!channel_config) return {};
+    const ChannelConfig *channel_config = app_ctrl_runtime_channel_config(runtime, chnId);
+    if (!channel_config)
+        return {};
 
     /* 存储最新解码帧（RGA 失败时作兜底）*/
     if (!raw_frame.model_input_mat.empty())
@@ -417,9 +408,8 @@ std::vector<AlgoResult> process_channel_results(
          * 跳过 logic 调用，避免 logic 对空 cv::Mat 做矩阵运算崩溃。 */
         if (!raw_frame.model_input_mat.empty())
         {
-            invoke_channel_logic(chnId, raw_frame.model_input_mat,
-                                 empty_results, logic_frame_id,
-                                 now_ms, dt_ms, infer_enabled, &raw_frame, runtime);
+            invoke_channel_logic(chnId, raw_frame.model_input_mat, empty_results, logic_frame_id, now_ms, dt_ms,
+                                 infer_enabled, &raw_frame, runtime);
         }
         return empty_results;
     }
@@ -438,19 +428,17 @@ std::vector<AlgoResult> process_channel_results(
     if (Tracker *tracker = get_tracker(chnId, channel_config))
         tracker->update(results);
 
-    const int64_t  frame_seq = result_frame_id;
-    const uint64_t frame_ts  = !results.empty() ? results.front().timestamp_ms : now_ms;
+    const int64_t frame_seq = result_frame_id;
+    const uint64_t frame_ts = !results.empty() ? results.front().timestamp_ms : now_ms;
 
-    const cv::Mat &frame_for_logic = (infer_frame && !infer_frame->empty())
-                                         ? *infer_frame
-                                         : raw_frame.model_input_mat;
+    const cv::Mat &frame_for_logic = (infer_frame && !infer_frame->empty()) ? *infer_frame : raw_frame.model_input_mat;
 
     std::vector<AlgoResult> out = std::move(results);
-    for (auto &result : out) result.chn_id = chnId;
+    for (auto &result : out)
+        result.chn_id = chnId;
     /* 防御：若 infer_frame 与 last_frame 均为空（极少见），跳过 logic 调用。*/
     if (frame_for_logic.empty())
         return out;
-    invoke_channel_logic(chnId, frame_for_logic, out, frame_seq,
-                         frame_ts, dt_ms, infer_enabled, &raw_frame, runtime);
+    invoke_channel_logic(chnId, frame_for_logic, out, frame_seq, frame_ts, dt_ms, infer_enabled, &raw_frame, runtime);
     return out;
 }

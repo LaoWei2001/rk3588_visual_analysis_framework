@@ -55,11 +55,11 @@ bool rga_convert_resize(int chnId, const RgaImage &src_img, const RgaImage &dst_
 struct RgaImportedBuffer
 {
     rga_buffer_handle_t handle = 0;
-    int width = 0;        // visible width
-    int height = 0;       // visible height
-    int stride_w = 0;     // hor stride
-    int stride_h = 0;     // ver stride
-    int format = 0;       // RK_FORMAT_*
+    int width = 0;    // visible width
+    int height = 0;   // visible height
+    int stride_w = 0; // hor stride
+    int stride_h = 0; // ver stride
+    int format = 0;   // RK_FORMAT_*
 
     RgaImportedBuffer() = default;
     RgaImportedBuffer(const RgaImportedBuffer &) = delete;
@@ -79,15 +79,15 @@ std::shared_ptr<RgaImportedBuffer> rga_import_src_fd(int fd, int w, int h, int s
  *             若 cached_dst_handle == 0 则退回每帧 importbuffer_fd 路径 (兜底安全).
  * @param cached_dst_handle  模型预缓存的 RGA handle (rga_buffer_handle_t), 0 = 不使用缓存
  */
-bool rga_convert_resize_handle(int chnId, const RgaImportedBuffer &src,
-                               int dst_fd, int dst_w, int dst_h, int dst_stride_w, int dst_stride_h, int dst_fmt,
-                               int cached_dst_handle = 0);
+bool rga_convert_resize_handle(int chnId, const RgaImportedBuffer &src, int dst_fd, int dst_w, int dst_h,
+                               int dst_stride_w, int dst_stride_h, int dst_fmt, int cached_dst_handle = 0);
 
 /*======================== 格式字符串 → RK_FORMAT ========================*/
 int rgaFmt(const char *strFmt);
 
 /*======================== Yolo 输入转换 (RGA 优先, 软件回退) ========================*/
-bool convertToYoloInput(int chnId, void *pSrcData, int src_fd, int srcW, int srcH, int srcStrH, int srcStrV, int srcFmt, cv::Mat &out);
+bool convertToYoloInput(int chnId, void *pSrcData, int src_fd, int srcW, int srcH, int srcStrH, int srcStrV, int srcFmt,
+                        cv::Mat &out);
 
 /*======================== 显示 tile 布局 ========================*/
 int tile_x(int chnId);
@@ -97,5 +97,5 @@ int tile_height(int chnId);
 uint64_t calcBufMapOffset(int chnId, int bytesPerPixel);
 
 /*======================== 显示缓冲区提交 ========================*/
-void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt,
-                           int srcWidth, int srcHeight, int srcHStride, int srcVStride);
+void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt, int srcWidth, int srcHeight, int srcHStride,
+                           int srcVStride);

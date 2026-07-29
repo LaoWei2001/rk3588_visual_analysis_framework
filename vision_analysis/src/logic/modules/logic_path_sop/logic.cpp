@@ -117,7 +117,8 @@ static std::string path_json_text(cJSON *root)
 {
     char *text = cJSON_PrintUnformatted(root);
     std::string result = text ? text : "{}";
-    if (text) cJSON_free(text);
+    if (text)
+        cJSON_free(text);
     cJSON_Delete(root);
     return result;
 }
@@ -132,16 +133,16 @@ struct PathSopState
     std::string cur_zone;       /* 最近确认所在区域名("" = 不在任何区域) */
     std::string cand_zone;      /* 候选区域(进入防抖) */
     uint64_t cand_since_ms = 0;
-    std::vector<bool> visited_steps;  /* 已访问 step 集合(DAG 漏检判定: 是否存在 entry→exit 完整路径) */
-    std::vector<std::string> visited; /* 已访问区域名(向后兼容/显示) */
+    std::vector<bool> visited_steps; /* 已访问 step 集合(DAG 漏检判定: 是否存在 entry→exit 完整路径) */
+    std::vector<std::string> visited;      /* 已访问区域名(向后兼容/显示) */
     std::vector<std::string> zone_history; /* 按实际确认顺序记录区域，允许重复，用于 Dify 二次核验 */
     std::vector<uint64_t> dwell_ms;
     std::vector<uint64_t> dwell_out_since; /* 每步: 目标离开该步区域的时刻(0=当前在内)。用于"重进则重新计时" */
-    bool order_error = false;              /* 顺序错误(latch) */
-    std::string err_detail;                /* 顺序错误详情: 进了X 应当进入Y */
-    bool ended = false;                    /* 本轮工序已结束(显示结算) */
-    std::vector<std::string> missed;       /* 结束时算出的漏掉区域 */
-    bool completed = false;                /* 严格按序走完全部步骤 */
+    bool order_error = false;        /* 顺序错误(latch) */
+    std::string err_detail;          /* 顺序错误详情: 进了X 应当进入Y */
+    bool ended = false;              /* 本轮工序已结束(显示结算) */
+    std::vector<std::string> missed; /* 结束时算出的漏掉区域 */
+    bool completed = false;          /* 严格按序走完全部步骤 */
     uint64_t last_seen_ms = 0;
     std::vector<bool> short_done; /* 该步"停留不足"已报(本轮去重) */
     std::vector<bool> long_done;  /* 该步"停留超时"已报(本轮去重) */
@@ -160,11 +161,11 @@ struct PathSopState
     bool loop_violation = false;       /* settle 后: 某条带 limit 的边循环次数不在范围内 */
     std::string loop_detail;           /* 循环次数违规详情(显示用) */
     bool triggered = false;            /* 外部触发标志: 收到sop_trigger后置true, settle时清回false */
-    bool triggered_end = false;        /* 外部结束触发标志: 收到sop_end_trigger后置true, settle时清回false */
-    bool untriggered_entry = false;    /* 外部触发必须模式下, 未触发却进区域(latch) */
-    bool end_zone_tracking = false;    /* 是否正在连续跟踪终点区域停留 */
-    std::string tracked_end_zone;      /* 热更新终点区域时用于识别并重启计时 */
-    uint64_t end_zone_since_ms = 0;    /* 本次连续进入终点区域的起始时刻 */
+    bool triggered_end = false; /* 外部结束触发标志: 收到sop_end_trigger后置true, settle时清回false */
+    bool untriggered_entry = false; /* 外部触发必须模式下, 未触发却进区域(latch) */
+    bool end_zone_tracking = false; /* 是否正在连续跟踪终点区域停留 */
+    std::string tracked_end_zone;   /* 热更新终点区域时用于识别并重启计时 */
+    uint64_t end_zone_since_ms = 0; /* 本次连续进入终点区域的起始时刻 */
 };
 
 static ChannelActionResult logic_path_sop_action(ChannelContext *ctx, const ChannelAction *action)
@@ -227,8 +228,7 @@ static void logic_path_sop(ChannelContext *ctx)
     const std::string endMode = cfg ? cfg->path_end_mode : std::string("leave");
     const std::string endZone = cfg ? cfg->path_end_zone : std::string();
     const float endDwellSec = cfg ? std::max(0.0f, cfg->path_end_dwell_sec) : 0.0f;
-    const uint64_t end_dwell_ms =
-        (uint64_t)std::max(0, (int)(endDwellSec * 1000.0f + 0.5f));
+    const uint64_t end_dwell_ms = (uint64_t)std::max(0, (int)(endDwellSec * 1000.0f + 0.5f));
     const bool useEndZone = (endMode == "endzone") && !endZone.empty();
     const bool useTriggerEnd = (endMode == "trigger");
     const int nseq = (int)seq.size();
@@ -279,7 +279,7 @@ static void logic_path_sop(ChannelContext *ctx)
 
     /* ---- 边解析(path_edges 空 → 默认线性链 0→1→...→N-1; 允许任意图含环) ---- */
     std::vector<std::vector<int>> succ(nseq); /* succ[i] = i 的所有后继 step 索引 */
-    std::vector<int> indeg(nseq, 0);          /* 入度(算 entry 节点; 全环图时全员都有入度 → fallback 全员可作 entry) */
+    std::vector<int> indeg(nseq, 0); /* 入度(算 entry 节点; 全环图时全员都有入度 → fallback 全员可作 entry) */
     std::vector<bool> self_loop(
         nseq, false); /* 该 step 是否画了自环(a==a): 语义=可"重进同区域", 用于把该区域也高亮成"可走" */
     {
@@ -585,99 +585,99 @@ static void logic_path_sop(ChannelContext *ctx)
                           s.missed.clear();
                           if (s.round_start_ms != 0)
                           {
-                          /* 漏检判定:
-                           *   exits 非空 → "visited 子图上, 从某个 visited 的 entry 能否走到某个 visited 的 exit"
-                           *               有 = 合规(可以画 1→4 短路径而不必走 1→2→3→4);
-                           *               无 = 漏检(列出未访问 step 的 zone 名).
-                           *   exits 空(全环图无标注) → 退化为"全 visited 才合规"。 */
-                          bool compliant = false;
-                          if (!exits.empty())
-                          {
-                              std::vector<bool> reachable(nseq, false);
-                              std::vector<int> stk;
-                              for (int e : entries)
-                                  if (s.visited_steps[e])
-                                      stk.push_back(e);
-                              while (!stk.empty())
+                              /* 漏检判定:
+                               *   exits 非空 → "visited 子图上, 从某个 visited 的 entry 能否走到某个 visited 的 exit"
+                               *               有 = 合规(可以画 1→4 短路径而不必走 1→2→3→4);
+                               *               无 = 漏检(列出未访问 step 的 zone 名).
+                               *   exits 空(全环图无标注) → 退化为"全 visited 才合规"。 */
+                              bool compliant = false;
+                              if (!exits.empty())
                               {
-                                  const int u = stk.back();
-                                  stk.pop_back();
-                                  if (reachable[u] || !s.visited_steps[u])
-                                      continue;
-                                  reachable[u] = true;
-                                  for (int v : succ[u])
-                                      if (!reachable[v] && s.visited_steps[v])
-                                          stk.push_back(v);
-                              }
-                              for (int x : exits)
-                                  if (reachable[x])
+                                  std::vector<bool> reachable(nseq, false);
+                                  std::vector<int> stk;
+                                  for (int e : entries)
+                                      if (s.visited_steps[e])
+                                          stk.push_back(e);
+                                  while (!stk.empty())
                                   {
-                                      compliant = true;
-                                      break;
+                                      const int u = stk.back();
+                                      stk.pop_back();
+                                      if (reachable[u] || !s.visited_steps[u])
+                                          continue;
+                                      reachable[u] = true;
+                                      for (int v : succ[u])
+                                          if (!reachable[v] && s.visited_steps[v])
+                                              stk.push_back(v);
                                   }
-                          }
-                          else
-                          {
-                              compliant = (s.expect >= nseq);
-                          }
-                          if (!compliant)
-                          {
-                              std::vector<std::string> miss_zones;
-                              for (int i = 0; i < nseq; ++i)
-                              {
-                                  if (s.visited_steps[i])
-                                      continue;
-                                  if (std::find(miss_zones.begin(), miss_zones.end(), seq[i]) == miss_zones.end())
-                                      miss_zones.push_back(seq[i]);
+                                  for (int x : exits)
+                                      if (reachable[x])
+                                      {
+                                          compliant = true;
+                                          break;
+                                      }
                               }
-                              s.missed = miss_zones;
-                          }
-                          if (!s.missed.empty() && !s.order_error)
-                              raise("sop_missed"); /* 漏检: 上报一次(顺序错误已解释, 不重复) */
-                          /* 边循环次数判定: 遍历所有有 limit 的边, 检查实际 count 是否在 [min, max] 范围内 */
-                          for (const auto &ed : limited_edges)
-                          {
-                              const int eidx = ed.first * nseq + ed.second;
-                              const int cnt = s.edge_count_dense[eidx];
-                              const int mn = limit_min[eidx], mx = limit_max[eidx];
-                              bool bad = false;
-                              if (mn > 0 && cnt < mn)
-                                  bad = true;
-                              if (mx > 0 && cnt > mx)
-                                  bad = true;
-                              if (bad)
+                              else
                               {
-                                  s.loop_violation = true;
-                                  char d[160];
-                                  snprintf(d, sizeof(d), "%s[%s]→[%s] 走%d次 (限 %d~%d)",
-                                           s.loop_detail.empty() ? "" : "; ", seq[ed.first].c_str(),
-                                           seq[ed.second].c_str(), cnt, mn, mx);
-                                  s.loop_detail += d;
-                                  raise("sop_loop_violation");
+                                  compliant = (s.expect >= nseq);
                               }
-                          }
-                          /* 总耗时结算: 仅当本轮启动过计时(round_start_ms 非 0)且配了上下限时才判 */
-                          if (s.round_start_ms != 0)
-                          {
-                              s.round_total_ms = ctx->timestamp_ms - s.round_start_ms;
-                              const float total_sec = s.round_total_ms / 1000.0f;
-                              if (totalMax > 0.0f && total_sec > totalMax)
+                              if (!compliant)
                               {
-                                  s.total_over = true;
-                                  char d[160];
-                                  snprintf(d, sizeof(d), "总耗时 %.1fs > %.1fs", total_sec, totalMax);
-                                  s.total_detail = d;
-                                  raise("sop_total_over");
+                                  std::vector<std::string> miss_zones;
+                                  for (int i = 0; i < nseq; ++i)
+                                  {
+                                      if (s.visited_steps[i])
+                                          continue;
+                                      if (std::find(miss_zones.begin(), miss_zones.end(), seq[i]) == miss_zones.end())
+                                          miss_zones.push_back(seq[i]);
+                                  }
+                                  s.missed = miss_zones;
                               }
-                              if (totalMin > 0.0f && total_sec < totalMin)
+                              if (!s.missed.empty() && !s.order_error)
+                                  raise("sop_missed"); /* 漏检: 上报一次(顺序错误已解释, 不重复) */
+                              /* 边循环次数判定: 遍历所有有 limit 的边, 检查实际 count 是否在 [min, max] 范围内 */
+                              for (const auto &ed : limited_edges)
                               {
-                                  s.total_short = true;
-                                  char d[160];
-                                  snprintf(d, sizeof(d), "总耗时 %.1fs < %.1fs", total_sec, totalMin);
-                                  s.total_detail = d;
-                                  raise("sop_total_short");
+                                  const int eidx = ed.first * nseq + ed.second;
+                                  const int cnt = s.edge_count_dense[eidx];
+                                  const int mn = limit_min[eidx], mx = limit_max[eidx];
+                                  bool bad = false;
+                                  if (mn > 0 && cnt < mn)
+                                      bad = true;
+                                  if (mx > 0 && cnt > mx)
+                                      bad = true;
+                                  if (bad)
+                                  {
+                                      s.loop_violation = true;
+                                      char d[160];
+                                      snprintf(d, sizeof(d), "%s[%s]→[%s] 走%d次 (限 %d~%d)",
+                                               s.loop_detail.empty() ? "" : "; ", seq[ed.first].c_str(),
+                                               seq[ed.second].c_str(), cnt, mn, mx);
+                                      s.loop_detail += d;
+                                      raise("sop_loop_violation");
+                                  }
                               }
-                          }
+                              /* 总耗时结算: 仅当本轮启动过计时(round_start_ms 非 0)且配了上下限时才判 */
+                              if (s.round_start_ms != 0)
+                              {
+                                  s.round_total_ms = ctx->timestamp_ms - s.round_start_ms;
+                                  const float total_sec = s.round_total_ms / 1000.0f;
+                                  if (totalMax > 0.0f && total_sec > totalMax)
+                                  {
+                                      s.total_over = true;
+                                      char d[160];
+                                      snprintf(d, sizeof(d), "总耗时 %.1fs > %.1fs", total_sec, totalMax);
+                                      s.total_detail = d;
+                                      raise("sop_total_over");
+                                  }
+                                  if (totalMin > 0.0f && total_sec < totalMin)
+                                  {
+                                      s.total_short = true;
+                                      char d[160];
+                                      snprintf(d, sizeof(d), "总耗时 %.1fs < %.1fs", total_sec, totalMin);
+                                      s.total_detail = d;
+                                      raise("sop_total_short");
+                                  }
+                              }
                           }
                           s.ended = true;
     };
@@ -1281,10 +1281,10 @@ static void logic_path_sop(ChannelContext *ctx)
         cJSON_AddStringToObject(root, "edge_verdict", normal ? "normal" : "violation");
         cJSON_AddStringToObject(root, "message", message.c_str());
 
-        const uint64_t total_ms = s.round_start_ms == 0
-                                      ? 0
-                                      : (s.ended ? s.round_total_ms
-                                                 : (now > s.round_start_ms ? now - s.round_start_ms : 0));
+        const uint64_t total_ms =
+            s.round_start_ms == 0
+                ? 0
+                : (s.ended ? s.round_total_ms : (now > s.round_start_ms ? now - s.round_start_ms : 0));
         cJSON *sop = cJSON_CreateObject();
         cJSON_AddStringToObject(sop, "target_label", targetLab.c_str());
         cJSON_AddBoolToObject(sop, "completed", s.completed ? 1 : 0);
@@ -1295,9 +1295,7 @@ static void logic_path_sop(ChannelContext *ctx)
         cJSON_AddStringToObject(sop, "end_mode", endMode.c_str());
         cJSON_AddStringToObject(sop, "end_zone", endZone.c_str());
         cJSON_AddNumberToObject(sop, "required_end_dwell_seconds", endDwellSec);
-        const uint64_t end_stay_ms = s.end_zone_tracking && now >= s.end_zone_since_ms
-                                         ? now - s.end_zone_since_ms
-                                         : 0;
+        const uint64_t end_stay_ms = s.end_zone_tracking && now >= s.end_zone_since_ms ? now - s.end_zone_since_ms : 0;
         cJSON_AddNumberToObject(sop, "actual_end_zone_stay_seconds", end_stay_ms / 1000.0);
         cJSON_AddItemToObject(sop, "configured_sequence", path_string_array(seq));
         cJSON_AddItemToObject(sop, "zone_history", path_string_array(s.zone_history));
@@ -1313,8 +1311,8 @@ static void logic_path_sop(ChannelContext *ctx)
             for (int dst = 0; dst < nseq; ++dst)
             {
                 const bool is_self = src == dst && self_loop[src];
-                const bool is_normal = src != dst &&
-                    std::find(succ[src].begin(), succ[src].end(), dst) != succ[src].end();
+                const bool is_normal =
+                    src != dst && std::find(succ[src].begin(), succ[src].end(), dst) != succ[src].end();
                 if (!is_self && !is_normal)
                     continue;
                 const int index = src * nseq + dst;
@@ -1429,7 +1427,8 @@ static void logic_path_sop(ChannelContext *ctx)
             cJSON *items = add_group("dwell_short", "停留时间不足", s.dwell_detail);
             for (int i = 0; i < nseq; ++i)
             {
-                if (!s.short_done[i] || dwell_min[i] <= 0.0f) continue;
+                if (!s.short_done[i] || dwell_min[i] <= 0.0f)
+                    continue;
                 const double actual = s.dwell_ms[i] / 1000.0;
                 cJSON *item = cJSON_CreateObject();
                 cJSON_AddNumberToObject(item, "step_index", i);
@@ -1446,7 +1445,8 @@ static void logic_path_sop(ChannelContext *ctx)
             cJSON *items = add_group("dwell_over", "停留时间过长", s.dwell_detail);
             for (int i = 0; i < nseq; ++i)
             {
-                if (!s.long_done[i] || dwell_max[i] <= 0.0f) continue;
+                if (!s.long_done[i] || dwell_max[i] <= 0.0f)
+                    continue;
                 const double actual = s.dwell_ms[i] / 1000.0;
                 cJSON *item = cJSON_CreateObject();
                 cJSON_AddNumberToObject(item, "step_index", i);
@@ -1484,7 +1484,8 @@ static void logic_path_sop(ChannelContext *ctx)
                 const int index = edge.first * nseq + edge.second;
                 const int count = s.edge_count_dense[index];
                 const int minimum = limit_min[index], maximum = limit_max[index];
-                if (!((minimum > 0 && count < minimum) || (maximum > 0 && count > maximum))) continue;
+                if (!((minimum > 0 && count < minimum) || (maximum > 0 && count > maximum)))
+                    continue;
                 cJSON *item = cJSON_CreateObject();
                 cJSON_AddNumberToObject(item, "from_step_index", edge.first);
                 cJSON_AddNumberToObject(item, "to_step_index", edge.second);
@@ -1530,21 +1531,30 @@ static void logic_path_sop(ChannelContext *ctx)
     if (!alarms.empty())
     {
         std::vector<std::string> names;
-        if (s.order_error) names.push_back("顺序错误");
-        if (!s.missed.empty()) names.push_back("遗漏工序");
-        if (s.dwell_short) names.push_back("停留时间不足");
-        if (s.dwell_over) names.push_back("停留时间过长");
-        if (s.total_short) names.push_back("总耗时不足");
-        if (s.total_over) names.push_back("总耗时过长");
-        if (s.loop_violation) names.push_back("循环次数不符");
-        if (s.untriggered_entry) names.push_back("未经触发进入工序");
+        if (s.order_error)
+            names.push_back("顺序错误");
+        if (!s.missed.empty())
+            names.push_back("遗漏工序");
+        if (s.dwell_short)
+            names.push_back("停留时间不足");
+        if (s.dwell_over)
+            names.push_back("停留时间过长");
+        if (s.total_short)
+            names.push_back("总耗时不足");
+        if (s.total_over)
+            names.push_back("总耗时过长");
+        if (s.loop_violation)
+            names.push_back("循环次数不符");
+        if (s.untriggered_entry)
+            names.push_back("未经触发进入工序");
         std::string message = "SOP工序违规";
         if (!names.empty())
         {
             message += ": ";
             for (size_t i = 0; i < names.size(); ++i)
             {
-                if (i) message += ",";
+                if (i)
+                    message += ",";
                 message += names[i];
             }
         }
@@ -1553,9 +1563,9 @@ static void logic_path_sop(ChannelContext *ctx)
 
     /* 正常结果只能在 settle 已完成后产生。round_start_ms 防止空轮次/未触发离场被误报，
      * completed 保证确实走到合法出口；所有 latch 都检查，覆盖此前帧已上报过的即时违规。 */
-    const bool normal_result = s.ended && s.round_start_ms != 0 && s.completed && alarms.empty() &&
-                               !s.order_error && s.missed.empty() && !s.dwell_short && !s.dwell_over &&
-                               !s.total_short && !s.total_over && !s.loop_violation && !s.untriggered_entry;
+    const bool normal_result = s.ended && s.round_start_ms != 0 && s.completed && alarms.empty() && !s.order_error &&
+                               s.missed.empty() && !s.dwell_short && !s.dwell_over && !s.total_short && !s.total_over &&
+                               !s.loop_violation && !s.untriggered_entry;
     if (cfg && cfg->path_report_normal && normal_result)
     {
         report_sop_result("sop_normal", "SOP工序正常完成", true);

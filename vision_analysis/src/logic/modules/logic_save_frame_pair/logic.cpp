@@ -32,23 +32,28 @@ bool directory_exists(const std::string &path)
 
 bool ensure_directory(const std::string &path)
 {
-    if (path.empty()) return false;
+    if (path.empty())
+        return false;
 
     for (size_t i = 1; i <= path.size(); ++i)
     {
-        if (i != path.size() && path[i] != '/') continue;
+        if (i != path.size() && path[i] != '/')
+            continue;
         const std::string part = path.substr(0, i);
-        if (part.empty() || directory_exists(part)) continue;
+        if (part.empty() || directory_exists(part))
+            continue;
         if (mkdir(part.c_str(), 0755) != 0 && errno != EEXIST)
             return false;
-        if (!directory_exists(part)) return false;
+        if (!directory_exists(part))
+            return false;
     }
     return directory_exists(path);
 }
 
 std::string join_path(const std::string &directory, const std::string &name)
 {
-    if (!directory.empty() && directory.back() == '/') return directory + name;
+    if (!directory.empty() && directory.back() == '/')
+        return directory + name;
     return directory + "/" + name;
 }
 
@@ -69,14 +74,15 @@ static void logic_save_frame_pair(ChannelContext *ctx)
         return;
 
     SaveFramePairState &state = save_frame_pair_state(ctx);
-    if (state.saved) return;
+    if (state.saved)
+        return;
 
     /* 原始帧入口仅在同步传统 CV 通道保证可用。未就绪时保留未完成状态，下一帧重试。 */
     const cv::Mat *source = ctx->source_frame();
     if (!source || source->empty())
     {
-        log_failure_throttled(ctx, state,
-            "source_frame() unavailable; configure this channel as a non-inference traditional-CV channel");
+        log_failure_throttled(
+            ctx, state, "source_frame() unavailable; configure this channel as a non-inference traditional-CV channel");
         return;
     }
 
@@ -91,8 +97,7 @@ static void logic_save_frame_pair(ChannelContext *ctx)
         state.capture_unix_ms = ctx->unix_ms;
 
     char base[96];
-    snprintf(base, sizeof(base), "ch%02d_%llu",
-             ctx->chnId, static_cast<unsigned long long>(state.capture_unix_ms));
+    snprintf(base, sizeof(base), "ch%02d_%llu", ctx->chnId, static_cast<unsigned long long>(state.capture_unix_ms));
 
     const std::string source_path = join_path(output_dir, std::string(base) + "_source.jpg");
     const std::string model_path = join_path(output_dir, std::string(base) + "_model.jpg");
@@ -107,8 +112,7 @@ static void logic_save_frame_pair(ChannelContext *ctx)
     }
     catch (const cv::Exception &e)
     {
-        fprintf(stderr, "[logic_save_frame_pair][ch%02d] imwrite exception: %s\n",
-                ctx->chnId, e.what());
+        fprintf(stderr, "[logic_save_frame_pair][ch%02d] imwrite exception: %s\n", ctx->chnId, e.what());
         return;
     }
 
@@ -120,10 +124,10 @@ static void logic_save_frame_pair(ChannelContext *ctx)
 
     state.saved = true;
     state.last_failure_log_ms = 0;
-    printf("[logic_save_frame_pair][ch%02d] saved source frame: %s (%dx%d)\n",
-           ctx->chnId, source_path.c_str(), source->cols, source->rows);
-    printf("[logic_save_frame_pair][ch%02d] saved model frame:  %s (%dx%d)\n",
-           ctx->chnId, model_path.c_str(), ctx->frame->cols, ctx->frame->rows);
+    printf("[logic_save_frame_pair][ch%02d] saved source frame: %s (%dx%d)\n", ctx->chnId, source_path.c_str(),
+           source->cols, source->rows);
+    printf("[logic_save_frame_pair][ch%02d] saved model frame:  %s (%dx%d)\n", ctx->chnId, model_path.c_str(),
+           ctx->frame->cols, ctx->frame->rows);
 }
 
 REGISTER_LOGIC(logic_save_frame_pair);

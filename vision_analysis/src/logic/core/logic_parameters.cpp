@@ -42,8 +42,11 @@ struct LogicSchema
 
 class LogicSchemaRegistry
 {
-public:
-    LogicSchemaRegistry() { load(); }
+  public:
+    LogicSchemaRegistry()
+    {
+        load();
+    }
 
     const LogicSchema *find(const std::string &logic_name) const
     {
@@ -58,26 +61,39 @@ public:
         return it == schemas_.end() ? nullptr : &it->second;
     }
 
-    bool valid() const { return error_.empty(); }
-    const std::string &error() const { return error_; }
+    bool valid() const
+    {
+        return error_.empty();
+    }
+    const std::string &error() const
+    {
+        return error_;
+    }
 
-private:
+  private:
     static bool parse_type(const char *name, LogicParameterType &out)
     {
-        if (!name) return false;
+        if (!name)
+            return false;
         const std::string type(name);
-        if (type == "string") out = LogicParameterType::STRING;
-        else if (type == "number") out = LogicParameterType::NUMBER;
-        else if (type == "integer") out = LogicParameterType::INTEGER;
-        else if (type == "boolean") out = LogicParameterType::BOOLEAN;
-        else if (type == "array") out = LogicParameterType::ARRAY;
-        else if (type == "object") out = LogicParameterType::OBJECT;
-        else return false;
+        if (type == "string")
+            out = LogicParameterType::STRING;
+        else if (type == "number")
+            out = LogicParameterType::NUMBER;
+        else if (type == "integer")
+            out = LogicParameterType::INTEGER;
+        else if (type == "boolean")
+            out = LogicParameterType::BOOLEAN;
+        else if (type == "array")
+            out = LogicParameterType::ARRAY;
+        else if (type == "object")
+            out = LogicParameterType::OBJECT;
+        else
+            return false;
         return true;
     }
 
-    static bool parse_value(cJSON *item, LogicParameterType type,
-                            LogicParameterValue &out, std::string &error)
+    static bool parse_value(cJSON *item, LogicParameterType type, LogicParameterValue &out, std::string &error)
     {
         out = LogicParameterValue();
         out.type = type;
@@ -99,11 +115,9 @@ private:
             }
             out.number_value = item->valuedouble;
             return true;
-        case LogicParameterType::INTEGER:
-        {
+        case LogicParameterType::INTEGER: {
             if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble) ||
-                std::floor(item->valuedouble) != item->valuedouble ||
-                item->valuedouble < -kMaxExactJsonInteger ||
+                std::floor(item->valuedouble) != item->valuedouble || item->valuedouble < -kMaxExactJsonInteger ||
                 item->valuedouble > kMaxExactJsonInteger)
             {
                 error = "expected integer";
@@ -121,14 +135,11 @@ private:
             out.bool_value = cJSON_IsTrue(item);
             return true;
         case LogicParameterType::ARRAY:
-        case LogicParameterType::OBJECT:
-        {
-            const bool expected = type == LogicParameterType::ARRAY
-                ? cJSON_IsArray(item) : cJSON_IsObject(item);
+        case LogicParameterType::OBJECT: {
+            const bool expected = type == LogicParameterType::ARRAY ? cJSON_IsArray(item) : cJSON_IsObject(item);
             if (!expected)
             {
-                error = type == LogicParameterType::ARRAY
-                    ? "expected array" : "expected object";
+                error = type == LogicParameterType::ARRAY ? "expected array" : "expected object";
                 return false;
             }
             char *text = cJSON_PrintUnformatted(item);
@@ -152,14 +163,17 @@ private:
         if (!cJSON_IsString(item) || !item->valuestring)
             return LogicReloadImpact::PRESERVE_STATE;
         const std::string policy(item->valuestring);
-        if (policy == "reset_state") return LogicReloadImpact::RESET_STATE;
-        if (policy == "restart_required") return LogicReloadImpact::RESTART_REQUIRED;
+        if (policy == "reset_state")
+            return LogicReloadImpact::RESET_STATE;
+        if (policy == "restart_required")
+            return LogicReloadImpact::RESTART_REQUIRED;
         return LogicReloadImpact::PRESERVE_STATE;
     }
 
     void fail(const std::string &message)
     {
-        if (error_.empty()) error_ = message;
+        if (error_.empty())
+            error_ = message;
     }
 
     void load()
@@ -185,8 +199,7 @@ private:
         {
             cJSON *name_item = cJSON_GetObjectItemCaseSensitive(logic, "name");
             cJSON *schema_item = cJSON_GetObjectItemCaseSensitive(logic, "parameters");
-            if (!cJSON_IsString(name_item) || !name_item->valuestring ||
-                !cJSON_IsObject(schema_item))
+            if (!cJSON_IsString(name_item) || !name_item->valuestring || !cJSON_IsObject(schema_item))
             {
                 fail("logic catalog entry is missing name/parameters");
                 break;
@@ -194,8 +207,7 @@ private:
 
             const std::string logic_name(name_item->valuestring);
             LogicSchema schema;
-            cJSON *additional = cJSON_GetObjectItemCaseSensitive(
-                schema_item, "additionalProperties");
+            cJSON *additional = cJSON_GetObjectItemCaseSensitive(schema_item, "additionalProperties");
             schema.additional_properties = cJSON_IsTrue(additional);
             cJSON *properties = cJSON_GetObjectItemCaseSensitive(schema_item, "properties");
             if (!cJSON_IsObject(properties))
@@ -214,16 +226,14 @@ private:
                 ParameterSpec spec;
                 spec.key = property->string;
                 cJSON *type_item = cJSON_GetObjectItemCaseSensitive(property, "type");
-                if (!cJSON_IsString(type_item) ||
-                    !parse_type(type_item->valuestring, spec.type))
+                if (!cJSON_IsString(type_item) || !parse_type(type_item->valuestring, spec.type))
                 {
                     fail(logic_name + "." + spec.key + ": invalid type");
                     break;
                 }
                 cJSON *default_item = cJSON_GetObjectItemCaseSensitive(property, "default");
                 std::string value_error;
-                if (!default_item || !parse_value(default_item, spec.type,
-                                                   spec.default_value, value_error))
+                if (!default_item || !parse_value(default_item, spec.type, spec.default_value, value_error))
                 {
                     fail(logic_name + "." + spec.key + ".default: " + value_error);
                     break;
@@ -262,7 +272,8 @@ private:
                 schema.spec_index.emplace(spec.key, schema.ordered_specs.size());
                 schema.ordered_specs.push_back(std::move(spec));
             }
-            if (!error_.empty()) break;
+            if (!error_.empty())
+                break;
             if (!schemas_.emplace(logic_name, std::move(schema)).second)
             {
                 fail("duplicate embedded logic schema: " + logic_name);
@@ -283,14 +294,13 @@ const LogicSchemaRegistry &schema_registry()
     return registry;
 }
 
-void add_error(std::vector<LogicParameterError> *errors,
-               const std::string &field, const std::string &message)
+void add_error(std::vector<LogicParameterError> *errors, const std::string &field, const std::string &message)
 {
-    if (errors) errors->push_back({field, message});
+    if (errors)
+        errors->push_back({field, message});
 }
 
-bool parse_configured_value(cJSON *item, const ParameterSpec &spec,
-                            LogicParameterValue &out, std::string &error)
+bool parse_configured_value(cJSON *item, const ParameterSpec &spec, LogicParameterValue &out, std::string &error)
 {
     /* 与 Registry 构造时相同的解析规则，单独写在这里避免把内部加载器暴露出去。 */
     out = LogicParameterValue();
@@ -298,49 +308,69 @@ bool parse_configured_value(cJSON *item, const ParameterSpec &spec,
     switch (spec.type)
     {
     case LogicParameterType::STRING:
-        if (!cJSON_IsString(item) || !item->valuestring) { error = "必须是字符串"; return false; }
+        if (!cJSON_IsString(item) || !item->valuestring)
+        {
+            error = "必须是字符串";
+            return false;
+        }
         out.text_value = item->valuestring;
         break;
     case LogicParameterType::NUMBER:
-        if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble)) { error = "必须是有限数值"; return false; }
+        if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble))
+        {
+            error = "必须是有限数值";
+            return false;
+        }
         out.number_value = item->valuedouble;
         break;
     case LogicParameterType::INTEGER:
         if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble) ||
-            std::floor(item->valuedouble) != item->valuedouble ||
-            item->valuedouble < -kMaxExactJsonInteger ||
+            std::floor(item->valuedouble) != item->valuedouble || item->valuedouble < -kMaxExactJsonInteger ||
             item->valuedouble > kMaxExactJsonInteger)
-        { error = "必须是整数"; return false; }
+        {
+            error = "必须是整数";
+            return false;
+        }
         out.integer_value = static_cast<int64_t>(item->valuedouble);
         break;
     case LogicParameterType::BOOLEAN:
-        if (!cJSON_IsBool(item)) { error = "必须是布尔值"; return false; }
+        if (!cJSON_IsBool(item))
+        {
+            error = "必须是布尔值";
+            return false;
+        }
         out.bool_value = cJSON_IsTrue(item);
         break;
     case LogicParameterType::ARRAY:
-    case LogicParameterType::OBJECT:
-    {
-        const bool valid = spec.type == LogicParameterType::ARRAY
-            ? cJSON_IsArray(item) : cJSON_IsObject(item);
-        if (!valid) { error = spec.type == LogicParameterType::ARRAY ? "必须是数组" : "必须是对象"; return false; }
+    case LogicParameterType::OBJECT: {
+        const bool valid = spec.type == LogicParameterType::ARRAY ? cJSON_IsArray(item) : cJSON_IsObject(item);
+        if (!valid)
+        {
+            error = spec.type == LogicParameterType::ARRAY ? "必须是数组" : "必须是对象";
+            return false;
+        }
         char *text = cJSON_PrintUnformatted(item);
-        if (!text) { error = "JSON 序列化失败"; return false; }
+        if (!text)
+        {
+            error = "JSON 序列化失败";
+            return false;
+        }
         out.text_value = text;
         cJSON_free(text);
         break;
     }
     }
 
-    const double numeric = spec.type == LogicParameterType::NUMBER
-        ? out.number_value : static_cast<double>(out.integer_value);
-    if ((spec.type == LogicParameterType::NUMBER || spec.type == LogicParameterType::INTEGER) &&
-        spec.has_minimum && numeric < spec.minimum)
+    const double numeric =
+        spec.type == LogicParameterType::NUMBER ? out.number_value : static_cast<double>(out.integer_value);
+    if ((spec.type == LogicParameterType::NUMBER || spec.type == LogicParameterType::INTEGER) && spec.has_minimum &&
+        numeric < spec.minimum)
     {
         error = "不得小于 " + std::to_string(spec.minimum);
         return false;
     }
-    if ((spec.type == LogicParameterType::NUMBER || spec.type == LogicParameterType::INTEGER) &&
-        spec.has_maximum && numeric > spec.maximum)
+    if ((spec.type == LogicParameterType::NUMBER || spec.type == LogicParameterType::INTEGER) && spec.has_maximum &&
+        numeric > spec.maximum)
     {
         error = "不得大于 " + std::to_string(spec.maximum);
         return false;
@@ -376,14 +406,14 @@ cJSON *value_to_json(const LogicParameterValue &value)
 
 bool operator==(const LogicParameterValue &lhs, const LogicParameterValue &rhs)
 {
-    if (lhs.type != rhs.type) return false;
+    if (lhs.type != rhs.type)
+        return false;
     switch (lhs.type)
     {
     case LogicParameterType::STRING:
         return lhs.text_value == rhs.text_value;
     case LogicParameterType::ARRAY:
-    case LogicParameterType::OBJECT:
-    {
+    case LogicParameterType::OBJECT: {
         cJSON *left = cJSON_Parse(lhs.text_value.c_str());
         cJSON *right = cJSON_Parse(rhs.text_value.c_str());
         const bool equal = left && right && cJSON_Compare(left, right, 1);
@@ -420,7 +450,8 @@ bool LogicParameterSet::has(const char *key) const
 float LogicParameterSet::get_float(const char *key) const
 {
     const LogicParameterValue *value = key ? find(key) : nullptr;
-    if (!value) return 0.0f;
+    if (!value)
+        return 0.0f;
     if (value->type == LogicParameterType::NUMBER)
         return static_cast<float>(value->number_value);
     if (value->type == LogicParameterType::INTEGER)
@@ -431,7 +462,8 @@ float LogicParameterSet::get_float(const char *key) const
 int64_t LogicParameterSet::get_int(const char *key) const
 {
     const LogicParameterValue *value = key ? find(key) : nullptr;
-    if (!value) return 0;
+    if (!value)
+        return 0;
     if (value->type == LogicParameterType::INTEGER)
         return value->integer_value;
     return 0;
@@ -440,33 +472,29 @@ int64_t LogicParameterSet::get_int(const char *key) const
 bool LogicParameterSet::get_bool(const char *key) const
 {
     const LogicParameterValue *value = key ? find(key) : nullptr;
-    return value && value->type == LogicParameterType::BOOLEAN
-        ? value->bool_value : false;
+    return value && value->type == LogicParameterType::BOOLEAN ? value->bool_value : false;
 }
 
 std::string LogicParameterSet::get_string(const char *key) const
 {
     const LogicParameterValue *value = key ? find(key) : nullptr;
-    return value && value->type == LogicParameterType::STRING
-        ? value->text_value : std::string();
+    return value && value->type == LogicParameterType::STRING ? value->text_value : std::string();
 }
 
 std::string LogicParameterSet::get_json(const char *key) const
 {
     const LogicParameterValue *value = key ? find(key) : nullptr;
-    if (!value || (value->type != LogicParameterType::ARRAY &&
-                   value->type != LogicParameterType::OBJECT))
+    if (!value || (value->type != LogicParameterType::ARRAY && value->type != LogicParameterType::OBJECT))
         return std::string();
     return value->text_value;
 }
 
-bool logic_parameters_resolve(const std::string &logic_name,
-                              const std::string &parameters_json,
-                              std::string *normalized_json,
-                              LogicParameterSet *set_out,
+bool logic_parameters_resolve(const std::string &logic_name, const std::string &parameters_json,
+                              std::string *normalized_json, LogicParameterSet *set_out,
                               std::vector<LogicParameterError> *errors)
 {
-    if (errors) errors->clear();
+    if (errors)
+        errors->clear();
     const LogicSchemaRegistry &registry = schema_registry();
     if (!registry.valid())
     {
@@ -556,7 +584,8 @@ bool logic_parameters_resolve(const std::string &logic_name,
                 cJSON_free(text);
             }
         }
-        if (valid && set_out) *set_out = std::move(resolved);
+        if (valid && set_out)
+            *set_out = std::move(resolved);
     }
 
     cJSON_Delete(normalized);
@@ -564,22 +593,20 @@ bool logic_parameters_resolve(const std::string &logic_name,
     return valid;
 }
 
-LogicReloadImpact logic_parameters_reload_impact(
-    const std::string &logic_name,
-    const std::string &old_parameters_json,
-    const std::string &new_parameters_json,
-    std::vector<std::string> *changed_keys)
+LogicReloadImpact logic_parameters_reload_impact(const std::string &logic_name, const std::string &old_parameters_json,
+                                                 const std::string &new_parameters_json,
+                                                 std::vector<std::string> *changed_keys)
 {
-    if (changed_keys) changed_keys->clear();
+    if (changed_keys)
+        changed_keys->clear();
     const LogicSchemaRegistry &registry = schema_registry();
     const LogicSchema *schema = registry.find(logic_name);
-    if (!schema) return LogicReloadImpact::RESTART_REQUIRED;
+    if (!schema)
+        return LogicReloadImpact::RESTART_REQUIRED;
 
     LogicParameterSet old_set, new_set;
-    if (!logic_parameters_resolve(logic_name, old_parameters_json, nullptr,
-                                  &old_set, nullptr) ||
-        !logic_parameters_resolve(logic_name, new_parameters_json, nullptr,
-                                  &new_set, nullptr))
+    if (!logic_parameters_resolve(logic_name, old_parameters_json, nullptr, &old_set, nullptr) ||
+        !logic_parameters_resolve(logic_name, new_parameters_json, nullptr, &new_set, nullptr))
         return LogicReloadImpact::RESTART_REQUIRED;
 
     LogicReloadImpact impact = LogicReloadImpact::NONE;
@@ -587,10 +614,10 @@ LogicReloadImpact logic_parameters_reload_impact(
     {
         const LogicParameterValue *old_value = old_set.find(spec.key);
         const LogicParameterValue *new_value = new_set.find(spec.key);
-        if ((!old_value && !new_value) ||
-            (old_value && new_value && *old_value == *new_value))
+        if ((!old_value && !new_value) || (old_value && new_value && *old_value == *new_value))
             continue;
-        if (changed_keys) changed_keys->push_back(spec.key);
+        if (changed_keys)
+            changed_keys->push_back(spec.key);
         if (static_cast<int>(spec.reload_impact) > static_cast<int>(impact))
             impact = spec.reload_impact;
     }
@@ -601,10 +628,14 @@ const char *logic_reload_impact_name(LogicReloadImpact impact)
 {
     switch (impact)
     {
-    case LogicReloadImpact::NONE: return "none";
-    case LogicReloadImpact::PRESERVE_STATE: return "preserve_state";
-    case LogicReloadImpact::RESET_STATE: return "reset_state";
-    case LogicReloadImpact::RESTART_REQUIRED: return "restart_required";
+    case LogicReloadImpact::NONE:
+        return "none";
+    case LogicReloadImpact::PRESERVE_STATE:
+        return "preserve_state";
+    case LogicReloadImpact::RESET_STATE:
+        return "reset_state";
+    case LogicReloadImpact::RESTART_REQUIRED:
+        return "restart_required";
     }
     return "unknown";
 }

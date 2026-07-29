@@ -9,22 +9,22 @@
 #include "global_logic.h"
 #include "core/app_ctrl.h"
 #include "core/pause_ctrl.h"
-#include <cstdio>
 #include <algorithm>
-#include <chrono>
 #include <atomic>
-#include <unistd.h>
+#include <chrono>
+#include <cstdio>
 #include <pthread.h>
+#include <unistd.h>
 
 /*======================== 单个实例的线程上下文 ========================*/
 struct GlobalLogicThread
 {
     GlobalLogicConfig config;
-    pthread_t          tid;
-    std::atomic<bool>   running{false};
-    std::atomic<bool>   stop_requested{false};
+    pthread_t tid;
+    std::atomic<bool> running{false};
+    std::atomic<bool> stop_requested{false};
     std::shared_ptr<void> state;
-    int64_t            tick_id;
+    int64_t tick_id;
 
     std::vector<std::vector<AlgoResult>> results_cache;
     std::vector<int> channel_ids;
@@ -34,12 +34,16 @@ struct GlobalLogicThread
     GlobalLogicFunc func;
 };
 
-static std::vector<GlobalLogicThread*> g_threads;
+static std::vector<GlobalLogicThread *> g_threads;
 static pthread_mutex_t g_threads_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 /*======================== 全局逻辑分发表 ========================*/
 #define MAX_GLOBAL_LOGICS 16
-static struct { const char *name; GlobalLogicFunc func; } g_logic_map[MAX_GLOBAL_LOGICS];
+static struct
+{
+    const char *name;
+    GlobalLogicFunc func;
+} g_logic_map[MAX_GLOBAL_LOGICS];
 static int g_logic_map_count = 0;
 
 static void global_default(GlobalContext *gctx);
@@ -74,18 +78,18 @@ static GlobalLogicFunc global_logic_resolve(const char *name)
 static uint64_t steady_now_ms(void)
 {
     auto now = std::chrono::steady_clock::now();
-    return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()).count();
+    return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 }
 
 /*======================== 全局逻辑线程入口 (pthread) ========================*/
 void *global_logic_thread_func(void *arg)
 {
     GlobalLogicThread *t = (GlobalLogicThread *)arg;
-    if (!t) return nullptr;
+    if (!t)
+        return nullptr;
 
-    printf("[GlobalLogic] Thread started: logic=%s poll=%dms channels=",
-           t->config.logic.c_str(), t->config.poll_interval_ms);
+    printf("[GlobalLogic] Thread started: logic=%s poll=%dms channels=", t->config.logic.c_str(),
+           t->config.poll_interval_ms);
     if (t->config.channels.empty())
         printf("ALL\n");
     else
@@ -109,8 +113,7 @@ void *global_logic_thread_func(void *arg)
         {
             if (!app_ctrl_has_channel(channel_id))
             {
-                fprintf(stderr, "[GlobalLogic] ignore unknown channel_id=%d\n",
-                        channel_id);
+                fprintf(stderr, "[GlobalLogic] ignore unknown channel_id=%d\n", channel_id);
                 continue;
             }
             t->channel_ids.push_back(channel_id);
@@ -130,17 +133,17 @@ void *global_logic_thread_func(void *arg)
         auto runtime = app_ctrl_get_runtime_snapshot();
         for (int channel_id : t->channel_ids)
         {
-            const ChannelConfig *channel =
-                app_ctrl_runtime_channel_config(runtime, channel_id);
-            if (!channel) continue;
+            const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, channel_id);
+            if (!channel)
+                continue;
             max_infer_fps = std::max(max_infer_fps, std::max(1, channel->max_fps));
         }
 
         int realtime_poll_ms = std::max(10, 500 / max_infer_fps);
         if (poll_ms > realtime_poll_ms)
         {
-            printf("[GlobalLogic] poll interval auto-adjust: cfg=%dms -> %dms (max_infer_fps=%d)\n",
-                   poll_ms, realtime_poll_ms, max_infer_fps);
+            printf("[GlobalLogic] poll interval auto-adjust: cfg=%dms -> %dms (max_infer_fps=%d)\n", poll_ms,
+                   realtime_poll_ms, max_infer_fps);
             poll_ms = realtime_poll_ms;
         }
     }
@@ -148,7 +151,8 @@ void *global_logic_thread_func(void *arg)
     while (t->running.load())
     {
         pause_ctrl::wait_if_paused();
-        if (!t->running.load()) break;
+        if (!t->running.load())
+            break;
 
         uint64_t tick_begin_ms = steady_now_ms();
 
@@ -164,8 +168,7 @@ void *global_logic_thread_func(void *arg)
             {
                 t->last_infer_ts_ms[i] = infer_ts_ms;
                 has_new_infer = 1;
-                t->results_cache[i] = app_ctrl_get_results_fresh(
-                    channel_id, t->config.poll_interval_ms * 3);
+                t->results_cache[i] = app_ctrl_get_results_fresh(channel_id, t->config.poll_interval_ms * 3);
             }
             if (t->last_infer_ts_ms[i] > latest_infer_ts_ms)
             {
@@ -174,18 +177,20 @@ void *global_logic_thread_func(void *arg)
             }
         }
 
-        t->gctx.config              = &t->config;
-        t->gctx.state               = &t->state;
-        t->gctx.timestamp_ms        = steady_now_ms();
-        t->gctx.tick_id             = ++t->tick_id;
-        t->gctx.channel_ids         = &t->channel_ids;
-        t->gctx.has_new_infer       = has_new_infer;
+        t->gctx.config = &t->config;
+        t->gctx.state = &t->state;
+        t->gctx.timestamp_ms = steady_now_ms();
+        t->gctx.tick_id = ++t->tick_id;
+        t->gctx.channel_ids = &t->channel_ids;
+        t->gctx.has_new_infer = has_new_infer;
         t->gctx.latest_infer_channel = latest_infer_channel;
-        t->gctx.latest_infer_ts_ms  = latest_infer_ts_ms;
+        t->gctx.latest_infer_ts_ms = latest_infer_ts_ms;
 
-        if (t->func) t->func(&t->gctx);
+        if (t->func)
+            t->func(&t->gctx);
 
-        if (t->stop_requested.load()) break;
+        if (t->stop_requested.load())
+            break;
 
         uint64_t elapsed_ms = steady_now_ms() - tick_begin_ms;
         if (elapsed_ms < (uint64_t)poll_ms)
@@ -216,13 +221,13 @@ int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs)
     for (size_t i = 0; i < cfgs.size(); ++i)
     {
         const GlobalLogicConfig &cfg = cfgs[i];
-        if (!cfg.enable) continue;
+        if (!cfg.enable)
+            continue;
 
         GlobalLogicFunc fn = global_logic_resolve(cfg.logic.c_str());
         if (fn == global_default && strcmp(cfg.logic.c_str(), "global_default") != 0)
         {
-            printf("[GlobalLogic][%zu] WARNING: logic '%s' not found, skipping\n",
-                   i, cfg.logic.c_str());
+            printf("[GlobalLogic][%zu] WARNING: logic '%s' not found, skipping\n", i, cfg.logic.c_str());
             continue;
         }
 
@@ -236,8 +241,7 @@ int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs)
         int ret = pthread_create(&t->tid, nullptr, global_logic_thread_func, t);
         if (ret != 0)
         {
-            fprintf(stderr, "[GlobalLogic] pthread_create failed for %s: %s\n",
-                    cfg.logic.c_str(), strerror(ret));
+            fprintf(stderr, "[GlobalLogic] pthread_create failed for %s: %s\n", cfg.logic.c_str(), strerror(ret));
             delete t;
             continue;
         }
@@ -258,8 +262,10 @@ void global_logic_stop_all(void)
 
     for (GlobalLogicThread *t : g_threads)
     {
-        if (!t) continue;
-        if (!t->running.load()) continue;
+        if (!t)
+            continue;
+        if (!t->running.load())
+            continue;
         t->stop_requested.store(true);
         t->running.store(false);
         pthread_join(t->tid, nullptr);

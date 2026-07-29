@@ -13,8 +13,8 @@
  */
 
 #include "gst_opt.h"
-#include <gst/video/video-info.h>
 #include <gst/allocators/gstdmabuf.h>
+#include <gst/video/video-info.h>
 #include <string.h>
 
 /**
@@ -58,7 +58,7 @@ GstBuffer *gstopt_sample_get_buffer(GstSample *sample, FrameDesc_t *pFrameDesc)
         return buffer;
     }
 
-    pFrameDesc->width  = (gint)GST_VIDEO_INFO_WIDTH(&vinfo);
+    pFrameDesc->width = (gint)GST_VIDEO_INFO_WIDTH(&vinfo);
     pFrameDesc->height = (gint)GST_VIDEO_INFO_HEIGHT(&vinfo);
 
     /*
@@ -101,8 +101,7 @@ GstBuffer *gstopt_sample_get_buffer(GstSample *sample, FrameDesc_t *pFrameDesc)
         pFrameDesc->horStride = (gint)GST_VIDEO_INFO_PLANE_STRIDE(&vinfo, 0);
         if (GST_VIDEO_INFO_N_PLANES(&vinfo) >= 2 && pFrameDesc->horStride > 0)
         {
-            pFrameDesc->verStride = (gint)(
-                GST_VIDEO_INFO_PLANE_OFFSET(&vinfo, 1) / (gsize)pFrameDesc->horStride);
+            pFrameDesc->verStride = (gint)(GST_VIDEO_INFO_PLANE_OFFSET(&vinfo, 1) / (gsize)pFrameDesc->horStride);
         }
         else
         {

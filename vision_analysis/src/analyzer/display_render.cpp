@@ -16,25 +16,26 @@
  *   ④ RGA 段（rga_convert_resize 调用）不在 display_lock 内，避免把锁争用误报为 RGA 错误。
  */
 
-#include "frame_pipeline.h"
 #include "../core/app_ctrl.h"
 #include "../core/image_utils.h"
 #include "../player/display.h"
-#include "logic/core/channel_logic.h"   /* DrawCommand, RenderParams */
+#include "frame_pipeline.h"
+#include "logic/core/channel_logic.h" /* DrawCommand, RenderParams */
 
-#include <cstdio>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <pthread.h>
+#include <cstdio>
 #include <opencv2/opencv.hpp>
+#include <pthread.h>
 
 /*======================== tile 布局计算 ========================*/
 
 int tile_x(int chnId)
 {
     const int display_order = app_ctrl_get_channel_display_order(chnId);
-    if (display_order < 0) return 0;
+    if (display_order < 0)
+        return 0;
     int cols = app_ctrl_get_tile_cols();
     return ((display_order % cols) * (app_ctrl_get_disp_width() / cols)) & ~3;
 }
@@ -42,7 +43,8 @@ int tile_x(int chnId)
 int tile_y(int chnId)
 {
     const int display_order = app_ctrl_get_channel_display_order(chnId);
-    if (display_order < 0) return 0;
+    if (display_order < 0)
+        return 0;
     int cols = app_ctrl_get_tile_cols();
     int rows = app_ctrl_get_tile_rows();
     return ((display_order / cols) * (app_ctrl_get_disp_height() / rows)) & ~1;
@@ -51,10 +53,11 @@ int tile_y(int chnId)
 int tile_width(int chnId)
 {
     const int display_order = app_ctrl_get_channel_display_order(chnId);
-    if (display_order < 0) return 0;
-    int cols   = app_ctrl_get_tile_cols();
+    if (display_order < 0)
+        return 0;
+    int cols = app_ctrl_get_tile_cols();
     int grid_w = app_ctrl_get_disp_width() / cols;
-    int x_left  = ((display_order % cols) * grid_w) & ~3;
+    int x_left = ((display_order % cols) * grid_w) & ~3;
     int x_right = (((display_order % cols) + 1) * grid_w) & ~3;
     if ((display_order % cols) == cols - 1)
         x_right = app_ctrl_get_disp_width() & ~3;
@@ -64,11 +67,12 @@ int tile_width(int chnId)
 int tile_height(int chnId)
 {
     const int display_order = app_ctrl_get_channel_display_order(chnId);
-    if (display_order < 0) return 0;
-    int cols   = app_ctrl_get_tile_cols();
-    int rows   = app_ctrl_get_tile_rows();
+    if (display_order < 0)
+        return 0;
+    int cols = app_ctrl_get_tile_cols();
+    int rows = app_ctrl_get_tile_rows();
     int grid_h = app_ctrl_get_disp_height() / rows;
-    int y_top    = ((display_order / cols) * grid_h) & ~1;
+    int y_top = ((display_order / cols) * grid_h) & ~1;
     int y_bottom = (((display_order / cols) + 1) * grid_h) & ~1;
     if ((display_order / cols) == rows - 1)
         y_bottom = app_ctrl_get_disp_height() & ~1;
@@ -77,8 +81,7 @@ int tile_height(int chnId)
 
 uint64_t calcBufMapOffset(int chnId, int bytesPerPixel)
 {
-    return (uint64_t)bytesPerPixel *
-           (uint64_t)(tile_y(chnId) * app_ctrl_get_disp_width() + tile_x(chnId));
+    return (uint64_t)bytesPerPixel * (uint64_t)(tile_y(chnId) * app_ctrl_get_disp_width() + tile_x(chnId));
 }
 
 /*======================== 帧渲染提交 ========================*/
@@ -94,23 +97,21 @@ uint64_t calcBufMapOffset(int chnId, int bytesPerPixel)
  *
  * 零尺寸帧保护：RTSP 重连期间上游可能推入无效帧，在入口早退避免 RGA 崩溃。
  */
-void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt,
-                            int srcWidth, int srcHeight,
-                            int srcHStride, int srcVStride)
+void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt, int srcWidth, int srcHeight, int srcHStride,
+                           int srcVStride)
 {
     static constexpr int SCREEN_BPP = 3;
     char *pFront = *g_pCtrl->pDispBuffer;
-    if (!pFront) return;
+    if (!pFront)
+        return;
 
-    if (!pSrcData || srcWidth <= 0 || srcHeight <= 0 ||
-        srcHStride <= 0 || srcVStride <= 0)
+    if (!pSrcData || srcWidth <= 0 || srcHeight <= 0 || srcHStride <= 0 || srcVStride <= 0)
     {
         static std::atomic<int> cnt{0};
         int c = ++cnt;
         if (c <= 20 || (c % 200) == 0)
-            fprintf(stderr,
-                    "[commit] skip invalid frame ch=%d cnt=%d  src=%dx%d stride=%dx%d pBuf=%p\n",
-                    chnId, c, srcWidth, srcHeight, srcHStride, srcVStride, pSrcData);
+            fprintf(stderr, "[commit] skip invalid frame ch=%d cnt=%d  src=%dx%d stride=%dx%d pBuf=%p\n", chnId, c,
+                    srcWidth, srcHeight, srcHStride, srcVStride, pSrcData);
         return;
     }
 
@@ -122,36 +123,34 @@ void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt,
     const int tile_aligned_w = (tile_w + 15) & ~15;
 
     auto &cs = g_pCtrl->channels_state[chnId];
-    if (cs.tile_staging.empty() ||
-        cs.tile_staging.cols != tile_aligned_w ||
-        cs.tile_staging.rows != tile_h)
+    if (cs.tile_staging.empty() || cs.tile_staging.cols != tile_aligned_w || cs.tile_staging.rows != tile_h)
     {
         cs.tile_staging.create(tile_h, tile_aligned_w, CV_8UC3);
     }
-    cv::Mat &staging      = cs.tile_staging;
-    cv::Mat  staging_view = staging(cv::Rect(0, 0, tile_w, tile_h));
+    cv::Mat &staging = cs.tile_staging;
+    cv::Mat staging_view = staging(cv::Rect(0, 0, tile_w, tile_h));
 
     bool rga_ok = false;
-    if (srcFmt == RK_FORMAT_YCbCr_420_SP || srcFmt == RK_FORMAT_YCrCb_420_SP ||
-        srcFmt == RK_FORMAT_BGR_888       || srcFmt == RK_FORMAT_RGB_888)
+    if (srcFmt == RK_FORMAT_YCbCr_420_SP || srcFmt == RK_FORMAT_YCrCb_420_SP || srcFmt == RK_FORMAT_BGR_888 ||
+        srcFmt == RK_FORMAT_RGB_888)
     {
         RgaImage src_img;
-        src_img.fmt        = static_cast<RgaSURF_FORMAT>(srcFmt);
-        src_img.width      = srcWidth;
-        src_img.height     = srcHeight;
+        src_img.fmt = static_cast<RgaSURF_FORMAT>(srcFmt);
+        src_img.width = srcWidth;
+        src_img.height = srcHeight;
         src_img.hor_stride = srcHStride;
         src_img.ver_stride = srcVStride;
-        src_img.rotation   = 0;
-        src_img.pBuf       = const_cast<void *>(pSrcData);
+        src_img.rotation = 0;
+        src_img.pBuf = const_cast<void *>(pSrcData);
 
         RgaImage dst_img;
-        dst_img.fmt        = RK_FORMAT_BGR_888;
-        dst_img.width      = tile_w;
-        dst_img.height     = tile_h;
+        dst_img.fmt = RK_FORMAT_BGR_888;
+        dst_img.width = tile_w;
+        dst_img.height = tile_h;
         dst_img.hor_stride = tile_aligned_w;
         dst_img.ver_stride = tile_h;
-        dst_img.rotation   = 0;
-        dst_img.pBuf       = staging.data;
+        dst_img.rotation = 0;
+        dst_img.pBuf = staging.data;
 
         rga_ok = rga_convert_resize(chnId, src_img, dst_img);
 
@@ -163,16 +162,14 @@ void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt,
                 fprintf(stderr,
                         "[commit] RGA fail ch=%d cnt=%d  src=%dx%d stride=%dx%d fmt=%d"
                         "  dst=%dx%d (aligned_stride=%d)\n",
-                        chnId, c, srcWidth, srcHeight, srcHStride, srcVStride, srcFmt,
-                        tile_w, tile_h, tile_aligned_w);
+                        chnId, c, srcWidth, srcHeight, srcHStride, srcVStride, srcFmt, tile_w, tile_h, tile_aligned_w);
         }
     }
 
     if (!rga_ok)
     {
         thread_local cv::Mat bgr, tile_bgr;
-        if (raw_to_bgr_mat(const_cast<void *>(pSrcData),
-                           srcWidth, srcHeight, srcHStride, srcVStride, srcFmt, bgr))
+        if (raw_to_bgr_mat(const_cast<void *>(pSrcData), srcWidth, srcHeight, srcHStride, srcVStride, srcFmt, bgr))
         {
             cv::resize(bgr, tile_bgr, cv::Size(tile_w, tile_h));
             tile_bgr.copyTo(staging_view);
@@ -190,28 +187,26 @@ void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt,
      * 本通道 swap_rb=1 时故意跳过这步：GTK 把 BGR 当 RGB 解析 → 屏幕上 R/B 互换显示
      * （仅影响显示；推理/上报仍用正常 BGR，不受影响）。 */
     auto runtime = app_ctrl_get_runtime_snapshot();
-    const ChannelConfig *channel_config =
-        app_ctrl_runtime_channel_config(runtime, chnId);
+    const ChannelConfig *channel_config = app_ctrl_runtime_channel_config(runtime, chnId);
     if (!channel_config || !channel_config->swap_rb)
         cv::cvtColor(staging_view, staging_view, cv::COLOR_BGR2RGB);
 
     uint64_t dstOffset = calcBufMapOffset(chnId, SCREEN_BPP);
-    cv::Mat  front_roi(tile_h, tile_w, CV_8UC3, pFront + dstOffset, disp_w * SCREEN_BPP);
+    cv::Mat front_roi(tile_h, tile_w, CV_8UC3, pFront + dstOffset, disp_w * SCREEN_BPP);
     display_lock();
     staging_view.copyTo(front_roi);
     display_unlock();
 
     /* 显示 FPS 统计（display_worker 独占 cs，无需锁）*/
-    auto now_ts = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+    auto now_ts =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
     cs.fps_counter++;
-    int64_t elapsed = static_cast<int64_t>(now_ts) -
-                      static_cast<int64_t>(cs.last_fps_ts_ms);
+    int64_t elapsed = static_cast<int64_t>(now_ts) - static_cast<int64_t>(cs.last_fps_ts_ms);
     if (elapsed >= 1000)
     {
-        const float new_disp_fps =
-            (1000.0f * cs.fps_counter) / static_cast<float>(elapsed);
-        cs.fps_counter    = 0;
+        const float new_disp_fps = (1000.0f * cs.fps_counter) / static_cast<float>(elapsed);
+        cs.fps_counter = 0;
         cs.last_fps_ts_ms = static_cast<uint64_t>(now_ts);
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         cs.disp_fps = new_disp_fps;

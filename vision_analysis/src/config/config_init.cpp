@@ -2,8 +2,8 @@
  * @file config_init.cpp
  * @brief 配置字段注册
  */
-#include "config_registry.h"
 #include "config.h"
+#include "config_registry.h"
 
 void init_config_fields(AppConfig &cfg)
 {

@@ -1,6 +1,6 @@
 /**
  * @file channel_logic.cpp
- * @brief 通道自定义业务逻辑 —— 框架核心 (C-style)
+ * @brief 通道自定义业务逻辑 —— 核心
  *
  * 本文件只保留「框架」部分, 不含任何具体业务逻辑:
  *   - ChannelContext 跨通道方法实现

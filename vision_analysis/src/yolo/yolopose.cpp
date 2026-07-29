@@ -1,13 +1,12 @@
 #include "yolopose.h"
 #include <algorithm>
-#include <cstring>
 #include <chrono>
-#include <stdexcept>
+#include <cstring>
 #include <rga/im2d.h>
+#include <stdexcept>
 
-YoloPose::YoloPose(const std::string &model_path, const std::string &label_path,
-                   int core_mask,
-                   float obj_thresh, float nms_thresh)
+YoloPose::YoloPose(const std::string &model_path, const std::string &label_path, int core_mask, float obj_thresh,
+                   float nms_thresh)
 {
     obj_thresh_ = obj_thresh;
     nms_thresh_ = nms_thresh;
@@ -29,8 +28,7 @@ YoloPose::YoloPose(const std::string &model_path, const std::string &label_path,
     }
 }
 
-YoloPose::YoloPose(const std::string &model_path, int core_mask,
-                   float obj_thresh, float nms_thresh)
+YoloPose::YoloPose(const std::string &model_path, int core_mask, float obj_thresh, float nms_thresh)
     : YoloPose(model_path, std::string(), core_mask, obj_thresh, nms_thresh)
 {
 }
@@ -111,8 +109,8 @@ void YoloPose::query_model_info()
     configure_pose_layout();
     printf("[YoloPose] model %dx%d, inputs=%d, outputs=%d, keypoints=%d, candidates=%d, "
            "kpt_output=%d, layout=%s\n",
-           model_w_, model_h_, io_num_in_, io_num_out_, keypoint_count_, total_grid_points_,
-           keypoint_output_index_, keypoints_channels_first_ ? "channels_first" : "candidates_first");
+           model_w_, model_h_, io_num_in_, io_num_out_, keypoint_count_, total_grid_points_, keypoint_output_index_,
+           keypoints_channels_first_ ? "channels_first" : "candidates_first");
 
     /* 预分配热路径缓存 */
     rknn_outputs_cache_.resize(io_num_out_);
@@ -230,8 +228,7 @@ void YoloPose::load_pose_label(const std::string &label_path)
     if (!labels.empty())
     {
         pose_label_ = labels.front();
-        while (!pose_label_.empty() &&
-               (pose_label_.back() == '\r' || pose_label_.back() == '\n'))
+        while (!pose_label_.empty() && (pose_label_.back() == '\r' || pose_label_.back() == '\n'))
             pose_label_.pop_back();
     }
     else if (keypoint_count_ == 17)
@@ -248,12 +245,11 @@ void YoloPose::load_pose_label(const std::string &label_path)
     }
 
     if (!label_path.empty() && labels.empty())
-        printf("[YoloPose] warning: cannot load pose label from %s, using '%s'\n",
-               label_path.c_str(), pose_label_.c_str());
+        printf("[YoloPose] warning: cannot load pose label from %s, using '%s'\n", label_path.c_str(),
+               pose_label_.c_str());
 }
 
-float YoloPose::keypoint_value(const float *buffer, int keypoint_index,
-                               int component, int candidate_index) const
+float YoloPose::keypoint_value(const float *buffer, int keypoint_index, int component, int candidate_index) const
 {
     const int channel = keypoint_index * 3 + component;
     size_t offset = 0;
@@ -303,7 +299,7 @@ bool YoloPose::init_zero_copy_input()
     printf("[YoloPose] zero-copy input enabled, mem=%u bytes, fd=%d\n", alloc_size, in_mem_->fd);
 
     im_handle_param_t rga_dst_param{};
-    rga_dst_param.width  = static_cast<uint32_t>(model_w_);
+    rga_dst_param.width = static_cast<uint32_t>(model_w_);
     rga_dst_param.height = static_cast<uint32_t>(model_h_);
     rga_dst_param.format = RK_FORMAT_RGB_888;
     input_rga_handle_ = static_cast<int>(importbuffer_fd(in_mem_->fd, &rga_dst_param));
@@ -370,7 +366,8 @@ void YoloPose::softmax(float *input, int size)
     }
 }
 
-float YoloPose::box_iou(float xmin0, float ymin0, float xmax0, float ymax0, float xmin1, float ymin1, float xmax1, float ymax1)
+float YoloPose::box_iou(float xmin0, float ymin0, float xmax0, float ymax0, float xmin1, float ymin1, float xmax1,
+                        float ymax1)
 {
     float w = fmax(0.f, fmin(xmax0, xmax1) - fmax(xmin0, xmin1) + 1.0f);
     float h = fmax(0.f, fmin(ymax0, ymax1) - fmax(ymin0, ymin1) + 1.0f);
@@ -379,9 +376,8 @@ float YoloPose::box_iou(float xmin0, float ymin0, float xmax0, float ymax0, floa
     return u <= 0.f ? 0.f : (i / u);
 }
 
-int YoloPose::process_fp32(float *input, int grid_h, int grid_w, int stride,
-                           std::vector<float> &boxes, std::vector<float> &boxScores, std::vector<int> &classId,
-                           int32_t zp, float scale, int index)
+int YoloPose::process_fp32(float *input, int grid_h, int grid_w, int stride, std::vector<float> &boxes,
+                           std::vector<float> &boxScores, std::vector<int> &classId, int32_t zp, float scale, int index)
 {
     int input_loc_len = 64;
     int obj_class_num = 1;
@@ -488,8 +484,8 @@ int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std:
             return -1;
         int stride = model_h_ / grid_h;
 
-        validCount += process_fp32((float *)outputs[i].buf, grid_h, grid_w, stride, filterBoxes, objProbs,
-                                   classId, out_attrs_[i].zp, out_attrs_[i].scale, index);
+        validCount += process_fp32((float *)outputs[i].buf, grid_h, grid_w, stride, filterBoxes, objProbs, classId,
+                                   out_attrs_[i].zp, out_attrs_[i].scale, index);
         index += grid_h * grid_w;
     }
 
@@ -554,8 +550,8 @@ int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std:
         res.box.width = std::max(0, (int)(w / lb.scale));
         res.box.height = std::max(0, (int)(h / lb.scale));
 
-        if (keypoints_index >= 0 && keypoints_index < total_grid_points_ &&
-            keypoint_output_index_ >= 0 && outputs[keypoint_output_index_].buf)
+        if (keypoints_index >= 0 && keypoints_index < total_grid_points_ && keypoint_output_index_ >= 0 &&
+            outputs[keypoint_output_index_].buf)
         {
             const float *kpts_buf = static_cast<const float *>(outputs[keypoint_output_index_].buf);
             res.keypoints.resize(keypoint_count_);

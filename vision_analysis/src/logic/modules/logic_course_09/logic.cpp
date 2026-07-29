@@ -5,7 +5,6 @@
 
 static void logic_course_09(ChannelContext *ctx)
 {
-    
 }
 
 REGISTER_LOGIC(logic_course_09);

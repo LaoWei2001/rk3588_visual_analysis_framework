@@ -7,10 +7,10 @@
 #include "../core/app_ctrl.h"
 #include "../player/display.h"
 
+#include <gst/gst.h>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <rga/RgaApi.h>
-#include <gst/gst.h>
 
 #include <algorithm>
 #include <chrono>
@@ -25,7 +25,8 @@
 #include <utility>
 #include <vector>
 
-namespace {
+namespace
+{
 
 struct RawFrame
 {
@@ -99,12 +100,19 @@ static bool g_running = false;
 
 static uint64_t now_ms()
 {
-    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count());
 }
 
-static int clamp_fps(int value) { return std::max(1, std::min(30, value)); }
-static float clamp_sec(float value) { return std::max(0.0f, std::min(120.0f, value)); }
+static int clamp_fps(int value)
+{
+    return std::max(1, std::min(30, value));
+}
+static float clamp_sec(float value)
+{
+    return std::max(0.0f, std::min(120.0f, value));
+}
 static std::string key_for(int channel_id, const std::string &type)
 {
     return std::to_string(channel_id) + ":" + type;
@@ -121,16 +129,13 @@ static size_t raw_size(int format, int stride_w, int stride_h)
 
 static bool raw_to_bgr(const RawFrame &raw, cv::Mat &bgr)
 {
-    if (raw.bytes.empty() || raw.width <= 0 || raw.height <= 0) return false;
+    if (raw.bytes.empty() || raw.width <= 0 || raw.height <= 0)
+        return false;
     const int aligned_w = (raw.width + 15) & ~15;
     cv::Mat staging(raw.height, aligned_w, CV_8UC3);
-    RgaImage src_img{
-        static_cast<RgaSURF_FORMAT>(raw.format), raw.width, raw.height,
-        raw.stride_w, raw.stride_h, 0,
-        const_cast<unsigned char *>(raw.bytes.data())};
-    RgaImage dst_img{
-        RK_FORMAT_BGR_888, raw.width, raw.height,
-        aligned_w, raw.height, 0, staging.data};
+    RgaImage src_img{static_cast<RgaSURF_FORMAT>(raw.format),      raw.width, raw.height, raw.stride_w, raw.stride_h, 0,
+                     const_cast<unsigned char *>(raw.bytes.data())};
+    RgaImage dst_img{RK_FORMAT_BGR_888, raw.width, raw.height, aligned_w, raw.height, 0, staging.data};
     if (rga_convert_resize(raw.channel_id, src_img, dst_img))
     {
         bgr = staging(cv::Rect(0, 0, raw.width, raw.height));
@@ -140,21 +145,20 @@ static bool raw_to_bgr(const RawFrame &raw, cv::Mat &bgr)
     /* RGA 在不支持的板卡/格式上失败时保留软件回退。 */
     if (raw.format == RK_FORMAT_YCbCr_420_SP || raw.format == RK_FORMAT_YCrCb_420_SP)
     {
-        cv::Mat yuv(raw.stride_h * 3 / 2, raw.stride_w, CV_8UC1,
-                    const_cast<unsigned char *>(raw.bytes.data()));
+        cv::Mat yuv(raw.stride_h * 3 / 2, raw.stride_w, CV_8UC1, const_cast<unsigned char *>(raw.bytes.data()));
         cv::Mat full;
-        cv::cvtColor(yuv, full, raw.format == RK_FORMAT_YCbCr_420_SP
-                                ? cv::COLOR_YUV2BGR_NV12 : cv::COLOR_YUV2BGR_NV21);
+        cv::cvtColor(yuv, full, raw.format == RK_FORMAT_YCbCr_420_SP ? cv::COLOR_YUV2BGR_NV12 : cv::COLOR_YUV2BGR_NV21);
         bgr = full(cv::Rect(0, 0, raw.width, raw.height));
         return true;
     }
     if (raw.format == RK_FORMAT_BGR_888 || raw.format == RK_FORMAT_RGB_888)
     {
-        cv::Mat full(raw.stride_h, raw.stride_w, CV_8UC3,
-                     const_cast<unsigned char *>(raw.bytes.data()));
+        cv::Mat full(raw.stride_h, raw.stride_w, CV_8UC3, const_cast<unsigned char *>(raw.bytes.data()));
         cv::Mat visible = full(cv::Rect(0, 0, raw.width, raw.height));
-        if (raw.format == RK_FORMAT_RGB_888) cv::cvtColor(visible, bgr, cv::COLOR_RGB2BGR);
-        else bgr = visible;
+        if (raw.format == RK_FORMAT_RGB_888)
+            cv::cvtColor(visible, bgr, cv::COLOR_RGB2BGR);
+        else
+            bgr = visible;
         return true;
     }
     return false;
@@ -162,27 +166,30 @@ static bool raw_to_bgr(const RawFrame &raw, cv::Mat &bgr)
 
 static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
 {
-    if (raw.overlay_mode == EVENT_VIDEO_OVERLAY_NONE || !g_pCtrl || bgr.empty()) return;
+    if (raw.overlay_mode == EVENT_VIDEO_OVERLAY_NONE || !g_pCtrl || bgr.empty())
+        return;
 
     if (raw.overlay_mode == EVENT_VIDEO_OVERLAY_DISPLAY)
     {
         const int output_width = tile_width(raw.channel_id);
         const int output_height = tile_height(raw.channel_id);
-        if (output_width <= 0 || output_height <= 0) return;
+        if (output_width <= 0 || output_height <= 0)
+            return;
         if (bgr.cols != output_width || bgr.rows != output_height)
             cv::resize(bgr, bgr, cv::Size(output_width, output_height));
         RenderParams params;
         params.chnId = raw.channel_id;
         params.inputW = raw.input_w;
         params.inputH = raw.input_h;
-        if (params.inputW <= 0 || params.inputH <= 0) return;
+        if (params.inputW <= 0 || params.inputH <= 0)
+            return;
         params.disp_fps = raw.disp_fps;
         params.infer_fps = algorithm_get_infer_fps(raw.channel_id);
         params.result_age_ms = raw.result_ts_ms && raw.timestamp_ms >= raw.result_ts_ms
-            ? static_cast<int64_t>(std::min<uint64_t>(raw.timestamp_ms - raw.result_ts_ms, 200)) : 0;
+                                   ? static_cast<int64_t>(std::min<uint64_t>(raw.timestamp_ms - raw.result_ts_ms, 200))
+                                   : 0;
         /* 视频自动复用实时画面的绘制层，并保留 VIDEO 专用绘制能力。 */
-        params.target_mask = static_cast<uint8_t>(
-            DrawCommand::DISPLAY | DrawCommand::VIDEO);
+        params.target_mask = static_cast<uint8_t>(DrawCommand::DISPLAY | DrawCommand::VIDEO);
         params.show_fps = 0;
         params.show_system_overlays = true;
         params.show_custom_overlays = true;
@@ -200,11 +207,13 @@ static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
     params.chnId = raw.channel_id;
     params.inputW = raw.input_w;
     params.inputH = raw.input_h;
-    if (params.inputW <= 0 || params.inputH <= 0) return;
+    if (params.inputW <= 0 || params.inputH <= 0)
+        return;
     params.disp_fps = raw.disp_fps;
     params.infer_fps = algorithm_get_infer_fps(raw.channel_id);
     params.result_age_ms = raw.result_ts_ms && raw.timestamp_ms >= raw.result_ts_ms
-        ? static_cast<int64_t>(std::min<uint64_t>(raw.timestamp_ms - raw.result_ts_ms, 200)) : 0;
+                               ? static_cast<int64_t>(std::min<uint64_t>(raw.timestamp_ms - raw.result_ts_ms, 200))
+                               : 0;
     params.show_fps = 0;
     params.target_mask = DrawCommand::VIDEO;
     params.show_system_overlays = raw.overlay_mode == EVENT_VIDEO_OVERLAY_ALL;
@@ -218,9 +227,11 @@ static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
 static bool event_has_pending_frame_locked(const VideoEvent &event)
 {
     const int channel_id = event.request.channel_id;
-    if (channel_id < 0 || channel_id >= MAX_CHANNEL_NUM) return false;
+    if (channel_id < 0 || channel_id >= MAX_CHANNEL_NUM)
+        return false;
     /* 正在锁外转换的帧也必须等完，否则封口后该帧无法再进入事件。 */
-    if (g_channel_busy[channel_id]) return true;
+    if (g_channel_busy[channel_id])
+        return true;
     const auto &queue = g_raw_queues[channel_id];
     /* 每通道队列按时间递增；队首已经晚于窗口终点时，后续帧也无需再等待。 */
     return !queue.empty() && queue.front().timestamp_ms <= event.end_ms;
@@ -228,7 +239,7 @@ static bool event_has_pending_frame_locked(const VideoEvent &event)
 
 static void expire_locked(uint64_t now, bool force)
 {
-    for (auto it = g_active.begin(); it != g_active.end(); )
+    for (auto it = g_active.begin(); it != g_active.end();)
     {
         VideoEvent &event = it->second;
         if (force || (now >= event.end_ms && !event_has_pending_frame_locked(event)))
@@ -240,7 +251,8 @@ static void expire_locked(uint64_t now, bool force)
             g_video_jobs.push(std::move(event));
             it = g_active.erase(it);
         }
-        else ++it;
+        else
+            ++it;
     }
 }
 
@@ -252,21 +264,25 @@ static void expire_locked(uint64_t now)
 static void process_raw(RawFrame &raw)
 {
     cv::Mat bgr;
-    if (!raw_to_bgr(raw, bgr)) return;
+    if (!raw_to_bgr(raw, bgr))
+        return;
     render_video_overlays(raw, bgr);
     FrameSample sample;
     sample.timestamp_ms = raw.timestamp_ms;
     sample.width = bgr.cols;
     sample.height = bgr.rows;
     sample.jpeg = std::make_shared<std::vector<unsigned char>>();
-    if (!cv::imencode(".jpg", bgr, *sample.jpeg, {cv::IMWRITE_JPEG_QUALITY, 85})) return;
+    if (!cv::imencode(".jpg", bgr, *sample.jpeg, {cv::IMWRITE_JPEG_QUALITY, 85}))
+        return;
 
     pthread_mutex_lock(&g_mtx);
     ChannelRing &ring = g_rings[raw.channel_id];
     ring.frames.push_back(sample);
     const uint64_t keep = raw.timestamp_ms > static_cast<uint64_t>(raw.pre_sec * 1000.0f)
-                            ? raw.timestamp_ms - static_cast<uint64_t>(raw.pre_sec * 1000.0f) : 0;
-    while (!ring.frames.empty() && ring.frames.front().timestamp_ms < keep) ring.frames.pop_front();
+                              ? raw.timestamp_ms - static_cast<uint64_t>(raw.pre_sec * 1000.0f)
+                              : 0;
+    while (!ring.frames.empty() && ring.frames.front().timestamp_ms < keep)
+        ring.frames.pop_front();
     for (auto &entry : g_active)
     {
         VideoEvent &event = entry.second;
@@ -281,14 +297,16 @@ static void process_raw(RawFrame &raw)
 static bool encoder_available(const char *name)
 {
     GstElementFactory *factory = gst_element_factory_find(name);
-    if (!factory) return false;
+    if (!factory)
+        return false;
     gst_object_unref(factory);
     return true;
 }
 
 static bool write_h264_mp4(VideoEvent &event, const char *encoder)
 {
-    if (event.frames.empty() || event.request.output_path.empty()) return false;
+    if (event.frames.empty() || event.request.output_path.empty())
+        return false;
 
     /* MP4 是恒定帧率容器。异步转换队列在高负载时可能丢采样帧，不能简单地把
      * “实际保留下来的帧数”按配置 FPS 连续写入，否则6秒真实窗口会被压成3秒。
@@ -296,17 +314,15 @@ static bool write_h264_mp4(VideoEvent &event, const char *encoder)
      *   - 样本不足时重复最近一帧，时长不被压缩；
      *   - 视频开头/结尾没有画面时，只编码实际存在的范围，不伪造前后内容。 */
     std::sort(event.frames.begin(), event.frames.end(),
-              [](const FrameSample &a, const FrameSample &b) {
-                  return a.timestamp_ms < b.timestamp_ms;
-              });
-    event.frames.erase(
-        std::remove_if(event.frames.begin(), event.frames.end(),
-                       [&](const FrameSample &sample) {
-                           return sample.timestamp_ms < event.start_ms ||
-                                  sample.timestamp_ms > event.end_ms;
-                       }),
-        event.frames.end());
-    if (event.frames.empty()) return false;
+              [](const FrameSample &a, const FrameSample &b) { return a.timestamp_ms < b.timestamp_ms; });
+    event.frames.erase(std::remove_if(event.frames.begin(), event.frames.end(),
+                                      [&](const FrameSample &sample) {
+                                          return sample.timestamp_ms < event.start_ms ||
+                                                 sample.timestamp_ms > event.end_ms;
+                                      }),
+                       event.frames.end());
+    if (event.frames.empty())
+        return false;
 
     const cv::Size size(event.frames.front().width, event.frames.front().height);
     const int fps = clamp_fps(event.request.fps);
@@ -314,19 +330,17 @@ static bool write_h264_mp4(VideoEvent &event, const char *encoder)
     const uint64_t last_ms = event.frames.back().timestamp_ms;
     const uint64_t span_ms = last_ms >= first_ms ? last_ms - first_ms : 0;
     const uint64_t output_frame_count = std::max<uint64_t>(
-        1, static_cast<uint64_t>(std::llround(
-               static_cast<double>(span_ms) * static_cast<double>(fps) / 1000.0)) + 1);
+        1, static_cast<uint64_t>(std::llround(static_cast<double>(span_ms) * static_cast<double>(fps) / 1000.0)) + 1);
 
-    event.available_pre_sec = first_ms < event.trigger_ms
-        ? std::min<double>(event.request.pre_sec,
-                           static_cast<double>(event.trigger_ms - first_ms) / 1000.0)
-        : 0.0;
-    event.available_post_sec = last_ms > event.trigger_ms
-        ? std::min<double>(event.request.post_sec,
-                           static_cast<double>(last_ms - event.trigger_ms) / 1000.0)
-        : 0.0;
-    event.encoded_duration_sec = static_cast<double>(output_frame_count) /
-                                 static_cast<double>(fps);
+    event.available_pre_sec =
+        first_ms < event.trigger_ms
+            ? std::min<double>(event.request.pre_sec, static_cast<double>(event.trigger_ms - first_ms) / 1000.0)
+            : 0.0;
+    event.available_post_sec =
+        last_ms > event.trigger_ms
+            ? std::min<double>(event.request.post_sec, static_cast<double>(last_ms - event.trigger_ms) / 1000.0)
+            : 0.0;
+    event.encoded_duration_sec = static_cast<double>(output_frame_count) / static_cast<double>(fps);
     const char *raw_format = strcmp(encoder, "mpph264enc") == 0 ? "NV12" : "I420";
     char launch[2048];
     snprintf(launch, sizeof(launch),
@@ -343,12 +357,14 @@ static bool write_h264_mp4(VideoEvent &event, const char *encoder)
     GstElement *pipeline = gst_parse_launch(launch, &parse_error);
     if (!pipeline)
     {
-        fprintf(stderr, "[event_video] cannot create H264 pipeline encoder=%s: %s\n",
-                encoder, parse_error ? parse_error->message : "unknown");
-        if (parse_error) g_error_free(parse_error);
+        fprintf(stderr, "[event_video] cannot create H264 pipeline encoder=%s: %s\n", encoder,
+                parse_error ? parse_error->message : "unknown");
+        if (parse_error)
+            g_error_free(parse_error);
         return false;
     }
-    if (parse_error) g_error_free(parse_error);
+    if (parse_error)
+        g_error_free(parse_error);
 
     GstElement *source = gst_bin_get_by_name(GST_BIN(pipeline), "video_source");
     if (!source)
@@ -356,12 +372,9 @@ static bool write_h264_mp4(VideoEvent &event, const char *encoder)
         gst_object_unref(pipeline);
         return false;
     }
-    GstCaps *caps = gst_caps_new_simple("video/x-raw",
-                                        "format", G_TYPE_STRING, "BGR",
-                                        "width", G_TYPE_INT, size.width,
-                                        "height", G_TYPE_INT, size.height,
-                                        "framerate", GST_TYPE_FRACTION, fps, 1,
-                                        nullptr);
+    GstCaps *caps =
+        gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, "BGR", "width", G_TYPE_INT, size.width, "height",
+                            G_TYPE_INT, size.height, "framerate", GST_TYPE_FRACTION, fps, 1, nullptr);
     g_object_set(G_OBJECT(source), "caps", caps, nullptr);
     gst_caps_unref(caps);
 
@@ -373,20 +386,25 @@ static bool write_h264_mp4(VideoEvent &event, const char *encoder)
     cv::Mat decoded_frame;
     for (uint64_t output_index = 0; output_index < output_frame_count; ++output_index)
     {
-        if (!ok) break;
-        const uint64_t target_ms = first_ms + static_cast<uint64_t>(std::llround(
-            static_cast<double>(output_index) * 1000.0 / static_cast<double>(fps)));
-        while (source_index + 1 < event.frames.size() &&
-               event.frames[source_index + 1].timestamp_ms <= target_ms)
+        if (!ok)
+            break;
+        const uint64_t target_ms =
+            first_ms +
+            static_cast<uint64_t>(std::llround(static_cast<double>(output_index) * 1000.0 / static_cast<double>(fps)));
+        while (source_index + 1 < event.frames.size() && event.frames[source_index + 1].timestamp_ms <= target_ms)
             ++source_index;
 
         if (decoded_index != source_index)
         {
-            if (!event.frames[source_index].jpeg) continue;
+            if (!event.frames[source_index].jpeg)
+                continue;
             decoded_frame = cv::imdecode(*event.frames[source_index].jpeg, cv::IMREAD_COLOR);
-            if (decoded_frame.empty()) continue;
-            if (decoded_frame.size() != size) cv::resize(decoded_frame, decoded_frame, size);
-            if (!decoded_frame.isContinuous()) decoded_frame = decoded_frame.clone();
+            if (decoded_frame.empty())
+                continue;
+            if (decoded_frame.size() != size)
+                cv::resize(decoded_frame, decoded_frame, size);
+            if (!decoded_frame.isContinuous())
+                decoded_frame = decoded_frame.clone();
             decoded_index = source_index;
         }
 
@@ -394,7 +412,8 @@ static bool write_h264_mp4(VideoEvent &event, const char *encoder)
         GstBuffer *buffer = gst_buffer_new_allocate(nullptr, bytes, nullptr);
         if (!buffer || gst_buffer_fill(buffer, 0, decoded_frame.data, bytes) != bytes)
         {
-            if (buffer) gst_buffer_unref(buffer);
+            if (buffer)
+                gst_buffer_unref(buffer);
             ok = false;
             break;
         }
@@ -406,19 +425,21 @@ static bool write_h264_mp4(VideoEvent &event, const char *encoder)
         GstFlowReturn flow = GST_FLOW_OK;
         g_signal_emit_by_name(source, "push-buffer", buffer, &flow);
         gst_buffer_unref(buffer);
-        if (flow != GST_FLOW_OK) ok = false;
+        if (flow != GST_FLOW_OK)
+            ok = false;
     }
 
     GstFlowReturn eos_flow = GST_FLOW_OK;
-    if (ok) g_signal_emit_by_name(source, "end-of-stream", &eos_flow);
-    if (eos_flow != GST_FLOW_OK) ok = false;
+    if (ok)
+        g_signal_emit_by_name(source, "end-of-stream", &eos_flow);
+    if (eos_flow != GST_FLOW_OK)
+        ok = false;
 
     if (ok)
     {
         GstBus *bus = gst_element_get_bus(pipeline);
-        GstMessage *message = gst_bus_timed_pop_filtered(
-            bus, 30 * GST_SECOND,
-            (GstMessageType)(GST_MESSAGE_EOS | GST_MESSAGE_ERROR));
+        GstMessage *message =
+            gst_bus_timed_pop_filtered(bus, 30 * GST_SECOND, (GstMessageType)(GST_MESSAGE_EOS | GST_MESSAGE_ERROR));
         if (!message || GST_MESSAGE_TYPE(message) != GST_MESSAGE_EOS)
         {
             ok = false;
@@ -427,13 +448,16 @@ static bool write_h264_mp4(VideoEvent &event, const char *encoder)
                 GError *error = nullptr;
                 gchar *debug = nullptr;
                 gst_message_parse_error(message, &error, &debug);
-                fprintf(stderr, "[event_video] H264 encode failed encoder=%s: %s\n",
-                        encoder, error ? error->message : "unknown");
-                if (error) g_error_free(error);
-                if (debug) g_free(debug);
+                fprintf(stderr, "[event_video] H264 encode failed encoder=%s: %s\n", encoder,
+                        error ? error->message : "unknown");
+                if (error)
+                    g_error_free(error);
+                if (debug)
+                    g_free(debug);
             }
         }
-        if (message) gst_message_unref(message);
+        if (message)
+            gst_message_unref(message);
         gst_object_unref(bus);
     }
 
@@ -450,7 +474,8 @@ static bool write_video(VideoEvent &event)
     const char *used_encoder = nullptr;
     for (const char *encoder : encoders)
     {
-        if (!encoder_available(encoder)) continue;
+        if (!encoder_available(encoder))
+            continue;
         ::remove(event.request.output_path.c_str());
         if (write_h264_mp4(event, encoder))
         {
@@ -460,8 +485,7 @@ static bool write_video(VideoEvent &event)
     }
     if (!used_encoder)
     {
-        fprintf(stderr, "[event_video] no working H264 encoder for: %s\n",
-                event.request.output_path.c_str());
+        fprintf(stderr, "[event_video] no working H264 encoder for: %s\n", event.request.output_path.c_str());
         ::remove(event.request.output_path.c_str());
         return false;
     }
@@ -469,10 +493,8 @@ static bool write_video(VideoEvent &event)
     alarm_report_video_ready(event.request.event_id, event.request.output_path);
     printf("[event_video] ready event=%s sampled=%zu encoded=%zu duration=%.2fs "
            "pre=%.2f/%.2fs post=%.2f/%.2fs size=%dx%d codec=h264 encoder=%s\n",
-           event.request.event_id.c_str(), event.frames.size(), event.encoded_frames,
-           event.encoded_duration_sec,
-           event.available_pre_sec, event.request.pre_sec,
-           event.available_post_sec, event.request.post_sec,
+           event.request.event_id.c_str(), event.frames.size(), event.encoded_frames, event.encoded_duration_sec,
+           event.available_pre_sec, event.request.pre_sec, event.available_post_sec, event.request.post_sec,
            event.frames.front().width, event.frames.front().height, used_encoder);
     return true;
 }
@@ -480,14 +502,16 @@ static bool write_video(VideoEvent &event)
 static bool raw_queues_empty_locked()
 {
     for (int channel_id = 0; channel_id < MAX_CHANNEL_NUM; ++channel_id)
-        if (!g_raw_queues[channel_id].empty()) return false;
+        if (!g_raw_queues[channel_id].empty())
+            return false;
     return true;
 }
 
 static bool channels_busy_locked()
 {
     for (int channel_id = 0; channel_id < MAX_CHANNEL_NUM; ++channel_id)
-        if (g_channel_busy[channel_id]) return true;
+        if (g_channel_busy[channel_id])
+            return true;
     return false;
 }
 
@@ -496,7 +520,8 @@ static bool pop_raw_locked(RawFrame &raw, int &channel_id)
     for (size_t offset = 0; offset < MAX_CHANNEL_NUM; ++offset)
     {
         const size_t index = (g_next_channel + offset) % MAX_CHANNEL_NUM;
-        if (g_channel_busy[index] || g_raw_queues[index].empty()) continue;
+        if (g_channel_busy[index] || g_raw_queues[index].empty())
+            continue;
         raw = std::move(g_raw_queues[index].front());
         g_raw_queues[index].pop();
         g_channel_busy[index] = true;
@@ -535,16 +560,22 @@ static void *worker_main(void *)
         {
             have_raw = true;
         }
-        else if (!g_running && raw_queues_empty_locked() && g_active.empty() &&
-                 g_video_jobs.empty() && g_active_encoders == 0)
+        else if (!g_running && raw_queues_empty_locked() && g_active.empty() && g_video_jobs.empty() &&
+                 g_active_encoders == 0)
         {
-            pthread_mutex_unlock(&g_mtx); break;
+            pthread_mutex_unlock(&g_mtx);
+            break;
         }
         else
         {
-            struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
             ts.tv_nsec += 200000000;
-            if (ts.tv_nsec >= 1000000000) { ++ts.tv_sec; ts.tv_nsec -= 1000000000; }
+            if (ts.tv_nsec >= 1000000000)
+            {
+                ++ts.tv_sec;
+                ts.tv_nsec -= 1000000000;
+            }
             pthread_cond_timedwait(&g_cv, &g_mtx, &ts);
         }
         pthread_mutex_unlock(&g_mtx);
@@ -570,7 +601,8 @@ static void *worker_main(void *)
 
 static bool ensure_started_locked()
 {
-    if (g_started) return g_running;
+    if (g_started)
+        return g_running;
     g_running = true;
     g_worker_count = 0;
     for (size_t i = 0; i < WORKER_COUNT; ++i)
@@ -591,15 +623,15 @@ static bool ensure_started_locked()
 
 } // namespace
 
-void event_video_recorder_push_source_frame(int channel_id, const void *data,
-                                            int format, int width, int height,
-                                            int stride_w, int stride_h,
-                                            int fps, float pre_sec,
+void event_video_recorder_push_source_frame(int channel_id, const void *data, int format, int width, int height,
+                                            int stride_w, int stride_h, int fps, float pre_sec,
                                             EventVideoOverlayMode overlay_mode)
 {
-    if (!data || !app_ctrl_has_channel(channel_id)) return;
+    if (!data || !app_ctrl_has_channel(channel_id))
+        return;
     const size_t bytes = raw_size(format, stride_w, stride_h);
-    if (bytes == 0) return;
+    if (bytes == 0)
+        return;
     const uint64_t now = now_ms();
     const uint64_t period = 1000 / static_cast<uint64_t>(clamp_fps(fps));
 
@@ -608,10 +640,15 @@ void event_video_recorder_push_source_frame(int channel_id, const void *data,
     ChannelRing &ring = g_rings[channel_id];
     if (ring.last_capture_ms && now - ring.last_capture_ms < period)
     {
-        pthread_mutex_unlock(&g_mtx); return;
+        pthread_mutex_unlock(&g_mtx);
+        return;
     }
     ring.last_capture_ms = now;
-    if (!ensure_started_locked()) { pthread_mutex_unlock(&g_mtx); return; }
+    if (!ensure_started_locked())
+    {
+        pthread_mutex_unlock(&g_mtx);
+        return;
+    }
     std::queue<RawFrame> &channel_queue = g_raw_queues[channel_id];
     if (channel_queue.size() >= CHANNEL_QUEUE_CAPACITY)
     {
@@ -620,9 +657,14 @@ void event_video_recorder_push_source_frame(int channel_id, const void *data,
     }
     pthread_mutex_unlock(&g_mtx);
 
-    raw.channel_id = channel_id; raw.format = format;
-    raw.width = width; raw.height = height; raw.stride_w = stride_w; raw.stride_h = stride_h;
-    raw.timestamp_ms = now; raw.pre_sec = clamp_sec(pre_sec);
+    raw.channel_id = channel_id;
+    raw.format = format;
+    raw.width = width;
+    raw.height = height;
+    raw.stride_w = stride_w;
+    raw.stride_h = stride_h;
+    raw.timestamp_ms = now;
+    raw.pre_sec = clamp_sec(pre_sec);
     raw.overlay_mode = overlay_mode;
     raw.bytes.resize(bytes);
     memcpy(raw.bytes.data(), data, bytes);
@@ -637,10 +679,8 @@ void event_video_recorder_push_source_frame(int channel_id, const void *data,
     if (overlay_mode != EVENT_VIDEO_OVERLAY_NONE && g_pCtrl)
     {
         auto runtime = app_ctrl_get_runtime_snapshot();
-        const std::vector<RoiZone> *runtime_rois =
-            app_ctrl_runtime_channel_rois(runtime, channel_id);
-        const ChannelConfig *channel =
-            app_ctrl_runtime_channel_config(runtime, channel_id);
+        const std::vector<RoiZone> *runtime_rois = app_ctrl_runtime_channel_rois(runtime, channel_id);
+        const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, channel_id);
         if (runtime_rois)
             raw.rois = *runtime_rois;
 
@@ -672,7 +712,8 @@ void event_video_recorder_push_source_frame(int channel_id, const void *data,
 
 int event_video_recorder_trigger(const EventVideoRequest &input)
 {
-    if (!app_ctrl_has_channel(input.channel_id) || input.event_id.empty()) return 0;
+    if (!app_ctrl_has_channel(input.channel_id) || input.event_id.empty())
+        return 0;
     EventVideoRequest request = input;
     request.fps = clamp_fps(request.fps);
     request.pre_sec = clamp_sec(request.pre_sec);
@@ -681,7 +722,11 @@ int event_video_recorder_trigger(const EventVideoRequest &input)
     const std::string key = key_for(request.channel_id, request.alarm_type);
 
     pthread_mutex_lock(&g_mtx);
-    if (!ensure_started_locked()) { pthread_mutex_unlock(&g_mtx); return 0; }
+    if (!ensure_started_locked())
+    {
+        pthread_mutex_unlock(&g_mtx);
+        return 0;
+    }
     auto latest = g_latest_by_key.find(key);
     if (latest != g_latest_by_key.end())
     {
@@ -689,16 +734,19 @@ int event_video_recorder_trigger(const EventVideoRequest &input)
         if (existing != g_active.end() && existing->second.request.event_id == request.event_id)
         {
             existing->second.end_ms = now + static_cast<uint64_t>(request.post_sec * 1000.0f);
-            pthread_mutex_unlock(&g_mtx); return 1;
+            pthread_mutex_unlock(&g_mtx);
+            return 1;
         }
-        if (existing == g_active.end()) g_latest_by_key.erase(latest);
+        if (existing == g_active.end())
+            g_latest_by_key.erase(latest);
     }
     VideoEvent event;
     event.request = request;
     event.trigger_ms = now;
     event.end_ms = now + static_cast<uint64_t>(request.post_sec * 1000.0f);
     event.start_ms = now > static_cast<uint64_t>(request.pre_sec * 1000.0f)
-                       ? now - static_cast<uint64_t>(request.pre_sec * 1000.0f) : 0;
+                         ? now - static_cast<uint64_t>(request.pre_sec * 1000.0f)
+                         : 0;
     for (const auto &sample : g_rings[request.channel_id].frames)
         if (sample.timestamp_ms >= event.start_ms && sample.timestamp_ms <= now)
             event.frames.push_back(sample);
@@ -717,8 +765,7 @@ void event_video_recorder_extend(int channel_id, const std::string &alarm_type)
     {
         auto found = g_active.find(latest->second);
         if (found != g_active.end())
-            found->second.end_ms = now_ms() +
-                static_cast<uint64_t>(found->second.request.post_sec * 1000.0f);
+            found->second.end_ms = now_ms() + static_cast<uint64_t>(found->second.request.post_sec * 1000.0f);
     }
     pthread_cond_signal(&g_cv);
     pthread_mutex_unlock(&g_mtx);
@@ -726,7 +773,8 @@ void event_video_recorder_extend(int channel_id, const std::string &alarm_type)
 
 void event_video_recorder_channel_offline(int channel_id)
 {
-    if (channel_id < 0 || channel_id >= MAX_CHANNEL_NUM) return;
+    if (channel_id < 0 || channel_id >= MAX_CHANNEL_NUM)
+        return;
     const uint64_t cutoff_ms = now_ms();
     pthread_mutex_lock(&g_mtx);
     for (auto &entry : g_active)
@@ -743,20 +791,30 @@ void event_video_recorder_channel_offline(int channel_id)
 void event_video_recorder_deinit(void)
 {
     pthread_mutex_lock(&g_mtx);
-    if (!g_started) { pthread_mutex_unlock(&g_mtx); return; }
+    if (!g_started)
+    {
+        pthread_mutex_unlock(&g_mtx);
+        return;
+    }
     g_running = false;
     pthread_cond_broadcast(&g_cv);
     pthread_mutex_unlock(&g_mtx);
     for (size_t i = 0; i < g_worker_count; ++i)
         pthread_join(g_worker_tids[i], nullptr);
     pthread_mutex_lock(&g_mtx);
-    for (auto &ring : g_rings) { ring.frames.clear(); ring.last_capture_ms = 0; }
+    for (auto &ring : g_rings)
+    {
+        ring.frames.clear();
+        ring.last_capture_ms = 0;
+    }
     for (int channel_id = 0; channel_id < MAX_CHANNEL_NUM; ++channel_id)
     {
-        while (!g_raw_queues[channel_id].empty()) g_raw_queues[channel_id].pop();
+        while (!g_raw_queues[channel_id].empty())
+            g_raw_queues[channel_id].pop();
         g_channel_busy[channel_id] = false;
     }
-    while (!g_video_jobs.empty()) g_video_jobs.pop();
+    while (!g_video_jobs.empty())
+        g_video_jobs.pop();
     g_active.clear();
     g_latest_by_key.clear();
     g_worker_count = 0;

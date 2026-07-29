@@ -15,47 +15,48 @@
  * 每 5 秒打印一次每通道的 recv/throttle/enq/drop/conv 统计。
  */
 
-#include <cstdio>
 #include <algorithm>
 #include <chrono>
-#include <vector>
-#include <pthread.h>
+#include <cstdio>
 #include <opencv2/opencv.hpp>
+#include <pthread.h>
+#include <vector>
 
-#include "system.h"
-#include "analyzer_internal.h"
-#include "analyzer.h"
-#include "frame_pipeline.h"
+#include "../core/pause_ctrl.h"
 #include "../recorder/event_video_recorder.h"
 #include "algoProcess.h"
-#include "../core/pause_ctrl.h"
+#include "analyzer.h"
+#include "analyzer_internal.h"
+#include "frame_pipeline.h"
+#include "system.h"
 
 /*======================== 送帧统计（每通道，仅 videoOutHandle 访问）========================*/
 
 struct FeedStats
 {
-    uint64_t recv      = 0;  /* appsink 收到的总帧数 */
-    uint64_t enq       = 0;  /* 成功入推理队列的帧数 */
-    uint64_t drop      = 0;  /* 推理队列满、被丢弃的帧数 */
-    uint64_t conv_fail = 0;  /* RGA/CPU 转换失败的帧数 */
-    uint64_t conv_ok   = 0;  /* 转换成功的帧数 */
-    uint64_t conv_us   = 0;  /* 转换耗时累计（微秒） */
-    uint64_t throttle  = 0;  /* FPS 节流跳过的帧数 */
+    uint64_t recv = 0;      /* appsink 收到的总帧数 */
+    uint64_t enq = 0;       /* 成功入推理队列的帧数 */
+    uint64_t drop = 0;      /* 推理队列满、被丢弃的帧数 */
+    uint64_t conv_fail = 0; /* RGA/CPU 转换失败的帧数 */
+    uint64_t conv_ok = 0;   /* 转换成功的帧数 */
+    uint64_t conv_us = 0;   /* 转换耗时累计（微秒） */
+    uint64_t throttle = 0;  /* FPS 节流跳过的帧数 */
     uint64_t log_last_ms = 0;
     uint64_t next_due_us = 0; /* FPS 节流：下次允许推理的时刻（微秒） */
 };
 
-static FeedStats        g_feed[MAX_CHANNEL_NUM];
-static pthread_mutex_t  g_feed_mtx = PTHREAD_MUTEX_INITIALIZER;
+static FeedStats g_feed[MAX_CHANNEL_NUM];
+static pthread_mutex_t g_feed_mtx = PTHREAD_MUTEX_INITIALIZER;
 static constexpr uint64_t FEED_LOG_WINDOW_MS = 5000;
 
 /*======================== 节流计时重置（供 analyzer_channel_offline/online 调用）========================*/
 
 void feed_stats_reset(int chnId)
 {
-    if (chnId < 0 || chnId >= MAX_CHANNEL_NUM) return;
+    if (chnId < 0 || chnId >= MAX_CHANNEL_NUM)
+        return;
     pthread_mutex_lock(&g_feed_mtx);
-    g_feed[chnId].next_due_us = 0;  /* 下次帧到达时重新计算 phase-offset */
+    g_feed[chnId].next_due_us = 0; /* 下次帧到达时重新计算 phase-offset */
     pthread_mutex_unlock(&g_feed_mtx);
 }
 
@@ -63,15 +64,17 @@ void feed_stats_reset(int chnId)
 
 int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
 {
-    if (pause_ctrl::is_paused()) return 0;
-    if (!app_ctrl_has_channel(imgDesc.chnId)) return -1;
+    if (pause_ctrl::is_paused())
+        return 0;
+    if (!app_ctrl_has_channel(imgDesc.chnId))
+        return -1;
 
-    const int ch      = imgDesc.chnId;
+    const int ch = imgDesc.chnId;
     const int fmt_int = rgaFmt(imgDesc.fmt);
     const auto runtime = app_ctrl_get_runtime_snapshot();
-    const ChannelConfig *channel_config =
-        app_ctrl_runtime_channel_config(runtime, ch);
-    if (!channel_config) return -1;
+    const ChannelConfig *channel_config = app_ctrl_runtime_channel_config(runtime, ch);
+    if (!channel_config)
+        return -1;
 
     /* 原始分辨率事件录像入口。函数内部按配置FPS节流，回调线程只复制命中的源帧；
      * 颜色转换、JPEG环形缓冲和MP4编码均在录像线程执行。 */
@@ -90,9 +93,8 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
         EventVideoOverlayMode overlay_mode = EVENT_VIDEO_OVERLAY_NONE;
         if (record_overlay == "custom" || record_overlay == "all")
             overlay_mode = EVENT_VIDEO_OVERLAY_DISPLAY;
-        event_video_recorder_push_source_frame(ch, imgData, fmt_int,
-            imgDesc.width, imgDesc.height, imgDesc.horStride, imgDesc.verStride,
-            record_fps, record_pre_sec, overlay_mode);
+        event_video_recorder_push_source_frame(ch, imgData, fmt_int, imgDesc.width, imgDesc.height, imgDesc.horStride,
+                                               imgDesc.verStride, record_fps, record_pre_sec, overlay_mode);
     }
 
     /* ---- 查推理开关 ---- */
@@ -115,9 +117,9 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
     {
         const int max_fps = std::max(1, channel_config->max_fps);
         const uint64_t period_us = (uint64_t)(1000000 / max_fps);
-        throttle_period_us       = period_us;
-        const uint64_t now_us    = steady_now_us();
-        uint64_t due_us          = g_feed[ch].next_due_us;
+        throttle_period_us = period_us;
+        const uint64_t now_us = steady_now_us();
+        uint64_t due_us = g_feed[ch].next_due_us;
 
         while (true)
         {
@@ -127,8 +129,7 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
                 const int chn_cnt = std::max(1, app_ctrl_get_chn_nums());
                 const int display_order = std::max(0, app_ctrl_get_channel_display_order(ch));
                 const uint64_t phase_us =
-                    (period_us * static_cast<uint64_t>(display_order)) /
-                    static_cast<uint64_t>(chn_cnt);
+                    (period_us * static_cast<uint64_t>(display_order)) / static_cast<uint64_t>(chn_cnt);
                 const uint64_t init_due = now_us + phase_us;
                 pthread_mutex_lock(&g_feed_mtx);
                 if (g_feed[ch].next_due_us == 0)
@@ -140,7 +141,7 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
             if (now_us < due_us)
             {
                 g_feed[ch].throttle++;
-                break;          /* 未到时刻，本帧跳过推理 */
+                break; /* 未到时刻，本帧跳过推理 */
             }
             /* 正常推进；若落后超过一个周期则小步快追 */
             uint64_t next_due = due_us + period_us;
@@ -164,18 +165,17 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
     /* ---- RGA 转换：NV12 → BGR 640×640 ----
      * 即使 NPU 推理会走 fd 零拷贝路径，也必须生成 CPU 侧的 yolo_input (cv::Mat)，
      * 因为 logic/上报路径需要 ctx->frame（640 BGR Mat）作为图像底图。*/
-    cv::Mat  yolo_input;
-    int      conv_ok = 0;
+    cv::Mat yolo_input;
+    int conv_ok = 0;
     uint64_t conv_us = 0;
     if (will_process)
     {
         const auto conv_begin = std::chrono::steady_clock::now();
-        conv_ok = convertToYoloInput(ch, imgData, imgDesc.fd,
-                                     imgDesc.width, imgDesc.height,
-                                     imgDesc.horStride, imgDesc.verStride,
-                                     fmt_int, yolo_input);
-        conv_us = (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
-                      std::chrono::steady_clock::now() - conv_begin).count();
+        conv_ok = convertToYoloInput(ch, imgData, imgDesc.fd, imgDesc.width, imgDesc.height, imgDesc.horStride,
+                                     imgDesc.verStride, fmt_int, yolo_input);
+        conv_us = (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() -
+                                                                                  conv_begin)
+                      .count();
     }
 
     /* ---- 生成单调递增 frame_seq ---- */
@@ -193,7 +193,7 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
 
     /* ---- 构造 ChannelRawFrame（供非推理直通路径 + dispatch 兜底）---- */
     ChannelRawFrame raw_frame;
-    raw_frame.width  = imgDesc.width;
+    raw_frame.width = imgDesc.width;
     raw_frame.height = imgDesc.height;
     raw_frame.source_data = imgData;
     raw_frame.source_format = fmt_int;
@@ -222,8 +222,8 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
     /* ---- 推入显示队列（单槽覆盖，始终展示最新解码帧）----
      * 开启 RTSP 推流时即使没接显示器(enable_display=false)也要合成，
      * 因为 RTSP 取流自同一张 g_disp 拼接大图。 */
-    if ((app_ctrl_get_enable_disp() || app_ctrl_get_enable_rtsp()) && g_pCtrl->pDispBuffer &&
-        *g_pCtrl->pDispBuffer && imgData)
+    if ((app_ctrl_get_enable_disp() || app_ctrl_get_enable_rtsp()) && g_pCtrl->pDispBuffer && *g_pCtrl->pDispBuffer &&
+        imgData)
     {
         size_t data_size = 0;
         if (fmt_int == RK_FORMAT_YCbCr_420_SP || fmt_int == RK_FORMAT_YCrCb_420_SP)
@@ -243,10 +243,10 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
                 memcpy(dst, imgData, data_size);
                 /* ② 持锁仅做元数据更新 + 整数槽交换（≈20 ns） */
                 pthread_mutex_lock(&dq.mtx);
-                dq.task.chnId      = ch;
-                dq.task.srcFmt     = fmt_int;
-                dq.task.srcWidth   = imgDesc.width;
-                dq.task.srcHeight  = imgDesc.height;
+                dq.task.chnId = ch;
+                dq.task.srcFmt = fmt_int;
+                dq.task.srcWidth = imgDesc.width;
+                dq.task.srcHeight = imgDesc.height;
                 dq.task.srcHStride = imgDesc.horStride;
                 dq.task.srcVStride = imgDesc.verStride;
                 dq.pool.publish();
@@ -267,11 +267,9 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
         {
             g_feed[ch].conv_ok++;
             g_feed[ch].conv_us += conv_us;
-            const int enq_ret = algorithm_process_mat(
-                ch, std::move(yolo_input),
-                imgDesc.fd, imgDesc.width, imgDesc.height,
-                fmt_int, imgDesc.horStride, imgDesc.verStride,
-                current_frame_seq);
+            const int enq_ret =
+                algorithm_process_mat(ch, std::move(yolo_input), imgDesc.fd, imgDesc.width, imgDesc.height, fmt_int,
+                                      imgDesc.horStride, imgDesc.verStride, current_frame_seq);
             if (enq_ret > 0)
                 g_feed[ch].enq++;
             else
@@ -289,8 +287,8 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
     }
 
     /* ---- 周期性统计日志（每 5 秒一次）---- */
-    const uint64_t now_ms   = steady_now_ms();
-    const uint64_t last_ms  = g_feed[ch].log_last_ms;
+    const uint64_t now_ms = steady_now_ms();
+    const uint64_t last_ms = g_feed[ch].log_last_ms;
     if (last_ms == 0)
     {
         g_feed[ch].log_last_ms = now_ms;
@@ -299,36 +297,36 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
     {
         g_feed[ch].log_last_ms = now_ms;
 
-        const uint64_t recv_s      = g_feed[ch].recv;      g_feed[ch].recv      = 0;
-        const uint64_t enq_s       = g_feed[ch].enq;       g_feed[ch].enq       = 0;
-        const uint64_t drop_s      = g_feed[ch].drop;      g_feed[ch].drop      = 0;
-        const uint64_t conv_fail_s = g_feed[ch].conv_fail; g_feed[ch].conv_fail = 0;
-        const uint64_t conv_ok_s   = g_feed[ch].conv_ok;   g_feed[ch].conv_ok   = 0;
-        const uint64_t conv_us_s   = g_feed[ch].conv_us;   g_feed[ch].conv_us   = 0;
-        const uint64_t throttle_s  = g_feed[ch].throttle;  g_feed[ch].throttle  = 0;
+        const uint64_t recv_s = g_feed[ch].recv;
+        g_feed[ch].recv = 0;
+        const uint64_t enq_s = g_feed[ch].enq;
+        g_feed[ch].enq = 0;
+        const uint64_t drop_s = g_feed[ch].drop;
+        g_feed[ch].drop = 0;
+        const uint64_t conv_fail_s = g_feed[ch].conv_fail;
+        g_feed[ch].conv_fail = 0;
+        const uint64_t conv_ok_s = g_feed[ch].conv_ok;
+        g_feed[ch].conv_ok = 0;
+        const uint64_t conv_us_s = g_feed[ch].conv_us;
+        g_feed[ch].conv_us = 0;
+        const uint64_t throttle_s = g_feed[ch].throttle;
+        g_feed[ch].throttle = 0;
 
-        const uint64_t q_total_s  = enq_s + drop_s;
-        const float q_drop_rate   = q_total_s > 0
-                                    ? (100.0f * (float)drop_s / (float)q_total_s) : 0.0f;
-        const float conv_avg_ms   = conv_ok_s > 0
-                                    ? ((float)conv_us_s / (float)conv_ok_s / 1000.0f) : 0.0f;
+        const uint64_t q_total_s = enq_s + drop_s;
+        const float q_drop_rate = q_total_s > 0 ? (100.0f * (float)drop_s / (float)q_total_s) : 0.0f;
+        const float conv_avg_ms = conv_ok_s > 0 ? ((float)conv_us_s / (float)conv_ok_s / 1000.0f) : 0.0f;
         const float infer_fps_val = algorithm_get_infer_fps(ch);
 
         const int show_perf = app_ctrl_get_performance_display();
         if (show_perf)
         {
-            log_printf_threadsafe(
-                "[Feed][ch%02d][5s] recv=%llu throttle=%llu enq=%llu "
-                "qdrop=%llu(%.1f%%) conv_ok=%llu conv_fail=%llu "
-                "conv_avg=%.2fms infer=%.1ffps\n",
-                ch,
-                (unsigned long long)recv_s,
-                (unsigned long long)throttle_s,
-                (unsigned long long)enq_s,
-                (unsigned long long)drop_s,   q_drop_rate,
-                (unsigned long long)conv_ok_s,
-                (unsigned long long)conv_fail_s,
-                conv_avg_ms, infer_fps_val);
+            log_printf_threadsafe("[Feed][ch%02d][5s] recv=%llu throttle=%llu enq=%llu "
+                                  "qdrop=%llu(%.1f%%) conv_ok=%llu conv_fail=%llu "
+                                  "conv_avg=%.2fms infer=%.1ffps\n",
+                                  ch, (unsigned long long)recv_s, (unsigned long long)throttle_s,
+                                  (unsigned long long)enq_s, (unsigned long long)drop_s, q_drop_rate,
+                                  (unsigned long long)conv_ok_s, (unsigned long long)conv_fail_s, conv_avg_ms,
+                                  infer_fps_val);
         }
     }
 

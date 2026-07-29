@@ -29,5 +29,5 @@ bool text_overlay_available();
  * @param thickness      <0 填充字形(推荐), >0 为描边粗细
  * @return true=已用中文字体绘制成功; false=不可用 → 调用方应回退 cv::putText
  */
-bool draw_text_unicode(cv::InputOutputArray img, const std::string &utf8, cv::Point org,
-                       int font_height_px, const cv::Scalar &color, int thickness);
+bool draw_text_unicode(cv::InputOutputArray img, const std::string &utf8, cv::Point org, int font_height_px,
+                       const cv::Scalar &color, int thickness);

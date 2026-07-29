@@ -21,22 +21,22 @@
  *   display_pipeline.cpp  — display_worker_thread
  */
 
-#include <cstdio>
-#include <string>
-#include <vector>
-#include <utility>
 #include <algorithm>
-#include <cmath>
 #include <atomic>
+#include <cmath>
+#include <cstdio>
 #include <pthread.h>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include "system.h"
+#include "../recorder/event_video_recorder.h"
+#include "algoProcess.h"
 #include "analyzer.h"
 #include "analyzer_internal.h" /* DispTask/DispQueue 定义、extern 声明、时间辅助 */
-#include "algoProcess.h"
-#include "../recorder/event_video_recorder.h"
 #include "logic/core/channel_logic.h"
 #include "logic/core/global_logic.h"
+#include "system.h"
 
 /*======================== 共享 extern 变量定义 ========================*/
 /* 声明在 analyzer_internal.h（extern），此处给出唯一定义。 */
@@ -70,8 +70,7 @@ int analyzer_init(void)
     g_pCtrl->inputW = algorithm_get_input_w();
     g_pCtrl->inputH = algorithm_get_input_h();
 
-    if (!analyzer_publish_runtime_snapshot(
-            g_pCtrl->config, g_pCtrl->config_generation))
+    if (!analyzer_publish_runtime_snapshot(g_pCtrl->config, g_pCtrl->config_generation))
     {
         algorithm_deinit();
         for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
@@ -113,7 +112,8 @@ void analyzer_request_stop(void)
 
 void analyzer_deinit(void)
 {
-    if (!g_analyzer_initialized) return;
+    if (!g_analyzer_initialized)
+        return;
     analyzer_request_stop();
     algorithm_deinit();
 
@@ -191,12 +191,11 @@ void analyzer_channel_offline(int chnId)
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
         pthread_mutex_unlock(&g_process_mtx[chnId]);
     }
-    feed_stats_reset(chnId);           /* 重置 FPS 节流计时，避免重连后偏移错乱 */
+    feed_stats_reset(chnId); /* 重置 FPS 节流计时，避免重连后偏移错乱 */
     /* reset 接口内部持 g_process_mtx，与 dispatch 的 tracker->update() 互斥。
      * 此处 chn_mtx 已释放，不会形成锁顺序反转。 */
     analyzer_reset_tracker_ids(chnId);
-    printf("[Analyzer] ch%d went OFFLINE at %llums (logic_state reset)\n",
-           chnId, (unsigned long long)ts);
+    printf("[Analyzer] ch%d went OFFLINE at %llums (logic_state reset)\n", chnId, (unsigned long long)ts);
 }
 
 void analyzer_channel_online(int chnId)
@@ -225,8 +224,7 @@ void analyzer_channel_online(int chnId)
     feed_stats_reset(chnId);
     /* 同 offline：reset 接口内部与 tracker->update() 串行。 */
     analyzer_reset_tracker_ids(chnId);
-    printf("[Analyzer] ch%d came ONLINE at %llums (logic_state reset)\n",
-           chnId, (unsigned long long)ts);
+    printf("[Analyzer] ch%d came ONLINE at %llums (logic_state reset)\n", chnId, (unsigned long long)ts);
 }
 
 int analyzer_is_channel_online(int chnId)
@@ -271,8 +269,7 @@ int analyzer_get_display_thread_count(void)
  */
 int analyzer_get_display_chn_id(int idx)
 {
-    return idx >= 0 && idx < static_cast<int>(g_display_channel_ids.size())
-        ? g_display_channel_ids[idx] : -1;
+    return idx >= 0 && idx < static_cast<int>(g_display_channel_ids.size()) ? g_display_channel_ids[idx] : -1;
 }
 
 /**
@@ -282,7 +279,8 @@ int analyzer_get_dispatch_thread_count(void)
 {
     int count = 0;
     auto runtime = app_ctrl_get_runtime_snapshot();
-    if (!runtime) return 0;
+    if (!runtime)
+        return 0;
     const int n = static_cast<int>(runtime->config.channels.size());
     for (int i = 0; i < n && i < MAX_CHANNEL_NUM; ++i)
     {
@@ -304,7 +302,8 @@ int analyzer_get_dispatch_chn_id(int idx)
 {
     int count = 0;
     auto runtime = app_ctrl_get_runtime_snapshot();
-    if (!runtime) return -1;
+    if (!runtime)
+        return -1;
     const int n = static_cast<int>(runtime->config.channels.size());
     for (int i = 0; i < n && i < MAX_CHANNEL_NUM; ++i)
     {

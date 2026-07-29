@@ -14,31 +14,29 @@
  */
 #pragma once
 
-#include <chrono>
-#include <cstdint>
-#include <cstdlib>      /* malloc / free */
-#include <vector>
-#include <atomic>
-#include <pthread.h>
-#include <opencv2/opencv.hpp>
 #include "../config/config.h"
 #include "../core/app_ctrl.h"
 #include "algoProcess.h"
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstdlib> /* malloc / free */
+#include <opencv2/opencv.hpp>
+#include <pthread.h>
+#include <vector>
 
 /*======================== 时间辅助 (各文件直接使用, 无链接冲突) ========================*/
 
 static inline uint64_t steady_now_ms(void)
 {
     auto now = std::chrono::steady_clock::now();
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
 }
 
 static inline uint64_t steady_now_us(void)
 {
     auto now = std::chrono::steady_clock::now();
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count());
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count());
 }
 
 /*======================== 三槽显示帧池（DispFramePool）========================*/
@@ -94,22 +92,24 @@ struct DispFramePool
      *  实际分辨率更大时 back_buf() 会自动一次性扩容。*/
     static constexpr size_t INIT_BYTES = static_cast<size_t>(1920) * 1088 * 3 / 2;
 
-    struct Slot {
-        uint8_t *data     = nullptr;
-        size_t   capacity = 0;
+    struct Slot
+    {
+        uint8_t *data = nullptr;
+        size_t capacity = 0;
     };
 
     Slot slots[3];
-    int  back_idx  = 0;       /* 生产者写入槽 */
-    int  mid_idx   = 1;       /* 最新就绪槽   */
-    int  front_idx = 2;       /* 消费者读取槽 */
+    int back_idx = 0;  /* 生产者写入槽 */
+    int mid_idx = 1;   /* 最新就绪槽   */
+    int front_idx = 2; /* 消费者读取槽 */
     bool mid_dirty = false;
 
     /** 预分配三槽内存，由 analyzer_init 调用一次。*/
     void init()
     {
-        for (auto &s : slots) {
-            s.data     = static_cast<uint8_t *>(malloc(INIT_BYTES));
+        for (auto &s : slots)
+        {
+            s.data = static_cast<uint8_t *>(malloc(INIT_BYTES));
             s.capacity = s.data ? INIT_BYTES : 0;
         }
     }
@@ -117,9 +117,10 @@ struct DispFramePool
     /** 释放三槽内存，由 analyzer_destroy_display_queues 调用。*/
     void deinit()
     {
-        for (auto &s : slots) {
+        for (auto &s : slots)
+        {
             free(s.data);
-            s.data     = nullptr;
+            s.data = nullptr;
             s.capacity = 0;
         }
     }
@@ -134,9 +135,10 @@ struct DispFramePool
     uint8_t *back_buf(size_t needed)
     {
         Slot &s = slots[back_idx];
-        if (needed > s.capacity) {
+        if (needed > s.capacity)
+        {
             free(s.data);
-            s.data     = static_cast<uint8_t *>(malloc(needed));
+            s.data = static_cast<uint8_t *>(malloc(needed));
             s.capacity = s.data ? needed : 0;
         }
         return s.data;
@@ -150,9 +152,9 @@ struct DispFramePool
     void publish()
     {
         const int tmp = back_idx;
-        back_idx      = mid_idx;
-        mid_idx       = tmp;
-        mid_dirty     = true;
+        back_idx = mid_idx;
+        mid_idx = tmp;
+        mid_dirty = true;
     }
 
     /**
@@ -163,11 +165,12 @@ struct DispFramePool
      */
     bool swap_front_if_dirty()
     {
-        if (!mid_dirty) return false;
+        if (!mid_dirty)
+            return false;
         const int tmp = mid_idx;
-        mid_idx       = front_idx;
-        front_idx     = tmp;
-        mid_dirty     = false;
+        mid_idx = front_idx;
+        front_idx = tmp;
+        mid_dirty = false;
         return true;
     }
 
@@ -176,7 +179,10 @@ struct DispFramePool
      *
      * 消费者独占 front 槽，调用者无需持锁。
      */
-    const uint8_t *front_buf() const { return slots[front_idx].data; }
+    const uint8_t *front_buf() const
+    {
+        return slots[front_idx].data;
+    }
 };
 
 /*======================== 显示任务与队列 (frame_inlet + display_pipeline 共用) ========================*/
@@ -189,10 +195,10 @@ struct DispFramePool
  */
 struct DispTask
 {
-    int chnId      = -1;
-    int srcFmt     = 0;
-    int srcWidth   = 0;
-    int srcHeight  = 0;
+    int chnId = -1;
+    int srcFmt = 0;
+    int srcWidth = 0;
+    int srcHeight = 0;
     int srcHStride = 0;
     int srcVStride = 0;
 };
@@ -208,10 +214,10 @@ struct DispTask
 struct DispQueue
 {
     pthread_mutex_t mtx;
-    pthread_cond_t  cv;
-    int             has_task = 0;
-    DispTask        task;       /* 元数据：6 个整数 */
-    DispFramePool   pool;       /* 帧像素：三槽预分配缓冲 */
+    pthread_cond_t cv;
+    int has_task = 0;
+    DispTask task;      /* 元数据：6 个整数 */
+    DispFramePool pool; /* 帧像素：三槽预分配缓冲 */
 };
 
 /* 定义在 analyzer.cpp，frame_inlet 和 display_pipeline 共同访问 */
@@ -242,12 +248,9 @@ void feed_stats_reset(int chnId);
 
 /*======================== 通道结果处理 (实现在 channel_pipeline.cpp) ========================*/
 
-std::vector<AlgoResult> process_channel_results(
-    int chnId,
-    const ChannelRawFrame &raw_frame,
-    std::vector<AlgoResult> *new_results  = nullptr,
-    cv::Mat                 *infer_frame  = nullptr,
-    int64_t                  result_frame_id = 0);
+std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame &raw_frame,
+                                                std::vector<AlgoResult> *new_results = nullptr,
+                                                cv::Mat *infer_frame = nullptr, int64_t result_frame_id = 0);
 
 /*======================== 跟踪器生命周期 (实现在 channel_pipeline.cpp) ========================*/
 

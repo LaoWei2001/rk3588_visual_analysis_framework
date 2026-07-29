@@ -52,7 +52,9 @@ static bool probe_rtsp_tcp(const std::string &rtsp_url, int timeout_ms = 2000)
     if (host.empty())
         return true; /* 解析不出 host, 不拦截 */
 
-    struct addrinfo hints{};
+    struct addrinfo hints
+    {
+    };
     struct addrinfo *res = nullptr;
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
@@ -549,8 +551,7 @@ static void *initialRtspConnect(void *para)
 
         for (int cid : pThis->mGstChn.chnIds)
             analyzer_channel_online(cid);
-        g_print("[Ch%d] RTSP initial connection recovered; entering bus loop\n",
-                pThis->channelId());
+        g_print("[Ch%d] RTSP initial connection recovered; entering bus loop\n", pThis->channelId());
         return busListen(pipeline);
     }
 

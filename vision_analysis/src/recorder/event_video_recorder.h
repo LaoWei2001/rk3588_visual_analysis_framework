@@ -24,10 +24,8 @@ struct EventVideoRequest
 };
 
 /* 帧缓存入口：可接收原始解码帧或已渲染显示帧；按 fps 节流，转换/压缩在录像线程完成。 */
-void event_video_recorder_push_source_frame(int channel_id, const void *data,
-                                            int format, int width, int height,
-                                            int stride_w, int stride_h,
-                                            int fps, float pre_sec,
+void event_video_recorder_push_source_frame(int channel_id, const void *data, int format, int width, int height,
+                                            int stride_w, int stride_h, int fps, float pre_sec,
                                             EventVideoOverlayMode overlay_mode);
 
 int event_video_recorder_trigger(const EventVideoRequest &request);

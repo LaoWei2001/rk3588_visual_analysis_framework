@@ -1,8 +1,8 @@
 #pragma once
-#include <vector>
-#include <string>
-#include <opencv2/opencv.hpp>
 #include "../config/config.h"
+#include <opencv2/opencv.hpp>
+#include <string>
+#include <vector>
 
 struct AlgoResult
 {
@@ -10,8 +10,8 @@ struct AlgoResult
     std::string label;
     int class_id = -1;
     float score = 0.0f;
-    int track_id = -1; // assigned by tracker
-    int chn_id = -1;          // config.channels[].id（logic 可见的稳定通道 ID）
+    int track_id = -1;         // assigned by tracker
+    int chn_id = -1;           // config.channels[].id（logic 可见的稳定通道 ID）
     int64_t frame_id = 0;      // monotonically increasing per channel
     uint64_t timestamp_ms = 0; // wall clock in milliseconds
     std::string model_id;      // 同通道多模型来源ID
@@ -45,14 +45,15 @@ struct AlgoResult
     }
 
     /* Model specific optional fields */
-    std::vector<cv::Point2f> keypoints;    // pose关键点坐标，数量由模型决定
-    std::vector<float> keypoint_scores;    // 与keypoints一一对应的可见度/置信度
+    std::vector<cv::Point2f> keypoints; // pose关键点坐标，数量由模型决定
+    std::vector<float> keypoint_scores; // 与keypoints一一对应的可见度/置信度
     std::string text_result;            // for OCR
-    cv::Mat boxMask;                    // for segmentation (mask of the whole image with class ids, or object specific mask)
+    cv::Mat boxMask; // for segmentation (mask of the whole image with class ids, or object specific mask)
 };
 
 int algorithm_init(const AppConfig &cfg);
-int algorithm_process_mat(int chnId, cv::Mat &&frame, int fd = -1, int srcW = 0, int srcH = 0, int srcFmt = 0, int srcStrH = 0, int srcStrV = 0, int64_t frame_seq = 0);
+int algorithm_process_mat(int chnId, cv::Mat &&frame, int fd = -1, int srcW = 0, int srcH = 0, int srcFmt = 0,
+                          int srcStrH = 0, int srcStrV = 0, int64_t frame_seq = 0);
 void algorithm_deinit();
 /** 停止并唤醒推理/结果等待线程，但不 join、也不销毁同步对象。 */
 void algorithm_request_stop();

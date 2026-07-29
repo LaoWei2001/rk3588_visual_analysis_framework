@@ -3,16 +3,16 @@
  * @brief JSON 配置解析与热加载
  */
 #include "config.h"
+#include "../third_party/json/cJSON.h"
 #include "config_registry.h"
 #include "config_validator.h"
 #include "logic/core/logic_parameters.h"
 #include <algorithm>
 #include <cctype>
 #include <fstream>
-#include <sstream>
 #include <set>
+#include <sstream>
 #include <sys/stat.h>
-#include "../third_party/json/cJSON.h"
 
 void init_config_fields(AppConfig &cfg);
 
@@ -27,8 +27,7 @@ std::string to_lower_copy(const std::string &value)
 {
     std::string out = value;
     std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c)
-                   { return static_cast<char>(std::tolower(c)); });
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return out;
 }
 
@@ -57,9 +56,9 @@ bool is_channel_infer_enabled(const ChannelConfig &ch_cfg)
      * infer_enable=false → 跳过 NPU 推理但仍解码/显示；若配置了后处理则以空结果逐帧调用。 */
     if (!ch_cfg.infer_enable)
         return false;
-    return std::any_of(ch_cfg.models.begin(), ch_cfg.models.end(),
-                       [](const ChannelModelConfig &model)
-                       { return model.enable && !model.model_path.empty() && !model.model_type.empty(); });
+    return std::any_of(ch_cfg.models.begin(), ch_cfg.models.end(), [](const ChannelModelConfig &model) {
+        return model.enable && !model.model_path.empty() && !model.model_type.empty();
+    });
 }
 } // namespace config_utils
 
@@ -103,8 +102,7 @@ EventVideoRuntimeConfig event_video_from_report_policy(cJSON *policy)
             continue;
         cJSON *enabled = cJSON_GetObjectItemCaseSensitive(delivery, "enabled");
         cJSON *media = cJSON_GetObjectItemCaseSensitive(delivery, "media");
-        if (!cJSON_IsFalse(enabled) && cJSON_IsString(media) &&
-            std::string(media->valuestring) == "video")
+        if (!cJSON_IsFalse(enabled) && cJSON_IsString(media) && std::string(media->valuestring) == "video")
         {
             runtime.enable = true;
             break;
@@ -171,16 +169,12 @@ bool load_config(const std::string &path, AppConfig &cfg)
         return false;
     }
 
-    static const char *removed_global_model_fields[] = {
-        "model_type", "model_path", "label_path"
-    };
+    static const char *removed_global_model_fields[] = {"model_type", "model_path", "label_path"};
     for (const char *field : removed_global_model_fields)
     {
         if (cJSON_GetObjectItemCaseSensitive(global, field))
         {
-            fprintf(stderr,
-                    "[Config] global field '%s' is not allowed; configure it in channels[].models[]\n",
-                    field);
+            fprintf(stderr, "[Config] global field '%s' is not allowed; configure it in channels[].models[]\n", field);
             cJSON_Delete(root);
             return false;
         }
@@ -238,9 +232,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
             if (gl_cfg.enable)
             {
                 printf("[Config] global_logic[%zu] enabled: logic=%s poll=%dms channels=%zu\n",
-                       cfg.global_logics.size() - 1,
-                       gl_cfg.logic.c_str(),
-                       gl_cfg.poll_interval_ms,
+                       cfg.global_logics.size() - 1, gl_cfg.logic.c_str(), gl_cfg.poll_interval_ms,
                        gl_cfg.channels.size());
             }
         }
@@ -315,7 +307,8 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 cJSON *zone = nullptr;
                 cJSON_ArrayForEach(zone, rz)
                 {
-                    if (!cJSON_IsObject(zone)) continue;
+                    if (!cJSON_IsObject(zone))
+                        continue;
                     RoiZoneConfig zc;
                     cJSON *nm = cJSON_GetObjectItemCaseSensitive(zone, "name");
                     if (cJSON_IsString(nm) && nm->valuestring)
@@ -336,8 +329,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
                     }
                     /* 多边形由渲染和命中算法自动闭合。兼容旧配置中
                      * [首点, ..., 首点] 的写法，但运行配置只保留实际顶点。 */
-                    while (zc.polygon.size() > 1 &&
-                           zc.polygon.front() == zc.polygon.back())
+                    while (zc.polygon.size() > 1 && zc.polygon.front() == zc.polygon.back())
                         zc.polygon.pop_back();
                     if (!zc.polygon.empty())
                         ch.roi_zones.push_back(std::move(zc));
@@ -347,27 +339,21 @@ bool load_config(const std::string &path, AppConfig &cfg)
 
         g_cfg_reg.parse_channel(item, &ch);
 
-        static const char *removed_model_fields[] = {
-            "model_type", "model_path", "label_path",
-            "obj_thresh", "nms_thresh", "detect_classes", "npu_core", "version"
-        };
+        static const char *removed_model_fields[] = {"model_type", "model_path",     "label_path", "obj_thresh",
+                                                     "nms_thresh", "detect_classes", "npu_core",   "version"};
         for (const char *field : removed_model_fields)
         {
             if (cJSON_GetObjectItemCaseSensitive(item, field))
             {
-                fprintf(stderr,
-                        "[Config] channel %d field '%s' is not allowed; move it into models[]\n",
-                        ch.id, field);
+                fprintf(stderr, "[Config] channel %d field '%s' is not allowed; move it into models[]\n", ch.id, field);
                 cJSON_Delete(root);
                 return false;
             }
         }
 
-        static const char *removed_channel_fields[] = {
-            "roi_polygon",
-            "event_video_enable", "event_video_pre_sec", "event_video_post_sec",
-            "event_video_fps", "event_video_overlay"
-        };
+        static const char *removed_channel_fields[] = {"roi_polygon",         "event_video_enable",
+                                                       "event_video_pre_sec", "event_video_post_sec",
+                                                       "event_video_fps",     "event_video_overlay"};
         for (const char *field : removed_channel_fields)
         {
             if (cJSON_GetObjectItemCaseSensitive(item, field))
@@ -381,24 +367,18 @@ bool load_config(const std::string &path, AppConfig &cfg)
             }
         }
 
-        cJSON *logic_parameters_item =
-            cJSON_GetObjectItemCaseSensitive(item, "logic_parameters");
+        cJSON *logic_parameters_item = cJSON_GetObjectItemCaseSensitive(item, "logic_parameters");
         if (logic_parameters_item && !cJSON_IsObject(logic_parameters_item))
         {
-            fprintf(stderr,
-                    "[Config] channel %d logic_parameters must be a JSON object\n",
-                    ch.id);
+            fprintf(stderr, "[Config] channel %d logic_parameters must be a JSON object\n", ch.id);
             cJSON_Delete(root);
             return false;
         }
 
-        cJSON *report_policy_item =
-            cJSON_GetObjectItemCaseSensitive(item, "report_policy");
+        cJSON *report_policy_item = cJSON_GetObjectItemCaseSensitive(item, "report_policy");
         if (report_policy_item && !cJSON_IsObject(report_policy_item))
         {
-            fprintf(stderr,
-                    "[Config] channel %d report_policy must be a JSON object\n",
-                    ch.id);
+            fprintf(stderr, "[Config] channel %d report_policy must be a JSON object\n", ch.id);
             cJSON_Delete(root);
             return false;
         }
@@ -418,33 +398,42 @@ bool load_config(const std::string &path, AppConfig &cfg)
             cJSON *model_item = nullptr;
             cJSON_ArrayForEach(model_item, models)
             {
-                if (!cJSON_IsObject(model_item)) continue;
+                if (!cJSON_IsObject(model_item))
+                    continue;
                 ChannelModelConfig model;
                 cJSON *v = cJSON_GetObjectItemCaseSensitive(model_item, "id");
-                if (cJSON_IsString(v) && v->valuestring) model.id = v->valuestring;
+                if (cJSON_IsString(v) && v->valuestring)
+                    model.id = v->valuestring;
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "enable");
-                if (cJSON_IsBool(v)) model.enable = cJSON_IsTrue(v);
+                if (cJSON_IsBool(v))
+                    model.enable = cJSON_IsTrue(v);
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "model_type");
-                if (cJSON_IsString(v) && v->valuestring) model.model_type = v->valuestring;
+                if (cJSON_IsString(v) && v->valuestring)
+                    model.model_type = v->valuestring;
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "model_path");
-                if (cJSON_IsString(v) && v->valuestring) model.model_path = v->valuestring;
+                if (cJSON_IsString(v) && v->valuestring)
+                    model.model_path = v->valuestring;
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "label_path");
-                if (cJSON_IsString(v) && v->valuestring) model.label_path = v->valuestring;
+                if (cJSON_IsString(v) && v->valuestring)
+                    model.label_path = v->valuestring;
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "version");
-                if (cJSON_IsString(v) && v->valuestring) model.version = v->valuestring;
+                if (cJSON_IsString(v) && v->valuestring)
+                    model.version = v->valuestring;
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "obj_thresh");
-                if (cJSON_IsNumber(v)) model.obj_thresh = static_cast<float>(v->valuedouble);
+                if (cJSON_IsNumber(v))
+                    model.obj_thresh = static_cast<float>(v->valuedouble);
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "nms_thresh");
-                if (cJSON_IsNumber(v)) model.nms_thresh = static_cast<float>(v->valuedouble);
+                if (cJSON_IsNumber(v))
+                    model.nms_thresh = static_cast<float>(v->valuedouble);
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "npu_core");
-                if (cJSON_IsNumber(v)) model.npu_core = v->valueint;
+                if (cJSON_IsNumber(v))
+                    model.npu_core = v->valueint;
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "detect_classes");
                 if (cJSON_IsArray(v))
                 {
                     cJSON *class_item = nullptr;
-                    cJSON_ArrayForEach(class_item, v)
-                        if (cJSON_IsString(class_item) && class_item->valuestring)
-                            model.detect_classes.emplace_back(class_item->valuestring);
+                    cJSON_ArrayForEach(class_item, v) if (cJSON_IsString(class_item) && class_item->valuestring)
+                        model.detect_classes.emplace_back(class_item->valuestring);
                 }
                 ch.models.push_back(std::move(model));
             }
@@ -456,14 +445,12 @@ bool load_config(const std::string &path, AppConfig &cfg)
         {
             std::vector<LogicParameterError> parameter_errors;
             std::string normalized_parameters;
-            if (!logic_parameters_resolve(ch.logic, ch.logic_parameters_json,
-                                          &normalized_parameters, nullptr,
+            if (!logic_parameters_resolve(ch.logic, ch.logic_parameters_json, &normalized_parameters, nullptr,
                                           &parameter_errors))
             {
                 fprintf(stderr, "[Config] channel %d logic_parameters validation failed:\n", ch.id);
                 for (const auto &error : parameter_errors)
-                    fprintf(stderr, "  - %s: %s\n",
-                            error.field.c_str(), error.message.c_str());
+                    fprintf(stderr, "  - %s: %s\n", error.field.c_str(), error.message.c_str());
                 cJSON_Delete(root);
                 return false;
             }
@@ -471,9 +458,12 @@ bool load_config(const std::string &path, AppConfig &cfg)
         }
         for (auto &model : ch.models)
         {
-            if (model.obj_thresh < 0.0f) model.obj_thresh = cfg.obj_thresh;
-            if (model.nms_thresh < 0.0f) model.nms_thresh = cfg.nms_thresh;
-            if (model.detect_classes.empty()) model.detect_classes = cfg.detect_classes;
+            if (model.obj_thresh < 0.0f)
+                model.obj_thresh = cfg.obj_thresh;
+            if (model.nms_thresh < 0.0f)
+                model.nms_thresh = cfg.nms_thresh;
+            if (model.detect_classes.empty())
+                model.detect_classes = cfg.detect_classes;
         }
         if (ch.threads < 0)
             ch.threads = cfg.channel_threads;
@@ -544,15 +534,16 @@ bool load_config(const std::string &path, AppConfig &cfg)
             return false;
         }
 
-        if (ch.stream.src_type == "usb" && !stream_location.empty() && !config_utils::starts_with(stream_location, "/dev/video"))
+        if (ch.stream.src_type == "usb" && !stream_location.empty() &&
+            !config_utils::starts_with(stream_location, "/dev/video"))
         {
             fprintf(stderr, "[Config] channel %d invalid usb device: %s\n", ch.id, stream_location.c_str());
             cJSON_Delete(root);
             return false;
         }
 
-        if (ch.stream.src_type == "rtsp" && !ch.stream.video_enc.empty() &&
-            ch.stream.video_enc != "h264" && ch.stream.video_enc != "h265")
+        if (ch.stream.src_type == "rtsp" && !ch.stream.video_enc.empty() && ch.stream.video_enc != "h264" &&
+            ch.stream.video_enc != "h265")
         {
             fprintf(stderr, "[Config] channel %d invalid video_enc\n", ch.id);
             cJSON_Delete(root);
@@ -567,8 +558,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
     }
 
     std::sort(cfg.channels.begin(), cfg.channels.end(),
-              [](const ChannelConfig &a, const ChannelConfig &b)
-              { return a.id < b.id; });
+              [](const ChannelConfig &a, const ChannelConfig &b) { return a.id < b.id; });
 
     if (cfg.channels.empty())
     {
@@ -633,7 +623,5 @@ uint64_t config_get_mtime(const std::string &path)
     struct stat st;
     if (stat(path.c_str(), &st) != 0)
         return 0;
-    return static_cast<uint64_t>(st.st_mtim.tv_sec) * 1000000000ULL +
-           static_cast<uint64_t>(st.st_mtim.tv_nsec);
+    return static_cast<uint64_t>(st.st_mtim.tv_sec) * 1000000000ULL + static_cast<uint64_t>(st.st_mtim.tv_nsec);
 }
-

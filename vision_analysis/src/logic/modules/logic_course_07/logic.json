@@ -11,13 +11,19 @@
             "id": "increment",
             "label": "+1",
             "style": "primary",
-            "help": "将当前通道画面中的数字加 1。"
+            "help": "将当前通道画面中的数字加 1"
         },
         {
             "id": "decrement",
             "label": "-1",
             "style": "default",
-            "help": "将当前通道画面中的数字减 1，最小值保持为 1。"
+            "help": "将当前通道画面中的数字减 1"
+        },
+                {
+            "id": "change",
+            "label": "切换数字",
+            "style": "default",
+            "help": "切换控制的数字"
         }
     ]
 }

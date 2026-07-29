@@ -2,31 +2,6 @@
     "_comment": "Generated from REGISTER_LOGIC(func), src/logic/modules/*/logic.json and src/logic/catalog.json; do not edit the generated file.",
     "channel_logics": [
         {
-            "name": "logic_button_demo",
-            "label": "按钮加减数字演示",
-            "parameters": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {}
-            },
-            "report_fields": [],
-            "actions": [
-                {
-                    "id": "increment",
-                    "label": "+1",
-                    "style": "primary",
-                    "help": "将当前通道画面中的数字加 1。"
-                },
-                {
-                    "id": "decrement",
-                    "label": "-1",
-                    "style": "default",
-                    "help": "将当前通道画面中的数字减 1，最小值保持为 1。"
-                }
-            ],
-            "params": []
-        },
-        {
             "name": "logic_course_01",
             "label": "课程1：自定义文字和图形叠加",
             "parameters": {
@@ -155,13 +130,19 @@
                     "id": "increment",
                     "label": "+1",
                     "style": "primary",
-                    "help": "将当前通道画面中的数字加 1。"
+                    "help": "将当前通道画面中的数字加 1"
                 },
                 {
                     "id": "decrement",
                     "label": "-1",
                     "style": "default",
-                    "help": "将当前通道画面中的数字减 1，最小值保持为 1。"
+                    "help": "将当前通道画面中的数字减 1"
+                },
+                {
+                    "id": "change",
+                    "label": "切换数字",
+                    "style": "default",
+                    "help": "切换控制的数字"
                 }
             ],
             "params": []

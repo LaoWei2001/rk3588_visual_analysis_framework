@@ -1,6 +1,7 @@
 import asyncio
 import os
 import random
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -30,6 +31,9 @@ _LOGO_MIME = {
 
 # Paths that are always public (no auth required)
 _PUBLIC_API = {"/api/auth/login"}
+_PUBLIC_CHANNEL_ACTION = re.compile(
+    r"^/api/apps/[^/]+/channels/\d+/actions/[^/]+$"
+)
 
 
 @asynccontextmanager
@@ -82,9 +86,18 @@ app.add_middleware(
 async def auth_middleware(request: Request, call_next):
     """Protect all /api/* endpoints except the public ones."""
     path = request.url.path
+    public_channel_action = (
+        request.method == "POST"
+        and _PUBLIC_CHANNEL_ACTION.fullmatch(path) is not None
+    )
 
     # Static files, SPA HTML, health check → always pass through
-    if not path.startswith("/api/") or path in _PUBLIC_API or path == "/health":
+    if (
+        not path.startswith("/api/")
+        or path in _PUBLIC_API
+        or path == "/health"
+        or public_channel_action
+    ):
         return await call_next(request)
 
     # 优先取 Authorization 头; 对于无法带头的 <img>/<video> 流(如 /stream),

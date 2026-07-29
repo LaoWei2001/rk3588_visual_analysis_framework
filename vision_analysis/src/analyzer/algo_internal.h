@@ -11,51 +11,51 @@
  */
 #pragma once
 
-#include <string>
-#include <vector>
-#include <queue>
-#include <memory>
-#include <set>
-#include <map>
-#include <fstream>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <fstream>
+#include <map>
+#include <memory>
 #include <mutex>
-#include <atomic>
-#include <pthread.h>
 #include <opencv2/opencv.hpp>
+#include <pthread.h>
+#include <queue>
+#include <set>
+#include <string>
+#include <vector>
 
-#include "algoProcess.h"
-#include "frame_pipeline.h"    /* RgaImportedBuffer */
 #include "../config/config.h"
-#include "../yolo/yolo.h"      /* ModelBase */
+#include "../yolo/yolo.h" /* ModelBase */
+#include "algoProcess.h"
+#include "frame_pipeline.h" /* RgaImportedBuffer */
 
 /*======================== 内部任务结构 ========================*/
 
 struct AlgoTask
 {
-    int      chnId;
-    cv::Mat  img;
+    int chnId;
+    cv::Mat img;
     std::chrono::steady_clock::time_point enqueue_tp;
-    int64_t  frame_seq;
+    int64_t frame_seq;
     std::shared_ptr<RgaImportedBuffer> src_buf;
-    int      srcW, srcH, srcFmt, srcStrH, srcStrV;
+    int srcW, srcH, srcFmt, srcStrH, srcStrV;
 };
 
 struct ChannelResult
 {
     std::vector<AlgoResult> data;
-    cv::Mat                 data_frame;
-    pthread_mutex_t         mtx;
-    int64_t                 latest_seq{0};
-    int                     has_new{0};
+    cv::Mat data_frame;
+    pthread_mutex_t mtx;
+    int64_t latest_seq{0};
+    int has_new{0};
 };
 
 struct TaskQueue
 {
     std::queue<AlgoTask> q;
     pthread_mutex_t mtx;
-    pthread_cond_t  cv;
+    pthread_cond_t cv;
 };
 
 /*======================== 性能计数器（每通道，支持多个 worker 汇总）========================*/
@@ -67,16 +67,24 @@ struct PerfCounters
     uint64_t post_us{0}, filter_nms_us{0}, total_us{0}, samples{0};
     uint64_t last_log_ms{0};
 
-    void accumulate(uint64_t wait, uint64_t lock, uint64_t pre, uint64_t npu,
-                    uint64_t post, uint64_t filter_nms, uint64_t total)
+    void accumulate(uint64_t wait, uint64_t lock, uint64_t pre, uint64_t npu, uint64_t post, uint64_t filter_nms,
+                    uint64_t total)
     {
         std::lock_guard<std::mutex> guard(mtx);
-        wait_us += wait; lock_us += lock; pre_us += pre; npu_us += npu;
-        post_us += post; filter_nms_us += filter_nms; total_us += total;
+        wait_us += wait;
+        lock_us += lock;
+        pre_us += pre;
+        npu_us += npu;
+        post_us += post;
+        filter_nms_us += filter_nms;
+        total_us += total;
         samples++;
     }
 
-    struct Snapshot { uint64_t samples, wait, lock, pre, npu, post, filter_nms, total; };
+    struct Snapshot
+    {
+        uint64_t samples, wait, lock, pre, npu, post, filter_nms, total;
+    };
 
     void init(uint64_t now_ms)
     {
@@ -96,8 +104,7 @@ struct PerfCounters
         if (now_ms - last_log_ms < window_ms || samples == 0)
             return false;
         last_log_ms = now_ms;
-        out = Snapshot{samples, wait_us, lock_us, pre_us, npu_us,
-                       post_us, filter_nms_us, total_us};
+        out = Snapshot{samples, wait_us, lock_us, pre_us, npu_us, post_us, filter_nms_us, total_us};
         wait_us = lock_us = pre_us = npu_us = post_us = filter_nms_us = total_us = samples = 0;
         return true;
     }
@@ -136,9 +143,9 @@ struct FpsTracker
         counter++;
         last_tick_ts = now_ts;
         has_tick = true;
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now_ts - last_ts).count();
-        if (elapsed >= 1000) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now_ts - last_ts).count();
+        if (elapsed >= 1000)
+        {
             fps = (1000.0f * counter) / (float)elapsed;
             counter = 0;
             last_ts = now_ts;
@@ -148,9 +155,11 @@ struct FpsTracker
     float value() const
     {
         std::lock_guard<std::mutex> lock(mtx);
-        if (!has_tick) return 0.0f;
-        const auto idle_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - last_tick_ts).count();
+        if (!has_tick)
+            return 0.0f;
+        const auto idle_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - last_tick_ts)
+                .count();
         return idle_ms >= STALE_TIMEOUT_MS ? 0.0f : fps;
     }
 
@@ -190,16 +199,16 @@ struct AlgoEngine
     std::vector<std::unique_ptr<TaskQueue>> task_queues;
     std::atomic<bool> running{false};
     std::atomic<bool> chn_reload_stop[MAX_CHANNEL_NUM]{};
-    pthread_mutex_t  chn_reload_mtx[MAX_CHANNEL_NUM];
+    pthread_mutex_t chn_reload_mtx[MAX_CHANNEL_NUM];
     std::vector<pthread_t> worker_tids;
     std::vector<unsigned char> worker_started;
-    int              max_queue_size{1};
+    int max_queue_size{1};
 
-    ChannelResult    channel_results[MAX_CHANNEL_NUM];
+    ChannelResult channel_results[MAX_CHANNEL_NUM];
 
-    pthread_cond_t   result_ready_cv[MAX_CHANNEL_NUM];
-    pthread_mutex_t  result_ready_mtx[MAX_CHANNEL_NUM];
-    int              result_dispatch_pending[MAX_CHANNEL_NUM]{};
+    pthread_cond_t result_ready_cv[MAX_CHANNEL_NUM];
+    pthread_mutex_t result_ready_mtx[MAX_CHANNEL_NUM];
+    int result_dispatch_pending[MAX_CHANNEL_NUM]{};
 
     using ModelKey = std::tuple<std::string, std::string, int>;
     std::map<ModelKey, std::shared_ptr<ModelBase>> model_registry;
@@ -208,16 +217,16 @@ struct AlgoEngine
 /** @brief Worker 线程入口参数（heap-alloc，worker 内部 delete）。*/
 struct WorkerArg
 {
-    int  chnId;
+    int chnId;
     TaskQueue *tq;
     std::shared_ptr<ModelBase> model;
 };
 
 /*======================== 全局状态（定义在 algo_engine.cpp）========================*/
 
-extern AlgoEngine    g_algo;
-extern FpsTracker    g_fps[MAX_CHANNEL_NUM];
-extern PerfCounters  g_perf[MAX_CHANNEL_NUM];
+extern AlgoEngine g_algo;
+extern FpsTracker g_fps[MAX_CHANNEL_NUM];
+extern PerfCounters g_perf[MAX_CHANNEL_NUM];
 
 static constexpr uint64_t PERF_LOG_WINDOW_MS = 5000;
 
@@ -225,8 +234,7 @@ static constexpr uint64_t PERF_LOG_WINDOW_MS = 5000;
 static inline uint64_t algo_steady_now_ms(void)
 {
     auto now = std::chrono::steady_clock::now();
-    return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()).count();
+    return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 }
 
 /*======================== 跨文件函数声明（定义在 algo_engine.cpp）========================*/
@@ -235,15 +243,12 @@ static inline uint64_t algo_steady_now_ms(void)
 int get_queue_idx_for_chn(int chnId);
 
 /** @brief 按标签名列表解析标签文件得到 class_id 集合。*/
-std::set<int> names_to_class_ids(const std::vector<std::string> &names,
-                                  const std::string &label_path);
+std::set<int> names_to_class_ids(const std::vector<std::string> &names, const std::string &label_path);
 
 /** @brief 按 model_type 创建对应的 ModelBase 子类实例。*/
-std::shared_ptr<ModelBase> create_model(const std::string &type,
-                                         const std::string &model_path,
-                                         const std::string &label_path,
-                                         int core_mask,
-                                         float obj_thresh, float nms_thresh);
+std::shared_ptr<ModelBase> create_model(const std::string &type, const std::string &model_path,
+                                        const std::string &label_path, int core_mask, float obj_thresh,
+                                        float nms_thresh);
 
 /** @brief 推理 worker 线程入口（通过 pthread_create 调用）。*/
 void *worker_thread_func(void *arg);

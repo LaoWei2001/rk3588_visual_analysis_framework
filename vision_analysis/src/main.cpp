@@ -40,34 +40,34 @@
  * 信号 → isRunning=0 → 唤醒所有等待线程 → 逆序 join → 释放资源
  */
 
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cerrno>
-#include <csignal>
 #include <dirent.h>
-#include <sys/resource.h>
-#include <unistd.h>
 #include <glib-unix.h>
 #include <pthread.h>
-#include <algorithm>
-#include <chrono>
+#include <sys/resource.h>
+#include <unistd.h>
 #include <vector>
 
-#include "system.h"
+#include "alarm/alarm_report.h"
+#include "analyzer/analyzer.h"
+#include "capturer/decChannel.h"
 #include "config/config.h"
+#include "control/channel_control.h"
 #include "core/app_ctrl.h"
 #include "core/pause_ctrl.h"
 #include "core/process_signals.h"
-#include "capturer/decChannel.h"
-#include "analyzer/analyzer.h"
-#include "control/channel_control.h"
 #include "logic/core/channel_logic.h"
 #include "logic/core/global_logic.h"
 #include "player/display.h"
 #include "player/rtsp_streamer.h"
 #include "recorder/event_video_recorder.h"
-#include "alarm/alarm_report.h"
+#include "system.h"
 
 /* config_monitor_thread_func — 由 app_ctrl.cpp 导出 (C++ mangling) */
 extern "C" void *config_monitor_thread_func(void *arg);
@@ -104,8 +104,7 @@ static void raise_fd_limit_or_warn(void)
     rlim_t want = 65536;
     if (rl.rlim_cur >= want)
     {
-        printf("[Main] RLIMIT_NOFILE already %lu (>= %lu), keep\n",
-               (unsigned long)rl.rlim_cur, (unsigned long)want);
+        printf("[Main] RLIMIT_NOFILE already %lu (>= %lu), keep\n", (unsigned long)rl.rlim_cur, (unsigned long)want);
         return;
     }
     struct rlimit nrl = rl;
@@ -124,9 +123,8 @@ static void raise_fd_limit_or_warn(void)
             return;
         }
     }
-    printf("[Main] RLIMIT_NOFILE raised: soft %lu -> %lu, hard %lu -> %lu\n",
-           (unsigned long)rl.rlim_cur, (unsigned long)nrl.rlim_cur,
-           (unsigned long)rl.rlim_max, (unsigned long)nrl.rlim_max);
+    printf("[Main] RLIMIT_NOFILE raised: soft %lu -> %lu, hard %lu -> %lu\n", (unsigned long)rl.rlim_cur,
+           (unsigned long)nrl.rlim_cur, (unsigned long)rl.rlim_max, (unsigned long)nrl.rlim_max);
 }
 
 static int count_self_fds(void)
@@ -171,8 +169,8 @@ static void *fd_monitor_thread_func(void *arg)
         int fd_count = count_self_fds();
         struct rlimit rl;
         getrlimit(RLIMIT_NOFILE, &rl);
-        printf("[Perf] fd_in_use=%d soft_limit=%lu hard_limit=%lu\n",
-               fd_count, (unsigned long)rl.rlim_cur, (unsigned long)rl.rlim_max);
+        printf("[Perf] fd_in_use=%d soft_limit=%lu hard_limit=%lu\n", fd_count, (unsigned long)rl.rlim_cur,
+               (unsigned long)rl.rlim_max);
     }
     return nullptr;
 }
@@ -196,8 +194,7 @@ int main(int argc, char **argv)
         AppConfig config;
         if (!load_config(argv[2], config))
             return 1;
-        printf("[Config] validation passed: %s (%zu channels)\n",
-               argv[2], config.channels.size());
+        printf("[Config] validation passed: %s (%zu channels)\n", argv[2], config.channels.size());
         return 0;
     }
 
@@ -228,14 +225,20 @@ int main(int argc, char **argv)
     }
 
     {
-        struct sigaction sa{};
+        struct sigaction sa
+        {
+        };
         sa.sa_handler = signal_handler;
         sigaction(SIGINT, &sa, nullptr);
         sigaction(SIGTERM, &sa, nullptr);
-        struct sigaction sa_usr{};
+        struct sigaction sa_usr
+        {
+        };
         sa_usr.sa_handler = sigusr1_handler;
         sigaction(SIGUSR1, &sa_usr, nullptr);
-        struct sigaction sa_pipe{};
+        struct sigaction sa_pipe
+        {
+        };
         sa_pipe.sa_handler = SIG_IGN;
         sigaction(SIGPIPE, &sa_pipe, nullptr);
     }
@@ -248,8 +251,7 @@ int main(int argc, char **argv)
     else
         pause_ctrl::init(false);
 
-    g_pCtrl->dispDesc = {"rtsp_yolo_grid", 0, 0,
-                         app_ctrl_get_disp_width(), app_ctrl_get_disp_height()};
+    g_pCtrl->dispDesc = {"rtsp_yolo_grid", 0, 0, app_ctrl_get_disp_width(), app_ctrl_get_disp_height()};
     if (app_ctrl_get_enable_disp() || app_ctrl_get_enable_rtsp())
     {
         g_pCtrl->pDispBuffer = dispBufferMap(&g_pCtrl->dispDesc);
@@ -274,26 +276,24 @@ int main(int argc, char **argv)
 
     g_pCtrl->capturer_count = 0;
     startup_runtime = app_ctrl_get_runtime_snapshot();
-    for (int config_index = 0;
-         config_index < static_cast<int>(startup_runtime->config.channels.size());
-         ++config_index)
+    for (int config_index = 0; config_index < static_cast<int>(startup_runtime->config.channels.size()); ++config_index)
     {
         const auto &chCfg = startup_runtime->config.channels[config_index];
         const int channel_id = chCfg.id;
         SrcCfg_t srcCfg;
         srcCfg.srcType = config_utils::normalize_src_type(chCfg.stream);
         srcCfg.location = config_utils::resolve_stream_location(chCfg.stream, srcCfg.srcType);
-        srcCfg.videoEncType = chCfg.stream.video_enc.empty()
-            ? "h264" : config_utils::to_lower_copy(chCfg.stream.video_enc);
+        srcCfg.videoEncType =
+            chCfg.stream.video_enc.empty() ? "h264" : config_utils::to_lower_copy(chCfg.stream.video_enc);
         srcCfg.loop = chCfg.stream.loop;
         srcCfg.usb_width = chCfg.stream.usb_width;
         srcCfg.usb_height = chCfg.stream.usb_height;
-        srcCfg.usb_fps = chCfg.playback_fps > 0 ? chCfg.playback_fps :
-            (chCfg.max_fps > 0 ? chCfg.max_fps : app_ctrl_get_max_fps());
+        srcCfg.usb_fps =
+            chCfg.playback_fps > 0 ? chCfg.playback_fps : (chCfg.max_fps > 0 ? chCfg.max_fps : app_ctrl_get_max_fps());
         if (srcCfg.location.empty())
         {
-            fprintf(stderr, "[Main] channel %d has empty stream location (src_type=%s)\n",
-                    channel_id, srcCfg.srcType.c_str());
+            fprintf(stderr, "[Main] channel %d has empty stream location (src_type=%s)\n", channel_id,
+                    srcCfg.srcType.c_str());
             continue;
         }
 
@@ -302,26 +302,27 @@ int main(int argc, char **argv)
         {
             const auto &otherCfg = startup_runtime->config.channels[other_index];
             const int other_id = otherCfg.id;
-            if (!g_pCtrl->capturers[other_id]) continue;
+            if (!g_pCtrl->capturers[other_id])
+                continue;
             const auto otherSrcType = config_utils::normalize_src_type(otherCfg.stream);
             const auto otherLocation = config_utils::resolve_stream_location(otherCfg.stream, otherSrcType);
             if (srcCfg.srcType == otherSrcType && srcCfg.location == otherLocation)
             {
-                printf("[Main] channel %d shares stream with channel %d\n",
-                       channel_id, other_id);
+                printf("[Main] channel %d shares stream with channel %d\n", channel_id, other_id);
                 g_pCtrl->capturers[other_id]->addTargetChannel(channel_id);
                 shared = true;
                 break;
             }
         }
-        if (shared) continue;
+        if (shared)
+            continue;
 
         DecChannel *ch = new DecChannel(channel_id, srcCfg);
         const int ret = ch ? ch->init() : -1;
         if (ret != 0)
         {
-            fprintf(stderr, "[Main] channel %d init failed (code=%d), url=%s\n",
-                    channel_id, ret, chCfg.stream.url.c_str());
+            fprintf(stderr, "[Main] channel %d init failed (code=%d), url=%s\n", channel_id, ret,
+                    chCfg.stream.url.c_str());
             delete ch;
             continue;
         }
@@ -334,16 +335,13 @@ int main(int argc, char **argv)
     {
         const int channel_id = analyzer_get_display_chn_id(i);
         pthread_t tid{};
-        const int ret = pthread_create(&tid, nullptr, display_worker_thread,
-                                       (void *)(intptr_t)channel_id);
+        const int ret = pthread_create(&tid, nullptr, display_worker_thread, (void *)(intptr_t)channel_id);
         if (ret != 0)
-            fprintf(stderr, "[Main] pthread_create display_worker[channel=%d] failed: %s\n",
-                    channel_id, strerror(ret));
+            fprintf(stderr, "[Main] pthread_create display_worker[channel=%d] failed: %s\n", channel_id, strerror(ret));
         else
         {
             display_tids.push_back(tid);
-            printf("[Main] display_worker[channel=%d] created (tid=%lu)\n",
-                   channel_id, (unsigned long)tid);
+            printf("[Main] display_worker[channel=%d] created (tid=%lu)\n", channel_id, (unsigned long)tid);
         }
     }
 
@@ -351,16 +349,14 @@ int main(int argc, char **argv)
     {
         const int channel_id = analyzer_get_dispatch_chn_id(i);
         pthread_t tid{};
-        const int ret = pthread_create(&tid, nullptr, dispatch_worker_thread,
-                                       (void *)(intptr_t)channel_id);
+        const int ret = pthread_create(&tid, nullptr, dispatch_worker_thread, (void *)(intptr_t)channel_id);
         if (ret != 0)
-            fprintf(stderr, "[Main] pthread_create dispatch_worker[channel=%d] failed: %s\n",
-                    channel_id, strerror(ret));
+            fprintf(stderr, "[Main] pthread_create dispatch_worker[channel=%d] failed: %s\n", channel_id,
+                    strerror(ret));
         else
         {
             dispatch_tids.push_back(tid);
-            printf("[Main] dispatch_worker[channel=%d] created (tid=%lu)\n",
-                   channel_id, (unsigned long)tid);
+            printf("[Main] dispatch_worker[channel=%d] created (tid=%lu)\n", channel_id, (unsigned long)tid);
         }
     }
 
@@ -375,25 +371,21 @@ int main(int argc, char **argv)
 
     /* 所有依赖固定拓扑的采集/显示/分发线程就绪后才启动热更新。
      * 避免启动阶段 config_monitor 与 main 同时改 capturers/config。 */
-    if (pthread_create(&g_pCtrl->config_monitor_tid, nullptr,
-                       config_monitor_thread_func, nullptr) != 0)
+    if (pthread_create(&g_pCtrl->config_monitor_tid, nullptr, config_monitor_thread_func, nullptr) != 0)
     {
         fprintf(stderr, "[FATAL] pthread_create config_monitor failed\n");
         exit_code = -4;
         goto cleanup;
     }
     config_monitor_started = true;
-    printf("[Main] config_monitor_thread created (tid=%lu)\n",
-           (unsigned long)g_pCtrl->config_monitor_tid);
+    printf("[Main] config_monitor_thread created (tid=%lu)\n", (unsigned long)g_pCtrl->config_monitor_tid);
 
-    if (pthread_create(&g_pCtrl->fd_monitor_tid, nullptr,
-                       fd_monitor_thread_func, nullptr) != 0)
+    if (pthread_create(&g_pCtrl->fd_monitor_tid, nullptr, fd_monitor_thread_func, nullptr) != 0)
         fprintf(stderr, "[WARNING] pthread_create fd_monitor failed, continuing\n");
     else
     {
         fd_monitor_started = true;
-        printf("[Main] fd_monitor_thread created (tid=%lu)\n",
-               (unsigned long)g_pCtrl->fd_monitor_tid);
+        printf("[Main] fd_monitor_thread created (tid=%lu)\n", (unsigned long)g_pCtrl->fd_monitor_tid);
     }
 
     printf("\n[Main] === All threads started. Entering main loop. ===\n\n");
@@ -415,7 +407,8 @@ int main(int argc, char **argv)
 cleanup:
     printf("\n[Main] === Stopping and joining all threads... ===\n");
     rtsp_streamer_deinit();
-    if (ctrl_initialized) app_ctrl_request_stop();
+    if (ctrl_initialized)
+        app_ctrl_request_stop();
     pause_ctrl::resume_all();
     channel_control_deinit();
 
@@ -426,13 +419,15 @@ cleanup:
         pthread_join(g_pCtrl->config_monitor_tid, nullptr);
 
     /* 热重载线程退出后再停止算法，避免它在 shutdown 中途重启模型 worker。 */
-    if (analyzer_initialized) analyzer_request_stop();
+    if (analyzer_initialized)
+        analyzer_request_stop();
 
     if (g_pCtrl)
     {
         for (int i = 0; i < APP_CTRL_MAX_CAPTURERS; ++i)
         {
-            if (!g_pCtrl->capturers[i]) continue;
+            if (!g_pCtrl->capturers[i])
+                continue;
             g_pCtrl->capturers[i]->stop();
             delete g_pCtrl->capturers[i];
             g_pCtrl->capturers[i] = nullptr;
@@ -441,8 +436,10 @@ cleanup:
     }
 
     /* 先回收仍可能触发 logic/告警的线程，再关闭告警与录像消费者。 */
-    for (pthread_t tid : dispatch_tids) pthread_join(tid, nullptr);
-    for (pthread_t tid : display_tids) pthread_join(tid, nullptr);
+    for (pthread_t tid : dispatch_tids)
+        pthread_join(tid, nullptr);
+    for (pthread_t tid : display_tids)
+        pthread_join(tid, nullptr);
 
     if (analyzer_initialized)
         analyzer_deinit();
@@ -453,7 +450,8 @@ cleanup:
     if (analyzer_initialized)
         analyzer_destroy_display_queues();
     dispBufferUnmap();
-    if (ctrl_initialized) app_ctrl_deinit();
+    if (ctrl_initialized)
+        app_ctrl_deinit();
 
     printf("[Main] Clean exit (code=%d).\n", exit_code);
     return exit_code;

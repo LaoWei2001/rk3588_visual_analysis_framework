@@ -47,7 +47,7 @@ inline bool operator!=(const LogicParameterValue &lhs, const LogicParameterValue
 
 class LogicParameterSet
 {
-public:
+  public:
     bool has(const char *key) const;
     float get_float(const char *key) const;
     int64_t get_int(const char *key) const;
@@ -58,7 +58,7 @@ public:
     const LogicParameterValue *find(const std::string &key) const;
     void assign(std::string key, LogicParameterValue value);
 
-private:
+  private:
     std::unordered_map<std::string, LogicParameterValue> values_;
 };
 
@@ -73,17 +73,13 @@ struct LogicParameterError
  * logic_name 为空表示无后处理模块，此时使用只接受 `{}` 的框架内置空 Schema。
  * normalized_json/set_out 均可为空；错误时保持调用方旧运行快照不变。
  */
-bool logic_parameters_resolve(const std::string &logic_name,
-                              const std::string &parameters_json,
-                              std::string *normalized_json,
-                              LogicParameterSet *set_out,
+bool logic_parameters_resolve(const std::string &logic_name, const std::string &parameters_json,
+                              std::string *normalized_json, LogicParameterSet *set_out,
                               std::vector<LogicParameterError> *errors);
 
 /** 比较同一种 logic 的两份参数，并按变更字段的 Schema 策略返回最高影响级别。 */
-LogicReloadImpact logic_parameters_reload_impact(
-    const std::string &logic_name,
-    const std::string &old_parameters_json,
-    const std::string &new_parameters_json,
-    std::vector<std::string> *changed_keys = nullptr);
+LogicReloadImpact logic_parameters_reload_impact(const std::string &logic_name, const std::string &old_parameters_json,
+                                                 const std::string &new_parameters_json,
+                                                 std::vector<std::string> *changed_keys = nullptr);
 
 const char *logic_reload_impact_name(LogicReloadImpact impact);

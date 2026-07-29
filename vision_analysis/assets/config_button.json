@@ -43,7 +43,7 @@
           "npu_core": 0
         }
       ],
-      "logic": "logic_course_06",
+      "logic": "logic_course_07",
       "report_policy": {
         "enabled": false,
         "deliveries": [],

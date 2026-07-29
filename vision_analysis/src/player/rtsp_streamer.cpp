@@ -16,11 +16,11 @@
  */
 #include "rtsp_streamer.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
-#include <string>
-#include <atomic>
 #include <pthread.h>
+#include <string>
 #include <unistd.h>
 
 #include <gst/gst.h>
@@ -35,32 +35,32 @@ struct RtspStreamer
     bool inited = false;
 
     /* 配置快照 (init 时读取一次; 这些字段不参与热重载) */
-    int         port    = 8554;
-    std::string path    = "/live";
-    int         fps     = 25;
-    int         bitrate = 4096; /* kbps, 仅软件编码使用 */
-    std::string codec   = "h264";
+    int port = 8554;
+    std::string path = "/live";
+    int fps = 25;
+    int bitrate = 4096; /* kbps, 仅软件编码使用 */
+    std::string codec = "h264";
     std::string encoder = "auto"; /* "auto"/"hw"/"sw" */
-    int         width   = 0; /* 源拼接大图尺寸 (= disp_width/disp_height) */
-    int         height  = 0;
-    int         enc_w   = 0; /* 送编码器/RTSP 的尺寸: 向上对齐到 16, 规避 MPP 编码器非对齐绿屏 */
-    int         enc_h   = 0;
+    int width = 0;                /* 源拼接大图尺寸 (= disp_width/disp_height) */
+    int height = 0;
+    int enc_w = 0; /* 送编码器/RTSP 的尺寸: 向上对齐到 16, 规避 MPP 编码器非对齐绿屏 */
+    int enc_h = 0;
 
     /* GStreamer / GLib */
-    GMainContext  *ctx       = nullptr;
-    GMainLoop     *loop      = nullptr;
-    GstRTSPServer *server    = nullptr;
-    guint          attach_id = 0;
+    GMainContext *ctx = nullptr;
+    GMainLoop *loop = nullptr;
+    GstRTSPServer *server = nullptr;
+    guint attach_id = 0;
 
     /* 当前活跃的 appsrc (有客户端连接时由 media-configure 写入) */
     pthread_mutex_t appsrc_mtx = PTHREAD_MUTEX_INITIALIZER;
-    GstElement     *appsrc     = nullptr;
+    GstElement *appsrc = nullptr;
 
     /* 线程句柄与标志 */
-    pthread_t    loop_tid       = 0;
-    pthread_t    feeder_tid     = 0;
-    bool         loop_running   = false;
-    bool         feeder_running = false;
+    pthread_t loop_tid = 0;
+    pthread_t feeder_tid = 0;
+    bool loop_running = false;
+    bool feeder_running = false;
     std::atomic<bool> feeder_exit{false};
 };
 
@@ -84,8 +84,7 @@ static void on_media_unprepared(GstRTSPMedia *media, gpointer user_data)
 }
 
 /* 客户端连接、media 创建时调用: 取出 appsrc, 设 caps/属性, 存给 feeder。 */
-static void on_media_configure(GstRTSPMediaFactory *factory,
-                               GstRTSPMedia *media, gpointer user_data)
+static void on_media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, gpointer user_data)
 {
     (void)factory;
     (void)user_data;
@@ -102,21 +101,12 @@ static void on_media_configure(GstRTSPMediaFactory *factory,
     }
 
     /* 实时源 + 自动打时间戳 + 满了不阻塞(丢帧保实时) */
-    g_object_set(G_OBJECT(appsrc),
-                 "format", GST_FORMAT_TIME,
-                 "is-live", TRUE,
-                 "do-timestamp", TRUE,
-                 "block", FALSE,
-                 "max-bytes", (guint64)((gint64)g_st.enc_w * g_st.enc_h * 3 * 3),
-                 nullptr);
+    g_object_set(G_OBJECT(appsrc), "format", GST_FORMAT_TIME, "is-live", TRUE, "do-timestamp", TRUE, "block", FALSE,
+                 "max-bytes", (guint64)((gint64)g_st.enc_w * g_st.enc_h * 3 * 3), nullptr);
 
-    GstCaps *caps = gst_caps_new_simple(
-        "video/x-raw",
-        "format", G_TYPE_STRING, "RGB",
-        "width", G_TYPE_INT, g_st.enc_w,
-        "height", G_TYPE_INT, g_st.enc_h,
-        "framerate", GST_TYPE_FRACTION, g_st.fps, 1,
-        nullptr);
+    GstCaps *caps =
+        gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, "RGB", "width", G_TYPE_INT, g_st.enc_w, "height",
+                            G_TYPE_INT, g_st.enc_h, "framerate", GST_TYPE_FRACTION, g_st.fps, 1, nullptr);
     g_object_set(G_OBJECT(appsrc), "caps", caps, nullptr);
     gst_caps_unref(caps);
 
@@ -127,8 +117,7 @@ static void on_media_configure(GstRTSPMediaFactory *factory,
     pthread_mutex_unlock(&g_st.appsrc_mtx);
 
     g_signal_connect(media, "unprepared", G_CALLBACK(on_media_unprepared), nullptr);
-    printf("[RTSP] client connected, media configured (%dx%d @%dfps)\n",
-           g_st.enc_w, g_st.enc_h, g_st.fps);
+    printf("[RTSP] client connected, media configured (%dx%d @%dfps)\n", g_st.enc_w, g_st.enc_h, g_st.fps);
 }
 
 /*======================== 推帧线程 ========================*/
@@ -136,16 +125,15 @@ static void on_media_configure(GstRTSPMediaFactory *factory,
 static void *rtsp_feeder_thread(void *arg)
 {
     (void)arg;
-    const int    src_w       = g_st.width;
-    const int    src_h       = g_st.height;
-    const int    dst_w       = g_st.enc_w;
-    const int    dst_h       = g_st.enc_h;
-    const size_t src_stride  = (size_t)src_w * 3; /* RGB packed */
-    const size_t dst_stride  = (size_t)dst_w * 3;
+    const int src_w = g_st.width;
+    const int src_h = g_st.height;
+    const int dst_w = g_st.enc_w;
+    const int dst_h = g_st.enc_h;
+    const size_t src_stride = (size_t)src_w * 3; /* RGB packed */
+    const size_t dst_stride = (size_t)dst_w * 3;
     const size_t frame_bytes = dst_stride * (size_t)dst_h;
-    const bool   need_pad    = (dst_w != src_w) || (dst_h != src_h);
-    const useconds_t period_us =
-        (useconds_t)(1000000 / (g_st.fps > 0 ? g_st.fps : 25));
+    const bool need_pad = (dst_w != src_w) || (dst_h != src_h);
+    const useconds_t period_us = (useconds_t)(1000000 / (g_st.fps > 0 ? g_st.fps : 25));
 
     while (g_pCtrl && g_pCtrl->isRunning.load() && !g_st.feeder_exit.load())
     {
@@ -175,8 +163,7 @@ static void *rtsp_feeder_thread(void *arg)
                             memcpy(map.data, front, frame_bytes);
                         else
                             for (int y = 0; y < src_h; ++y)
-                                memcpy(map.data + (size_t)y * dst_stride,
-                                       front + (size_t)y * src_stride, src_stride);
+                                memcpy(map.data + (size_t)y * dst_stride, front + (size_t)y * src_stride, src_stride);
                         display_unlock();
                         frame_ready = true;
                     }
@@ -186,11 +173,9 @@ static void *rtsp_feeder_thread(void *arg)
                         /* 黑边填充 (buf 私有于本次迭代, 锁外做) */
                         if (dst_w > src_w)
                             for (int y = 0; y < src_h; ++y)
-                                memset(map.data + (size_t)y * dst_stride + src_stride, 0,
-                                       (size_t)(dst_w - src_w) * 3);
+                                memset(map.data + (size_t)y * dst_stride + src_stride, 0, (size_t)(dst_w - src_w) * 3);
                         if (dst_h > src_h)
-                            memset(map.data + (size_t)src_h * dst_stride, 0,
-                                   (size_t)(dst_h - src_h) * dst_stride);
+                            memset(map.data + (size_t)src_h * dst_stride, 0, (size_t)(dst_h - src_h) * dst_stride);
                     }
                     gst_buffer_unmap(buf, &map);
 
@@ -237,21 +222,27 @@ static void *rtsp_loop_thread(void *arg)
  * 注意 launch 字符串需用 ( ) 包裹, 且 payloader 必须命名为 pay0。*/
 static std::string build_launch_string(void)
 {
-    const bool h265        = (g_st.codec == "h265" || g_st.codec == "hevc");
-    const char *enc_hw     = h265 ? "mpph265enc" : "mpph264enc";
+    const bool h265 = (g_st.codec == "h265" || g_st.codec == "hevc");
+    const char *enc_hw = h265 ? "mpph265enc" : "mpph264enc";
     const char *parse_elem = h265 ? "h265parse" : "h264parse";
-    const char *pay_elem   = h265 ? "rtph265pay" : "rtph264pay";
+    const char *pay_elem = h265 ? "rtph265pay" : "rtph264pay";
 
     /* 选择硬编/软编:
      *   "hw"   强制硬件 mpph26xenc (插件缺失时 pipeline 会报错, 便于暴露问题)
      *   其他    探测到 mpph26xenc 用硬编, 否则回退软编 (默认) */
     bool hw_available = false;
     GstElementFactory *hw_factory = gst_element_factory_find(enc_hw);
-    if (hw_factory) { hw_available = true; gst_object_unref(hw_factory); }
+    if (hw_factory)
+    {
+        hw_available = true;
+        gst_object_unref(hw_factory);
+    }
 
     bool use_hw;
-    if (g_st.encoder == "hw") use_hw = true;
-    else                      use_hw = hw_available; /* auto (含旧 "sw" 值不再强制软编) */
+    if (g_st.encoder == "hw")
+        use_hw = true;
+    else
+        use_hw = hw_available; /* auto (含旧 "sw" 值不再强制软编) */
 
     char launch[1024];
     if (use_hw)
@@ -262,8 +253,8 @@ static std::string build_launch_string(void)
                  "! videoconvert ! video/x-raw,format=NV12 ! %s "
                  "! %s ! %s name=pay0 pt=96 config-interval=1 )",
                  enc_hw, parse_elem, pay_elem);
-        printf("[RTSP] encoder: HW %s (mode=%s, hw_available=%d)\n",
-               enc_hw, g_st.encoder.c_str(), hw_available ? 1 : 0);
+        printf("[RTSP] encoder: HW %s (mode=%s, hw_available=%d)\n", enc_hw, g_st.encoder.c_str(),
+               hw_available ? 1 : 0);
     }
     else
     {
@@ -273,8 +264,8 @@ static std::string build_launch_string(void)
                  "! videoconvert ! %s tune=zerolatency speed-preset=ultrafast bitrate=%d "
                  "! %s ! %s name=pay0 pt=96 config-interval=1 )",
                  enc_sw, g_st.bitrate, parse_elem, pay_elem);
-        printf("[RTSP] encoder: SW %s (mode=%s, hw_available=%d, %dkbps)\n",
-               enc_sw, g_st.encoder.c_str(), hw_available ? 1 : 0, g_st.bitrate);
+        printf("[RTSP] encoder: SW %s (mode=%s, hw_available=%d, %dkbps)\n", enc_sw, g_st.encoder.c_str(),
+               hw_available ? 1 : 0, g_st.bitrate);
     }
     return std::string(launch);
 }
@@ -292,12 +283,12 @@ int rtsp_streamer_init(void)
     bool enabled = false;
     {
         pthread_rwlock_rdlock(&g_pCtrl->mtx);
-        enabled      = g_pCtrl->config.enable_rtsp;
-        g_st.port    = g_pCtrl->config.rtsp_port > 0 ? g_pCtrl->config.rtsp_port : 8554;
-        g_st.path    = g_pCtrl->config.rtsp_path.empty() ? "/live" : g_pCtrl->config.rtsp_path;
-        g_st.fps     = g_pCtrl->config.rtsp_fps > 0 ? g_pCtrl->config.rtsp_fps : 25;
+        enabled = g_pCtrl->config.enable_rtsp;
+        g_st.port = g_pCtrl->config.rtsp_port > 0 ? g_pCtrl->config.rtsp_port : 8554;
+        g_st.path = g_pCtrl->config.rtsp_path.empty() ? "/live" : g_pCtrl->config.rtsp_path;
+        g_st.fps = g_pCtrl->config.rtsp_fps > 0 ? g_pCtrl->config.rtsp_fps : 25;
         g_st.bitrate = g_pCtrl->config.rtsp_bitrate > 0 ? g_pCtrl->config.rtsp_bitrate : 4096;
-        g_st.codec   = g_pCtrl->config.rtsp_codec.empty() ? "h264" : g_pCtrl->config.rtsp_codec;
+        g_st.codec = g_pCtrl->config.rtsp_codec.empty() ? "h264" : g_pCtrl->config.rtsp_codec;
         g_st.encoder = g_pCtrl->config.rtsp_encoder.empty() ? "auto" : g_pCtrl->config.rtsp_encoder;
         pthread_rwlock_unlock(&g_pCtrl->mtx);
     }
@@ -311,7 +302,7 @@ int rtsp_streamer_init(void)
     if (g_st.path.empty() || g_st.path[0] != '/')
         g_st.path = std::string("/") + g_st.path;
 
-    g_st.width  = app_ctrl_get_disp_width();
+    g_st.width = app_ctrl_get_disp_width();
     g_st.height = app_ctrl_get_disp_height();
     if (g_st.width <= 0 || g_st.height <= 0)
     {
@@ -323,8 +314,8 @@ int rtsp_streamer_init(void)
     g_st.enc_w = (g_st.width + 15) & ~15;
     g_st.enc_h = (g_st.height + 15) & ~15;
     if (g_st.enc_w != g_st.width || g_st.enc_h != g_st.height)
-        printf("[RTSP] encode size aligned to 16: %dx%d -> %dx%d (black-padded)\n",
-               g_st.width, g_st.height, g_st.enc_w, g_st.enc_h);
+        printf("[RTSP] encode size aligned to 16: %dx%d -> %dx%d (black-padded)\n", g_st.width, g_st.height, g_st.enc_w,
+               g_st.enc_h);
     if (!g_pCtrl->pDispBuffer || !*g_pCtrl->pDispBuffer)
     {
         fprintf(stderr, "[RTSP] display buffer not allocated; ensure g_disp is allocated "
@@ -333,7 +324,7 @@ int rtsp_streamer_init(void)
     }
 
     /* ---- 独立 GMainContext + loop (与 GTK 主循环互不干扰) ---- */
-    g_st.ctx  = g_main_context_new();
+    g_st.ctx = g_main_context_new();
     g_st.loop = g_main_loop_new(g_st.ctx, FALSE);
 
     g_st.server = gst_rtsp_server_new();
@@ -341,7 +332,7 @@ int rtsp_streamer_init(void)
     snprintf(service, sizeof(service), "%d", g_st.port);
     g_object_set(g_st.server, "service", service, nullptr);
 
-    GstRTSPMountPoints  *mounts  = gst_rtsp_server_get_mount_points(g_st.server);
+    GstRTSPMountPoints *mounts = gst_rtsp_server_get_mount_points(g_st.server);
     GstRTSPMediaFactory *factory = gst_rtsp_media_factory_new();
 
     const std::string launch = build_launch_string();
@@ -371,7 +362,7 @@ int rtsp_streamer_init(void)
         return -1;
     }
 
-    g_st.inited      = true;
+    g_st.inited = true;
     g_st.feeder_exit.store(false);
 
     if (pthread_create(&g_st.loop_tid, nullptr, rtsp_loop_thread, nullptr) != 0)
@@ -393,8 +384,7 @@ int rtsp_streamer_init(void)
 
     printf("[RTSP] streaming composited view at rtsp://<board-ip>:%d%s "
            "(codec=%s, %dfps, %dx%d)\n",
-           g_st.port, g_st.path.c_str(), g_st.codec.c_str(),
-           g_st.fps, g_st.width, g_st.height);
+           g_st.port, g_st.path.c_str(), g_st.codec.c_str(), g_st.fps, g_st.width, g_st.height);
     return 0;
 }
 
