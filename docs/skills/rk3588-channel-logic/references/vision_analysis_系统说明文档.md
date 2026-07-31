@@ -26,13 +26,13 @@
 | `yolo/` | RKNN 模型推理与不同 YOLO 输出解析 | `yolo.*`、各模型实现 |
 | `logic/` | channel logic、global logic、自注册表和业务实现 | `channel_logic.*`、`global_logic.*`、`logic_*.cpp` |
 | `player/` | 叠加渲染、显示和内置 RTSP 推流 | `display.*`、`rtsp_streamer.*` |
-| `alarm/` | 统一告警入口、图片和事件清单异步落盘 | `alarm_report.*` |
+| `event/` | 标准事件入口、图片和投递清单异步落盘 | `event_report.*` |
 | `recorder/` | 报警前后帧缓存和事件 MP4 异步编码 | `event_video_recorder.*` |
 | `control/` | Web 控制 Unix Socket、系统动作和每通道业务动作队列 | `channel_control.*` |
 | `config/` | JSON 配置解析、字段注册和热拷贝 | `config.*`、`config_registry.*`、`config_init.cpp` |
 | `core/` | `APP_CTRL`、每通道运行状态、配置监控和暂停控制 | `app_ctrl.*`、`pause_ctrl.*` |
 
-当前源码中没有 `src/uploader/`。C++ 不再通过 `alarm_uploader_enqueue()` 或 Redis 直接提交业务告警。
+网络投递由独立 Python 服务完成。C++ logic 只提交标准事件，不直接调用上传服务或消息队列。
 
 ## 3. 通道数据流
 
@@ -58,7 +58,7 @@ frame_inlet
           ↓
       channel logic
           ├─ DrawCommand → 显示 / 图片 / 视频
-          └─ report_alarm → 告警图片 / 事件视频 / 事件清单
+          └─ report_event → 告警图片 / 事件视频 / 事件清单
 ```
 
 显示路径使用最新解码帧，并叠加最近的推理结果；告警图片和事件视频根据 `report_policy` 决定使用原始画面、显示画面和哪些叠加信息。
@@ -169,10 +169,17 @@ REGISTER_LOGIC(logic_xxx);
 业务逻辑唯一推荐入口：
 
 ```cpp
-report_alarm(ctx, "alarm_type", "message", {
-    alarm_field("score", score),
-    alarm_field("track_id", track_id),
-});
+EventRequest request;
+request.event_type = "person_intrusion";
+request.message = "检测到人员进入";
+request.fields = {
+    event_field("score", score),
+    event_field("track_id", track_id),
+};
+const EventReportResult report = report_event(ctx, request);
+if (!report.accepted())
+    fprintf(stderr, "report rejected: %s (%s)\n",
+            event_report_status_name(report.status), report.detail.c_str());
 ```
 
 logic 只提交事件类型、消息和运行时字段。以下内容由 Web 保存的 `report_policy` 决定：
@@ -188,11 +195,13 @@ logic 只提交事件类型、消息和运行时字段。以下内容由 Web 保
 
 ### 8.2 图片路径
 
-`alarm_report` 根据策略生成图片任务。后台 `alarm_image_worker` 负责渲染、编码、落盘并写事件清单，避免在推理线程内进行耗时 I/O。
+`report_event` 根据策略生成图片任务。后台 `alarm_image_worker` 负责渲染、编码、落盘并写事件清单，避免在推理线程内进行耗时 I/O。
 
 ### 8.3 事件视频路径
 
-`event_video_recorder` 持续保存需要的源帧历史。告警触发后组合报警前缓存和报警后帧，异步编码 MP4；完成后调用 `alarm_report_video_ready()` 更新事件。
+`event_video_recorder` 持续保存需要的源帧历史。告警触发后组合报警前缓存和报警后帧，异步编码
+MP4；成功后调用 `report_event_video_ready()`，无帧或编码失败时调用
+`report_event_video_failed()` 更新媒体终态。
 
 ### 8.4 绘制路由
 
@@ -201,7 +210,7 @@ logic 只提交事件类型、消息和运行时字段。以下内容由 Web 保
 - `DISPLAY`：实时显示；
 - `IMAGE`：告警图片；
 - `VIDEO`：事件视频；
-- `UPLOAD`：图片和视频；
+- `MEDIA`：图片和视频；
 - `ALL`：全部目标。
 
 ## 9. Web 自定义按钮控制链
@@ -256,7 +265,7 @@ HTTP 返回 `accepted` 只表示动作成功进入队列，不代表业务 handl
 → 停止 analyzer（推理、global logic、跟踪等）并等待分发线程
 → 唤醒并等待显示线程
 → 停止 event_video_recorder
-→ 停止 alarm_report worker
+→ 停止 report_event worker
 → 停止配置与 fd 监控
 → app_ctrl_deinit
 ```
@@ -272,7 +281,7 @@ HTTP 返回 `accepted` 只表示动作成功进入队列，不代表业务 handl
 3. 使用 `ctx->state` 保存跨帧状态；
 4. 文件末尾 `REGISTER_LOGIC(logic_xxx)`，函数名即外部 logic ID；
 5. 同目录 `logic.json` 声明参数、动作和上报字段，不写 `name`；正常打包自动生成 App `logics.json`；
-6. 如需上报，调用 `report_alarm()`，由画布配置 `report_policy`；
+6. 如需上报，调用 `report_event()`，由画布配置 `report_policy`；
 7. 如需按钮，实现 `REGISTER_LOGIC_ACTION(logic_xxx, handler)` 并在模块 `logic.json` 声明 actions。
 
 ### 新增配置参数

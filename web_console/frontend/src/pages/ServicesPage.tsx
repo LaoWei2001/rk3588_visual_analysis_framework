@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchApps, type AppInfo } from '../api/client'
 import ServiceConfigModal from '../components/ServiceConfigModal'
 import ServicesPanel from '../components/ServicesPanel'
+import { useEditorStore } from '../store/editorStore'
 import './ServicesPage.css'
 
 export default function ServicesPage() {
@@ -10,6 +11,8 @@ export default function ServicesPage() {
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const serviceConfigDirty = useEditorStore(state => state.serviceConfigDirty)
+  const setServiceConfigDirty = useEditorStore(state => state.setServiceConfigDirty)
 
   useEffect(() => {
     let active = true
@@ -78,7 +81,14 @@ export default function ServicesPage() {
                 <strong>服务文件所属程序包</strong>
                 <p>这里只用于编辑 services 配置；启动后台服务时会自动绑定当前运行的视觉程序。</p>
               </div>
-              <select value={selectedApp} onChange={event => setSelectedApp(event.target.value)}>
+              <select value={selectedApp} onChange={event => {
+                const next = event.target.value
+                if (next === selectedApp) return
+                if (serviceConfigDirty &&
+                    !window.confirm('服务参数有未保存的改动，确定切换程序包？未保存的修改将丢失。')) return
+                setServiceConfigDirty(false)
+                setSelectedApp(next)
+              }}>
                 {apps.map(app => <option key={app.name} value={app.name}>{app.name}</option>)}
               </select>
             </section>

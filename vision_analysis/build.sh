@@ -257,7 +257,7 @@ if [ -d "$PROJECT_DIR/assets" ]; then
     cp -rp "$PROJECT_DIR/assets" "$DIST_DIR/"
 fi
 
-# 从 REGISTER_LOGIC(func) 取 logic ID，并聚合每个模块的 logic.json，
+# 从通道/全局注册宏取 logic ID，并聚合每个模块的 logic.json，
 # 生成 Web 控制台兼容的根目录 logics.json。
 # 生成器同时校验逻辑身份、参数 Schema，以及 C++ param_* 调用的键和类型。
 LOGICS_GENERATOR="$PROJECT_DIR/scripts/generate_logics_catalog.py"
@@ -266,7 +266,7 @@ if [ ! -f "$LOGICS_GENERATOR" ]; then
     exit 1
 fi
 python3 "$LOGICS_GENERATOR" --output "$DIST_DIR/logics.json"
-echo "  聚合: REGISTER_LOGIC(func) + src/logic/modules/*/logic.json  ->  logics.json"
+echo "  聚合: channel/global modules + logic.json  ->  logics.json"
 
 mkdir -p "$DIST_DIR/services"
 for entry in "${PYTHON_SERVICES[@]}"; do

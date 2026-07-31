@@ -1,5 +1,6 @@
 {
     "label": "课程3: 模型推理结果获取示例",
+    "event_types": [],
     "parameters": {
         "type": "object",
         "additionalProperties": false,

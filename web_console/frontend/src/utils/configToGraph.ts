@@ -1,5 +1,5 @@
 import { Node, Edge, MarkerType } from '@xyflow/react'
-import { sopConfigToFlow } from './sopFlow'
+import { sopParametersToFlow } from './sopFlow'
 import type { GlobalLogicEntry } from '../components/GlobalLogicsPanel'
 import type { GlobalSettingsData } from '../components/GlobalSettingsPanel'
 import { DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
@@ -67,6 +67,9 @@ export function configToGraph(
     logic:            (gl.logic           as string)  ?? 'global_default',
     channels:         (gl.channels        as number[]) ?? [],
     poll_interval_ms: (gl.poll_interval_ms as number) ?? 200,
+    logic_parameters: gl.logic_parameters && typeof gl.logic_parameters === 'object' &&
+      !Array.isArray(gl.logic_parameters)
+      ? gl.logic_parameters as Record<string, unknown> : {},
   }))
 
   const { global_logics: _gl, ...rawGD } = global
@@ -107,24 +110,15 @@ export function configToGraph(
       data: { ...stream, channel_id: origId },
     })
 
-    // ── 通道字段分流：模型字段 → 模型节点；其余参数 → 逻辑节点 ──
+    // ── 通道字段分流：模型字段 → 模型节点；逻辑参数只来自 logic_parameters ──
     const {
       stream: _s, logic: _lg, logic_parameters: _logicParameters,
-      model_type: _legacyModelType, model_path: _legacyModelPath,
-      label_path: _legacyLabelPath, version: _legacyVersion,
-      obj_thresh: _legacyObjThresh, nms_thresh: _legacyNmsThresh,
-      detect_classes: _legacyDetectClasses, npu_core: _legacyNpuCore,
-      event_video_enable: _eve, event_video_pre_sec: _evpre,
-      event_video_post_sec: _evpost, event_video_fps: _evfps,
-      event_video_overlay: _evOverlay,
       report_policy: _reportPolicy, report_parameters: _reportParameters,
       ...rest
     } = ch
     const modelData:   Record<string, unknown> = {}
-    const logicParams: Record<string, unknown> = {}
     Object.entries(rest).forEach(([k, v]) => {
       if (MODEL_KEYS.has(k)) modelData[k] = v
-      else                   logicParams[k] = v
     })
     delete modelData.models
 
@@ -179,14 +173,14 @@ export function configToGraph(
     const logic   = String(_lg ?? '').trim()
     const isSop   = logic === 'logic_path_sop'
     let logicId: string | null = null
-    // SOP: 结构化流程(target/reset/steps, 集中在 sopConfigToFlow); 普通逻辑: 名字 + 参数(logics.json 驱动)
+    // SOP: flow 来自 logic_parameters；普通逻辑也只读取同一参数对象。
     const moduleParameters = _logicParameters && typeof _logicParameters === 'object' && !Array.isArray(_logicParameters)
       ? _logicParameters as Record<string, unknown> : {}
     if (logic) {
       logicId = uid(isSop ? 'sop' : 'logic')
       const logicData: Record<string, unknown> = isSop
-        ? { ...sopConfigToFlow(ch), logic_parameters: moduleParameters }
-        : { logic, logic_parameters: moduleParameters, ...logicParams }
+        ? { ...sopParametersToFlow(moduleParameters), logic_parameters: moduleParameters }
+        : { logic, logic_parameters: moduleParameters }
       nodes.push({
         id: logicId, type: isSop ? 'sop' : 'logic',
         position: pos('logic', hasModel ? LOGIC_X : MODEL_X, y),  // 传统通道 logic 占据 model 的列位置, 更紧凑
@@ -206,16 +200,14 @@ export function configToGraph(
       ? _reportPolicy : null) as Record<string, unknown> | null
     const configuredDeliveries = Array.isArray(policyObj?.deliveries)
       ? policyObj!.deliveries as Record<string, unknown>[] : []
-    // enabled 是新配置的显式节点存在标记；deliveries 判断用于兼容没有 enabled 的旧配置。
-    const hasReportNode = logicId !== null &&
-      (policyObj?.enabled === true || configuredDeliveries.length > 0)
+    const hasReportNode = logicId !== null && policyObj?.enabled === true
     if (hasReportNode && logicId) {
       const nodeDeliveries = configuredDeliveries.length > 0 ? configuredDeliveries : [{
         id: `delivery_ch${origId}`,
         enabled: true,
-        media: 'image',
-        target: 'server',
-        inputs: [],
+        profile_id: '',
+        contract_id: '',
+        media: [],
       }]
       nodeDeliveries.forEach((delivery, reportIndex) => {
         const reportId = uid('report')
@@ -226,10 +218,10 @@ export function configToGraph(
             enabled: true,
             deliveries: [{ ...delivery, enabled: delivery.enabled !== false }],
             image_overlay: policyObj?.image_overlay ?? 'custom',
-            video_overlay: policyObj?.video_overlay ?? _evOverlay ?? 'custom',
-            video_pre_sec: policyObj?.video_pre_sec ?? _evpre ?? 3,
-            video_post_sec: policyObj?.video_post_sec ?? _evpost ?? 3,
-            video_fps: policyObj?.video_fps ?? _evfps ?? 15,
+            video_overlay: policyObj?.video_overlay ?? 'custom',
+            video_pre_sec: policyObj?.video_pre_sec ?? 3,
+            video_post_sec: policyObj?.video_post_sec ?? 3,
+            video_fps: policyObj?.video_fps ?? 15,
           },
           report_parameters: (_reportParameters && typeof _reportParameters === 'object') ? _reportParameters : {},
         }

@@ -1,16 +1,35 @@
+import { useEffect, useState } from 'react'
 import { Handle, Position, NodeProps, useReactFlow } from '@xyflow/react'
-import { useConsoleStore } from '../store/consoleStore'
+import { asLogicDef, fetchAppLogics, type LogicDef } from '../api/client'
+import { useEditorStore } from '../store/editorStore'
 import NumberField from '../components/NumberField'
 import './nodeStyles.css'
 
 export default function GlobalLogicNode({ id, data, selected }: NodeProps) {
   const { updateNodeData } = useReactFlow()
-  const info = useConsoleStore(s => s.info)
+  const appName = useEditorStore(s => s.appName)
+  const [definitions, setDefinitions] = useState<LogicDef[]>([])
   const d = data as Record<string, unknown>
   const set = (key: string, val: unknown) => updateNodeData(id, { [key]: val })
 
-  const globalLogics = info?.known_global_logics ?? ['global_default']
-  const currentLogic = String(d.logic ?? 'global_default')
+  useEffect(() => {
+    let cancelled = false
+    if (!appName) {
+      setDefinitions([])
+      return () => { cancelled = true }
+    }
+    fetchAppLogics(appName)
+      .then(result => {
+        if (!cancelled) setDefinitions(result.global_logics.map(asLogicDef))
+      })
+      .catch(() => {
+        if (!cancelled) setDefinitions([])
+      })
+    return () => { cancelled = true }
+  }, [appName])
+
+  const globalLogics = definitions.map(item => item.name)
+  const currentLogic = String(d.logic ?? '')
 
   const channelsRaw = (d.channels as number[]) ?? []
   const channelsStr = channelsRaw.join(', ')
@@ -31,8 +50,19 @@ export default function GlobalLogicNode({ id, data, selected }: NodeProps) {
       <div className="rf-node-body">
         <div className="node-field">
           <label>逻辑名称</label>
-          <select value={currentLogic} onChange={e => set('logic', e.target.value)}>
-            {globalLogics.map(l => <option key={l} value={l}>{l}</option>)}
+          <select value={currentLogic} onChange={e => {
+            const definition = definitions.find(item => item.name === e.target.value)
+            const logicParameters: Record<string, unknown> = {}
+            ;(definition?.params ?? []).forEach(param => {
+              if (param.default !== undefined) logicParameters[param.key] = param.default
+            })
+            updateNodeData(id, { logic: e.target.value, logic_parameters: logicParameters })
+          }}>
+            {definitions.map(item => (
+              <option key={item.name} value={item.name}>
+                {item.label ? `${item.label}（${item.name}）` : item.name}
+              </option>
+            ))}
             {!globalLogics.includes(currentLogic) && <option value={currentLogic}>{currentLogic}</option>}
           </select>
         </div>

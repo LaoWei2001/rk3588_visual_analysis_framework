@@ -8,9 +8,6 @@
     "max_fps": 25,
     "queue_size": 1,
     "channel_threads": 3,
-    "obj_thresh": 0.3,
-    "nms_thresh": 0.45,
-    "detect_classes": [],
     "tracker_enable": 1,
     "tracker_iou_thresh": 0.3,
     "tracker_max_miss": 30,
@@ -43,14 +40,38 @@
           "npu_core": 0
         }
       ],
-      "logic": "logic_course_07",
+      "logic": "logic_course_08",
       "report_policy": {
-        "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "enabled": true,
+        "deliveries": [
+          {
+            "id": "test_dify_image",
+            "enabled": true,
+            "profile_id": "inspection_dify",
+            "contract_id": "dify_event_image",
+            "media": ["annotated_image"]
+          },
+          {
+            "id": "test_dify_video",
+            "enabled": true,
+            "profile_id": "inspection_dify",
+            "contract_id": "dify_event_video",
+            "media": ["video"],
+            "when": {"event_types": ["logic_course_08"]}
+          }
+        ],
+        "parameters": [],
+        "image_overlay": "custom",
+        "video_overlay": "custom",
+        "video_pre_sec": 3,
+        "video_post_sec": 3,
+        "video_fps": 15,
+        "merge_window_sec": 5
       },
       "report_parameters": {},
-      "logic_parameters": {},
+      "logic_parameters": {
+        "time_interval": 3
+      },
       "roi_zones": []
     }
   ],
@@ -67,6 +88,10 @@
       "logic": {
         "x": 305,
         "y": -65
+      },
+      "report": {
+        "x": 529,
+        "y": -64
       }
     }
   }

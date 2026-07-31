@@ -27,6 +27,7 @@
   cursor: pointer;
 }
 .gl-add-btn:hover { color: var(--accent); border-color: var(--accent); }
+.gl-add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .gl-empty {
   font-size: 12px;
@@ -64,9 +65,29 @@
 }
 
 .gl-field input,
-.gl-field select {
+.gl-field select,
+.gl-field textarea {
   font-size: 12px;
   padding: 3px 6px;
+}
+
+.gl-params {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: end;
+  gap: 8px 10px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.gl-json-param {
+  grid-column: 1 / -1;
+}
+
+.gl-param-error {
+  color: var(--red);
+  font-size: 11px;
 }
 
 .gl-toggle {

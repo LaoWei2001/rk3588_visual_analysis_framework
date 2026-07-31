@@ -56,7 +56,6 @@ export interface ConsoleInfo {
   version: string
   apps_root: string
   binary_name: string
-  known_global_logics: string[]
   known_model_types: string[]
 }
 
@@ -151,7 +150,6 @@ export const captureSnapshot = (
 export interface LogicParam {
   key: string
   type: 'int' | 'float' | 'string' | 'bool' | 'enum' | 'text' | 'json'
-  storage?: 'logic_parameters'                           // 缺省=旧版通道顶层字段
   json_type?: 'array' | 'object'                         // type=json 时约束容器类型
   label?: string
   default?: unknown
@@ -170,6 +168,11 @@ export interface ReportField {
   label?: string
   help?: string
 }
+export interface EventTypeDef {
+  id: string
+  label?: string
+  help?: string
+}
 export interface BusinessField {
   path: string
   type: 'string' | 'number' | 'boolean' | 'json'
@@ -181,10 +184,10 @@ export interface BusinessField {
 export interface LogicDef {
   name: string
   label?: string
-  report?: 'dify' | 'server'                             // 需要连接「上报配置」节点
   params?: LogicParam[]
   parameters?: Record<string, unknown>                    // 模块 JSON Schema（C++/Web 同源）
-  report_fields?: ReportField[]                            // C++ AlarmRequest.fields 只读字段清单
+  event_types?: EventTypeDef[]                            // 本逻辑可产生的 EventRequest.event_type
+  report_fields?: ReportField[]                            // C++ EventRequest.fields 只读字段清单
   business_fields?: BusinessField[]                        // 完整业务 JSON 字段目录
 }
 
@@ -238,16 +241,45 @@ export const sendChannelAction = (
 
 // ── 微服务配置 (上报服务 config.yaml 默认值 + OTA 升级服务 ota_config.json) ──
 export interface UploadProfile {
-  type?: 'dify' | 'server'
-  api_url?: string
-  api_key?: string
-  url?: string
-  timeout?: number
+  adapter: string
+  [key: string]: unknown
 }
 export interface UploadServiceConfig {
-  dify:   { api_url: string; api_key: string; timeout: number }
-  server: { url: string; timeout: number }
   profiles: Record<string, UploadProfile>
+}
+export interface AdapterProfileField {
+  key: string
+  label: string
+  type: 'string' | 'secret' | 'number' | 'json' | 'select'
+  required?: boolean
+  default?: unknown
+  options?: string[]
+}
+export interface DeliveryAdapterDef {
+  id: string
+  label: string
+  supported_media: Array<'annotated_image' | 'raw_image' | 'video'>
+  profile_fields: AdapterProfileField[]
+  transforms: string[]
+}
+export interface ReportContract {
+  id: string
+  label: string
+  description?: string
+  adapter: string
+  media: Array<'annotated_image' | 'raw_image' | 'video'>
+  mapping: Array<{
+    source: string
+    target: string
+    value?: unknown
+    type?: string
+    transform?: string
+    file_mode?: 'single' | 'list'
+    required?: boolean
+  }>
+  request?: Record<string, unknown>
+  success?: Record<string, unknown>
+  source_file?: string
 }
 export interface OtaConfig {
   platform_ws_host: string
@@ -258,6 +290,23 @@ export const fetchUploadConfig = (name: string) =>
   api.get<UploadServiceConfig>(`/apps/${name}/upload-config`).then(r => r.data)
 export const saveUploadConfig = (name: string, cfg: UploadServiceConfig) =>
   api.post(`/apps/${name}/upload-config`, cfg).then(r => r.data)
+export const fetchDeliveryAdapters = (name: string) =>
+  api.get<{ adapters: DeliveryAdapterDef[] }>(`/apps/${name}/delivery-adapters`).then(r => r.data.adapters)
+export const fetchReportContracts = (name: string) =>
+  api.get<{ contracts: ReportContract[] }>(`/apps/${name}/report-contracts`).then(r => r.data.contracts)
+export const saveReportContract = (name: string, contract: ReportContract) =>
+  api.put<{ ok: boolean; contract: ReportContract }>(
+    `/apps/${name}/report-contracts/${encodeURIComponent(contract.id)}`,
+    contract,
+  ).then(r => r.data.contract)
+export const previewDelivery = (
+  name: string,
+  delivery: Record<string, unknown>,
+  eventId = '',
+  send = false,
+) => api.post(`/apps/${name}/delivery-preview`, {
+  delivery, event_id: eventId, send,
+}).then(r => r.data as { preview: Record<string, unknown>; test?: Record<string, unknown> })
 export const fetchOtaConfig = (name: string) =>
   api.get<OtaConfig>(`/apps/${name}/ota-config`).then(r => r.data)
 export const saveOtaConfig = (name: string, cfg: OtaConfig) =>
@@ -301,9 +350,6 @@ export interface ServiceInfo {
 
 export const fetchServices = () => api.get<ServiceInfo[]>('/services').then(r => r.data)
 
-export const installService = (key: string, app: string) =>
-  api.post(`/services/${key}/install`, { app }).then(r => r.data)
-
 export const controlService = (key: string, action: 'start' | 'stop' | 'restart') =>
   api.post(`/services/${key}/${action}`).then(r => r.data)
 
@@ -337,31 +383,29 @@ export const uploadApp = (
 export const deleteApp = (name: string) =>
   api.delete(`/apps/${name}`).then(r => r.data)
 
-// ── 本地业务发件箱（正常工序、违规工序及其他待上报事件）────────────────────
-export interface AlarmRecord {
+// ── 本地事件发件箱 ──────────────────────────────────────────────────────────
+export interface EventRecord {
   id: string
   channel_id: number | null
-  alarm_type: string
-  record_kind: 'normal' | 'violation' | 'alarm'
-  media_mode: 'json' | 'media'
-  expects_image: boolean
-  expects_video: boolean
+  event_type: string
+  required_media: string[]
   trigger_count?: number
-  snapTime: string | number
-  ts: number
-  has_raw: boolean
-  has_image: boolean
+  snap_time: string | number
+  created_unix_sec: number
+  has_raw_image: boolean
+  has_annotated_image: boolean
   has_video: boolean
   message?: string
   state: string
+  media_statuses?: Record<string, { status: string; error?: string }>
   total_bytes?: number
   deliveries: Array<{
-    id?: string; media?: string; target?: string; status?: string
+    id?: string; media?: string[]; profile_id?: string; contract_id?: string; status?: string
     attempts?: number; last_error?: string
   }>
 }
 export interface RecordsResp {
-  records: AlarmRecord[]
+  records: EventRecord[]
   count: number
   total_bytes: number
   cap_bytes: number
@@ -370,20 +414,14 @@ export interface RecordsResp {
 export const fetchRecords = (name: string, limit = 500) =>
   api.get<RecordsResp>(`/apps/${name}/records`, { params: { limit } }).then(r => r.data)
 
-export interface RecordJsonPayload {
-  delivery_id: string
-  media: string
-  status: string
-  event_variable: string
-  event_json: Record<string, unknown>
-}
-
 export interface RecordJsonResponse {
-  delivery_id: string
-  event_variable: string
-  event_json: Record<string, unknown>
-  payloads: RecordJsonPayload[]
-  full_business_json: Record<string, unknown>
+  schema_version: number
+  event: Record<string, unknown>
+  source: Record<string, unknown>
+  fields: Record<string, unknown>
+  media: Record<string, string>
+  media_statuses: Record<string, { status: string; error?: string }>
+  deliveries: Array<Record<string, unknown>>
 }
 
 export const fetchRecordJson = (name: string, id: string) =>
@@ -410,3 +448,5 @@ export const retryRecord = (name: string, id: string) =>
 export const deleteRecord = (name: string, id: string) =>
   api.delete(`/apps/${name}/records/${id}`).then(r => r.data)
 
+export const deleteAllRecords = (name: string) =>
+  api.delete(`/apps/${name}/records`).then(r => r.data)

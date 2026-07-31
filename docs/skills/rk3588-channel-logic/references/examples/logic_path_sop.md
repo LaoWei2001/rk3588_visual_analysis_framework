@@ -8,7 +8,7 @@
 
 ## 当前告警类型
 
-源码在一帧内先收集告警类型，完成所有叠加后再统一调用 `alarm_report(ctx, request)`：
+源码在一帧内先收集告警类型，完成所有叠加后再统一调用 `report_event(ctx, request)`：
 
 - `sop_order_err`：进入了设计内区域，但不是当前候选的合法后继；
 - `sop_missed`：结算时不存在已访问的有效入口到出口路径；
@@ -38,16 +38,52 @@
 
 为了让上报结果可以完整还原本轮实际采用的 SOP 路径图，`sop` 还固定输出：
 
-- `configured_graph_mode`：`explicit` 表示使用画布显式连线，`linear_fallback` 表示未配置边时采用顺序线性链；
 - `configured_edges`：实际生效的全部普通边、分支、回边和自环；
 - `configured_entry_steps`：实际生效的入口步骤；
 - `configured_exit_steps`：实际生效的出口步骤。
 
-将这些字段与 `configured_sequence` 组合即可还原完整拓扑；它们输出的是回退规则处理后的有效配置，因此比直接复制原始 `path_*` 字符串更准确。
+将这些字段与 `configured_sequence` 组合即可还原完整拓扑。边、入口和出口都是画布显式
+配置，不存在隐式线性链或自动推断出口。
+
+## 配置结构
+
+SOP 的唯一配置入口是 `channels[].logic_parameters.flow`：
+
+```json
+{
+  "logic": "logic_path_sop",
+  "logic_parameters": {
+    "flow": {
+      "target_label": "person",
+      "reset_sec": 5,
+      "end_mode": "leave",
+      "end_zone": "",
+      "end_dwell_sec": 0,
+      "total_min_sec": 0,
+      "total_max_sec": 120,
+      "trigger_mode": "auto",
+      "trigger_mandatory": false,
+      "report_normal": false,
+      "steps": [
+        {"zoneName": "入口", "enter_sec": 0.5, "dwell_min_sec": 0, "dwell_max_sec": 0},
+        {"zoneName": "工位", "enter_sec": 0.5, "dwell_min_sec": 10, "dwell_max_sec": 60}
+      ],
+      "edges": [[0, 1]],
+      "edge_limits": [],
+      "entries": [0],
+      "exits": [1]
+    }
+  }
+}
+```
+
+`steps[].zoneName` 必须与 `roi_zones[].name` 完全一致。多个步骤时必须显式配置 `edges`；
+`entries` 和 `exits` 至少各有一项。Web 保存前会检查这些条件，C++ 遇到不完整配置时只显示
+配置错误，不猜测路线。`flow` 的热更新策略是 `reset_state`。
 
 ## 上报方式
 
-SOP logic 不选择服务器或 Dify，也不拼装图片。画布连接的上报节点生成 `report_policy`；告警模块自动复用当前显示叠加生成 `snapshot.jpg`，同时保留 `raw.jpg`，视频 delivery 则触发事件录像。
+SOP logic 不选择服务器或 Dify，也不拼装图片。画布连接的上报节点生成 `report_policy`；告警模块自动复用当前显示叠加生成 `annotated.jpg`，同时保留 `raw.jpg`，视频 delivery 则触发事件录像。
 
 相同通道、相同告警类型在 `merge_window_sec` 内可能合并为同一事件。SOP 自身还按步骤/轮次去重，避免同一违规每帧重复提交。
 

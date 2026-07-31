@@ -37,9 +37,6 @@ export interface GlobalSettingsData {
   max_fps: number
   queue_size: number
   channel_threads: number
-  obj_thresh: number
-  nms_thresh: number
-  detect_classes: string[]
   tracker_enable: number
   tracker_iou_thresh: number
   tracker_max_miss: number
@@ -56,8 +53,6 @@ export const DEFAULT_GLOBAL_SETTINGS: GlobalSettingsData = {
   tile_rows: 1, tile_cols: 1,
   max_fps: 25, queue_size: 1,
   channel_threads: 3,
-  obj_thresh: 0.3, nms_thresh: 0.45,
-  detect_classes: [],
   tracker_enable: 1, tracker_iou_thresh: 0.3,
   tracker_max_miss: 30, tracker_min_hits: 3,
   performance_display: 0, enable_pause_key: 0,
@@ -95,8 +90,6 @@ export default function GlobalSettingsPanel({ settings: s, onChange }: Props) {
           </div>
 
           <div className="gs-row">
-            <NumField label="置信阈值"   value={s.obj_thresh}         def={0.3}  step="0.05" min="0" max="1" onChange={v => set('obj_thresh', v)} />
-            <NumField label="NMS 阈值"   value={s.nms_thresh}         def={0.45} step="0.05" min="0" max="1" onChange={v => set('nms_thresh', v)} />
             <NumField label="Tracker IOU" value={s.tracker_iou_thresh} def={0.3} step="0.05" min="0" max="1" onChange={v => set('tracker_iou_thresh', v)} />
             <NumField label="最大丢失帧" value={s.tracker_max_miss}   def={30}   onChange={v => set('tracker_max_miss', v)} />
             <NumField label="最小命中"   value={s.tracker_min_hits}   def={3}    onChange={v => set('tracker_min_hits', v)} />

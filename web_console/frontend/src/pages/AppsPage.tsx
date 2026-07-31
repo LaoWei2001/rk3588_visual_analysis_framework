@@ -661,7 +661,7 @@ export default function AppsPage() {
                     className="action-btn log"
                     onClick={() => navigate(`/records/${app.name}`)}
                     title="查看本地发件箱中的待上报记录"
-                  >待上报记录{(app.unreported ?? 0) > 0 ? `（${app.unreported}条）` : ''}</button>
+                  >待上报记录（{app.unreported ?? 0}条）</button>
 
                   <button
                     className="action-btn"

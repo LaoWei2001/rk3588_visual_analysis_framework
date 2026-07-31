@@ -28,11 +28,6 @@ YoloPose::YoloPose(const std::string &model_path, const std::string &label_path,
     }
 }
 
-YoloPose::YoloPose(const std::string &model_path, int core_mask, float obj_thresh, float nms_thresh)
-    : YoloPose(model_path, std::string(), core_mask, obj_thresh, nms_thresh)
-{
-}
-
 YoloPose::~YoloPose()
 {
     if (input_rga_handle_ != 0)

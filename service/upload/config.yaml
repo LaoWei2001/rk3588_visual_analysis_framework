@@ -1,29 +1,13 @@
-# Unified upload config
-#
-# dify/server 是默认连接；每个通道的 delivery 可通过 profile_id 选择 profiles 中的独立连接。
-# 地址和密钥不写进通道 config.json，避免画布配置携带凭据。
+# Dify 投递连接。通道 delivery 引用 profile_id。
+# 地址和密钥集中在这里；字段 mapping、媒体由 contracts/*.json 定义。
+profiles:
+  server_22:
+    adapter: http_json
+    url: http://192.168.2.22:9200/api/objectInvadeDet
+    timeout: 15
 
-# Dify config (默认地址, 通道留空时使用)
-dify:
-  api_url: http://192.168.2.98:8015
-  api_key: "app-7qmWISrMzrVYVpalX95hTSGa"
-  timeout: 120
-
-# Business server config (默认地址, 通道留空时使用)
-server:
-  url: "http://192.168.2.22:9200/api/objectInvadeDet"
-  timeout: 15
-
-# 可复用连接Profile。画布中的 delivery 只保存 profile_id；按项目增加或删除。
-# 示例：
-# profiles:
-#   sop_dify:
-#     type: "dify"
-#     api_url: "http://dify.example.com"
-#     api_key: "app-..."
-#   alarm_server:
-#     type: "server"
-#     url: "http://server.example.com/api/alarm"
-#     token: "..."
-#     timeout: 15
-profiles: {}
+  inspection_dify:
+    adapter: dify_workflow
+    api_url: "http://127.0.0.1:9201"
+    api_key: "test-key-123"
+    timeout: 120

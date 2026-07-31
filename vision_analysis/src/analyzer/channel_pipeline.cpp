@@ -278,10 +278,8 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
     ctx.results = &current_results;
     ctx.config = channel_config;
     ctx.logic_parameters = runtime_logic_parameters;
-    /* 多 ROI: ctx.rois = 本通道全部区域; ctx.roi = 第一个区域(兼容老逻辑, 无区域时为 nullptr)。
-     * 顶点已是模型坐标系(归一化加载时即是; 旧像素格式由下方 process_channel_results 缩放后填入)。*/
+    /* 多 ROI 顶点均为模型坐标系。 */
     ctx.rois = runtime_rois;
-    ctx.roi = runtime_rois->empty() ? nullptr : &(*runtime_rois)[0].polygon;
     ctx.state = &logic_state;
     ctx.infer_enabled = infer_enabled;
     ctx.infer_fps = algorithm_get_infer_fps(chnId);

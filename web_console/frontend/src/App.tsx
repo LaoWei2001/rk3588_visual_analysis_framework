@@ -14,10 +14,17 @@ import { useEditorStore } from './store/editorStore'
 import { apiLogout }    from './api/client'
 import './App.css'
 
-// 编辑器有未保存改动时，侧边栏跳转/退出前先确认（SPA 导航不触发 beforeunload，需单独拦截）
-const confirmLeaveIfDirty = (): boolean =>
-  !useEditorStore.getState().dirty ||
-  window.confirm('编辑器有未保存的改动，确定离开？未保存的修改将丢失。')
+// 编辑器或服务配置有未保存改动时，侧边栏跳转/退出前先确认。
+const confirmLeaveIfDirty = (): boolean => {
+  const state = useEditorStore.getState()
+  if (state.dirty) {
+    return window.confirm('编辑器有未保存的改动，确定离开？未保存的修改将丢失。')
+  }
+  if (state.serviceConfigDirty) {
+    return window.confirm('服务参数有未保存的改动，确定离开？未保存的修改将丢失。')
+  }
+  return true
+}
 
 // ── Sidebar logo: image on top, text below; no fallback if image missing ──
 // 每次打开随机取一张(frontend/logos/ 里的图片或 GIF; 空则回退 logo.png)。

@@ -1,9 +1,23 @@
 {
     "label": "课程8:如何定时上报图片",
+    "event_types": [
+        {
+            "id": "logic_course_08",
+            "label": "定时触发告警",
+            "help": "按照设定的报警时间间隔上报图片"
+        }
+    ],
     "parameters": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {}
+        "properties": {
+            "time_interval": {
+                "type": "number",
+                "title": "报警时间间隔",
+                "description": "报警时间间隔",
+                "default": 3.0
+            }
+        }
     },
     "report_fields": []
 }

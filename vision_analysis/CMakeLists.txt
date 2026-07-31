@@ -82,15 +82,6 @@ set(sysLib_list
 )
 # ======================== third_party helpers END =========================
 
-# 兼容旧版 easyeai vendor 目录（如果存在，附加其源文件；通常新工程不会有此目录）
-set(vendor_root ${PROJECT_SOURCE_DIR}/src/third_party/easyeai/common)
-if(EXISTS ${vendor_root})
-    list(APPEND api_inc ${vendor_root}/base64 ${vendor_root}/system_opt ${vendor_root}/gst_opt)
-    file(GLOB VENDOR_BASE64_SRCS ${vendor_root}/base64/*.cpp)
-    file(GLOB VENDOR_SYSOPT_SRCS ${vendor_root}/system_opt/*.cpp)
-    list(APPEND api_srcs ${VENDOR_BASE64_SRCS} ${VENDOR_SYSOPT_SRCS})
-endif()
-
 # ========================== custom ============================
 find_package(OpenCV REQUIRED)
 find_package(PkgConfig REQUIRED)
@@ -143,7 +134,8 @@ aux_source_directory(${PROJECT_SOURCE_DIR}/src/core                     dir_srcs
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/capturer                 dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/analyzer                 dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/control                  dir_srcs)
-# 每种业务逻辑位于 src/logic/modules/<logic_name>/，框架位于 src/logic/core/。
+# 通道逻辑位于 src/logic/modules/<logic_name>/，全局逻辑位于
+# src/logic/global_modules/<logic_name>/，框架位于 src/logic/core/。
 # 递归收集让新增/删除逻辑模块无需再修改 CMakeLists.txt；重新运行 cmake 即可刷新列表。
 file(GLOB_RECURSE logic_srcs
     "${PROJECT_SOURCE_DIR}/src/logic/*.cpp"
@@ -158,13 +150,21 @@ find_program(PYTHON3_EXECUTABLE NAMES python3)
 if(NOT PYTHON3_EXECUTABLE)
     message(FATAL_ERROR "生成逻辑参数能力需要 python3")
 endif()
-file(GLOB logic_manifest_files "${PROJECT_SOURCE_DIR}/src/logic/modules/*/logic.json")
+file(GLOB logic_manifest_files
+    "${PROJECT_SOURCE_DIR}/src/logic/modules/*/logic.json"
+    "${PROJECT_SOURCE_DIR}/src/logic/global_modules/*/logic.json"
+)
 file(GLOB_RECURSE logic_validation_files
     "${PROJECT_SOURCE_DIR}/src/logic/modules/*.cpp"
     "${PROJECT_SOURCE_DIR}/src/logic/modules/*.cc"
     "${PROJECT_SOURCE_DIR}/src/logic/modules/*.cxx"
     "${PROJECT_SOURCE_DIR}/src/logic/modules/*.h"
     "${PROJECT_SOURCE_DIR}/src/logic/modules/*.hpp"
+    "${PROJECT_SOURCE_DIR}/src/logic/global_modules/*.cpp"
+    "${PROJECT_SOURCE_DIR}/src/logic/global_modules/*.cc"
+    "${PROJECT_SOURCE_DIR}/src/logic/global_modules/*.cxx"
+    "${PROJECT_SOURCE_DIR}/src/logic/global_modules/*.h"
+    "${PROJECT_SOURCE_DIR}/src/logic/global_modules/*.hpp"
 )
 set(logic_catalog_cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/logic_catalog_embedded.cpp")
 add_custom_command(
@@ -185,7 +185,7 @@ list(APPEND dir_srcs "${logic_catalog_cpp}")
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/player                   dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/yolo                     dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/recorder                 dir_srcs)
-aux_source_directory(${PROJECT_SOURCE_DIR}/src/alarm                    dir_srcs)
+aux_source_directory(${PROJECT_SOURCE_DIR}/src/event                    dir_srcs)
 set(cjson_src ${PROJECT_SOURCE_DIR}/src/third_party/json/cJSON.c)
 # ========================== custom ============================
 

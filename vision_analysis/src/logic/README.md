@@ -1,6 +1,6 @@
 # Logic 模块目录
 
-通道逻辑按“每种逻辑一个模块目录”组织：
+通道逻辑和全局逻辑都按“每种逻辑一个模块目录”组织：
 
 ```text
 src/logic/
@@ -10,7 +10,12 @@ src/logic/
 │       ├── logic.cpp           # 入口、动作处理和 REGISTER_LOGIC
 │       ├── logic.json          # 参数、动作、上报字段等模块元数据
 │       └── ...                 # 复杂逻辑可继续添加 state/engine/render 等文件
-└── catalog.json                # 全局逻辑和模型类型等共享能力
+├── global_modules/
+│   └── global_xxx/
+│       ├── logic.cpp           # 入口和 REGISTER_GLOBAL_LOGIC
+│       ├── logic.json          # 参数 Schema 和 Web 元数据
+│       └── ...
+└── catalog.json                # 模型类型等非模块共享能力
 ```
 
 这里的一个模块对应一种逻辑类型，不对应某个实际视频通道。多个通道可以同时使用同一个
@@ -96,9 +101,10 @@ Schema 会在构建时嵌入可执行文件。配置在启动和热重载时解�
 参数表，逐帧逻辑不会解析 JSON。类型错误、越界值和未知键会使新配置被拒绝，旧运行
 快照继续工作。
 
-`logic_path_sop` 现有 `path_*` 顶层字段为了兼容历史配置仍保留；其专用流程编辑器继续
-管理这些结构化字段。以后新增的普通 SOP 扩展参数也可以放进 `parameters.properties`，
-Web 会在 SOP 信息面板的“模块扩展参数”区自动显示。
+`logic_path_sop` 的完整流程也遵守同一规则，唯一持久化入口是
+`logic_parameters.flow`。SOP 子画布直接读写这个 object；步骤、边、入口、出口、阈值和
+子画布坐标不再压缩成通道顶层 CSV 字段。`flow` 使用 `reset_state` 热更新策略，图发生变化
+时框架会清空旧状态，logic 在新状态第一次运行时解析一次结构化对象。
 
 可在不构建 C++ 的情况下单独校验所有模块：
 
@@ -110,9 +116,24 @@ CMake 编译（包括 `build.sh --debug`）会生成并编译嵌入式能力清�
 应用根目录的 `logics.json`，供后端和前端动态渲染。生成文件不应人工修改；需要调整
 某种逻辑时，只修改对应模块内的 `logic.json`。
 
+## 新增全局逻辑
+
+1. 新建 `global_modules/global_xxx/logic.cpp` 和 `logic.json`。
+2. 实现 `static void global_xxx(GlobalContext *gctx)`，末尾写
+   `REGISTER_GLOBAL_LOGIC(global_xxx)`；函数名是唯一全局 logic ID。
+3. 在模块 `logic.json.parameters.properties` 声明专有参数，通过
+   `gctx->param_float/int/bool/string/json()` 读取。
+4. 在 `global.global_logics[]` 配置实例；参数值放在该实例的
+   `logic_parameters` 对象中。
+
+全局模块清单和参数表会与通道模块一起聚合进 `logics.json`。Web 直接读取当前 App 的
+`global_logics`，不维护全局 logic 硬编码列表。全局配置发生变化时，框架停止并重建全局
+logic 线程，因此每个实例的 `state` 也会重新初始化。
+
 ## 框架与业务边界
 
 - `core/` 只存放所有逻辑共享的生命周期、上下文、注册和绘制接口。
 - `modules/logic_xxx/` 只存放该逻辑自己的代码和元数据。
+- `global_modules/global_xxx/` 只存放该跨通道逻辑自己的代码和元数据。
 - 小逻辑可以只有一个 `logic.cpp`；只有文件确实变大时才继续按状态、算法、上报、绘制拆分。
 - 模块之间不要通过相对路径包含彼此的内部头文件；需要复用的稳定能力应提升到明确的公共层。

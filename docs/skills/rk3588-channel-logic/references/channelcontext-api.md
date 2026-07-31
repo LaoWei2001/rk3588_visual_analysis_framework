@@ -92,7 +92,7 @@ RenderParams ctx->render_params(int64_t age=0);     // 给 render_overlays 用�
 | `ctx->roi_index_of(box)` | 框中心落在第几个区域（取首个命中；都不在/无区域 → `ROI_NONE`，当前值为 -2） |
 | `ChannelContext::point_box_in_poly(poly, box)`（静态） | 框中心是否在给定多边形内（多边形 <3 点视为"全屏"=1） |
 
-> 单区域、多区域用同一套 C 风格自由函数 `roi_contains` / `roi_has_target` / `roi_count_target`（`idx` 传 `ROI_ALL` = 所有区域）。当前多区域范例见 `examples/logic_upload.md`（目标落入任一区域）和 `examples/logic_path_sop.md`（按名字把流程步骤绑定到区域）。
+> 单区域、多区域用同一套 C 风格自由函数 `roi_contains` / `roi_has_target` / `roi_count_target`（`idx` 传 `ROI_ALL` = 所有区域）。ROI 进入告警模式见 `examples/roi-alarm-pattern.md`，复杂的按名区域流程见 `examples/logic_path_sop.md`。
 
 ### 为什么有些 ROI API 在结构体内，有些在结构体外
 
@@ -125,7 +125,7 @@ if (!s.frame.empty() && s.result_age_ms < 500) {    // 新鲜度自检
     for (auto &r : s.results) { /* r.box / r.label / r.score ... */ }
 }
 std::string name = ctx->get_channel_logic_name(2);  // 通道2跑的是哪个 logic
-int yes = ctx->channel_has_logic(2, "logic_upload");
+int yes = ctx->channel_has_logic(2, "logic_xxx");
 ```
 > 本通道当帧数据直接用 `ctx->frame` / `ctx->results` 即可（已保证同帧）。跨通道**必须**用 `get_channel_snapshot`，不要直接摸别的通道状态。
 
@@ -170,10 +170,10 @@ void draw_poly_filled(ctx, const std::vector<cv::Point> &points, color=绿, alph
 - `DrawCommand::DISPLAY` — 实时显示层；
 - `DrawCommand::IMAGE` — 告警图片专用层；
 - `DrawCommand::VIDEO` — 事件视频专用层；
-- `DrawCommand::UPLOAD` — `IMAGE | VIDEO`；
+- `DrawCommand::MEDIA` — `IMAGE | VIDEO`；
 - `DrawCommand::ALL` — `DISPLAY | IMAGE | VIDEO`（默认）。
 
-当前 Web 的“与实时播放窗口画面一致”会让告警图片取 `DISPLAY|IMAGE`，事件视频取 `DISPLAY|VIDEO`，因此 `DISPLAY` 层也会被这种媒体模式复用；选择原始图片/视频时不绘制任何层。例：只想额外写入告警媒体而不出现在实时画面，用 `DrawCommand::UPLOAD`。
+当前 Web 的“与实时播放窗口画面一致”会让告警图片取 `DISPLAY|IMAGE`，事件视频取 `DISPLAY|VIDEO`，因此 `DISPLAY` 层也会被这种媒体模式复用；选择原始图片/视频时不绘制任何层。例：只想额外写入告警媒体而不出现在实时画面，用 `DrawCommand::MEDIA`。
 
 ### `ctx->draw_cmds` 的真实作用
 
@@ -196,17 +196,17 @@ channel_pipeline 为本帧创建 vector<DrawCommand>
   └─ ctx.draw_cmds 指向它
        └─ logic 调 draw_text/draw_rect 等追加命令
             ├─ logic 返回后 move 到该通道状态，供实时显示读取
-            ├─ alarm_report 调用时复制当前命令，供 snapshot.jpg 渲染
+            ├─ report_event 调用时复制当前命令，供 annotated.jpg 渲染
             └─ 录像帧入口复制通道最近命令，供 clip.mp4 渲染
 ```
 
 它采用“记录命令、出口延迟渲染”，所以同一套逻辑坐标能分别适配实时 tile、模型尺寸截图和源分辨率录像。它不是跨帧状态，指针在本次 logic 返回后就失效；不要缓存它，也通常不要直接 `push_back`。只有需要直接修改实时显示底图像素时才使用 `ctx->display_canvas()`，那条路径与 DrawCommand 不同。
 
-上报图片会在 `alarm_report()` 调用期间复制当前队列，因此希望进入本次截图的 `draw_*` 必须写在上报调用之前。完整媒体分层示例见 [logic_upload_teach.md](examples/logic_upload_teach.md)。
+上报图片会在 `report_event()` 调用期间复制当前队列，因此希望进入本次截图的 `draw_*` 必须写在上报调用之前。完整媒体分层示例见 [logic_upload_teach.md](examples/logic_upload_teach.md)。
 
 ## 跨帧状态模式（计时 / 闩锁 / 去重必用）
 
-`ctx->state` 是本通道独有的一格 `shared_ptr<void>`。第一次用时建，之后每帧取回同一份：
+`ctx->state` 的类型是 `std::shared_ptr<void>*`：它是“指向框架所持 `shared_ptr<void>` 对象的普通指针”，不是可以与 `void**` 互换的传统二级指针。`ctx->state` 访问外层指针，`*ctx->state` 才取得那一格智能指针。第一次用时创建状态对象，之后每帧取回同一份：
 
 ```cpp
 #include <set>

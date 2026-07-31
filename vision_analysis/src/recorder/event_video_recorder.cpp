@@ -1,6 +1,6 @@
 #include "event_video_recorder.h"
 
-#include "../alarm/alarm_report.h"
+#include "../event/event_report.h"
 #include "../analyzer/algoProcess.h"
 #include "../analyzer/frame_pipeline.h"
 #include "../config/config.h"
@@ -79,7 +79,7 @@ static ChannelRing g_rings[MAX_CHANNEL_NUM];
 /* event_id -> 正在收集的录像。不同告警的时间窗允许重叠，不能因为同通道同类型
  * 新事件到来就提前截断上一个事件。 */
 static std::map<std::string, VideoEvent> g_active;
-/* channel:alarm_type -> 最近事件ID，仅用于5秒合并事件的 post 窗口延长。 */
+/* channel:event_type -> 最近事件ID，仅用于5秒合并事件的 post 窗口延长。 */
 static std::map<std::string, std::string> g_latest_by_key;
 static std::queue<RawFrame> g_raw_queues[MAX_CHANNEL_NUM];
 static std::queue<VideoEvent> g_video_jobs;
@@ -244,7 +244,7 @@ static void expire_locked(uint64_t now, bool force)
         VideoEvent &event = it->second;
         if (force || (now >= event.end_ms && !event_has_pending_frame_locked(event)))
         {
-            const std::string merge_key = key_for(event.request.channel_id, event.request.alarm_type);
+            const std::string merge_key = key_for(event.request.channel_id, event.request.event_type);
             auto latest = g_latest_by_key.find(merge_key);
             if (latest != g_latest_by_key.end() && latest->second == event.request.event_id)
                 g_latest_by_key.erase(latest);
@@ -470,6 +470,19 @@ static bool write_h264_mp4(VideoEvent &event, const char *encoder)
 
 static bool write_video(VideoEvent &event)
 {
+    if (event.frames.empty())
+    {
+        event_report_video_failed(event.request.event_id, event.request.output_path,
+                                  "no frames available in requested event window");
+        return false;
+    }
+    if (event.request.output_path.empty())
+    {
+        event_report_video_failed(event.request.event_id, event.request.output_path,
+                                  "video output path is empty");
+        return false;
+    }
+
     static const char *encoders[] = {"mpph264enc", "x264enc", "openh264enc"};
     const char *used_encoder = nullptr;
     for (const char *encoder : encoders)
@@ -487,10 +500,12 @@ static bool write_video(VideoEvent &event)
     {
         fprintf(stderr, "[event_video] no working H264 encoder for: %s\n", event.request.output_path.c_str());
         ::remove(event.request.output_path.c_str());
+        event_report_video_failed(event.request.event_id, event.request.output_path,
+                                  "no working H264 encoder or video encoding failed");
         return false;
     }
 
-    alarm_report_video_ready(event.request.event_id, event.request.output_path);
+    event_report_video_ready(event.request.event_id, event.request.output_path);
     printf("[event_video] ready event=%s sampled=%zu encoded=%zu duration=%.2fs "
            "pre=%.2f/%.2fs post=%.2f/%.2fs size=%dx%d codec=h264 encoder=%s\n",
            event.request.event_id.c_str(), event.frames.size(), event.encoded_frames, event.encoded_duration_sec,
@@ -719,7 +734,7 @@ int event_video_recorder_trigger(const EventVideoRequest &input)
     request.pre_sec = clamp_sec(request.pre_sec);
     request.post_sec = clamp_sec(request.post_sec);
     const uint64_t now = now_ms();
-    const std::string key = key_for(request.channel_id, request.alarm_type);
+    const std::string key = key_for(request.channel_id, request.event_type);
 
     pthread_mutex_lock(&g_mtx);
     if (!ensure_started_locked())
@@ -757,10 +772,10 @@ int event_video_recorder_trigger(const EventVideoRequest &input)
     return 1;
 }
 
-void event_video_recorder_extend(int channel_id, const std::string &alarm_type)
+void event_video_recorder_extend(int channel_id, const std::string &event_type)
 {
     pthread_mutex_lock(&g_mtx);
-    auto latest = g_latest_by_key.find(key_for(channel_id, alarm_type));
+    auto latest = g_latest_by_key.find(key_for(channel_id, event_type));
     if (latest != g_latest_by_key.end())
     {
         auto found = g_active.find(latest->second);

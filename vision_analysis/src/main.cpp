@@ -28,7 +28,7 @@
  * 5. dispatch_worker[N]     — NPU 结果分发 + channel_logic (main 直接 pthread_create)
  * 6. infer_worker[N]        — NPU 推理 worker (algorithm_init 内部创建, 底层)
  * 7. global_logic[N]        — 跨通道全局逻辑轮询 (global_logic_start_all 内部创建)
- * 8. alarm_image_worker     — 告警图片与事件清单异步落盘 (首次报警时创建)
+ * 8. event_image_worker     — 事件图片与事件清单异步落盘 (首次报警时创建)
  * 9. event_video_worker     — 报警前后片段异步编码 (首次启用录像时创建)
  *
  * === 同步模型 ===
@@ -54,7 +54,7 @@
 #include <unistd.h>
 #include <vector>
 
-#include "alarm/alarm_report.h"
+#include "event/event_report.h"
 #include "analyzer/analyzer.h"
 #include "capturer/decChannel.h"
 #include "config/config.h"
@@ -186,6 +186,12 @@ int main(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "--list-logics") == 0)
     {
         for (const auto &name : channel_logic_names())
+            printf("%s\n", name.c_str());
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--list-global-logics") == 0)
+    {
+        for (const auto &name : global_logic_names())
             printf("%s\n", name.c_str());
         return 0;
     }
@@ -445,7 +451,7 @@ cleanup:
         analyzer_deinit();
 
     event_video_recorder_deinit();
-    alarm_report_deinit();
+    event_report_deinit();
 
     if (analyzer_initialized)
         analyzer_destroy_display_queues();

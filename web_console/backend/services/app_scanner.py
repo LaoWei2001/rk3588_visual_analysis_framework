@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 
 from services.process_manager import get_status
 from services.runtime_state import get_vision_settings
+from services.data_dir import data_dir
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 BINARY_NAME = os.environ.get("BINARY_NAME", "vision_analysis")
@@ -52,17 +53,16 @@ def scan_apps() -> List[Dict[str, Any]]:
         status_info = get_status(entry.name)
         runtime_settings = get_vision_settings(entry.name)
 
-        # 待上报记录数 = 统一事件目录数，每条事件必须包含 manifest.json。
+        # 待上报记录数 = 统一事件目录数，以 event.json 为完成标记。
         # 只检查目录结构、不解析内容；上报全部成功后事件目录会被删除。
-        # ALARM_STORE_DIR 为全局覆盖(与 records.py 一致), 否则用 <app>/alarm_store。
-        store = Path(os.environ["ALARM_STORE_DIR"]) if os.environ.get("ALARM_STORE_DIR") \
-            else entry / "alarm_store"
+        # 与 records.py / process_manager.py 保持一致，使用 data_dir 下的 event_store。
+        store = data_dir(entry.name) / "event_store"
         unreported = 0
         if store.is_dir():
             try:
                 unreported = sum(
                     1 for event_dir in store.iterdir()
-                    if event_dir.is_dir() and (event_dir / "manifest.json").is_file()
+                    if event_dir.is_dir() and (event_dir / "event.json").is_file()
                 )
             except OSError:
                 unreported = 0

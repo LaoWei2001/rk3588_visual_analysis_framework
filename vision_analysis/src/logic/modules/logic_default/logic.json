@@ -1,5 +1,6 @@
 {
     "label": "空白逻辑示例",
+    "event_types": [],
     "parameters": {
         "type": "object",
         "additionalProperties": false,

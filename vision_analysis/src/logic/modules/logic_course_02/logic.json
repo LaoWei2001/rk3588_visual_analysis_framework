@@ -1,5 +1,6 @@
 {
     "label": "课程2：ctx变量调用",
+    "event_types": [],
     "parameters": {
         "type": "object",
         "additionalProperties": false,

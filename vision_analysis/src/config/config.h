@@ -60,8 +60,8 @@ struct ChannelModelConfig
     std::string model_path;
     std::string label_path;
     std::string version; /* OTA 版本；空表示未设置 */
-    float obj_thresh = -1.0f;
-    float nms_thresh = -1.0f;
+    float obj_thresh = 0.3f;
+    float nms_thresh = 0.45f;
     std::vector<std::string> detect_classes;
     int npu_core = -1;
 };
@@ -101,40 +101,6 @@ struct ChannelConfig
     int tracker_max_miss = 10;       /* 连续丢失上限, 超限删除轨迹 */
     int tracker_min_hits = 3;        /* 确认轨迹所需的最小命中帧数 */
 
-    /* logic_path_sop: 目标"路径/顺序/停留/合规"检测(单目标·按类别; 不含抖动/朝向) */
-    std::string path_sequence = ""; /* 设计路径: 逗号分隔的区域名(须与本通道各 ROI 区域名完全一致), 顺序=期望经过顺序 */
-    std::string path_target_label = ""; /* 要跟踪的目标类别名(取整帧该类置信度最高的一个) */
-    float path_enter_sec = 0.5f;        /* 进入确认【默认】(秒): per-step 列表缺省项的回退值 */
-    float path_dwell_min_sec = 0.0f; /* 最小停留【默认】(秒): per-step 列表缺省项的回退值; 0=不要求 */
-    float path_dwell_max_sec = 0.0f; /* 最大停留【默认】(秒): per-step 列表缺省项的回退值; 0=不限(用户可忽略) */
-    std::string path_enter_list =
-        ""; /* 每步进入确认(秒), 逗号分隔, 与 path_sequence 对齐(空项回退默认); 由 SOP 编排画布生成 */
-    std::string path_dwell_list =
-        ""; /* 每步最小停留(秒), 逗号分隔, 与 path_sequence 对齐(空项回退默认); 由 SOP 编排画布生成 */
-    std::string path_dwell_max_list =
-        ""; /* 每步最大停留(秒), 逗号分隔, 与 path_sequence 对齐(空项回退默认; 0=不限); 由 SOP 编排画布生成 */
-    std::string path_edges = ""; /* 图边列表(可空, 空=默认线性链 0→1→...→N-1); 形如 "0-1,0-3,1-2,3-2": 每条边 src-dst,
-                                    索引基于 path_sequence 位置。允许多分支(同源多出 / 多源汇合) / 环 */
-    std::string path_entries = ""; /* 起点 step 索引(逗号分隔, 如 "0,2"): 被标记为「🚩 起点」的步骤。允许多起点(多路线)+
-                                      同 zone 多起点(靠后续区域区分)。空 → fallback step 0 */
-    std::string path_exits =
-        ""; /* 出口 step 索引(逗号分隔, 如 "3,5"): 用户在 SOP 子画布上连到「🏁 结束判定」的 source step。漏检判定:
-               visited 子图必须存在 entry→exit 路径。空 → fallback 到出度0(老 DAG 行为) */
-    std::string path_edge_limits =
-        ""; /* 边循环次数约束: "src-dst:min-max,..."(如 "1-0:2-5" = 1→0 边必须走 2~5 次)。settle 时判 count∈[min,max],
-               不在范围内 → 报"循环次数不符"。min/max 为 0 = 该侧不限 */
-    float path_reset_sec =
-        5.0f; /* 离场超时(秒): 目标离场持续此久 → 工序结束(漏检结算/复位); leave 模式为主判定, endzone 模式为兜底 */
-    std::string path_end_mode =
-        "leave"; /* 工序结束判定: "leave"=离场超时, "endzone"=进入终点区域, "trigger"=外部触发信号 */
-    std::string path_end_zone = ""; /* 终点区域名(end_mode=endzone 时用) */
-    float path_end_dwell_sec = 0.0f; /* 终点连续停留达到此秒数才结束; 0=通过终点进入确认后立即结束(兼容旧配置) */
-    float path_total_min_sec = 0.0f; /* 工序总耗时下限(秒): 一轮总耗时 < 此值 → 报"总耗时不足" (赶工); 0=不限 */
-    float path_total_max_sec = 0.0f; /* 工序总耗时上限(秒): 一轮总耗时 > 此值 → 报"总耗时超时" (卡壳); 0=不限 */
-    std::string path_trigger_mode =
-        "auto"; /* 起点触发方式: "auto"=目标进入即开始; "external"=等待sop_trigger外部信号 */
-    bool path_trigger_mandatory = false; /* 仅 external 模式有效: 未触发而进入区域 → 报 sop_untracked_entry */
-    bool path_report_normal = false; /* 一轮正式结算且完全合规时是否上报 sop_normal；默认关闭以兼容旧配置 */
     /* 通用告警配置：Web 直接保存对象/数组，C++ 以 JSON 文本解析，新增参数无需改结构体。 */
     std::string report_policy_json = "{}";
     std::string report_parameters_json = "{}";
@@ -148,13 +114,16 @@ struct GlobalLogicConfig
     std::string logic = "global_default"; /* 逻辑名称 */
     std::vector<int> channels;            /* 监控的通道列表，空 = 全部 */
     int poll_interval_ms = 100;           /* 轮询间隔 (毫秒) */
+    /* 全局逻辑模块专有参数：由 global_modules/<name>/logic.json 统一定义和校验。 */
+    std::string logic_parameters_json = "{}";
 };
 
 /* 用于热重载时检测 global_logics 数组是否变化, 任一字段不同即视为变化 */
 inline bool operator==(const GlobalLogicConfig &a, const GlobalLogicConfig &b)
 {
     return a.enable == b.enable && a.logic == b.logic && a.channels == b.channels &&
-           a.poll_interval_ms == b.poll_interval_ms;
+           a.poll_interval_ms == b.poll_interval_ms &&
+           a.logic_parameters_json == b.logic_parameters_json;
 }
 inline bool operator!=(const GlobalLogicConfig &a, const GlobalLogicConfig &b)
 {
@@ -188,10 +157,6 @@ struct AppConfig
     int max_fps = 30;                        /* 每通道推理帧率上限默认值 (从15提高到30) */
     int local_default_fps = 25;              /* 本地文件默认播放采样率 */
     int queue_size = 1;                      /* 每核任务队列深度 */
-    float obj_thresh = 0.4f;                 /* 全局默认置信度阈值 */
-    float nms_thresh = 0.45f;                /* 全局默认NMS阈值 */
-    std::vector<std::string> detect_classes; /* 全局默认检测类别, 空=全部 */
-
     /* 跟踪器 (全局默认，可被通道覆盖) */
     int tracker_enable = 1; /* 0=关闭, 1=开启 */
     float tracker_iou_thresh = 0.3f;
@@ -201,7 +166,7 @@ struct AppConfig
     /* 通道列表 */
     std::vector<ChannelConfig> channels;
 
-    /* 全局逻辑 (使用 global_logic.h 中定义的 GlobalLogicConfig, 支持多个并行实例) */
+    /* 全局逻辑（支持多个并行实例） */
     std::vector<GlobalLogicConfig> global_logics;
 
     /* 配置文件路径 (用于热加载监控) */

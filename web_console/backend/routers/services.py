@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from services import process_manager as pm
 from services import runtime_state
+from services.data_dir import data_dir, migrate_app_data
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 SYSTEMD_DIR = Path("/etc/systemd/system")
@@ -66,23 +67,26 @@ def _systemd_quote(value: str) -> str:
 
 
 def _unit_content(key: str, app_dir: Path, config_name: str) -> str:
-    """生成绑定当前视觉 App 的单元；OTA 同时绑定实际运行的配置文件。"""
+    """生成绑定当前视觉 App 的单元；同时设置持久数据目录的环境变量。"""
+    app_name = app_dir.name
+    d = data_dir(app_name)
+    event_store = d / "event_store"
+    upload_data = d
+    ota_config_file = d / "ota_config.json"
+
     if key == "ota_agent":
         return (
             "[Unit]\n"
             "Description=Edge Box OTA Agent\n"
             "After=network.target\n"
-            # 快速失败达 5 次/120s 即停在 failed，避免无限重启刷上千次
-            # (RestartSec 比 systemd 默认限速窗口还宽，否则默认限速永远触发不了)
             "StartLimitIntervalSec=120\n"
             "StartLimitBurst=5\n\n"
             "[Service]\n"
             "Type=simple\n"
-            # systemd 247 的 WorkingDirectory= 不剥离双引号，会把引号视为路径字符，
-            # 从而把 "/opt/..." 判定为非绝对路径；这里必须直接写绝对路径。
             f"WorkingDirectory={app_dir / 'services/model_update'}\n"
             f'Environment="ASSETS_DIR={_systemd_env(str(app_dir / "assets"))}"\n'
             f'Environment="CONFIG_FILE={_systemd_env(config_name)}"\n'
+            f'Environment="OTA_CONFIG_FILE={_systemd_env(str(ota_config_file))}"\n'
             f"ExecStart=/usr/bin/python3 -u {_systemd_quote(str(app_dir / 'services/model_update/ota_agent.py'))}\n"
             "Restart=always\n"
             "RestartSec=3\n"
@@ -96,12 +100,13 @@ def _unit_content(key: str, app_dir: Path, config_name: str) -> str:
         "Description=RK3588 Unified Upload Service\n"
         "After=network-online.target\n"
         "Wants=network-online.target\n"
-        # 快速失败达 5 次/120s 即停在 failed，避免无限重启刷上千次
         "StartLimitIntervalSec=120\n"
         "StartLimitBurst=5\n\n"
         "[Service]\n"
         "Type=simple\n"
         f"WorkingDirectory={app_dir / 'services/upload'}\n"
+        f'Environment="UPLOAD_DATA_DIR={_systemd_env(str(upload_data))}"\n'
+        f'Environment="EVENT_STORE_DIR={_systemd_env(str(event_store))}"\n'
         "ExecStart=/usr/bin/python3 -u main.py\n"
         "Restart=always\n"
         "RestartSec=5\n"
@@ -196,10 +201,6 @@ async def list_services():
     return out
 
 
-class InstallReq(BaseModel):
-    app: str
-
-
 class AutostartReq(BaseModel):
     enabled: bool
 
@@ -217,6 +218,9 @@ def _write_and_start_unlocked(key: str, context: Dict[str, Any]) -> Dict[str, An
     app_name = str(context["app"])
     app_dir = Path(context["app_dir"]).resolve()
     config_name = str(context.get("config") or "config.json")
+
+    # 确保持久数据目录存在并已迁移初始文件
+    migrate_app_data(app_name, app_dir)
     try:
         app_dir.relative_to(APPS_ROOT.resolve())
     except ValueError:
@@ -288,8 +292,7 @@ def sync_services_for_running_app() -> Dict[str, List[str]]:
                 and ota_config_matches
             )
             if active and binding_matches:
-                # 旧 deploy.sh 可能曾 enable 过该单元；Web 接管后统一关闭原生自启，
-                # 后续只按 autostart + desired_running 的组合恢复。
+                # Web 统一编排自启，避免 systemd 绕过视觉 App 的绑定关系。
                 _run(["systemctl", "disable", MANAGED[key]["unit"]])
                 continue
             if not active and not waiting_autostart:
@@ -304,19 +307,6 @@ def sync_services_for_running_app() -> Dict[str, List[str]]:
     return {"updated": updated, "errors": errors}
 
 
-@router.post("/services/{key}/install")
-async def install_service(key: str, req: InstallReq):
-    # 兼容旧前端接口，但不再信任手工选择：实际绑定必须跟随当前视觉程序。
-    with pm.runtime_lock():
-        context = _running_context_or_409()
-        if req.app and req.app != context["app"]:
-            raise HTTPException(
-                status_code=409,
-                detail=f"当前运行的是 {context['app']}，后台服务不能绑定到 {req.app}",
-            )
-        return _write_and_start_unlocked(key, context)
-
-
 @router.post("/services/{key}/autostart")
 async def set_service_autostart(key: str, req: AutostartReq):
     _svc(key)
@@ -324,14 +314,6 @@ async def set_service_autostart(key: str, req: AutostartReq):
         settings = runtime_state.set_service_autostart(key, req.enabled)
         # Web 使用统一编排恢复，不能让 systemd 绕过视觉 App 匹配独立拉起旧 unit。
         _run(["systemctl", "disable", MANAGED[key]["unit"]])
-        # 兼容升级前已经在跑、但尚未写入 desired_running 的 systemd 服务。
-        if req.enabled and _status(key).get("active_state") == "active":
-            runtime_state.mark_service_started(key)
-            settings = runtime_state.get_service_settings(key)
-        elif req.enabled:
-            # 在停止/故障状态下勾选不安排下次启动。
-            runtime_state.mark_service_stopped(key)
-            settings = runtime_state.get_service_settings(key)
     return {"ok": True, **settings}
 
 

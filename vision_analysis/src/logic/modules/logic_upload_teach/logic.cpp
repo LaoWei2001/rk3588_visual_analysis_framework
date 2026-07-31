@@ -1,5 +1,6 @@
 #include "logic/core/logic_common.h"
 
+#include <cstdio>
 #include <memory>
 #include <string>
 
@@ -14,7 +15,7 @@ struct UploadTeachState
 UploadTeachState &upload_teach_state(ChannelContext *ctx)
 {
     if (!*ctx->state)
-        *ctx->state = std::make_shared<UploadTeachState>();
+        *(ctx->state) = std::make_shared<UploadTeachState>();
     return *std::static_pointer_cast<UploadTeachState>(*ctx->state);
 }
 
@@ -50,11 +51,14 @@ static void logic_upload_teach(ChannelContext *ctx)
     if (!state.pending_report)
         return;
 
-    AlarmRequest request;
-    request.type = "upload_teach_demo";
+    EventRequest request;
+    request.event_type = "upload_teach_demo";
     request.message = "Web 按钮触发的报警事件";
-    request.merge_enabled = false;
-    alarm_report(ctx, request);
+    request.merge_mode = EventMergeMode::NEVER;
+    const EventReportResult report = report_event(ctx, request);
+    if (!report.accepted())
+        fprintf(stderr, "[logic_upload_teach][ch%02d] report failed status=%s detail=%s\n", ctx->chnId,
+                event_report_status_name(report.status), report.detail.c_str());
     state.pending_report = false;
 }
 

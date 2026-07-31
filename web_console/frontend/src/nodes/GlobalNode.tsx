@@ -57,19 +57,6 @@ export default function GlobalNode({ id, data, selected }: NodeProps) {
           </div>
 
           <div className="node-row">
-            <div className="node-field">
-              <label>置信阈值</label>
-              <NumberField step="0.05" min="0" max="1" def={0.3} value={d.obj_thresh} onChange={v => set('obj_thresh', v ?? 0.3)} />
-            </div>
-            <div className="node-field">
-              <label>NMS 阈值</label>
-              <NumberField step="0.05" min="0" max="1" def={0.45} value={d.nms_thresh} onChange={v => set('nms_thresh', v ?? 0.45)} />
-            </div>
-          </div>
-
-          <hr className="node-divider" />
-
-          <div className="node-row">
             <label className="node-toggle">
               <input type="checkbox" checked={!!d.tracker_enable} onChange={e => set('tracker_enable', e.target.checked ? 1 : 0)} />
               启用跟踪器

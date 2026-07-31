@@ -1,6 +1,6 @@
 /**
  * @file logic_parameters.h
- * @brief Schema 驱动的通道逻辑专有参数。
+ * @brief Schema 驱动的通道/全局逻辑专有参数。
  *
  * 每个模块的 logic.json 是参数类型、默认值、范围和热重载策略的唯一真源。
  * 构建脚本把聚合后的 Schema 嵌入二进制；配置只保存 logic_parameters 对象。

@@ -9,10 +9,12 @@
 #include "global_logic.h"
 #include "core/app_ctrl.h"
 #include "core/pause_ctrl.h"
+#include "logic_parameters.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <pthread.h>
 #include <unistd.h>
 
@@ -24,6 +26,7 @@ struct GlobalLogicThread
     std::atomic<bool> running{false};
     std::atomic<bool> stop_requested{false};
     std::shared_ptr<void> state;
+    LogicParameterSet logic_parameters;
     int64_t tick_id;
 
     std::vector<std::vector<AlgoResult>> results_cache;
@@ -38,40 +41,83 @@ static std::vector<GlobalLogicThread *> g_threads;
 static pthread_mutex_t g_threads_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 /*======================== 全局逻辑分发表 ========================*/
-#define MAX_GLOBAL_LOGICS 16
-static struct
+struct GlobalLogicEntry
 {
-    const char *name;
-    GlobalLogicFunc func;
-} g_logic_map[MAX_GLOBAL_LOGICS];
-static int g_logic_map_count = 0;
+    const char *name = nullptr;
+    GlobalLogicFunc func = nullptr;
+};
+static GlobalLogicEntry g_logic_registry[MAX_GLOBAL_LOGIC_FUNCS];
+static int g_logic_count = 0;
 
-static void global_default(GlobalContext *gctx);
-
-static void register_global_logic(const char *name, GlobalLogicFunc func)
+void register_global_logic(const char *name, GlobalLogicFunc func)
 {
-    if (g_logic_map_count < MAX_GLOBAL_LOGICS)
+    if (!name || !func)
+        return;
+    for (int i = 0; i < g_logic_count; ++i)
     {
-        g_logic_map[g_logic_map_count].name = name;
-        g_logic_map[g_logic_map_count].func = func;
-        g_logic_map_count++;
+        if (g_logic_registry[i].name && strcmp(g_logic_registry[i].name, name) == 0)
+        {
+            g_logic_registry[i].func = func;
+            return;
+        }
+    }
+    if (g_logic_count < MAX_GLOBAL_LOGIC_FUNCS)
+    {
+        g_logic_registry[g_logic_count].name = name;
+        g_logic_registry[g_logic_count].func = func;
+        ++g_logic_count;
     }
 }
 
-static void global_logic_register(void)
+GlobalLogicFunc global_logic_get(const char *name)
 {
-    g_logic_map_count = 0;
-    register_global_logic("global_default", global_default);
-
-    /* 新增 global logic: 在此处添加 register_global_logic("global_xxx", global_xxx); 即可 */
+    if (name)
+        for (int i = 0; i < g_logic_count; ++i)
+            if (g_logic_registry[i].name && strcmp(g_logic_registry[i].name, name) == 0)
+                return g_logic_registry[i].func;
+    return nullptr;
 }
 
-static GlobalLogicFunc global_logic_resolve(const char *name)
+std::vector<std::string> global_logic_names()
 {
-    for (int i = 0; i < g_logic_map_count; ++i)
-        if (g_logic_map[i].name && strcmp(g_logic_map[i].name, name) == 0)
-            return g_logic_map[i].func;
-    return global_default;
+    std::vector<std::string> names;
+    names.reserve(g_logic_count);
+    for (int i = 0; i < g_logic_count; ++i)
+        if (g_logic_registry[i].name)
+            names.emplace_back(g_logic_registry[i].name);
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+/*======================== GlobalContext 参数访问 ========================*/
+bool GlobalContext::has_param(const char *key) const
+{
+    return logic_parameters && logic_parameters->has(key);
+}
+
+float GlobalContext::param_float(const char *key) const
+{
+    return logic_parameters ? logic_parameters->get_float(key) : 0.0f;
+}
+
+int64_t GlobalContext::param_int(const char *key) const
+{
+    return logic_parameters ? logic_parameters->get_int(key) : 0;
+}
+
+bool GlobalContext::param_bool(const char *key) const
+{
+    return logic_parameters ? logic_parameters->get_bool(key) : false;
+}
+
+std::string GlobalContext::param_string(const char *key) const
+{
+    return logic_parameters ? logic_parameters->get_string(key) : std::string();
+}
+
+std::string GlobalContext::param_json(const char *key) const
+{
+    return logic_parameters ? logic_parameters->get_json(key) : std::string();
 }
 
 /*======================== 辅助: 时间戳 ========================*/
@@ -179,6 +225,7 @@ void *global_logic_thread_func(void *arg)
 
         t->gctx.config = &t->config;
         t->gctx.state = &t->state;
+        t->gctx.logic_parameters = &t->logic_parameters;
         t->gctx.timestamp_ms = steady_now_ms();
         t->gctx.tick_id = ++t->tick_id;
         t->gctx.channel_ids = &t->channel_ids;
@@ -212,7 +259,6 @@ void *global_logic_thread_func(void *arg)
 /*======================== 公开接口 ========================*/
 int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs)
 {
-    global_logic_register();
     global_logic_stop_all();
 
     pthread_mutex_lock(&g_threads_mtx);
@@ -224,8 +270,8 @@ int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs)
         if (!cfg.enable)
             continue;
 
-        GlobalLogicFunc fn = global_logic_resolve(cfg.logic.c_str());
-        if (fn == global_default && strcmp(cfg.logic.c_str(), "global_default") != 0)
+        GlobalLogicFunc fn = global_logic_get(cfg.logic.c_str());
+        if (!fn)
         {
             printf("[GlobalLogic][%zu] WARNING: logic '%s' not found, skipping\n", i, cfg.logic.c_str());
             continue;
@@ -237,6 +283,16 @@ int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs)
         t->stop_requested.store(false);
         t->func = fn;
         t->tick_id = 0;
+        std::vector<LogicParameterError> parameter_errors;
+        if (!logic_parameters_resolve(cfg.logic, cfg.logic_parameters_json, nullptr, &t->logic_parameters,
+                                      &parameter_errors))
+        {
+            fprintf(stderr, "[GlobalLogic][%zu] parameters for '%s' are invalid:\n", i, cfg.logic.c_str());
+            for (const auto &error : parameter_errors)
+                fprintf(stderr, "  - %s: %s\n", error.field.c_str(), error.message.c_str());
+            delete t;
+            continue;
+        }
 
         int ret = pthread_create(&t->tid, nullptr, global_logic_thread_func, t);
         if (ret != 0)
@@ -283,11 +339,4 @@ int global_logic_get_instance_count(void)
     int n = (int)g_threads.size();
     pthread_mutex_unlock(&g_threads_mtx);
     return n;
-}
-
-/*======================== 全局逻辑函数实现 ========================*/
-
-static void global_default(GlobalContext *gctx)
-{
-    (void)gctx;
 }

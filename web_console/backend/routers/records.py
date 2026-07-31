@@ -1,305 +1,203 @@
-"""
-GET  /api/apps/{name}/records              列出本地发件箱里的待上报记录
-GET  /api/apps/{name}/records/{rid}/json   查看实际发送给 Dify 的纯业务 event_json
-GET  /api/apps/{name}/records/{rid}/image  取带媒体记录的截图(带框图; ?raw=1 取原图)
+"""本地事件发件箱浏览、媒体查看、重试和删除 API。"""
 
-数据由 C++ 产生业务事件时落盘到 <app>/alarm_store/ (env ALARM_STORE_DIR 可覆盖),
-Python 上报微服务补传成功后会删除 —— 所以这里只会看到"还没传上去"的那些。
-"""
 import json
 import os
 import re
+import shutil
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
-CAP_BYTES = int(os.environ.get("ALARM_STORE_MAX_BYTES", 1024 * 1024 * 1024))
+CAP_BYTES = int(os.environ.get("EVENT_STORE_MAX_BYTES", 1024 * 1024 * 1024))
 _SAFE_ID = re.compile(r"^[A-Za-z0-9._-]+$")
-_MISSING = object()
+RETRY_REQUEST_FILE = "delivery_retry.request.json"
+
+from services.data_dir import data_dir
 
 router = APIRouter()
 
 
 def _store_dir(name: str) -> Path:
-    """该 App 的发件箱目录。env ALARM_STORE_DIR 为全局覆盖, 否则 <app>/alarm_store。"""
-    override = os.environ.get("ALARM_STORE_DIR")
+    override = os.environ.get("EVENT_STORE_DIR")
     if override:
         return Path(override)
-    return APPS_ROOT / name / "alarm_store"
+    return data_dir(name) / "event_store"
 
 
-def _business_event(meta: dict) -> dict:
-    """与上传服务保持一致：只生成 Dify event_json，不泄露发件箱内部状态。"""
-    fields = meta.get("fields", {})
-    source = fields.get("event_payload", {}) if isinstance(fields, dict) else {}
-    payload = dict(source) if isinstance(source, dict) else {}
-    business = {
-        "schema_version": 2,
-        "event_id": meta.get("event_id", ""),
-        "channel_id": meta.get("channel_id"),
-        "trigger_unix_ms": meta.get("trigger_unix_ms"),
-        "snap_time": meta.get("snap_time", ""),
-        "end_time": meta.get("end_time") or meta.get("snap_time", ""),
+def _read_event_dir(event_dir: Path) -> dict:
+    event_doc = json.loads((event_dir / "event.json").read_text(encoding="utf-8"))
+    media_doc = json.loads((event_dir / "media_state.json").read_text(encoding="utf-8"))
+    delivery_doc = json.loads((event_dir / "delivery_state.json").read_text(encoding="utf-8"))
+    event = event_doc.get("event", {})
+    source = event_doc.get("source", {})
+    data = event_doc.get("data", {})
+    media_entries = media_doc.get("media", {})
+    deliveries = delivery_doc.get("deliveries", [])
+    if not all(isinstance(item, dict) for item in (
+        event, source, data, media_doc, media_entries, delivery_doc,
+    )) or not isinstance(deliveries, list):
+        raise ValueError("invalid event document")
+    media = {}
+    media_statuses = {}
+    for kind, entry in media_entries.items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("files", {}), dict):
+            raise ValueError(f"invalid {kind} media state")
+        media.update(entry["files"])
+        media_statuses[str(kind)] = {
+            "status": str(entry.get("status", "")),
+            "error": str(entry.get("error", "")),
+        }
+    return {
+        "schema_version": event_doc.get("schema_version", 3),
+        "event": event,
+        "source": source,
+        "fields": data.get("fields", {}),
+        "media": media,
+        "media_statuses": media_statuses,
+        "state": media_doc.get("status", "ready"),
+        "deliveries": deliveries,
     }
-    business.update(payload)
-    return business
 
 
-def _lookup_business(root: dict, path: str):
-    current = root
-    for part in (part for part in path.split(".") if part):
-        if not isinstance(current, dict) or part not in current:
-            return _MISSING
-        current = current[part]
-    return current
-
-
-def _set_path(root: dict, path: str, value):
-    parts = [part for part in path.split(".") if part]
-    if not parts:
-        raise ValueError("mapped JSON key is empty")
-    current = root
-    for part in parts[:-1]:
-        child = current.get(part)
-        if not isinstance(child, dict):
-            child = {}
-            current[part] = child
-        current = child
-    current[parts[-1]] = value
-
-
-def _coerce(value, value_type: str):
-    if value is None or not value_type:
-        return value
-    if value_type == "string":
-        return str(value)
-    if value_type == "number":
-        number = float(value)
-        return int(number) if number.is_integer() else number
-    if value_type == "boolean":
-        if isinstance(value, bool):
-            return value
-        text = str(value).strip().lower()
-        if text in ("true", "1", "yes", "on"):
-            return True
-        if text in ("false", "0", "no", "off"):
-            return False
-        raise ValueError(f"invalid boolean value: {value}")
-    if value_type == "json":
-        return json.loads(value) if isinstance(value, str) else value
-    raise ValueError(f"unsupported input type: {value_type}")
-
-
-def _mapped_business_event(meta: dict, delivery: dict) -> dict:
-    """与上传微服务一致：缺少 event_fields 的旧记录全量返回，显式映射则按路径组装。"""
-    complete = _business_event(meta)
-    if "event_fields" not in delivery:
-        return complete
-
-    mappings = delivery.get("event_fields")
-    if not isinstance(mappings, list):
-        raise ValueError("delivery event_fields must be a list")
-    result = {}
-    for mapping in mappings:
-        if not isinstance(mapping, dict):
-            raise ValueError("event field mapping must be an object")
-        source = str(mapping.get("source", "")).strip()
-        target = str(mapping.get("target", "")).strip()
-        required = bool(mapping.get("required", False))
-        if not source or not target:
-            if required:
-                raise ValueError("required event field source/target is empty")
-            continue
-        value = _lookup_business(complete, source)
-        if value is _MISSING:
-            if required:
-                raise ValueError(f"missing required event field: {source}")
-            continue
-        _set_path(result, target, _coerce(value, str(mapping.get("type", ""))))
-    return result
-
-
-def _dify_payloads(meta: dict) -> list:
-    payloads = []
-    deliveries = meta.get("deliveries", [])
-    if not isinstance(deliveries, list):
-        return payloads
-    for delivery in deliveries:
-        if not isinstance(delivery, dict) or delivery.get("target") != "dify":
-            continue
-        payloads.append({
-            "delivery_id": str(delivery.get("id", "")),
-            "media": str(delivery.get("media", "")),
-            "status": str(delivery.get("status", "")),
-            "event_variable": str(delivery.get("event_variable", "")).strip(),
-            "event_json": _mapped_business_event(meta, delivery),
-        })
-    return payloads
+def _event_dir(name: str, event_id: str) -> Path:
+    if not _SAFE_ID.fullmatch(event_id):
+        raise HTTPException(400, "非法的事件 ID")
+    path = _store_dir(name) / event_id
+    if not path.is_dir():
+        raise HTTPException(404, "事件不存在或已成功投递")
+    return path
 
 
 @router.get("/apps/{name}/records")
 async def list_records(name: str, limit: int = 500):
-    """列出待上报记录，最新在前；同时回报总占用与上限。"""
-    d = _store_dir(name)
-    if not d.exists():
+    store = _store_dir(name)
+    if not store.exists():
         return {"records": [], "count": 0, "total_bytes": 0, "cap_bytes": CAP_BYTES}
-
-    items = []
+    records = []
     total = 0
     try:
-        entries = list(d.iterdir())
+        entries = list(store.iterdir())
     except OSError:
         entries = []
-
-    for event_dir in entries:
-        manifest = event_dir / "manifest.json"
-        if not event_dir.is_dir() or not manifest.is_file():
+    for path in entries:
+        if not path.is_dir() or not (path / "event.json").is_file():
             continue
         try:
-            meta = json.loads(manifest.read_text(encoding="utf-8"))
-            size = sum(path.stat().st_size for path in event_dir.iterdir() if path.is_file())
-            total += size
-        except Exception:
+            meta = _read_event_dir(path)
+            size = sum(item.stat().st_size for item in path.iterdir() if item.is_file())
+        except (OSError, ValueError, TypeError):
             continue
-        media = meta.get("media", {})
-        deliveries = meta.get("deliveries", [])
-        requested = meta.get("media_requested", {})
-        delivery_media = {
-            str(item.get("media", ""))
-            for item in deliveries
-            if isinstance(item, dict) and item.get("status") != "invalid"
+        total += size
+        event, source, media = meta["event"], meta["source"], meta["media"]
+        required_media = {
+            str(kind)
+            for delivery in meta["deliveries"] if isinstance(delivery, dict)
+            for kind in delivery.get("media", []) if isinstance(delivery.get("media", []), list)
         }
-        expects_image = bool(requested.get("image")) or "image" in delivery_media
-        expects_video = bool(requested.get("video")) or "video" in delivery_media
-        json_only = meta.get("delivery_mode") == "json_only" or (
-            "json" in delivery_media and not expects_image and not expects_video
-        )
-        alarm_type = str(meta.get("alarm_type", ""))
-        record_kind = str(meta.get("record_kind", "")).lower()
-        if record_kind not in ("normal", "violation", "alarm"):
-            record_kind = "normal" if alarm_type == "sop_normal" \
-                else "violation" if alarm_type == "sop_violation" else "alarm"
-        items.append({
-            "id": meta.get("event_id", event_dir.name),
-            "channel_id": meta.get("channel_id"),
-            "alarm_type": alarm_type,
-            "record_kind": record_kind,
-            "media_mode": "json" if json_only else "media",
-            "expects_image": expects_image,
-            "expects_video": expects_video,
-            "message": meta.get("message", ""),
-            "trigger_count": meta.get("trigger_count", 1),
-            "snapTime": meta.get("snap_time") or meta.get("trigger_unix_ms", 0),
-            "ts": meta.get("ts", 0),
-            "state": meta.get("state", "pending"),
-            "has_image": bool(media.get("snapshot")),
-            "has_raw": bool(media.get("raw")),
+        records.append({
+            "id": event.get("id", path.name),
+            "channel_id": source.get("channel_id"),
+            "event_type": event.get("type", ""),
+            "message": event.get("message", ""),
+            "trigger_count": event.get("trigger_count", 1),
+            "snap_time": event.get("snap_time") or event.get("trigger_unix_ms", 0),
+            "created_unix_sec": event.get("created_unix_sec", 0),
+            "state": meta["state"],
+            "required_media": sorted(required_media),
+            "has_annotated_image": bool(media.get("annotated_image")),
+            "has_raw_image": bool(media.get("raw_image")),
             "has_video": bool(media.get("video")),
-            "deliveries": deliveries,
+            "media_statuses": meta["media_statuses"],
+            "deliveries": meta["deliveries"],
             "total_bytes": size,
         })
-
-    items.sort(key=lambda x: x.get("ts") or 0, reverse=True)
+    records.sort(key=lambda item: item.get("created_unix_sec") or 0, reverse=True)
     return {
-        "records": items[: max(0, limit)],
-        "count": len(items),
+        "records": records[:max(0, limit)],
+        "count": len(records),
         "total_bytes": total,
         "cap_bytes": CAP_BYTES,
     }
 
 
-@router.get("/apps/{name}/records/{rid}/json")
-async def record_json(name: str, rid: str):
-    """返回每条 Dify 投递按当前字段映射实际组装出的业务 JSON。"""
-    if not _SAFE_ID.match(rid):
-        raise HTTPException(400, "非法的记录 id")
-    path = _store_dir(name) / rid / "manifest.json"
-    if not path.is_file():
-        raise HTTPException(404, "记录不存在或已成功投递")
+@router.get("/apps/{name}/records/{event_id}/json")
+async def record_json(name: str, event_id: str):
+    path = _event_dir(name, event_id)
     try:
-        meta = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        raise HTTPException(500, "记录 JSON 读取失败")
-    try:
-        payloads = _dify_payloads(meta)
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(500, f"上报字段映射无效: {exc}") from exc
-
-    if payloads:
-        primary = payloads[0]
-    else:
-        primary = {
-            "delivery_id": "",
-            "event_variable": "",
-            "event_json": _business_event(meta),
-        }
+        meta = _read_event_dir(path)
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(500, "事件 JSON 读取失败") from exc
     return {
-        "delivery_id": primary["delivery_id"],
-        "event_variable": primary["event_variable"],
-        "event_json": primary["event_json"],
-        "payloads": payloads,
-        "full_business_json": _business_event(meta),
+        "schema_version": meta["schema_version"],
+        "event": meta["event"],
+        "source": meta["source"],
+        "fields": meta["fields"],
+        "media": meta["media"],
+        "media_statuses": meta["media_statuses"],
+        "deliveries": meta["deliveries"],
     }
 
 
-@router.get("/apps/{name}/records/{rid}/image")
-async def record_image(name: str, rid: str, raw: int = 0):
-    """返回某条带媒体记录的 JPEG。raw=1 取原图；原图缺失时回退到带框图。"""
-    if not _SAFE_ID.match(rid):
-        raise HTTPException(400, "非法的记录 id")
-    d = _store_dir(name)
-    event_dir = d / rid
-    if event_dir.is_dir():
-        p = event_dir / ("raw.jpg" if raw else "snapshot.jpg")
-        if not p.is_file() and raw:
-            p = event_dir / "snapshot.jpg"
-        if p.is_file():
-            return FileResponse(str(p), media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
-    raise HTTPException(404, "图片不存在(可能已补传并删除)")
+@router.get("/apps/{name}/records/{event_id}/image")
+async def record_image(name: str, event_id: str, raw: int = 0):
+    path = _event_dir(name, event_id)
+    image = path / ("raw.jpg" if raw else "annotated.jpg")
+    if not image.is_file() and raw:
+        image = path / "annotated.jpg"
+    if not image.is_file():
+        raise HTTPException(404, "图片不存在或仍在生成")
+    return FileResponse(str(image), media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
 
 
-@router.get("/apps/{name}/records/{rid}/video")
-async def record_video(name: str, rid: str):
-    if not _SAFE_ID.match(rid):
-        raise HTTPException(400, "非法的记录 id")
-    p = _store_dir(name) / rid / "clip.mp4"
-    if not p.is_file():
+@router.get("/apps/{name}/records/{event_id}/video")
+async def record_video(name: str, event_id: str):
+    video = _event_dir(name, event_id) / "clip.mp4"
+    if not video.is_file():
         raise HTTPException(404, "视频不存在或仍在生成")
     return FileResponse(
-        str(p), media_type="video/mp4",
-        headers={"Cache-Control": "no-cache", "Accept-Ranges": "bytes", "Content-Disposition": "inline"},
+        str(video), media_type="video/mp4",
+        headers={"Cache-Control": "no-cache", "Accept-Ranges": "bytes",
+                 "Content-Disposition": "inline"},
     )
 
 
-@router.post("/apps/{name}/records/{rid}/retry")
-async def retry_record(name: str, rid: str):
-    if not _SAFE_ID.match(rid):
-        raise HTTPException(400, "非法的记录 id")
-    path = _store_dir(name) / rid / "manifest.json"
-    if not path.is_file():
-        raise HTTPException(404, "记录不存在")
-    meta = json.loads(path.read_text(encoding="utf-8"))
-    for delivery in meta.get("deliveries", []):
-        if delivery.get("status") != "delivered":
-            delivery["status"] = "pending"
-            delivery["last_error"] = ""
-            delivery.pop("next_retry_unix_ms", None)
-    meta["state"] = "pending"
-    tmp = path.with_suffix(".json.web.tmp")
-    tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+@router.post("/apps/{name}/records/{event_id}/retry")
+async def retry_record(name: str, event_id: str):
+    path = _event_dir(name, event_id)
+    try:
+        _read_event_dir(path)
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(500, "事件状态读取失败") from exc
+    request = path / RETRY_REQUEST_FILE
+    temporary = request.with_name(request.name + ".web.tmp")
+    temporary.write_text(
+        json.dumps({"requested_unix_ms": int(time.time() * 1000)}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, request)
+    return {"ok": True, "accepted": True}
+
+
+@router.delete("/apps/{name}/records/{event_id}")
+async def delete_record(name: str, event_id: str):
+    path = _event_dir(name, event_id)
+    shutil.rmtree(path)
     return {"ok": True}
 
 
-@router.delete("/apps/{name}/records/{rid}")
-async def delete_record(name: str, rid: str):
-    if not _SAFE_ID.match(rid):
-        raise HTTPException(400, "非法的记录 id")
-    import shutil
-    event_dir = _store_dir(name) / rid
-    if not event_dir.is_dir():
-        raise HTTPException(404, "记录不存在")
-    shutil.rmtree(event_dir)
-    return {"ok": True}
+@router.delete("/apps/{name}/records")
+async def delete_all_records(name: str):
+    store = _store_dir(name)
+    deleted = 0
+    if store.exists():
+        for entry in list(store.iterdir()):
+            if entry.is_dir() and (entry / "event.json").is_file():
+                try:
+                    shutil.rmtree(entry)
+                    deleted += 1
+                except OSError:
+                    pass
+    return {"ok": True, "deleted": deleted}

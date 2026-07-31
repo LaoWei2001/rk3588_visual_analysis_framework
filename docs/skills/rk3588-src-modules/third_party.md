@@ -7,7 +7,7 @@
 | 目录 | 内容与当前用途 |
 |---|---|
 | `gst_opt/` | `gstopt_sample_get_buffer()`：用标准 GStreamer/GstVideo API 提取格式、可见尺寸、stride 和 DMA-BUF fd；`api.cmake` 同时声明 GStreamer、video、RTSP server、allocators 依赖。 |
-| `json/` | 内嵌 cJSON 源码，供配置、control 协议和 alarm manifest 使用。 |
+| `json/` | 内嵌 cJSON 源码，供配置、control 协议和告警事件 JSON 使用。 |
 | `rk_mpi/` | Rockchip MPI/RK 类型头文件，`api.cmake` 链接 `rockit`；项目刻意使用目录内 `rk_type.h`，不直接取 `/usr/include/rockchip` 的同名头。 |
 | `system_opt/` | CPU/NPU 温度、CPU/内存/分区统计、时间/延时、线程和命令执行辅助函数。 |
 
@@ -17,7 +17,7 @@
 
 `rk_mpi` 大量文件是厂商 ABI 声明，不应为业务需求随意改结构体布局、枚举值或对齐。升级板端 `rockit`/MPP 库时，应采用匹配版本的头文件整体核验，而不是只修一个编译错误。
 
-cJSON 对象的所有权在当前代码中依赖 `cJSON_AddItemToObject/Array` 转移；扩展配置、control 或 manifest 时必须保持 create/attach/delete 成对，字符串化结果用 `cJSON_free()`。
+cJSON 对象的所有权在当前代码中依赖 `cJSON_AddItemToObject/Array` 转移；扩展配置、control 或告警事件 schema 时必须保持 create/attach/delete 成对，字符串化结果用 `cJSON_free()`。
 
 `system_opt` 提供 `exec_cmd_by_system/popen`，不要把未经验证的 Web/logic 输入拼入 shell 命令。新业务优先使用直接系统调用或专用库，避免把该工具层变成命令注入入口。
 

@@ -16,7 +16,13 @@
     "enable_display": true,
     "max_fps": 30,
     "global_logics": [
-      {"enable": true, "logic": "global_default", "channels": [], "poll_interval_ms": 100}
+      {
+        "enable": true,
+        "logic": "global_default",
+        "channels": [],
+        "poll_interval_ms": 100,
+        "logic_parameters": {}
+      }
     ]
   },
   "channels": [
@@ -36,11 +42,19 @@
 }
 ```
 
-`global_logics` 位于 `global` 对象内，不在顶层。`stream.src_type` 必填，只支持 `rtsp`、`file`、`usb`；USB 优先取 `stream.device`，其他源取 `stream.url`。启用通道必须有有效 location。`channels[].logic` 是可选后处理模块名；省略或设为空字符串时不执行任何业务模块，视频仍显示，模型结果仍由框架绘制。
+`global_logics` 位于 `global` 对象内，不在顶层；每个实例的专有参数保存在自己的
+`logic_parameters` 对象中，由 `global_modules/<name>/logic.json` 校验。`stream.src_type`
+必填，只支持 `rtsp`、`file`、`usb`；USB 优先取 `stream.device`，其他源取 `stream.url`。
+启用通道必须有有效 location。`channels[].logic` 是可选后处理模块名；省略或设为空字符串
+时不执行任何业务模块，视频仍显示，模型结果仍由框架绘制。
 
 ## 继承与多模型
 
-模型类型、路径、标签、版本、阈值、类别过滤和 NPU 核心只存在于 `channels[].models[]`。一个条目就是单模型，多个有效条目会在同一帧运行并合并结果；空数组表示无模型通道。模型阈值缺省时继承 `global.obj_thresh/nms_thresh/detect_classes`。`infer_enable=false` 是整个通道的推理总开关；`models[].enable` 控制单个模型。旧的通道顶层模型字段会被明确拒绝。
+模型类型、路径、标签、版本、阈值、类别过滤和 NPU 核心只存在于
+`channels[].models[]`。一个条目就是单模型，多个有效条目会在同一帧运行并合并结果；空数组
+表示无模型通道。`obj_thresh`、`nms_thresh` 和 `detect_classes` 都由每个模型明确保存，不从
+global 继承。`infer_enable=false` 是整个通道的推理总开关；`models[].enable` 控制单个模型。
+通道顶层或 global 中的模型字段会被明确拒绝。
 
 ROI 唯一格式是 `channels[].roi_zones[]`，顶点为 0–1 归一化坐标。加载后由 analyzer 按模型输入尺寸生成 `RoiZone`。
 

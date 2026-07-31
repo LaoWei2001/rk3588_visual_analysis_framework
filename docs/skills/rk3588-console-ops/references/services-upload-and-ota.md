@@ -1,201 +1,169 @@
-# 两个后台微服务：告警上报与模型 OTA
+# 事件投递与模型 OTA 后台服务
 
-程序包的 `services/` 下包含两个 Python 微服务：
+> 第一次接入事件投递时，先完成 [事件上报与画布接线](../../rk3588-channel-logic/references/upload-and-wiring.md) 的最小闭环；本文说明部署、运行与排障。
 
-- `services/upload/`：消费统一事件发件箱，按 delivery 投递到业务服务器或 Dify；
-- `services/model_update/`：接收平台 OTA 指令，下载模型并修改目标配置文件。
+程序包包含两个独立服务：
 
-它们与 `vision_analysis` 主进程通过文件交接，不通过 Redis，也不被 channel logic 直接调用。
+- `services/upload/`：消费标准事件发件箱，通过可配置 adapter 投递；
+- `services/model_update/`：接收平台 OTA 指令并更新模型。
 
 ## 1. 总体关系
 
 ```text
 channel logic
-   │ report_alarm(ctx, type, message, fields)
-   ▼
-C++ alarm_report
-   │ 读取本通道 report_policy / report_parameters
-   │
-   └─ alarm_store/<event_id>/
-        ├─ manifest.json
-        ├─ snapshot.jpg / raw.jpg（按策略）
-        └─ clip.mp4（按策略，异步完成）
-                 │
-                 ▼ 扫描事件目录
-        unified_upload / EventOutboxForwarder
-                 │ 按 manifest.deliveries
-                 ├─ server image → HTTP POST
-                 └─ dify image/video → 上传文件并运行工作流
+  └─ report_event(EventRequest)
+       └─ event_store/<event_id>/
+            ├─ event.json
+            ├─ media_state.json
+            ├─ delivery_state.json
+            └─ annotated.jpg / raw.jpg / clip.mp4（按需）
+                    │
+                    ▼
+             EventOutboxForwarder
+                    │
+                    └─ adapter registry
+                         ├─ http_json
+                         └─ dify_workflow
 
-OTA 平台
-   │ WebSocket UPDATE_COMMAND
-   ▼
-ota_agent
-   ├─ 下载 .rknn 到 /tmp
-   ├─ MD5 校验
-   ├─ 移入目标 App 的 assets/
-   └─ 修改目标 config.json
-                 │
-                 ▼
-        C++ config_monitor → 模型热重载
+OTA 平台 → ota_agent → assets/*.rknn + config.json → C++ 热重载
 ```
 
-## 2. 告警上报服务 `unified_upload`
+## 2. 事件投递服务 `unified_upload`
 
-### 2.1 代码与入口
-
-源码目录：`service/upload/`；打包后位于：
+### 2.1 代码结构
 
 ```text
-/opt/ai_apps/<App>/services/upload/
+services/upload/
 ├─ main.py
 ├─ event_outbox.py
-├─ dify_uploader.py
+├─ delivery_tool.py
+├─ adapters/
+│  ├─ base.py
+│  ├─ registry.py
+│  ├─ mapping.py
+│  ├─ http_json.py
+│  ├─ dify_workflow.py
+│  └─ catalog.json
 └─ config.yaml
 ```
 
-`main.py` 创建一个 `EventOutboxForwarder` 工作线程。该线程扫描事件目录，并在处理 delivery 时调用 `DifyUploader`。当前没有 Redis 生产者、消费者、`dify_queue` 或 `BLPOP/RPUSH`。
+`EventOutboxForwarder` 只负责扫描、状态机和重试。协议构造及响应判定属于 adapter；
+新增协议不应在发件箱循环中增加业务分支。
 
 ### 2.2 事件发件箱
 
-默认目录为 App 根目录下的 `alarm_store/`：
+默认目录为 App 根目录的 `event_store/`，C++、上传服务和 Web 后端都可用
+`EVENT_STORE_DIR` 覆盖，三者必须指向同一目录。
 
-```text
-/opt/ai_apps/<App>/alarm_store/<event_id>/
-```
+- `event.json`：标准 `event/source/data.fields` 和策略快照；
+- `media_state.json`：每种媒体的 `requested → generating → ready/failed` 状态；
+- `delivery_state.json`：每条 delivery 的投递状态、重试次数和错误。
 
-C++ 主程序通常以 App 根目录为工作目录，默认写 `./alarm_store`；上传服务从 `services/upload/` 向上两级得到同一个目录。两侧都支持用环境变量 `ALARM_STORE_DIR` 覆盖，使用时必须保持一致。
-
-每个事件目录至少包含 `manifest.json`。事件视频可能在报警后窗口结束后才生成，因此服务会等待 `media.video` 指向的文件就绪。
-
-`manifest.json` 中的重要内容：
-
-- `event_id/channel_id/alarm_type/message`；
-- `fields`：logic 调用 `report_alarm()` 时提交的运行时字段；
-- `channel_parameters`：通道级上报参数；
-- `media`：图片、原图和视频文件名；
-- `policy_snapshot`：触发时的策略快照；
-- `deliveries`：每个投递任务及其状态、重试次数和错误。
-
-### 2.3 delivery 支持范围
-
-| media | target | 当前行为 |
-|---|---|---|
-| `image` | `server` | 读取 snapshot/raw，组业务 JSON，HTTP POST |
-| `image` | `dify` | 上传图片，映射输入字段，运行 Dify 工作流 |
-| `video` | `dify` | 等待 MP4，上传视频，运行 Dify 工作流 |
-
-其他组合会被标记为无效投递。
-
-服务器图片请求由 `event_outbox.py::_send_server_image()` 生成固定 JSON：
-
-```json
-{
-  "source": "JNU",
-  "eventType": "4005",
-  "detResult": {},
-  "snapTime": "...",
-  "endTime": "...",
-  "base64Data": "<snapshot.jpg base64>",
-  "base64DataRaw": "<raw.jpg base64>",
-  "invadeFlag": 1,
-  "eventId": "..."
-}
-```
-
-画布只能覆盖 `server_source` 和 `server_event_type`；当前服务器请求不会把 `fields` 或 `delivery.inputs` 写进 `detResult`。如果业务服务器需要算法字段，必须明确修改 Python 协议实现和本文，而不是只在 `logics.json` 增加 `report_fields`。
-
-Dify delivery 的 `inputs` 支持 `event.*`、`channel.*`、`logic.*` 和常量来源；其中 `logic.xxx` 读取 manifest 的 `fields.xxx`。Web 只展示当前 logic 在 `logics.json.report_fields` 声明的字段。
-
-投递状态大致为：
+delivery 的 `media` 是所需媒体数组，可取 `annotated_image`、`raw_image`、`video`；
+空数组表示纯数据投递。服务只在全部所需媒体 `ready` 后调用 adapter，任一媒体
+`failed` 时该 delivery 进入终态 `failed`。
 
 ```text
 pending → uploading → delivered
-                    ├→ retry   （网络异常、非 200、媒体未就绪等）
-                    └→ invalid （Profile、字段映射或投递组合无效）
+                    ├→ retry
+                    ├→ invalid
+                    └→ failed
 ```
 
-远端拒绝或网络失败时，delivery 保留在事件目录中并延迟重试。只有所有 delivery 都是 `delivered` 时，服务才删除整个事件目录。部分成功、重试中或存在 `invalid` 的事件不会被整体删除。
+只有全部 delivery 都成功时事件目录才会被删除；因此 Web 记录页展示的是本地待处理和失败事件，
+不是远端成功历史。
 
-### 2.4 `config.yaml` 与 Profile
+### 2.3 Profile、接口模板与 adapter
 
-连接地址和密钥集中保存在：
-
-```text
-/opt/ai_apps/<App>/services/upload/config.yaml
-```
-
-结构：
+连接配置只使用一个 `profiles` 字典：
 
 ```yaml
-dify:
-  api_url: "http://dify.example.com"
-  api_key: "app-..."
-  timeout: 120
-
-server:
-  url: "http://server.example.com/api/alarm"
-  timeout: 15
-
 profiles:
-  line_a_server:
-    type: server
-    url: "http://server-a.example.com/api/alarm"
-    token: ""
+  plant_http:
+    adapter: http_json
+    url: https://api.example.com/events
+    headers:
+      Authorization: Bearer replace-me
     timeout: 15
-  line_b_dify:
-    type: dify
-    api_url: "http://dify-b.example.com"
-    api_key: "app-..."
+
+  inspection_dify:
+    adapter: dify_workflow
+    api_url: https://dify.example.com
+    api_key: app-xxx
+    timeout: 120
 ```
 
-画布中的 delivery 只保存 `profile_id` 和投递策略，不把服务地址或密钥写进通道 `config.json`：
+delivery 写 `profile_id/contract_id/media`。地址、密钥和 Header 保存在 Profile；
+请求方式、媒体、mapping 和成功条件保存在 `services/upload/contracts/*.json`。Web 选择
+Profile 与接口模板，不要求使用者逐条拼装协议。
 
-- `profile_id` 为空：使用 `server` 或 `dify` 默认连接；
-- 指定 `profile_id`：从 `profiles` 查找，且 Profile 的 `type` 必须与 delivery target 一致；
-- Profile 不存在、类型不匹配或缺少地址时，该 delivery 进入 `invalid`。
+映射示例：
 
-网页「服务配置」弹窗通过 `upload_config.py` 读写这个文件。保存配置不会让已运行的 Python 进程自动重新读取；需要重启 `unified_upload`。
+```json
+{
+  "profile_id": "plant_http",
+  "contract_id": "object_invade_det",
+  "media": ["annotated_image", "raw_image"]
+}
+```
 
-### 2.5 与 channel logic 的关系
+模板中的 source 以 `event.*`、`source.*`、`fields.*`、`media.*` 开头，也可使用
+`constant`；target 支持点路径。具体 adapter 能力由 `adapters/catalog.json` 声明，
+接口清单由 `contracts/*.json` 声明。
 
-logic 只提交业务事件：
+### 2.4 logic 边界
+
+logic 只描述事件，不了解 HTTP、Dify 或远端字段：
 
 ```cpp
-report_alarm(ctx, "intrusion", "检测到入侵", {
-    alarm_field("track_id", result.track_id),
-    alarm_field("score", result.score),
-});
+EventRequest request;
+request.event_type = "person_intrusion";
+request.message = "检测到人员进入禁区";
+request.fields = {
+    event_field("track_id", track_id),
+    event_field("score", score),
+};
+
+const EventReportResult result = report_event(ctx, request);
+if (!result.accepted()) {
+    fprintf(stderr, "report rejected: %s (%s)\n",
+            event_report_status_name(result.status), result.detail.c_str());
+}
 ```
 
-图片/视频、Profile、overlay 和字段映射由画布生成的 `report_policy` 决定。logic 不应：
+图片/视频和映射由接口模板决定，画布 report 节点只选择 Profile、模板和事件过滤。
+协议变化不应要求修改算法 logic。
 
-- 调用已经删除的 `alarm_uploader_enqueue()`；
-- 读取 `server_url/dify_api_url/dify_api_key` 旧通道字段；
-- 在 C++ 中实现 HTTP 或 Redis 转发；
-- 把服务密钥硬编码进业务逻辑。
+### 2.5 预览、测试与排障
 
-### 2.6 上报排查
+Web 的 report 节点支持：
+
+- 使用样例事件预览最终请求，敏感 Header 会被遮蔽；
+- 选择本地事件预览真实映射；
+- 选择本地事件执行测试发送。
+
+命令行也可直接验证：
 
 ```bash
-# 看本地待投递事件
-find /opt/ai_apps/<App>/alarm_store -maxdepth 2 -name manifest.json -print
+cd /opt/ai_apps/<App>/services/upload
+python3 delivery_tool.py preview \
+  --config config.yaml \
+  --event-dir ../../event_store/<event_id> \
+  --delivery-json delivery.json
 
-# 查看事件状态
-python3 -m json.tool /opt/ai_apps/<App>/alarm_store/<event_id>/manifest.json
-
-# 查看上传服务日志
-journalctl -u unified_upload -n 100 --no-pager
-journalctl -u unified_upload -f
+python3 delivery_tool.py send \
+  --config config.yaml \
+  --event-dir ../../event_store/<event_id> \
+  --delivery-json delivery.json
 ```
 
-排查顺序：
+常规排查顺序：
 
-1. logic 的 `report_alarm()` 是否返回非空事件 ID；
-2. `alarm_store/<event_id>/manifest.json` 是否存在；
-3. `deliveries[].status/last_error` 是什么；
-4. delivery 的 `profile_id` 是否存在且类型正确；
-5. systemd 单元绑定的 App 是否正是产生该发件箱的 App。
+1. 检查 `EventReportResult.status/detail`；
+2. 检查事件目录中的三个 JSON 状态文件；
+3. 检查 delivery 的 `profile_id/contract_id`，以及媒体快照是否与契约一致；
+4. 用预览确认最终 URL、Header、Body 或 Dify inputs；
+5. 查看 `journalctl -u unified_upload -n 100 --no-pager`。
 
 ## 3. OTA 服务 `ota_agent`
 
@@ -309,7 +277,8 @@ Web 仍会主动 `disable` 原生 unit 自启，设备启动顺序由 `rk3588-co
 - 启动/切换视觉 App：运行中但绑定不同 App 的后台服务会被自动停止、改绑并重启；
 - OTA 除了匹配 App，还必须匹配视觉程序实际加载的 `config*.json`。
 
-旧版 `POST /api/services/{key}/install {app}` 为兼容保留，但请求中的 App 必须等于当前运行的视觉 App，否则返回 409。
+后台服务不提供单独的 install 路由。`POST /api/services/{key}/start` 会校验当前运行的视觉
+App、写入绑定该 App 的 systemd unit 并启动；`restart` 使用相同绑定流程。
 
 ### 4.4 路径失效
 
@@ -399,9 +368,9 @@ ASSETS_DIR=/opt/ai_apps/<App>/assets python3 -u ota_agent.py
 
 | 现象 | 检查 |
 |---|---|
-| 上报服务运行但没有事件 | App 是否产生 `alarm_store/<event_id>/manifest.json`；单元是否绑定同一 App |
+| 上报服务运行但没有事件 | App 是否产生 `event_store/<event_id>/event.json`；单元是否绑定同一 App |
 | delivery 一直 retry | `last_error`、网络、远端状态码、媒体文件是否就绪 |
-| delivery 变 invalid | Profile 是否存在、类型是否匹配、字段映射是否完整 |
+| delivery 变 invalid | Profile 与接口契约是否存在、adapter 是否匹配、媒体快照是否过期、契约 source 是否有效 |
 | 配置已保存但服务仍用旧地址 | 重启对应 Python 服务；它不会热重载配置文件 |
 | 服务 CHDIR 失败 | systemd `WorkingDirectory` 已失效，在 Web 中重新绑定并启动 |
 | 重启设备后 Web 安装的服务没启动 | 当前 Web 安装默认执行 `disable`；需要自启时手动 enable |

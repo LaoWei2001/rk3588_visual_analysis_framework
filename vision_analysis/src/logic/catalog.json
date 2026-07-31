@@ -1,12 +1,5 @@
 {
-    "_comment": "通道逻辑 ID 由 REGISTER_LOGIC(func) 的函数名生成，其余元数据由 src/logic/modules/*/logic.json 聚合；此文件只保存非通道逻辑的共享能力。",
-    "global_logics": [
-        {
-            "name": "global_default",
-            "label": "默认全局逻辑",
-            "params": []
-        }
-    ],
+    "_comment": "通道和全局逻辑均由各自模块目录聚合；此文件只保存模型类型等非模块共享能力。",
     "model_types": [
         "yolov5",
         "yolov8_det",

@@ -21,9 +21,6 @@ class YoloPose : public ModelBase
   public:
     YoloPose(const std::string &model_path, const std::string &label_path, int core_mask = RKNN_NPU_CORE_0_1_2,
              float obj_thresh = 0.5f, float nms_thresh = 0.45f);
-    /* 保留旧构造接口，未提供标签时根据关键点数量使用 person/hand/pose。 */
-    YoloPose(const std::string &model_path, int core_mask = RKNN_NPU_CORE_0_1_2, float obj_thresh = 0.5f,
-             float nms_thresh = 0.45f);
     virtual ~YoloPose();
 
     virtual bool infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat *perf = nullptr) override;

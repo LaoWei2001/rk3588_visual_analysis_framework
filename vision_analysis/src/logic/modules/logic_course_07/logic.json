@@ -1,5 +1,6 @@
 {
     "label": "课程7:如何添加一个带自定义功能的按钮",
+    "event_types": [],
     "parameters": {
         "type": "object",
         "additionalProperties": false,

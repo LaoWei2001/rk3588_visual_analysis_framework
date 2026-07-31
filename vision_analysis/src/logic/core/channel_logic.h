@@ -59,7 +59,7 @@ struct ChannelActionResult
  * 与 ctx->results[].box 完全一致 —— 逻辑里可直接 cv::pointPolygonTest, 无需再缩放。
  *
  * 通道逻辑通过 ctx->rois (全部区域) 或 ctx->roi_by_name("xxx") / ctx->roi_polygon_at(i)
- * 等便捷方法访问本通道的各个区域; ctx->roi 仍指向"第一个区域"以兼容老逻辑。
+ * 等便捷方法访问本通道的各个区域。
  */
 struct RoiZone
 {
@@ -85,7 +85,7 @@ struct DrawCommand
         DISPLAY = 0x01,
         IMAGE = 0x02,
         VIDEO = 0x04,
-        UPLOAD = IMAGE | VIDEO, /* 兼容旧代码：同时进入上报图片和视频 */
+        MEDIA = IMAGE | VIDEO,
         ALL = DISPLAY | IMAGE | VIDEO
     };
     uint8_t target = ALL;
@@ -195,9 +195,7 @@ struct ChannelContext
     std::string param_json(const char *key) const;
 
     /* ---- ROI (已缩放到模型输入坐标系) ----
-     * roi  : 兼容字段, 指向"第一个区域"的多边形(无区域时为 nullptr); 老逻辑继续用它即可。
-     * rois : 本通道全部 ROI 区域(支持一个视频流配多个区域); 用下方便捷方法访问更省事。 */
-    const std::vector<cv::Point> *roi = nullptr;
+     * rois 是本通道全部 ROI 区域；单个区域用 roi_polygon_at()/roi_by_name() 获取。 */
     const std::vector<RoiZone> *rois = nullptr;
 
     /* ---- 本帧绘制指令输出 ----
@@ -215,10 +213,14 @@ struct ChannelContext
     bool *show_canvas = nullptr; /* display_canvas() 置 true → 框架把 canvas 路由到显示 */
     cv::Mat &display_canvas();   /* 取可写显示画布并标记启用(见上) */
 
-    /* ---- 跨帧持久化状态 ---- */
-    std::shared_ptr<void> *state;
+  /* ---- 跨帧持久化状态 ---- */
+  // state是指向 std::shared_ptr<void> 对象的普通指针。
+  // ctx->state：外层指针
+  // *(ctx->state)：外层指针指向的 shared_ptr 对象
+  // ctx->state->get()：shared_ptr 管理的原始 void* 指针
+  std::shared_ptr<void>* state;
 
-    /* ---- 元信息 ---- */
+    /* ---- 是否开启推理 ---- */
     int infer_enabled;
 
     /* ---- 实时 fps ---- */
@@ -328,7 +330,7 @@ void draw_line(ChannelContext *ctx, const cv::Point &pt1, const cv::Point &pt2,
 
 /* thickness = 加粗级别: <=1 普通填充字(默认外观); >=2 越大越粗(在填充字上叠同色描边来加粗)。
  * 报警大字想更醒目就调大 thickness, 如 draw_text(ctx,"报警",pos,红,1.0,4)。 */
-/* target 可精确选择 DISPLAY / IMAGE / VIDEO；UPLOAD 表示图片+视频，ALL 表示三者。 */
+/* target 可精确选择 DISPLAY / IMAGE / VIDEO；MEDIA 表示图片+视频，ALL 表示三者。 */
 void draw_text(ChannelContext *ctx, const char *text, const cv::Point &pos,
                const cv::Scalar &color = cv::Scalar(255, 255, 255), double font_scale = 0.6, int thickness = 1,
                DrawCommand::Target target = DrawCommand::ALL);
@@ -341,7 +343,7 @@ void draw_polyline(ChannelContext *ctx, const std::vector<cv::Point> &points,
 
 /* 填充多边形(实心色块); alpha<1 半透明叠加 —— 给一块 ROI/区域铺半透明底色高亮最常用。
  * 顶点为模型输入坐标系(与 ROI/检测框同坐标系); 少于 3 个点不绘制。
- * 例: draw_poly_filled(ctx, *ctx->roi, 红, 0.3)  → 把不规则 ROI 铺成半透明红。 */
+ * 例: draw_poly_filled(ctx, *ctx->roi_polygon_at(0), 红, 0.3)  → 把首个 ROI 铺成半透明红。 */
 void draw_poly_filled(ChannelContext *ctx, const std::vector<cv::Point> &points,
                       const cv::Scalar &color = cv::Scalar(0, 255, 0), double alpha = 0.3,
                       DrawCommand::Target target = DrawCommand::ALL);

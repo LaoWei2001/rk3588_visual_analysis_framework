@@ -102,7 +102,13 @@ EventVideoRuntimeConfig event_video_from_report_policy(cJSON *policy)
             continue;
         cJSON *enabled = cJSON_GetObjectItemCaseSensitive(delivery, "enabled");
         cJSON *media = cJSON_GetObjectItemCaseSensitive(delivery, "media");
-        if (!cJSON_IsFalse(enabled) && cJSON_IsString(media) && std::string(media->valuestring) == "video")
+        bool needs_video = false;
+        cJSON *kind = nullptr;
+        cJSON_ArrayForEach(kind, media)
+            needs_video = needs_video ||
+                          (cJSON_IsString(kind) && kind->valuestring &&
+                           std::string(kind->valuestring) == "video");
+        if (!cJSON_IsFalse(enabled) && cJSON_IsArray(media) && needs_video)
         {
             runtime.enable = true;
             break;
@@ -154,8 +160,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
     cfg.max_fps = 30;
     cfg.local_default_fps = 25;
     cfg.queue_size = 1;
-    cfg.obj_thresh = 0.4f;
-    cfg.nms_thresh = 0.45f;
     cfg.tracker_enable = 1;
     cfg.tracker_iou_thresh = 0.3f;
     cfg.tracker_max_miss = 10;
@@ -169,7 +173,8 @@ bool load_config(const std::string &path, AppConfig &cfg)
         return false;
     }
 
-    static const char *removed_global_model_fields[] = {"model_type", "model_path", "label_path"};
+    static const char *removed_global_model_fields[] = {"model_type", "model_path", "label_path",
+                                                        "obj_thresh", "nms_thresh", "detect_classes"};
     for (const char *field : removed_global_model_fields)
     {
         if (cJSON_GetObjectItemCaseSensitive(global, field))
@@ -225,6 +230,44 @@ bool load_config(const std::string &path, AppConfig &cfg)
                     if (cJSON_IsNumber(ch_item))
                         gl_cfg.channels.push_back(ch_item->valueint);
                 }
+            }
+
+            cJSON *gl_parameters = cJSON_GetObjectItemCaseSensitive(gl_item, "logic_parameters");
+            if (gl_parameters)
+            {
+                if (!cJSON_IsObject(gl_parameters))
+                {
+                    fprintf(stderr, "[Config] global_logic[%zu].logic_parameters must be an object\n",
+                            cfg.global_logics.size());
+                    cJSON_Delete(root);
+                    return false;
+                }
+                char *parameters_text = cJSON_PrintUnformatted(gl_parameters);
+                if (!parameters_text)
+                {
+                    fprintf(stderr, "[Config] cannot serialize global_logic[%zu].logic_parameters\n",
+                            cfg.global_logics.size());
+                    cJSON_Delete(root);
+                    return false;
+                }
+                gl_cfg.logic_parameters_json = parameters_text;
+                cJSON_free(parameters_text);
+            }
+
+            {
+                std::vector<LogicParameterError> parameter_errors;
+                std::string normalized_parameters;
+                if (!logic_parameters_resolve(gl_cfg.logic, gl_cfg.logic_parameters_json, &normalized_parameters,
+                                              nullptr, &parameter_errors))
+                {
+                    fprintf(stderr, "[Config] global_logic[%zu] logic_parameters validation failed:\n",
+                            cfg.global_logics.size());
+                    for (const auto &error : parameter_errors)
+                        fprintf(stderr, "  - %s: %s\n", error.field.c_str(), error.message.c_str());
+                    cJSON_Delete(root);
+                    return false;
+                }
+                gl_cfg.logic_parameters_json = std::move(normalized_parameters);
             }
 
             cfg.global_logics.push_back(gl_cfg);
@@ -367,6 +410,27 @@ bool load_config(const std::string &path, AppConfig &cfg)
             }
         }
 
+        static const char *removed_sop_fields[] = {
+            "path_sequence",      "path_target_label",  "path_enter_sec",    "path_dwell_min_sec",
+            "path_dwell_max_sec", "path_enter_list",    "path_dwell_list",   "path_dwell_max_list",
+            "path_edges",         "path_entries",       "path_exits",        "path_edge_limits",
+            "path_reset_sec",     "path_end_mode",      "path_end_zone",     "path_end_dwell_sec",
+            "path_total_min_sec", "path_total_max_sec", "path_trigger_mode", "path_trigger_mandatory",
+            "path_report_normal", "path_step_x_list",   "path_step_y_list",  "path_end_x",
+            "path_end_y"};
+        for (const char *field : removed_sop_fields)
+        {
+            if (cJSON_GetObjectItemCaseSensitive(item, field))
+            {
+                fprintf(stderr,
+                        "[Config] channel %d field '%s' is not allowed; "
+                        "use logic_parameters.flow\n",
+                        ch.id, field);
+                cJSON_Delete(root);
+                return false;
+            }
+        }
+
         cJSON *logic_parameters_item = cJSON_GetObjectItemCaseSensitive(item, "logic_parameters");
         if (logic_parameters_item && !cJSON_IsObject(logic_parameters_item))
         {
@@ -455,15 +519,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 return false;
             }
             ch.logic_parameters_json = std::move(normalized_parameters);
-        }
-        for (auto &model : ch.models)
-        {
-            if (model.obj_thresh < 0.0f)
-                model.obj_thresh = cfg.obj_thresh;
-            if (model.nms_thresh < 0.0f)
-                model.nms_thresh = cfg.nms_thresh;
-            if (model.detect_classes.empty())
-                model.detect_classes = cfg.detect_classes;
         }
         if (ch.threads < 0)
             ch.threads = cfg.channel_threads;
@@ -573,15 +628,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
         cfg.tile_rows = 2;
     if (cfg.queue_size <= 0)
         cfg.queue_size = 1;
-    if (cfg.obj_thresh < 0.0f)
-        cfg.obj_thresh = 0.0f;
-    if (cfg.obj_thresh > 1.0f)
-        cfg.obj_thresh = 1.0f;
-    if (cfg.nms_thresh < 0.0f)
-        cfg.nms_thresh = 0.0f;
-    if (cfg.nms_thresh > 1.0f)
-        cfg.nms_thresh = 1.0f;
-
     cJSON_Delete(root);
 
     // 【修改点】：分级验证 — 首次加载做完整验证，热重载只做关键字段验证

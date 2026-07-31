@@ -66,19 +66,6 @@ async def set_app_autostart(name: str, req: AutostartRequest):
         raise HTTPException(status_code=404, detail=f"程序不存在: {name}")
     with pm.runtime_lock():
         settings = runtime_state.set_vision_autostart(name, req.enabled)
-        status = pm.get_status(name)
-        # 兼容升级前已经在跑、但尚未写入 desired_running 的进程。
-        if req.enabled and status.get("status") == "running":
-            runtime_state.mark_vision_started(
-                name,
-                status.get("mode") or "deploy",
-                status.get("config") or "config.json",
-            )
-            settings = runtime_state.get_vision_settings(name)
-        elif req.enabled:
-            # 在停止状态下勾选只保存偏好，不能继承一次更早的“运行”意图。
-            runtime_state.mark_vision_stopped(name)
-            settings = runtime_state.get_vision_settings(name)
     return {"ok": True, **settings}
 
 

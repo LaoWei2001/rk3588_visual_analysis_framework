@@ -108,7 +108,7 @@ App 根目录 logics.json
 可以不编译 C++，单独执行：
 
 ```bash
-cd /userdata/sop_agent/vision_analysis
+cd vision_analysis
 python3 scripts/generate_logics_catalog.py --check
 ```
 
@@ -145,4 +145,6 @@ CMake 会递归收集 `src/logic` 下的 `.cpp/.cc/.cxx`。使用 `build.sh` 会
 
 ## channel logic 与 global logic 的区别
 
-本文只针对 `REGISTER_LOGIC` 通道逻辑。global logic 当前使用 `global_logic.cpp` 中的显式注册和 `global.global_logics` 配置，发现链路与模块化 channel logic 不同；新增全局逻辑应参考 `docs/skills/rk3588-global-logic/SKILL.md`。
+global logic 使用对称的 `REGISTER_GLOBAL_LOGIC` 自注册机制，模块位于
+`src/logic/global_modules/<global_xxx>/`，运行实例配置在 `global.global_logics`；新增全局
+逻辑应参考 `docs/skills/rk3588-global-logic/SKILL.md`。

@@ -1,5 +1,12 @@
 {
     "label": "周期截图与热重载演示",
+    "event_types": [
+        {
+            "id": "periodic_snapshot_demo",
+            "label": "周期截图事件",
+            "help": "达到配置的截图间隔时产生。"
+        }
+    ],
     "parameters": {
         "type": "object",
         "additionalProperties": false,

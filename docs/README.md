@@ -2,7 +2,7 @@
 
 > 文档角色：本文件是 `docs/` 的唯一导航入口。新开发者、维护者和大模型都先从这里判断任务类型，再进入课程、专题指南或源码参考。
 >
-> 基线状态：已按 `/userdata/sop_agent` 当前工作区核对，日期为 2026-07-16。入口唯一不等于本文覆盖所有技术事实；系统行为始终以现行源码、模块清单、前端序列化和后端路由为准。
+> 基线状态：已按本仓库当前源码核对，日期为 2026-07-30。入口唯一不等于本文覆盖所有技术事实；系统行为始终以现行源码、模块清单、前端序列化和后端路由为准。
 
 ## 一、按任务选择入口
 
@@ -10,11 +10,14 @@
 |---|---|---|
 | 从零系统学习二次开发 | [二次开发课程大纲](二次开发课程大纲.md) | 学习顺序、练习、产物和验收标准 |
 | 新增或修改单通道检测/报警规则 | [通道逻辑开发](skills/rk3588-channel-logic/SKILL.md) | `logic_xxx`、参数、绘制、动作和统一告警 |
+| 第一次开发完整报警与上报功能 | [报警事件与上报开发指南](报警事件与上报开发指南.md) | 报警判断、C++事件、按钮、媒体、HTTP/Dify、Web契约和提示词 |
+| 已了解报警，只需查上报接线细节 | [事件上报与画布接线](skills/rk3588-channel-logic/references/upload-and-wiring.md) | C++动态字段、Profile、接口契约、媒体和排错 |
 | 新增跨通道、聚合或周期巡检规则 | [全局逻辑开发](skills/rk3588-global-logic/SKILL.md) | `global_xxx`、快照、轮询和当前告警边界 |
 | 修改 Web、部署、后台服务或排障 | [控制台 / 部署 / 运维](skills/rk3588-console-ops/SKILL.md) | React、FastAPI、应用包、systemd、上传和 OTA |
-| 理解或修改 C++ 底层模块 | [源码模块索引](skills/rk3588-src-modules/README.md) | runtime、config、logic、alarm、recorder 等模块地图 |
+| 理解或修改 C++ 底层模块 | [源码模块索引](skills/rk3588-src-modules/README.md) | runtime、config、logic、event、recorder 等模块地图 |
 | 不确定该看哪个专题 | [开发/运维知识库索引](skills/README.md) | 更细的“任务 → 文档”路由 |
 | 让有仓库权限的大模型执行开发任务 | [大模型功能开发提示词模板](大模型开发提示词模板.md) | 按任务套用约束完整的开发模板 |
+| 了解当前设计缺口和改进优先级 | [框架设计评审与改进路线](框架设计评审与改进路线.md) | 安全、事件一致性、操作成本、扩展性和测试 |
 | 追溯旧方案和历史决策 | [开发日志](development_log.md) | 仅用于历史追溯，不作为当前接口或实现依据 |
 
 快速判断：单通道逐帧业务规则进入“通道逻辑”；多通道聚合或独立周期轮询进入“全局逻辑”；其余 Web、服务、部署和排障问题进入“控制台 / 部署 / 运维”。
@@ -25,9 +28,10 @@
 
 1. 先读本页，确认任务边界和资料权威顺序；
 2. 按 [二次开发课程大纲](二次开发课程大纲.md) 的基础章节建立运行链路、配置和身份模型；
-3. 只选择与任务相符的一份 `SKILL.md`，不要一开始通读全部专题；
-4. 从 [源码模块索引](skills/rk3588-src-modules/README.md) 进入相关模块，并以真实头文件、调用点和配置链路确认接口；
-5. 选择当前源码中最接近的实现作为参考，完成静态检查、构建和针对性验收。
+3. 开发报警或事件投递时完整阅读 [报警事件与上报开发指南](报警事件与上报开发指南.md)；
+4. 只选择与任务相符的一份 `SKILL.md`，不要一开始通读全部专题；
+5. 从 [源码模块索引](skills/rk3588-src-modules/README.md) 进入相关模块，并以真实头文件、调用点和配置链路确认接口；
+6. 选择当前源码中最接近的实现作为参考，完成静态检查、构建和针对性验收。
 
 推荐的两条路径：
 
@@ -42,37 +46,53 @@
 
 | 范围 | 当前职责 |
 |---|---|
-| `vision_analysis/` | C++ 采集、推理、通道/全局 logic、绘制、录像和本地告警事件 |
+| `vision_analysis/` | C++ 采集、推理、通道/全局 logic、绘制、录像和本地标准事件 |
 | `web_console/` | Web 编辑器、配置序列化、应用进程管理、实时画面和后台服务控制 |
-| `service/upload/` | 消费 `alarm_store` 持久化发件箱并投递到业务服务器或 Dify |
+| `service/upload/` | 消费 `event_store`，按连接 Profile 与接口契约调用 adapter 投递 |
 | `service/model_update/` | 模型更新与 OTA 服务 |
 
-当前统一告警链路是：
+当前统一事件链路是：
 
 ```text
-report_alarm/alarm_report
-  -> alarm_store/<event_id>/manifest.json + 媒体
+report_event
+  -> event_store/<event_id>/
+     event.json + media_state.json + delivery_state.json + 媒体
   -> unified_upload
-  -> 业务服务器 / Dify
+  -> adapter -> 远端接口
 ```
 
-C++ logic 不直接做 HTTP，不使用旧 Redis 报警队列，也不在 logic 中保存服务器地址或密钥。
+C++ logic 不直接做 HTTP，也不在 logic 中保存连接地址或密钥。
+三个 JSON 分别承载事件/业务数据、媒体状态和投递状态。
 
 ### 3.2 当前通道逻辑模块
 
-通道逻辑位于 `vision_analysis/src/logic/modules/<module_dir>/`，每个模块由 C++ 入口和 `logic.json` 共同定义。`REGISTER_LOGIC(logic_xxx)` 中的 C++ 函数名是唯一 logic ID；构建器自动把它写入 Web 清单。当前正式模块为：
+通道逻辑位于 `vision_analysis/src/logic/modules/<module_dir>/`，每个模块由 C++ 入口和 `logic.json` 共同定义。`REGISTER_LOGIC(logic_xxx)` 中的 C++ 函数名是唯一 logic ID；构建器自动把它写入 Web 清单。
 
-| 注册名 | 示例说明 |
+不要在入口文档手抄一份容易过期的“全部模块固定表”。当前源码清单用下面的命令取得：
+
+```bash
+cd vision_analysis
+python3 scripts/generate_logics_catalog.py --check
+./vision_analysis --list-logics   # 已有当前架构二进制时
+./vision_analysis --list-global-logics
+```
+
+当前推荐参考：
+
+| 目的 | 当前源码 |
 |---|---|
-| `logic_default` | [可删除的空白逻辑示例](skills/rk3588-channel-logic/references/examples/logic_default.md) |
-| `logic_course_person_dwell` | [二次开发课程人员停留骨架](二次开发课程大纲.md) |
-| `logic_upload` | [ROI 告警示例](skills/rk3588-channel-logic/references/examples/logic_upload.md) |
-| `logic_upload_teach` | [按钮上报告警示例](skills/rk3588-channel-logic/references/examples/logic_upload_teach.md) |
-| `logic_button_demo` | [Web 动作示例](skills/rk3588-channel-logic/references/examples/logic_button_demo.md) |
-| `logic_periodic_snapshot_demo` | [周期截图与参数热更新示例](skills/rk3588-channel-logic/references/examples/logic_periodic_snapshot_demo.md) |
-| `logic_path_sop` | [SOP 路径逻辑](skills/rk3588-channel-logic/references/examples/logic_path_sop.md) |
+| 空白模块 | [logic_default](skills/rk3588-channel-logic/references/examples/logic_default.md) |
+| 基础绘制、参数、结果、ROI、状态和按钮课程 | `logic_course_01` ～ `logic_course_07`；按钮见 [logic_course_07](skills/rk3588-channel-logic/references/examples/logic_course_07.md) |
+| 按钮触发上报 | [logic_upload_teach](skills/rk3588-channel-logic/references/examples/logic_upload_teach.md) |
+| 周期截图与参数热更新 | [logic_periodic_snapshot_demo](skills/rk3588-channel-logic/references/examples/logic_periodic_snapshot_demo.md) |
+| 同步传统 CV 原始帧 | `logic_save_frame_pair` |
+| SOP 路径业务 | [logic_path_sop](skills/rk3588-channel-logic/references/examples/logic_path_sop.md) |
+| 自定义 ROI 进入报警 | [ROI 告警代码模式](skills/rk3588-channel-logic/references/examples/roi-alarm-pattern.md)（不是内置同名模块） |
 
-`src/logic/catalog.json` 只保存共享的模型类型和全局 logic 元数据，不重复维护通道 logic 列表。当前全局实现仍集中在 `src/logic/core/global_logic.cpp`，内置注册名只有 `global_default`。
+`logic_course_08` ～ `logic_course_10` 当前仍是课程任务骨架，不应被大模型当成已完成的生产示例。
+全局 logic 位于 `src/logic/global_modules/<module_dir>/`，通过
+`REGISTER_GLOBAL_LOGIC(global_xxx)` 自注册；通道和全局模块的 `logic.json` 都由构建器聚合。
+`src/logic/catalog.json` 只保存模型类型等非模块共享能力。
 
 通道可以不配置 `logic`：此时只运行视频与可选模型管线，模型检测结果仍由框架绘制，不执行任何 `modules/` 业务后处理。包括 `logic_default` 在内的通道模块都不是系统兜底项。
 
@@ -113,7 +133,7 @@ C++ logic 不直接做 HTTP，不使用旧 Redis 报警队列，也不在 logic 
 在具备对应依赖的开发环境中按改动范围执行：
 
 ```bash
-cd /userdata/sop_agent/vision_analysis
+cd vision_analysis
 
 # 检查 manifest、函数注册、参数 Schema 和访问器
 python3 scripts/generate_logics_catalog.py --check

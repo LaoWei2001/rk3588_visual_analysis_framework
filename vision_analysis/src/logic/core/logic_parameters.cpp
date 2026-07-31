@@ -186,99 +186,104 @@ class LogicSchemaRegistry
             return;
         }
 
-        cJSON *logics = cJSON_GetObjectItemCaseSensitive(root, "channel_logics");
-        if (!cJSON_IsArray(logics))
+        const char *collections[] = {"channel_logics", "global_logics"};
+        for (const char *collection : collections)
         {
-            fail("embedded logic catalog has no channel_logics array");
-            cJSON_Delete(root);
-            return;
-        }
-
-        cJSON *logic = nullptr;
-        cJSON_ArrayForEach(logic, logics)
-        {
-            cJSON *name_item = cJSON_GetObjectItemCaseSensitive(logic, "name");
-            cJSON *schema_item = cJSON_GetObjectItemCaseSensitive(logic, "parameters");
-            if (!cJSON_IsString(name_item) || !name_item->valuestring || !cJSON_IsObject(schema_item))
+            cJSON *logics = cJSON_GetObjectItemCaseSensitive(root, collection);
+            if (!cJSON_IsArray(logics))
             {
-                fail("logic catalog entry is missing name/parameters");
+                fail(std::string("embedded logic catalog has no ") + collection + " array");
                 break;
             }
 
-            const std::string logic_name(name_item->valuestring);
-            LogicSchema schema;
-            cJSON *additional = cJSON_GetObjectItemCaseSensitive(schema_item, "additionalProperties");
-            schema.additional_properties = cJSON_IsTrue(additional);
-            cJSON *properties = cJSON_GetObjectItemCaseSensitive(schema_item, "properties");
-            if (!cJSON_IsObject(properties))
+            cJSON *logic = nullptr;
+            cJSON_ArrayForEach(logic, logics)
             {
-                fail(logic_name + ": parameters.properties is missing");
-                break;
-            }
-
-            for (cJSON *property = properties->child; property; property = property->next)
-            {
-                if (!property->string || !cJSON_IsObject(property))
+                cJSON *name_item = cJSON_GetObjectItemCaseSensitive(logic, "name");
+                cJSON *schema_item = cJSON_GetObjectItemCaseSensitive(logic, "parameters");
+                if (!cJSON_IsString(name_item) || !name_item->valuestring || !cJSON_IsObject(schema_item))
                 {
-                    fail(logic_name + ": invalid parameter property");
+                    fail("logic catalog entry is missing name/parameters");
                     break;
                 }
-                ParameterSpec spec;
-                spec.key = property->string;
-                cJSON *type_item = cJSON_GetObjectItemCaseSensitive(property, "type");
-                if (!cJSON_IsString(type_item) || !parse_type(type_item->valuestring, spec.type))
+
+                const std::string logic_name(name_item->valuestring);
+                LogicSchema schema;
+                cJSON *additional = cJSON_GetObjectItemCaseSensitive(schema_item, "additionalProperties");
+                schema.additional_properties = cJSON_IsTrue(additional);
+                cJSON *properties = cJSON_GetObjectItemCaseSensitive(schema_item, "properties");
+                if (!cJSON_IsObject(properties))
                 {
-                    fail(logic_name + "." + spec.key + ": invalid type");
+                    fail(logic_name + ": parameters.properties is missing");
                     break;
                 }
-                cJSON *default_item = cJSON_GetObjectItemCaseSensitive(property, "default");
-                std::string value_error;
-                if (!default_item || !parse_value(default_item, spec.type, spec.default_value, value_error))
-                {
-                    fail(logic_name + "." + spec.key + ".default: " + value_error);
-                    break;
-                }
-                spec.reload_impact = parse_reload_impact(property);
 
-                cJSON *minimum = cJSON_GetObjectItemCaseSensitive(property, "minimum");
-                cJSON *maximum = cJSON_GetObjectItemCaseSensitive(property, "maximum");
-                if (cJSON_IsNumber(minimum))
+                for (cJSON *property = properties->child; property; property = property->next)
                 {
-                    spec.has_minimum = true;
-                    spec.minimum = minimum->valuedouble;
-                }
-                if (cJSON_IsNumber(maximum))
-                {
-                    spec.has_maximum = true;
-                    spec.maximum = maximum->valuedouble;
-                }
-
-                cJSON *enum_item = cJSON_GetObjectItemCaseSensitive(property, "enum");
-                if (cJSON_IsArray(enum_item))
-                {
-                    cJSON *enum_value = nullptr;
-                    cJSON_ArrayForEach(enum_value, enum_item)
+                    if (!property->string || !cJSON_IsObject(property))
                     {
-                        LogicParameterValue parsed;
-                        if (!parse_value(enum_value, spec.type, parsed, value_error))
-                        {
-                            fail(logic_name + "." + spec.key + ".enum: " + value_error);
-                            break;
-                        }
-                        spec.enum_values.push_back(std::move(parsed));
+                        fail(logic_name + ": invalid parameter property");
+                        break;
                     }
-                }
+                    ParameterSpec spec;
+                    spec.key = property->string;
+                    cJSON *type_item = cJSON_GetObjectItemCaseSensitive(property, "type");
+                    if (!cJSON_IsString(type_item) || !parse_type(type_item->valuestring, spec.type))
+                    {
+                        fail(logic_name + "." + spec.key + ": invalid type");
+                        break;
+                    }
+                    cJSON *default_item = cJSON_GetObjectItemCaseSensitive(property, "default");
+                    std::string value_error;
+                    if (!default_item || !parse_value(default_item, spec.type, spec.default_value, value_error))
+                    {
+                        fail(logic_name + "." + spec.key + ".default: " + value_error);
+                        break;
+                    }
+                    spec.reload_impact = parse_reload_impact(property);
 
-                schema.spec_index.emplace(spec.key, schema.ordered_specs.size());
-                schema.ordered_specs.push_back(std::move(spec));
+                    cJSON *minimum = cJSON_GetObjectItemCaseSensitive(property, "minimum");
+                    cJSON *maximum = cJSON_GetObjectItemCaseSensitive(property, "maximum");
+                    if (cJSON_IsNumber(minimum))
+                    {
+                        spec.has_minimum = true;
+                        spec.minimum = minimum->valuedouble;
+                    }
+                    if (cJSON_IsNumber(maximum))
+                    {
+                        spec.has_maximum = true;
+                        spec.maximum = maximum->valuedouble;
+                    }
+
+                    cJSON *enum_item = cJSON_GetObjectItemCaseSensitive(property, "enum");
+                    if (cJSON_IsArray(enum_item))
+                    {
+                        cJSON *enum_value = nullptr;
+                        cJSON_ArrayForEach(enum_value, enum_item)
+                        {
+                            LogicParameterValue parsed;
+                            if (!parse_value(enum_value, spec.type, parsed, value_error))
+                            {
+                                fail(logic_name + "." + spec.key + ".enum: " + value_error);
+                                break;
+                            }
+                            spec.enum_values.push_back(std::move(parsed));
+                        }
+                    }
+
+                    schema.spec_index.emplace(spec.key, schema.ordered_specs.size());
+                    schema.ordered_specs.push_back(std::move(spec));
+                }
+                if (!error_.empty())
+                    break;
+                if (!schemas_.emplace(logic_name, std::move(schema)).second)
+                {
+                    fail("duplicate embedded logic schema: " + logic_name);
+                    break;
+                }
             }
             if (!error_.empty())
                 break;
-            if (!schemas_.emplace(logic_name, std::move(schema)).second)
-            {
-                fail("duplicate embedded logic schema: " + logic_name);
-                break;
-            }
         }
 
         cJSON_Delete(root);

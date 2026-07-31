@@ -8,10 +8,12 @@ interface EditorState {
   uploadProfiles: Record<string, UploadProfile>
   globalMaxFps: number   // 全局最大FPS：影响 USB 采集分辨率/视野；ROI 抓帧需与之一致(镜像 C++ desired_fps 兜底)
   dirty: boolean         // 编辑器画布有未保存改动；供侧边栏导航拦截使用（离开前提示）
+  serviceConfigDirty: boolean // 服务配置页有尚未写入 config.yaml/ota_config.json 的改动
   setAppName: (name: string) => void
   setUploadProfiles: (profiles: Record<string, UploadProfile>) => void
   setGlobalMaxFps: (fps: number) => void
   setDirty: (d: boolean) => void
+  setServiceConfigDirty: (dirty: boolean) => void
   loadAssets: (name: string) => Promise<void>
   loadUploadProfiles: (name: string) => Promise<void>
 }
@@ -24,10 +26,12 @@ export const useEditorStore = create<EditorState>((set) => ({
   uploadProfiles: {},
   globalMaxFps: 25,
   dirty: false,
+  serviceConfigDirty: false,
   setAppName: (name) => set({ appName: name }),
   setUploadProfiles: (uploadProfiles) => set({ uploadProfiles }),
   setGlobalMaxFps: (fps) => set({ globalMaxFps: fps > 0 ? fps : 25 }),
   setDirty: (d) => set({ dirty: d }),
+  setServiceConfigDirty: (serviceConfigDirty) => set({ serviceConfigDirty }),
   loadAssets: async (name) => {
     try {
       const assets = await fetchAssets(name)

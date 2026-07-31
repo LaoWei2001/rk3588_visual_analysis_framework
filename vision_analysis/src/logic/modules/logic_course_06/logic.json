@@ -1,5 +1,6 @@
 {
     "label": "课程6:如何保存跨帧状态变量",
+    "event_types": [],
     "parameters": {
         "type": "object",
         "additionalProperties": false,

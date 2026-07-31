@@ -23,7 +23,8 @@
 
 支持将视频流手动绑定至某一个npu的核心，npu有3个核心，建议总的视频流个数为3的倍数，可以使npu负载较均衡。
 
-上报模块从主程序中解耦为 Python 微服务程序。此阶段曾采用 Redis 报警队列；该实现后来已被 `alarm_store/manifest.json` 持久化发件箱替代，不能作为当前开发接口。
+上报模块从主程序中解耦为 Python 微服务程序。此阶段曾采用 Redis 报警队列；该实现后来已被
+`event_store` 文件事件发件箱替代，不能作为当前开发接口。
 
 ## 2026.04.23
 
@@ -71,7 +72,7 @@ build.sh现可以自动判断平台类型(arm/x86)进行不同的编译方式，
 
 这样如果不同通道使用的逻辑不一样也可以共用一个dify工作流。
 
-当时计划为服务器/Dify 的 Redis 入队和消费补单元测试；当前测试目标应改为 `report_alarm → manifest/media → EventOutboxForwarder`，不再测试 Redis 队列。
+当时计划为服务器/Dify 的 Redis 入队和消费补单元测试；当前测试目标应改为 `report_event → manifest/media → EventOutboxForwarder`，不再测试 Redis 队列。
 
 ## 2026.05.11
 
@@ -206,7 +207,8 @@ TODO:后续需要测试关于添加, 修改参数的这一整套流程。还有�
 
 > 以下内容只描述 2026.07.14 当日状态。当前模块与服务边界请从 [docs 文档总入口](README.md) 查询。
 
-统一告警链路已经收敛为 `report_alarm/alarm_report → alarm_store/<event_id>/manifest.json + 媒体 → unified_upload → server/Dify`。C++ 不再维护直接 uploader 或 Redis 队列，连接地址和密钥集中保存在上传服务 `config.yaml` 的默认连接/Profile 中，Web 通道配置只保存 `report_policy`、`report_parameters` 和 `profile_id`。
+统一告警链路已经收敛为
+`report_event → event_store/<event_id>/{event.json,media_state.json,delivery_state.json} + 媒体 → unified_upload → adapter`。C++ 不维护网络协议，连接地址和密钥集中保存在上传服务 `config.yaml` 的 Profile 中，Web 通道配置只保存 `report_policy`、`report_parameters` 和 delivery 的 mapping。
 
 截至 2026.07.14，当时生产 `src/logic/` 的具体实现为 `logic_default`、`logic_upload`、`logic_button_demo` 和 `logic_path_sop`。当日删除了文档中对已不存在的 `logic_server`、`logic_dify`、`logic_hook` 等示例的现行引用，并按当时源码补齐四篇示例。后续又增加了正式模块，因此这四项不能作为现行清单。ROI 在该阶段从通道内嵌配置加载并支持热更新；通道数量、顺序或 id 的拓扑变化仍要求重启。
 

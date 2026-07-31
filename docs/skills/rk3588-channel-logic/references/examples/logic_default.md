@@ -26,4 +26,4 @@ REGISTER_LOGIC(logic_default);
 }
 ```
 
-新 logic 可以从这个文件复制结构；学习统一上报、媒体分层和 Web 接线先看 `logic_upload_teach.md`，实现真实 ROI 进入告警再看 `logic_upload.md`。
+新 logic 可以从这个文件复制结构；学习统一上报、媒体分层和 Web 接线先看 `logic_upload_teach.md`，实现真实 ROI 进入告警再看 `roi-alarm-pattern.md`。

@@ -29,11 +29,11 @@ description: >-
 ├── <App1>/  <App2>/ ...          每个"程序包"(build.sh 产物 install 进来的)
 │   ├── vision_analysis           C++ 推理二进制 ← 控制台 process_manager 用 subprocess 启停
 │   ├── assets/  (config.json, *.rknn, labels/videos 等)
-│   ├── alarm_store/<event_id>/      统一告警事件发件箱（manifest + 图片/视频）
+│   ├── event_store/<event_id>/      统一告警事件发件箱（三份 JSON 状态 + 图片/视频）
 │   └── services/                 两个 Python 微服务（随包带）
 │       ├── model_update/ ota_agent.py + ota_config.json   ← systemd: ota_agent.service
 │       └── upload/       main.py + config.yaml             ← systemd: unified_upload.service
-└── 上报服务扫描所绑定 App 的 alarm_store/，当前不使用 Redis
+└── 上报服务扫描所绑定 App 的 event_store/，当前不使用 Redis
 ```
 
 **三种进程、三套托管方式**（容易混，记牢）：

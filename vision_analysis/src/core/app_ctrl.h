@@ -80,7 +80,7 @@ struct ChannelRawFrame
  * 不会在业务 logic 执行过程中被原地修改。
  *
  * ChannelContext 的公开字段保持不变：框架仍向上层提供
- * ctx->config / ctx->rois / ctx->roi，上层 logic 无需感知此类型。
+ * ctx->config / ctx->rois，上层 logic 无需感知此类型。
  */
 struct AppRuntimeSnapshot
 {
@@ -213,11 +213,6 @@ extern "C"
 
     /* 单一通道身份查询。channel_id 始终等于 config.channels[].id。 */
     int app_ctrl_has_channel(int channel_id);
-    /**
-     * 兼容查询：返回值由线程局部 shared_ptr 保活，内容只读且不会被热更新原地修改。
-     * 新的框架代码优先一次获取 app_ctrl_get_runtime_snapshot()，避免同帧重复查询。
-     */
-    const ChannelConfig *app_ctrl_get_channel_config(int channel_id);
     int app_ctrl_get_channel_display_order(int channel_id);
 
     std::shared_ptr<const AppRuntimeSnapshot> app_ctrl_get_runtime_snapshot(void);

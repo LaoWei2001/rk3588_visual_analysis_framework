@@ -19,7 +19,6 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
           version: '1.0.0',
           apps_root: '/opt/ai_apps',
           binary_name: 'vision_analysis',
-          known_global_logics: ['global_default'],
           known_model_types: ['yolov5', 'yolov8_det', 'yolov8_pose', 'yolov5_seg'],
         },
       })

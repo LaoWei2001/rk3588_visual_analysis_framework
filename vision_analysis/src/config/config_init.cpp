@@ -31,9 +31,6 @@ void init_config_fields(AppConfig &cfg)
     REG_G("max_fps", INT, max_fps);
     REG_G("local_default_fps", INT, local_default_fps);
     REG_G("queue_size", INT, queue_size);
-    REG_G("obj_thresh", FLOAT, obj_thresh);
-    REG_G("nms_thresh", FLOAT, nms_thresh);
-    REG_G("detect_classes", STRING_ARRAY, detect_classes);
     REG_G("tracker_enable", INT, tracker_enable);
     REG_G("tracker_iou_thresh", FLOAT, tracker_iou_thresh);
     REG_G("tracker_max_miss", INT, tracker_max_miss);
@@ -54,28 +51,6 @@ void init_config_fields(AppConfig &cfg)
     REG_C("tracker_max_miss", INT, tracker_max_miss);
     REG_C("tracker_min_hits", INT, tracker_min_hits);
 
-    // 自定义逻辑中的变量配置区域
-    REG_C("path_sequence", STRING, path_sequence);
-    REG_C("path_target_label", STRING, path_target_label);
-    REG_C("path_enter_sec", FLOAT, path_enter_sec);
-    REG_C("path_dwell_min_sec", FLOAT, path_dwell_min_sec);
-    REG_C("path_enter_list", STRING, path_enter_list);
-    REG_C("path_dwell_list", STRING, path_dwell_list);
-    REG_C("path_dwell_max_sec", FLOAT, path_dwell_max_sec);
-    REG_C("path_dwell_max_list", STRING, path_dwell_max_list);
-    REG_C("path_reset_sec", FLOAT, path_reset_sec);
-    REG_C("path_end_mode", STRING, path_end_mode);
-    REG_C("path_end_zone", STRING, path_end_zone);
-    REG_C("path_end_dwell_sec", FLOAT, path_end_dwell_sec);
-    REG_C("path_total_min_sec", FLOAT, path_total_min_sec);
-    REG_C("path_total_max_sec", FLOAT, path_total_max_sec);
-    REG_C("path_edges", STRING, path_edges);
-    REG_C("path_entries", STRING, path_entries);
-    REG_C("path_exits", STRING, path_exits);
-    REG_C("path_edge_limits", STRING, path_edge_limits);
-    REG_C("path_trigger_mode", STRING, path_trigger_mode);
-    REG_C("path_trigger_mandatory", BOOL, path_trigger_mandatory);
-    REG_C("path_report_normal", BOOL, path_report_normal);
     REG_C("report_policy", JSON, report_policy_json);
     REG_C("report_parameters", JSON, report_parameters_json);
 }

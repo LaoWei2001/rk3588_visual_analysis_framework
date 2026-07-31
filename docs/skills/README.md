@@ -12,7 +12,7 @@
 | **`rk3588-console-ops`**   | 部署、网页控制台(前后端)、后台服务、运维、调试   | Web、服务、部署和排障类任务归它           |
 | **`rk3588-global-logic`**  | 写**跨通道 / 周期性**的全局逻辑(`global_xxx`) | "通道 A 有人且通道 B 缺货就报警"这类跨路规则 |
 
-> 另有 **`rk3588-src-modules/`**：C++ 端 config/core/capturer/analyzer/yolo/logic/control/alarm/recorder/player 等模块，以及外部上传服务边界的深档；想理解或改底层实现时看它。
+> 另有 **`rk3588-src-modules/`**：C++ 端 config/core/capturer/analyzer/yolo/logic/control/event/recorder/player 等模块，以及外部投递服务边界的深档；想理解或改底层实现时看它。
 
 ---
 
@@ -22,13 +22,14 @@
 
 | 我要…                        | 去看                                                       |
 | -------------------------- | -------------------------------------------------------- |
+| 第一次从报警判断一路做到 HTTP/Dify 远端成功 | `../报警事件与上报开发指南.md`（人类快速上手 + 大模型提示词 + 完整验收） |
 | 把"检测到 X 就报警/上报"做成一个逻辑      | `rk3588-channel-logic/SKILL.md`(总览 + 骨架 + 接线 + 验证 + 坑)   |
 | 照着已有的逻辑改，或者参考某个逻辑的编写方式     | `rk3588-channel-logic/references/examples/`(一函数一文件,挑最像的) |
 | 查 `ctx` 有哪些字段、辅助函数、绘制、跨帧状态 | `…/references/channelcontext-api.md`                     |
 | 搞懂 logic 的命名/注册（函数名·单参数注册·logics.json 的关系）、网页怎么认出逻辑、名字是怎样生成的 | `…/references/logic-naming-and-registration.md` |
 | 给逻辑加一个网页能改的参数(半径/秒数/阈值)    | `…/references/adding-config-parameter.md`（模块 Schema + `ctx->param_*()` + Web 热重载） |
 | 给实时画面增加自定义按钮、理解按钮到 C++ 的动作链路 | `…/references/custom-button-actions.md`（声明、队列、handler、payload、排错） |
-| 逻辑提交统一告警，并由画布选择服务器 / Dify | `…/references/upload-and-wiring.md`                      |
+| 第一次跑通上报，或让 logic 提交标准事件并由画布选择 adapter/Profile | `…/references/upload-and-wiring.md`（最小闭环 + 开发契约） |
 | 搞懂运行时(8 类线程、时序、帧与框同帧、坐标系)  | `…/references/vision_analysis_系统说明文档.md` + `…_架构图.md`        |
 
 ### 部署 / 网页控制台 / 后台服务 / 运维 / 调试
@@ -68,11 +69,10 @@ docs/skills/
 │       ├── logic-naming-and-registration.md  逻辑命名/注册四名关系 + 网页如何识别 + 失配后果
 │       ├── adding-config-parameter.md    加可调参数(代码+热重载+网页可配)
 │       ├── custom-button-actions.md      Web 自定义按钮(action 声明→Socket→logic handler)
-│       ├── upload-and-wiring.md          report_alarm + report_policy + 画布接线
+│       ├── upload-and-wiring.md          report_event + report_policy + 画布接线
 │       ├── vision_analysis_系统说明文档.md 运行时架构(文字详解)
 │       ├── vision_analysis_架构图.md      架构图
-│       └── examples/                     当前六个源码示例(default/upload/upload_teach/
-│                                         button_demo/periodic_snapshot_demo/path_sop)
+│       └── examples/                     当前源码示例和明确标注的业务代码模式
 │
 ├── rk3588-global-logic/                  写跨通道 / 周期性全局逻辑(global_xxx)
 │   └── SKILL.md
@@ -86,7 +86,7 @@ docs/skills/
 │
 └── rk3588-src-modules/                   C++ 端各源码模块深档(src/ 蒸馏)
     ├── README.md                         模块地图 + 端到端数据流 + 全局约定 + 扩展路由
-    └── {runtime,config,core,capturer,analyzer,yolo,logic,control,alarm,recorder,player,third_party,uploader}.md
+    └── {runtime,config,core,capturer,analyzer,yolo,logic,control,event,recorder,player,third_party,uploader}.md
 ```
 
 ---

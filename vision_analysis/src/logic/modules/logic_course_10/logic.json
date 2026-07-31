@@ -1,5 +1,6 @@
 {
     "label": "课程9:如何通过自定义的按钮上报图片",
+    "event_types": [],
     "parameters": {
         "type": "object",
         "additionalProperties": false,

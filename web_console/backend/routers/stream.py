@@ -69,7 +69,7 @@ def _rtsp_info(name: str):
     return f"rtsp://127.0.0.1:{port}{path}", codec
 
 
-def _build_gst_args(rtsp_url: str, codec: str, fps: int, quality: int = 75):
+def _build_gst_args(rtsp_url: str, codec: str, fps: int, quality: int = 60):
     """构造 RTSP → MJPEG 管线；fps<=0 时不插入限帧环节。"""
     h265 = codec in ("h265", "hevc")
     depay = "rtph265depay" if h265 else "rtph264depay"
@@ -77,10 +77,10 @@ def _build_gst_args(rtsp_url: str, codec: str, fps: int, quality: int = 75):
     args = [
         "gst-launch-1.0", "-q",
         "rtspsrc", f"location={rtsp_url}", "protocols=tcp", "latency=100",
-        "drop-on-latency=true",
+        "buffer-mode=1", "drop-on-latency=true",
         "!", depay, "!", parse, "!", "decodebin",
         "!", "queue", "max-size-buffers=1", "max-size-bytes=0",
-        "max-size-time=0", "leaky=downstream",
+        "max-size-time=0", "leaky=upstream",
     ]
     if fps > 0:
         args.extend([
@@ -142,7 +142,7 @@ async def _mjpeg_stream(request: Request, name: str, rtsp_url: str, codec: str, 
                 assert proc.stdout is not None
                 while not session.stop.is_set() and not await request.is_disconnected():
                     try:
-                        chunk = await asyncio.wait_for(proc.stdout.read(65536), timeout=5.0)
+                        chunk = await asyncio.wait_for(proc.stdout.read(65536), timeout=15.0)
                     except asyncio.TimeoutError:
                         break  # 管线卡住：结束本实例并在外层重建。
                     if not chunk:
@@ -171,7 +171,7 @@ async def stream_app(name: str, request: Request, fps: int = 15):
 
     url, codec = _rtsp_info(name)
     # fps<=0 表示不额外限帧；正数保留兼容的 1~25 FPS 主动限帧模式。
-    fps = 0 if int(fps) <= 0 else min(int(fps), 25)
+    fps = 0 if int(fps) <= 0 else min(int(fps), 15)
     return StreamingResponse(
         _mjpeg_stream(request, name, url, codec, fps),
         media_type="multipart/x-mixed-replace; boundary=frame",

@@ -17,7 +17,7 @@ import './SopFlowModal.css'
 // 子画布架构 (与主画布一致): 左侧 palette → 拖到画布上创建节点 → 连线组装流程
 //   - sopStep: 流程步骤; 一条链 = 期望经过顺序
 //   - sopEnd : 结束判定; 一般放在链尾, 决定工序何时算结束
-// 没有"必须存在"的约束: 没拖出结束判定 → 保存时用默认 leave/5s; 拖出多个 → 取第一个。
+// 保存前要求目标、步骤、入口、出口和结束判定都完整，避免运行时猜测用户意图。
 //
 // 右侧栏按选中节点切显示: 选中 sopStep → 步骤参数; 选中 sopEnd → 结束判定参数; 都没选 → 占位。
 
@@ -242,9 +242,8 @@ function Inner({ availableZones, initial, onSave, onClose }: Props) {
   useEffect(() => {
     const gridX = (i: number) => 120 + (i % 5) * 190
     const gridY = (i: number) => 80  + Math.floor(i / 5) * 120
-    // 起点 = entries 里的 step 索引; entries 空时默认 step 0 为起点(对齐后端 fallback)
-    const initEntriesSet = new Set(initial.entries ?? [])
-    const isEntryOf = (i: number) => initEntriesSet.size > 0 ? initEntriesSet.has(i) : i === 0
+    const initEntriesSet = new Set(initial.entries)
+    const isEntryOf = (i: number) => initEntriesSet.has(i)
     const stepNs: Node[] = (initial.steps ?? []).map((s, i) => ({
       id: newId('step'), type: 'sopStep',
       position: {
@@ -272,58 +271,40 @@ function Inner({ availableZones, initial, onSave, onClose }: Props) {
 
     const es: Edge[] = []
     const idxToId = (i: number): string | undefined => stepNs[i]?.id
-    const initEdges = initial.edges ?? []
-    const initExits = initial.exits ?? []
-    const initLimits = initial.edge_limits ?? []
+    const initEdges = initial.edges
+    const initExits = initial.exits
+    const initLimits = initial.edge_limits
     // (src,dst) → {min, max} 快速查
     const limitOf = new Map<string, { min: number; max: number }>()
     for (const l of initLimits) limitOf.set(`${l.src}-${l.dst}`, { min: l.min, max: l.max })
-    if (initEdges.length > 0 || initExits.length > 0) {
-      // 用 path_edges 还原 step↔step 边 (含自环 a===b)
-      for (const [a, b] of initEdges) {
-        const sid = idxToId(a), tid = idxToId(b)
-        if (!sid || !tid) continue
-        const lim = limitOf.get(`${a}-${b}`)
-        const hasLimit = !!lim && (lim.min > 0 || lim.max > 0)
-        const selfLoop = sid === tid
-        if (hasLimit || selfLoop) {
-          // 带循环约束 或 自环 → 都用循环边样式 + SmartEdge 自定义渲染
-          const lbl = hasLimit ? `↻ ${lim!.min || '∞'}…${lim!.max || '∞'}` : '↻ ?'
-          es.push({
-            id: `e-${sid}-${tid}-${++_sid}`, source: sid, target: tid,
-            sourceHandle: 'out', targetHandle: 'in',
-            type: 'sopSelfLoop',
-            label: lbl,
-            labelStyle: { fill: '#fef3c7', fontWeight: 600, fontSize: 11 },
-            labelBgPadding: [6, 3] as [number, number],
-            labelBgBorderRadius: 4,
-            labelBgStyle: { fill: '#7c2d12', stroke: LOOP_COLOR },
-            style: { stroke: LOOP_COLOR, strokeWidth: 3 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: LOOP_COLOR },
-            data: hasLimit ? { loop_min: lim!.min, loop_max: lim!.max } : {},
-          })
-        } else {
-          es.push(mkEdge(sid, tid))
-        }
-      }
-      // 还原"出口边" (step → sopEnd): 优先用 initExits; 缺省时回退到"出度0"老语义
-      if (initExits.length > 0) {
-        for (const ei of initExits) {
-          const sid = idxToId(ei)
-          if (sid) es.push(mkEdge(sid, endN.id, END_EDGE_COLOR))
-        }
-      } else {
-        const outDeg = new Map<string, number>()
-        stepNs.forEach(n => outDeg.set(n.id, 0))
-        es.forEach(e => outDeg.set(e.source, (outDeg.get(e.source) ?? 0) + 1))
-        stepNs.forEach(n => {
-          if ((outDeg.get(n.id) ?? 0) === 0) es.push(mkEdge(n.id, endN.id, END_EDGE_COLOR))
+    for (const [a, b] of initEdges) {
+      const sid = idxToId(a), tid = idxToId(b)
+      if (!sid || !tid) continue
+      const lim = limitOf.get(`${a}-${b}`)
+      const hasLimit = !!lim && (lim.min > 0 || lim.max > 0)
+      const selfLoop = sid === tid
+      if (hasLimit || selfLoop) {
+        const lbl = hasLimit ? `↻ ${lim!.min || '∞'}…${lim!.max || '∞'}` : '↻ ?'
+        es.push({
+          id: `e-${sid}-${tid}-${++_sid}`, source: sid, target: tid,
+          sourceHandle: 'out', targetHandle: 'in',
+          type: 'sopSelfLoop',
+          label: lbl,
+          labelStyle: { fill: '#fef3c7', fontWeight: 600, fontSize: 11 },
+          labelBgPadding: [6, 3] as [number, number],
+          labelBgBorderRadius: 4,
+          labelBgStyle: { fill: '#7c2d12', stroke: LOOP_COLOR },
+          style: { stroke: LOOP_COLOR, strokeWidth: 3 },
+          markerEnd: { type: MarkerType.ArrowClosed, color: LOOP_COLOR },
+          data: hasLimit ? { loop_min: lim!.min, loop_max: lim!.max } : {},
         })
+      } else {
+        es.push(mkEdge(sid, tid))
       }
-    } else {
-      // 老配置(无 edges 无 exits): 默认线性链 + 最后一步到结束判定
-      for (let i = 0; i + 1 < stepNs.length; i++) es.push(mkEdge(stepNs[i].id, stepNs[i + 1].id))
-      if (stepNs.length > 0) es.push(mkEdge(stepNs[stepNs.length - 1].id, endN.id, END_EDGE_COLOR))
+    }
+    for (const ei of initExits) {
+      const sid = idxToId(ei)
+      if (sid) es.push(mkEdge(sid, endN.id, END_EDGE_COLOR))
     }
     setEdges(es)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -339,7 +320,7 @@ function Inner({ availableZones, initial, onSave, onClose }: Props) {
     stepNodes.forEach(n => adj.set(n.id, []))
     edges.forEach(e => { if (adj.has(e.source) && adj.has(e.target)) adj.get(e.source)!.push(e.target) })
     const entryIds = stepNodes.filter(n => (n.data as StepData).isEntry).map(n => n.id)
-    const starts = entryIds.length > 0 ? entryIds : (orderedIds.length > 0 ? [orderedIds[0]] : [])
+    const starts = entryIds
     const num = new Map<string, number>()
     for (const s of starts) {
       const queue: [string, number][] = [[s, 1]]
@@ -464,7 +445,7 @@ function Inner({ availableZones, initial, onSave, onClose }: Props) {
   }
 
   const handleSave = () => {
-    // 步骤按 orderedIds 序列化, idx 即 step 索引(用作 path_edges 的引用); 同时把每个节点的画布坐标存进 step
+    // 步骤按 orderedIds 序列化，idx 是结构化边的 step 引用。
     const orderedStepNodes = orderedIds.map(id => nodes.find(n => n.id === id)!)
                                         .filter(n => n && (n.data as StepData).zoneName)
     const steps: SopStep[] = orderedStepNodes.map(n => {
@@ -484,11 +465,11 @@ function Inner({ availableZones, initial, onSave, onClose }: Props) {
       .map((n, i) => ((n.data as StepData).isEntry ? i : -1))
       .filter(i => i >= 0)
 
-    // 节点 id → step idx 映射, 用于把画布连线翻译成 path_edges
+    // 节点 id → step idx 映射。
     const idToIdx = new Map<string, number>()
     orderedStepNodes.forEach((n, i) => idToIdx.set(n.id, i))
 
-    // 边分类: sopStep↔sopStep = path_edges; step→🏁结束判定 = exits
+    // 边分类: sopStep↔sopStep = edges; step→🏁结束判定 = exits
     const dagEdges: [number, number][] = []
     const exitSet = new Set<number>()
     const edgeLimits: { src: number; dst: number; min: number; max: number }[] = []
@@ -509,9 +490,18 @@ function Inner({ availableZones, initial, onSave, onClose }: Props) {
     }
     const exitList = Array.from(exitSet).sort((x, y) => x - y)
 
-    // 取第一个结束判定节点；没有就用默认 leave/5s/空终点/0s终点停留
     const endNode = nodes.find(n => n.type === 'sopEnd')
-    const e = (endNode?.data ?? DEFAULT_END_DATA) as EndData
+    const e = endNode?.data as EndData | undefined
+    if (!target.trim()) { flash('请设置目标类别'); return }
+    if (steps.length === 0) { flash('请至少添加一个步骤'); return }
+    if (entryList.length === 0) { flash('请至少标记一个起点'); return }
+    if (exitList.length === 0) { flash('请把至少一个步骤连接到结束判定'); return }
+    if (steps.length > 1 && dagEdges.length === 0) { flash('多个步骤之间必须显式连线'); return }
+    if (!endNode || !e) { flash('请添加结束判定节点'); return }
+    if (e.end_mode === 'endzone' && !e.end_zone.trim()) { flash('终点区域模式必须选择区域'); return }
+    const totalMin = Math.max(0, savedNumber(e.total_min_sec, 0))
+    const totalMax = Math.max(0, savedNumber(e.total_max_sec, 0))
+    if (totalMax > 0 && totalMin > totalMax) { flash('总耗时下限不能大于上限'); return }
 
     onSave({
       target_label: target.trim(),
@@ -519,8 +509,8 @@ function Inner({ availableZones, initial, onSave, onClose }: Props) {
       end_mode: e.end_mode === 'endzone' ? 'endzone' : (e.end_mode === 'trigger' ? 'trigger' : 'leave'),
       end_zone: e.end_mode === 'endzone' ? e.end_zone : '',
       end_dwell_sec: e.end_mode === 'endzone' ? Math.max(0, savedNumber(e.end_dwell_sec, 0)) : 0,
-      total_min_sec: Math.max(0, savedNumber(e.total_min_sec, 0)),
-      total_max_sec: Math.max(0, savedNumber(e.total_max_sec, 0)),
+      total_min_sec: totalMin,
+      total_max_sec: totalMax,
       trigger_mode: triggerMode,
       trigger_mandatory: triggerMandatory,
       report_normal: reportNormal,
@@ -529,10 +519,8 @@ function Inner({ availableZones, initial, onSave, onClose }: Props) {
       entries: entryList,
       exits: exitList,
       edge_limits: edgeLimits,
-      ...(endNode ? {
-        end_x: Math.round(endNode.position.x),
-        end_y: Math.round(endNode.position.y),
-      } : {}),
+      end_x: Math.round(endNode.position.x),
+      end_y: Math.round(endNode.position.y),
     })
     onClose()
   }

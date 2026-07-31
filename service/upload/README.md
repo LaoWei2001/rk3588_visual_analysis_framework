@@ -1,86 +1,125 @@
-# 告警上传微服务
+# 通用事件投递服务
 
-本服务直接消费 C++ 写入 `alarm_store/<event_id>/manifest.json` 的统一事件发件箱，不使用 Redis。
+本服务消费 `event_store/<event_id>/`，负责投递状态、失败重试和适配器分派。它不参与视觉
+推理，也不包含 SOP 等业务判断。
 
-## 模块
+## 目录
 
-- `main.py`：读取配置、处理退出信号并启动消费者。
-- `event_outbox.py`：扫描事件、解析 Dify 参数映射、维护每个 delivery 的状态；服务器使用固定 JSON，不发送算法参数。
-- `dify_uploader.py`：上传图片或事件 MP4，并调用 Dify 工作流；视频分辨率取决于 Web 选择的原始源帧或通道显示帧模式。
-- `config.yaml`：默认服务器、默认 Dify 连接和可复用 Profile。
+```text
+service/upload/
+├── main.py
+├── event_outbox.py
+├── delivery_tool.py
+├── contracts.py
+├── contracts/
+│   ├── object_invade_det.json
+│   └── dify_*.json
+├── config.yaml
+└── adapters/
+    ├── catalog.json
+    ├── registry.py
+    ├── mapping.py
+    ├── http_json.py
+    └── dify_workflow.py
+```
 
-每个投递独立重试。全部投递成功后立即删除事件目录；网络中断、远端拒绝或配置无效时保留记录，Web“待上报记录”页面可继续查看。SOP 正常结果使用仅 JSON 投递，不生成图片或视频。
+- `event_outbox.py`：只维护 pending/uploading/retry/delivered/invalid/failed 状态。
+- `registry.py`：`adapter ID -> Python 类` 的唯一分发表。
+- `catalog.json`：Web 使用的适配器能力和 Profile 字段清单。
+- `mapping.py`：稳定事件路径、类型转换、嵌套 target 和媒体转换。
+- `contracts/*.json`：接口字段、固定值、媒体、请求方式和成功条件的唯一权威。
+- `delivery_tool.py`：请求预览和测试发送，不修改发件箱状态。
 
-## 配置
+## Profile
+
+连接地址和密钥集中在 `config.yaml`：
 
 ```yaml
-dify:
-  api_url: "http://dify.example.com"
-  api_key: "app-..."
-  timeout: 120
-
-server:
-  url: "http://server.example.com/api/alarm"
-  timeout: 15
-
 profiles:
-  sop_dify:
-    type: dify
-    api_url: "http://dify.example.com"
-    api_key: "app-..."
-  alarm_server:
-    type: server
-    url: "http://server.example.com/api/alarm"
-    token: "..."
+  factory:
+    adapter: http_json
+    url: http://server.example.com/api/events
+    timeout: 15
+    headers:
+      Authorization: Bearer replace-me
+
+  inspection:
+    adapter: dify_workflow
+    api_url: http://dify.example.com
+    api_key: app-replace-me
+    timeout: 120
 ```
 
-画布中的 delivery 通过 `profile_id` 引用 Profile。地址和密钥不会进入通道配置。
+接口契约的 `adapter` 必须与所选 Profile 的 `adapter` 一致。不存在隐式默认连接。
 
-## 运行
+## 接口模板
+
+字段 mapping 集中保存在 `contracts/*.json`，而不是复制进每个通道 delivery。Web 上报节点
+提供接口模板编辑器：它读取当前 logic 的 `report_fields`，并让开发者从系统事件、算法变量、
+媒体或固定值中选择 source，再填写远端 target。保存后生成或更新模板文件。
+`object_invade_det.json` 已完整声明 `source=JNU`、`eventType=4005`、两张图片和成功条件。
+正常运行时 Web 只选择 Profile 与接口模板。delivery 保存：
+
+```json
+{
+  "profile_id": "factory",
+  "contract_id": "object_invade_det",
+  "media": ["annotated_image", "raw_image"]
+}
+```
+
+adapter、mapping、请求方式和成功条件都不复制到 delivery；`media` 是供 C++ 建立媒体任务的
+必要快照。
+Python 每次投递都会按 `contract_id` 重新加载权威模板，因此普通字段或成功条件变化只修改一份模板并重启
+投递服务。若模板改变了所需媒体，需在 Web 重新选择该模板并保存配置，使 C++ 获得新的媒体快照。
+
+Web 修改的是已安装 App 的 `services/upload/contracts/`。希望下次重新打包仍保留该模板时，
+应把确认后的 JSON 同步回仓库 `service/upload/contracts/`；应用包重装会以包内文件为准。
+
+## 模板字段来源
+
+标准 source：
+
+- `event.id/type/message/trigger_unix_ms/...`
+- `source.channel_id`
+- `source.parameters.<key>`
+- `fields.<logic自定义字段>`
+- `media.annotated_image/raw_image/video`
+- `event`、`source`、`fields` 整体对象
+- `constant` 配合映射的 `value`
+
+通用转换：
+
+- `string/number/boolean/json`：`type`
+- `json_string`：对象序列化为 JSON 字符串
+- `base64`、`data_url`：媒体转入 HTTP JSON
+- `file`：HTTP multipart 文件或 Dify 文件上传
+
+HTTP 成功条件由模板定义，既可只判断状态码，也可判断响应 JSON 路径。Dify 适配器会先上传 `file`
+映射，再将文件 ID 和其他工作流输入一起提交。
+
+## 增加接口或平台
+
+同一种 HTTP/Dify 协议增加接口时，只新增一个 `contracts/<name>.json`，不修改 adapter。
+
+只有出现新的交互协议或签名算法时：
+
+1. 新建 `adapters/<name>.py`，实现 `preview()` 和 `send()`；
+2. 在 `registry.py` 注册 ID；
+3. 在 `catalog.json` 声明连接字段；
+4. 新增接口模板和单元测试。
+
+不需要修改 C++、logic、事件 schema、发件箱循环或 Web 表单组件。
+
+## 验证
 
 ```bash
-pip3 install -r requirements.txt
-python3 main.py
+python3 -m unittest discover -s service/upload/tests -p 'test_event_store.py' -v
+
+# 真实 Dify 视频联调
+python3 service/upload/tests/dify_video_test.py \
+  --video /path/to/clip.mp4 \
+  --prompt "请分析视频"
 ```
 
-`ALARM_STORE_DIR` 可覆盖默认发件箱目录。
-
-## Dify 图片+视频联合分析测试
-
-该测试直接复用生产环境的 `DifyUploader.upload_media_list()`，不会创建告警记录。Dify 工作流开始节点只需两个输入变量：
-
-- `media_files`：`File list`，同时允许“图片、视频”，允许本地上传，最大数量至少为 2。
-- `prompt`：文本类型，建议设置为必填。
-
-测试使用独立配置 `tests/dify_video_test.yaml`，不会读取或修改生产环境的 `config.yaml`。先填写：
-
-```yaml
-dify:
-  scheme: http
-  host: 192.168.2.98
-  port: 8015
-  base_path: ""
-  api_key: "app-你的工作流API密钥"
-  timeout: 120
-  user: "rk3588-dify-video-test"
-workflow:
-  media_variable: "media_files"
-  prompt_variable: "prompt"
-```
-
-`media_variable` 和 `prompt_variable` 必须与 Dify 开始节点的变量标识完全一致。LLM 节点开启“视觉”后，视觉变量选择 `media_files`；输出节点把 `LLM.text` 保存到输出变量。
-
-修改工作流后必须重新发布。测试程序会先读取 `/v1/parameters`，确认 `media_files` 是文件列表、同时允许图片和视频、允许 `local_file`、最大数量不少于 2，并检查图片和视频大小限制。
-
-然后运行：
-
-```bash
-python3 tests/dify_video_test.py \
-  --video /userdata/test.mp4 \
-  --image /userdata/alarm.jpg \
-  --prompt "请结合图片和视频分析异常行为"
-```
-
-脚本返回码为 `0` 且打印 `[PASS]`，表示文件上传和工作流执行均成功；随后 `[Dify回复]` 会打印 Dify 输出节点的全部 `outputs` 变量。返回码 `1` 表示 Dify 拒绝上传或工作流执行失败；返回码 `2` 表示本地参数或配置错误。
-
-服务器图片接口继续发送 `base64Data` 和 `base64DataRaw`；Dify 图片及视频先调用 `/v1/files/upload`，再调用 `/v1/workflows/run`。
+运行时默认目录为 App 根目录的 `event_store/`，可用 `EVENT_STORE_DIR` 覆盖。

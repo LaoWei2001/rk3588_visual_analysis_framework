@@ -69,8 +69,8 @@ int algorithm_init(const AppConfig &cfg)
 
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
     {
-        g_algo.obj_thresh[i].store(cfg.obj_thresh, std::memory_order_relaxed);
-        g_algo.nms_thresh[i].store(cfg.nms_thresh, std::memory_order_relaxed);
+        g_algo.obj_thresh[i].store(0.0f, std::memory_order_relaxed);
+        g_algo.nms_thresh[i].store(1.0f, std::memory_order_relaxed);
     }
 
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)

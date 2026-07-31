@@ -54,27 +54,7 @@ static bool roi_config_equal(const std::vector<RoiZoneConfig> &lhs, const std::v
 
 static bool logic_runtime_changed(const ChannelConfig &old_channel, const ChannelConfig &new_channel)
 {
-    return old_channel.logic != new_channel.logic || !roi_config_equal(old_channel.roi_zones, new_channel.roi_zones) ||
-           old_channel.path_sequence != new_channel.path_sequence ||
-           old_channel.path_target_label != new_channel.path_target_label ||
-           old_channel.path_enter_sec != new_channel.path_enter_sec ||
-           old_channel.path_dwell_min_sec != new_channel.path_dwell_min_sec ||
-           old_channel.path_dwell_max_sec != new_channel.path_dwell_max_sec ||
-           old_channel.path_enter_list != new_channel.path_enter_list ||
-           old_channel.path_dwell_list != new_channel.path_dwell_list ||
-           old_channel.path_dwell_max_list != new_channel.path_dwell_max_list ||
-           old_channel.path_edges != new_channel.path_edges || old_channel.path_entries != new_channel.path_entries ||
-           old_channel.path_exits != new_channel.path_exits ||
-           old_channel.path_edge_limits != new_channel.path_edge_limits ||
-           old_channel.path_reset_sec != new_channel.path_reset_sec ||
-           old_channel.path_end_mode != new_channel.path_end_mode ||
-           old_channel.path_end_zone != new_channel.path_end_zone ||
-           old_channel.path_end_dwell_sec != new_channel.path_end_dwell_sec ||
-           old_channel.path_total_min_sec != new_channel.path_total_min_sec ||
-           old_channel.path_total_max_sec != new_channel.path_total_max_sec ||
-           old_channel.path_trigger_mode != new_channel.path_trigger_mode ||
-           old_channel.path_trigger_mandatory != new_channel.path_trigger_mandatory ||
-           old_channel.path_report_normal != new_channel.path_report_normal;
+    return old_channel.logic != new_channel.logic || !roi_config_equal(old_channel.roi_zones, new_channel.roi_zones);
 }
 
 std::shared_ptr<const AppRuntimeSnapshot> app_ctrl_build_runtime_snapshot(const AppConfig &config, int input_w,
@@ -581,7 +561,13 @@ extern "C" void *config_monitor_thread_func(void *arg)
                 if (!remaining.empty())
                 {
                     int primary = remaining[0];
-                    const ChannelConfig *primary_config = app_ctrl_get_channel_config(primary);
+                    const ChannelConfig *primary_config = nullptr;
+                    for (const auto &channel : ctrl->config.channels)
+                        if (channel.id == primary)
+                        {
+                            primary_config = &channel;
+                            break;
+                        }
                     if (!primary_config)
                         continue;
                     const auto &ps = primary_config->stream;
@@ -794,17 +780,6 @@ int app_ctrl_has_channel(int channel_id)
 {
     auto snapshot = app_ctrl_get_runtime_snapshot();
     return app_ctrl_runtime_channel_config(snapshot, channel_id) ? 1 : 0;
-}
-
-const ChannelConfig *app_ctrl_get_channel_config(int channel_id)
-{
-    /* 兼容旧框架调用：每个通道各自保留一份线程局部 shared_ptr，保证返回指针
-     * 即使恰逢下一代快照发布也不会悬空。业务 logic 仍通过 ctx->config 访问。 */
-    thread_local std::shared_ptr<const AppRuntimeSnapshot> held[MAX_CHANNEL_NUM];
-    if (channel_id < 0 || channel_id >= MAX_CHANNEL_NUM)
-        return nullptr;
-    held[channel_id] = app_ctrl_get_runtime_snapshot();
-    return app_ctrl_runtime_channel_config(held[channel_id], channel_id);
 }
 
 int app_ctrl_get_channel_display_order(int channel_id)

@@ -82,7 +82,10 @@ const NODE_DEFAULTS: Record<string, Record<string, unknown>> = {
   report: {
     report_policy: {
       enabled: true,
-      deliveries: [{ id: 'image_server', enabled: true, media: 'image', target: 'server', inputs: [] }],
+      deliveries: [{
+        id: 'delivery_default', enabled: true, profile_id: '',
+        contract_id: '', media: [],
+      }],
       parameters: [], image_overlay: 'custom', video_overlay: 'custom',
       video_pre_sec: 3, video_post_sec: 3, video_fps: 15, merge_window_sec: 5,
     },
@@ -448,11 +451,17 @@ export default function EditorPage() {
       // 新增 YOLO 节点按现有模型数量循环绑定 Core 0/1/2，避免默认全部压到 Core 0。
       if (nodeType === 'model')
         data.npu_core = ns.filter(n => n.type === 'model').length % 3
-      // 一个上报节点固定一条投递，并使用节点级唯一 ID，避免多个节点共享 image_server。
+      // 一个上报节点固定一条投递，并使用节点级唯一 ID。
       if (nodeType === 'report') {
         data.report_policy = {
           ...((data.report_policy as Record<string, unknown>) ?? {}),
-          deliveries: [{ id: `delivery_${id}`, enabled: true, media: 'image', target: 'server', inputs: [] }],
+          deliveries: [{
+            id: `delivery_${id}`,
+            enabled: true,
+            profile_id: '',
+            contract_id: '',
+            media: [],
+          }],
           parameters: [],
         }
         data.report_parameters = {}

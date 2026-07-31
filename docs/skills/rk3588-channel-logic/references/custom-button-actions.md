@@ -6,7 +6,7 @@
 
 阅读建议：
 
-- 初学者先阅读“五分钟入门”和“action 字段表”，然后运行仓库现有的 `logic_button_demo`；
+- 初学者先阅读“五分钟入门”和“action 字段表”，然后运行仓库现有的 `logic_course_07`；
 - 开发普通按钮时继续阅读“C++ handler 的编写规则”和“从零新增一个按钮”；
 - 排查问题或扩展框架时，再阅读整体链路、运行时语义和系统级动作。
 
@@ -48,12 +48,12 @@ Web 按钮发送 action ID
 
 按钮不会直接调用某一段任意 C++ 代码。它先发送一个动作名，再由当前 logic 注册的 handler 判断该动作应该做什么。
 
-## 五分钟入门：给画面中的数字增加 `+1` / `-1` 按钮
+## 五分钟入门：用 `+1` / `-1` / 切换按钮控制两个数字
 
 仓库已经提供完整示例：
 
 ```text
-vision_analysis/src/logic/modules/logic_button_demo/
+vision_analysis/src/logic/modules/logic_course_07/
 ├── logic.cpp
 └── logic.json
 ```
@@ -62,7 +62,7 @@ vision_analysis/src/logic/modules/logic_button_demo/
 
 ```json
 {
-  "label": "按钮加减数字演示",
+  "label": "课程7:如何添加一个带自定义功能的按钮",
   "parameters": {
     "type": "object",
     "additionalProperties": false,
@@ -74,13 +74,19 @@ vision_analysis/src/logic/modules/logic_button_demo/
       "id": "increment",
       "label": "+1",
       "style": "primary",
-      "help": "将当前通道画面中的数字加 1。"
+      "help": "将当前通道画面中的数字加 1"
     },
     {
       "id": "decrement",
       "label": "-1",
       "style": "default",
-      "help": "将当前通道画面中的数字减 1，最小值保持为 1。"
+      "help": "将当前通道画面中的数字减 1"
+    },
+    {
+      "id": "change",
+      "label": "切换数字",
+      "style": "default",
+      "help": "切换控制的数字"
     }
   ]
 }
@@ -94,18 +100,18 @@ action->name == "increment"
 
 ### 第二步：在 `logic.cpp` 处理按钮
 
-下面是与上述 `logic.json` 对应的完整教学版代码：
+下面是与当前示例行为等价的精简教学代码；完整实现以模块源码为准：
 
 ```cpp
 #include "logic/core/logic_common.h"
 
-#include <climits>
 #include <memory>
 #include <string>
 
 struct ButtonDemoState
 {
-    int number = 1;
+    int selected = 0;
+    int number[2] = {0, 0};
 };
 
 static ButtonDemoState &button_demo_state(ChannelContext *ctx)
@@ -115,7 +121,7 @@ static ButtonDemoState &button_demo_state(ChannelContext *ctx)
     return *std::static_pointer_cast<ButtonDemoState>(*ctx->state);
 }
 
-static ChannelActionResult logic_button_demo_action(
+static ChannelActionResult logic_course_07_action(
     ChannelContext *ctx, const ChannelAction *action)
 {
     ChannelActionResult result;
@@ -129,19 +135,25 @@ static ChannelActionResult logic_button_demo_action(
 
     if (action->name == "increment")
     {
-        if (state.number < INT_MAX)
-            ++state.number;
+        ++state.number[state.selected];
         result.handled = true;
-        result.message = "number=" + std::to_string(state.number);
+        result.message = "number increased";
         return result;
     }
 
     if (action->name == "decrement")
     {
-        if (state.number > 1)
-            --state.number;
+        --state.number[state.selected];
         result.handled = true;
-        result.message = "number=" + std::to_string(state.number);
+        result.message = "number decreased";
+        return result;
+    }
+
+    if (action->name == "change")
+    {
+        state.selected = !state.selected;
+        result.handled = true;
+        result.message = "selected number changed";
         return result;
     }
 
@@ -149,27 +161,32 @@ static ChannelActionResult logic_button_demo_action(
     return result;
 }
 
-static void logic_button_demo(ChannelContext *ctx)
+static void logic_course_07(ChannelContext *ctx)
 {
     if (!ctx || !ctx->state)
         return;
 
     ButtonDemoState &state = button_demo_state(ctx);
-    const std::string text = std::to_string(state.number);
-    draw_text(ctx, text.c_str(), cv::Point(300, 320),
-              cv::Scalar(0, 255, 255), 3.0, 5);
+    for (int i = 0; i < 2; ++i)
+    {
+        const std::string text = std::to_string(state.number[i]);
+        const cv::Scalar color = i == state.selected
+            ? cv::Scalar(0, 255, 255) : cv::Scalar(255, 255, 255);
+        draw_text(ctx, text.c_str(), cv::Point(500, 65 + i * 65),
+                  color, 1.8, 3);
+    }
 }
 
-REGISTER_LOGIC(logic_button_demo);
-REGISTER_LOGIC_ACTION(logic_button_demo, logic_button_demo_action);
+REGISTER_LOGIC(logic_course_07);
+REGISTER_LOGIC_ACTION(logic_course_07, logic_course_07_action);
 ```
 
 这个例子中：
 
 1. `logic.json` 决定 Web 显示哪几个按钮；
-2. `logic_button_demo_action()` 处理按钮；
-3. handler 修改 `ctx->state` 中的 `number`；
-4. `logic_button_demo()` 每帧把最新数字画出来；
+2. `logic_course_07_action()` 处理按钮；
+3. handler 修改 `ctx->state` 中的数字或当前选择；
+4. `logic_course_07()` 每帧把两个数字画出来；
 5. 每个通道拥有自己的 `ctx->state`，所以多个通道不会共用同一个数字。
 
 ### 第三步：记住两个名字必须一致
@@ -497,23 +514,21 @@ C++ 控制端单次 `recv` 的缓冲上限目前约为 64 KiB，且没有循环�
 
 ## 外部 HTTP 调用
 
-按钮使用的 API 也可以由 PLC 网关、扫码枪服务或其它程序调用。接口受 Web 登录鉴权保护：
+按钮使用的 API 也可以由 PLC 网关、扫码枪服务或其它程序调用。项目有意把这个 POST 路径设计为免登录接口，以降低设备联动成本：
 
 ```bash
-# 登录获取 token
-curl -X POST "http://<IP>:8080/api/auth/login" \
-  -H "Content-Type: application/json" \
-  -d '{"username":"root","password":"<password>"}'
-
 # channel_id 使用 config.channels[].id
 curl -X POST \
   "http://<IP>:8080/api/apps/<app>/channels/0/actions/clear_state" \
-  -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"payload":{"reason":"plc_reset"}}'
 ```
 
 外部调用不要求 action 必须出现在 `logics.json`；后端会把 URL 中的 action 原样转发。但业务级动作仍要求当前 logic 已注册 handler，并由 handler 自己判断是否支持该 `action->name`。
+
+免登录是当前项目约定，不要求为 Action 增加 Web 会话或机器鉴权。部署者负责控制 8080
+端口的可达范围；logic 仍必须校验 `action->name` 和 `payload_json`，不接受未声明的状态变化，
+并在失败时写出清晰日志。
 
 ## Web 显示规则
 
@@ -621,7 +636,7 @@ C++ 关键日志格式：
 | 文件 | 职责 |
 |---|---|
 | `vision_analysis/src/logic/modules/logic_xxx/logic.json` | 当前 logic 的按钮元数据源；打包后聚合给 Web |
-| `vision_analysis/src/logic/modules/logic_button_demo/logic.cpp` | 最小自定义按钮示例：`+1` / `-1` 修改每通道数字并显示到画面 |
+| `vision_analysis/src/logic/modules/logic_course_07/logic.cpp` | 自定义按钮示例：`+1` / `-1` / 切换选择，修改每通道数字并显示到画面 |
 | `vision_analysis/src/logic/core/channel_logic.h` | `ChannelAction`、`ChannelActionResult`、handler 类型和注册宏 |
 | `vision_analysis/src/logic/core/channel_logic.cpp` | 普通 logic 与 action handler 两套注册表 |
 | `vision_analysis/src/control/channel_control.cpp` | Unix Socket 协议、系统动作、每通道队列和控制线程 |

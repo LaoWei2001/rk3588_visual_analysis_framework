@@ -52,7 +52,7 @@ REGISTER_LOGIC(logic_person);
 
 `ctx->roi_count()/roi_at()/roi_index_of()` 是成员函数，调用时隐式使用 `this=ctx`；`roi_contains(ctx,...)/roi_has_target(ctx,...)/roi_count_target(ctx,...)` 是显式接收上下文的自由函数，统一封装 `ROI_ALL/ROI_NONE/具体索引` 规则并能在内部处理空 `ctx`。这主要是 API 组织和兼容选择，不代表自由函数更快；完整比较见 `../rk3588-channel-logic/references/channelcontext-api.md`。
 
-绘制 API 包括矩形、圆、线、文字、折线和填充多边形。坐标、半径、线宽均基于模型输入坐标系，由 player 映射到目标画面。Target 位掩码为：`DISPLAY=1`、`IMAGE=2`、`VIDEO=4`、`UPLOAD=6`、`ALL=7`。当前告警叠加图片使用 `DISPLAY|IMAGE`，叠加视频使用 `DISPLAY|VIDEO`，所以 DISPLAY 层会被媒体复用；原始媒体模式不绘制。
+绘制 API 包括矩形、圆、线、文字、折线和填充多边形。坐标、半径、线宽均基于模型输入坐标系，由 player 映射到目标画面。Target 位掩码为：`DISPLAY=1`、`IMAGE=2`、`VIDEO=4`、`MEDIA=6`、`ALL=7`。当前告警叠加图片使用 `DISPLAY|IMAGE`，叠加视频使用 `DISPLAY|VIDEO`，所以 DISPLAY 层会被媒体复用；原始媒体模式不绘制。
 
 `ctx->draw_cmds` 是每次 logic 调用的命令输出队列；`draw_*` 内部构造 `DrawCommand` 并 `push_back`，业务 logic 通常不直接访问。logic 返回后队列被移交给实时显示，告警图片和录像按各自 Target mask 复制并延迟渲染。它不是跨帧状态，不能缓存指针。完整上报对照示例见 `../rk3588-channel-logic/references/examples/logic_upload_teach.md`。
 
@@ -62,7 +62,7 @@ REGISTER_LOGIC(logic_person);
 
 ## 告警
 
-使用 `report_alarm()`，如需让 Dify 映射业务字段，再同步把字段元数据写入模块 `logic.json.report_fields`。同一次调用可以由 Web 配成服务器图片、Dify 图片和 Dify 视频多条 delivery；业务 logic 不选择投递地址，也不直接执行 HTTP/Dify。按钮触发上报的最小示例见 [alarm.md](alarm.md) 和 `../rk3588-channel-logic/references/examples/logic_upload_teach.md`。
+使用 `report_event()`；需要让 Web 为业务字段提供映射提示时，再同步把字段元数据写入模块 `logic.json.report_fields`。同一次调用可以由 Web 配成多条 adapter delivery；业务 logic 不选择投递协议或地址。按钮触发上报的最小示例见 [event.md](event.md) 和 `../rk3588-channel-logic/references/examples/logic_upload_teach.md`。
 
 ## 模块参数
 
@@ -72,7 +72,10 @@ REGISTER_LOGIC(logic_person);
 
 每个启用的 `GlobalLogicConfig` 有独立线程、轮询间隔和 `state`。`GlobalContext` 提供受监控通道列表、tick、是否有新推理、最新推理通道以及安全快照。只看本通道且要求每帧响应时用 channel logic；跨通道汇总或周期巡检用 global logic。
 
-当前全局 logic 不是通道 logic 的自注册宏模式：实现函数后需要在 `global_logic.cpp::global_logic_register()` 显式调用 `register_global_logic()`。配置位置是 `global.global_logics`，热更新会停止并重建全部实例。
+全局 logic 位于 `src/logic/global_modules/global_xxx/`，使用
+`REGISTER_GLOBAL_LOGIC(global_xxx)` 自注册；同目录 `logic.json` 是参数 Schema 和 Web
+元数据唯一来源。参数值保存在每个 `global.global_logics[]` 实例的
+`logic_parameters` 中，通过 `gctx->param_*()` 读取。热更新会停止并重建全部全局实例。
 
 ## 二次开发硬约束
 

@@ -24,19 +24,18 @@
  * 注册全局 logic 的方法
  * ============================================================
  *
- * 1. 在 global_logic.cpp 中实现函数（见下方"最小 logic 示例"）：
+ * 1. 新建 src/logic/global_modules/global_my_logic/logic.cpp 和 logic.json。
+ * 2. 在 logic.cpp 中实现函数，并在文件末尾自注册：
  *       static void global_my_logic(GlobalContext *gctx) { ... }
- *
- * 2. 在 global_logic.cpp 的 global_logic_register() 中注册：
- *       register_global_logic("global_my_logic", global_my_logic);
- *
+ *       REGISTER_GLOBAL_LOGIC(global_my_logic);
  * 3. 在 config.json 中配置（支持多实例）：
  *       "global_logics": [
  *           {
  *               "enable": true,
  *               "logic":  "global_my_logic",
  *               "channels": [0, 1, 2],      // 空数组 = 监控所有通道
- *               "poll_interval_ms": 200
+ *               "poll_interval_ms": 200,
+ *               "logic_parameters": {}
  *           }
  *       ]
  *
@@ -87,7 +86,7 @@
  *         if (now - st.last_alarm_ts > 5000) {
  *             st.last_alarm_ts = now;
  *             printf("[MyGlobal] ALARM: %d persons across all channels\n", total);
- *             // 如需报警，在对应通道逻辑中统一调用 alarm_report(...)
+ *             // 如需报警，在对应通道逻辑中统一调用 report_event(...)
  *         }
  *     }
  * }
@@ -137,6 +136,7 @@
 #include <vector>
 
 struct AlgoResult;
+class LogicParameterSet;
 #include "config/config.h"
 #include "core/app_ctrl.h"
 
@@ -225,6 +225,15 @@ struct GlobalContext
      * 框架在 global_logic_stop_all() 时自动释放，无需 logic 手动清理。
      */
     std::shared_ptr<void> *state;
+
+    /** @brief 当前全局 logic 的专有参数，已按模块 Schema 校验并补齐默认值。 */
+    const LogicParameterSet *logic_parameters = nullptr;
+    bool has_param(const char *key) const;
+    float param_float(const char *key) const;
+    int64_t param_int(const char *key) const;
+    bool param_bool(const char *key) const;
+    std::string param_string(const char *key) const;
+    std::string param_json(const char *key) const;
 
     /* ---- 便捷方法 ---- */
 
@@ -335,10 +344,32 @@ struct GlobalContext
  */
 typedef void (*GlobalLogicFunc)(GlobalContext *gctx);
 
+/*======================== 全局逻辑分发表与自注册 ========================*/
+#define MAX_GLOBAL_LOGIC_FUNCS 64
+
+GlobalLogicFunc global_logic_get(const char *name);
+std::vector<std::string> global_logic_names();
+void register_global_logic(const char *name, GlobalLogicFunc func);
+
+struct GlobalLogicRegistrar
+{
+    GlobalLogicRegistrar(const char *name, GlobalLogicFunc func)
+    {
+        register_global_logic(name, func);
+    }
+};
+
+/**
+ * 在 global_modules/<name>/logic.cpp 末尾使用。函数名会成为配置、能力清单
+ * 和 Web 共同使用的唯一全局 logic ID，无需修改任何核心分发表。
+ */
+#define REGISTER_GLOBAL_LOGIC(func)                                                                                     \
+    static const GlobalLogicRegistrar _global_logic_reg_##func(#func, func)
+
 /*======================== 多实例管理器接口 ========================*/
 
 /**
- * @brief 启动所有全局逻辑实例（注册 + 内部创建 pthread）。
+ * @brief 启动所有全局逻辑实例（内部创建 pthread）。
  *
  * 由 analyzer_init 调用一次；热重载时由 config_monitor 按需重启受影响实例。
  * @return 成功启动的实例数（启动失败的实例跳过，不影响其余实例）

@@ -1,5 +1,6 @@
 {
     "label": "保存原始帧与缩放帧",
+    "event_types": [],
     "parameters": {
         "type": "object",
         "additionalProperties": false,

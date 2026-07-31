@@ -20,9 +20,14 @@ REGISTER_LOGIC_RE = re.compile(
 REGISTER_LOGIC_ACTION_RE = re.compile(
     r"\bREGISTER_LOGIC_ACTION\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,"
 )
+REGISTER_GLOBAL_LOGIC_RE = re.compile(
+    r"\bREGISTER_GLOBAL_LOGIC\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)"
+)
 PARAM_ACCESS_RE = re.compile(
     r'\bparam_(float|int|bool|string|json)\s*\(\s*"([^"]+)"'
 )
+REPORT_EVENT_CALL_RE = re.compile(r"\breport_event\s*\(")
+EVENT_TYPE_LITERAL_RE = re.compile(r'\.event_type\s*=\s*"([^"]+)"')
 CPP_CODE_SUFFIXES = {".cpp", ".cc", ".cxx", ".h", ".hpp"}
 CPP_SOURCE_SUFFIXES = {".cpp", ".cc", ".cxx"}
 
@@ -173,7 +178,6 @@ def schema_property_to_web_param(key: str, spec: Dict[str, Any]) -> Dict[str, An
     out: Dict[str, Any] = {
         "key": key,
         "type": web_type,
-        "storage": "logic_parameters",
         "default": spec["default"],
         "hot_reload": spec.get("x-hot-reload", "preserve_state"),
     }
@@ -195,23 +199,12 @@ def schema_property_to_web_param(key: str, spec: Dict[str, Any]) -> Dict[str, An
     return out
 
 
-def merge_web_params(
-    manifest_path: Path,
-    legacy_params: Any,
-    parameter_schema: Dict[str, Any],
-) -> List[Dict[str, Any]]:
-    require_unique_strings(manifest_path, legacy_params, "params", "key")
-    result = list(legacy_params or [])
-    seen = {item["key"] for item in result}
+def web_params_from_schema(parameter_schema: Dict[str, Any]) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
     for key, spec in parameter_schema.get("properties", {}).items():
         if spec.get("x-ui-hidden") is True:
             continue
-        if key in seen:
-            raise ManifestError(
-                f"{manifest_path}: parameter '{key}' is declared in both params and parameters.properties"
-            )
         result.append(schema_property_to_web_param(key, spec))
-        seen.add(key)
     return result
 
 
@@ -267,6 +260,40 @@ def require_unique_strings(
         seen.add(value)
 
 
+def validate_event_types(
+    manifest_path: Path, module_dir: Path, event_types: Any
+) -> None:
+    if event_types is None:
+        raise ManifestError(
+            f"{manifest_path}: event_types is required; use [] when the logic never reports events"
+        )
+    require_unique_strings(manifest_path, event_types, "event_types", "id")
+    declared = {item["id"] for item in event_types}
+    for index, item in enumerate(event_types):
+        for field in ("label", "help"):
+            if field in item and not isinstance(item[field], str):
+                raise ManifestError(
+                    f"{manifest_path}: event_types[{index}].{field} must be a string"
+                )
+
+    source_text = ""
+    for source in module_cpp_code_files(module_dir):
+        try:
+            source_text += source.read_text(encoding="utf-8") + "\n"
+        except OSError as exc:
+            raise ManifestError(f"{source}: cannot read source: {exc}") from exc
+    if REPORT_EVENT_CALL_RE.search(source_text) and not event_types:
+        raise ManifestError(
+            f"{manifest_path}: logic calls report_event() but event_types is empty"
+        )
+    undeclared_literals = sorted(set(EVENT_TYPE_LITERAL_RE.findall(source_text)) - declared)
+    if undeclared_literals:
+        raise ManifestError(
+            f"{manifest_path}: C++ uses undeclared event type(s): "
+            f"{', '.join(undeclared_literals)}"
+        )
+
+
 def module_cpp_source_files(module_dir: Path) -> List[Path]:
     return sorted(
         path
@@ -291,6 +318,18 @@ def registered_action_logic_names(module_dir: Path) -> List[str]:
         try:
             names.extend(
                 REGISTER_LOGIC_ACTION_RE.findall(source.read_text(encoding="utf-8"))
+            )
+        except OSError as exc:
+            raise ManifestError(f"{source}: cannot read source: {exc}") from exc
+    return names
+
+
+def registered_global_logic_names(module_dir: Path) -> List[str]:
+    names: List[str] = []
+    for source in module_cpp_source_files(module_dir):
+        try:
+            names.extend(
+                REGISTER_GLOBAL_LOGIC_RE.findall(source.read_text(encoding="utf-8"))
             )
         except OSError as exc:
             raise ManifestError(f"{source}: cannot read source: {exc}") from exc
@@ -375,10 +414,14 @@ def load_channel_manifests(logic_root: Path) -> List[Dict[str, Any]]:
         parameter_schema = validate_parameter_schema(
             manifest_path, manifest.get("parameters")
         )
+        if "params" in manifest:
+            raise ManifestError(
+                f"{manifest_path}: top-level params is not supported; "
+                "declare parameters.properties only"
+            )
         validate_parameter_accesses(manifest_path, module_dir, parameter_schema)
-        manifest["params"] = merge_web_params(
-            manifest_path, manifest.get("params", []), parameter_schema
-        )
+        manifest["params"] = web_params_from_schema(parameter_schema)
+        validate_event_types(manifest_path, module_dir, manifest.get("event_types"))
         require_unique_strings(manifest_path, manifest.get("actions"), "actions", "id")
         require_unique_strings(
             manifest_path, manifest.get("report_fields"), "report_fields", "key"
@@ -386,6 +429,52 @@ def load_channel_manifests(logic_root: Path) -> List[Dict[str, Any]]:
         require_unique_strings(
             manifest_path, manifest.get("business_fields"), "business_fields", "path"
         )
+        result.append({"name": name, **manifest})
+
+    return result
+
+
+def load_global_manifests(logic_root: Path) -> List[Dict[str, Any]]:
+    module_root = logic_root / "global_modules"
+    if not module_root.is_dir():
+        raise ManifestError(f"{module_root}: global logic module root is missing")
+    module_dirs = sorted(path for path in module_root.iterdir() if path.is_dir())
+
+    result: List[Dict[str, Any]] = []
+    seen_names = set()
+    for module_dir in module_dirs:
+        manifest_path = module_dir / "logic.json"
+        if not manifest_path.is_file():
+            raise ManifestError(f"{module_dir}: global logic module is missing logic.json")
+
+        manifest = load_object(manifest_path)
+        if "name" in manifest:
+            raise ManifestError(
+                f"{manifest_path}: name is generated from REGISTER_GLOBAL_LOGIC(func); remove it"
+            )
+
+        registrations = registered_global_logic_names(module_dir)
+        if len(registrations) != 1:
+            found = ", ".join(sorted(registrations)) or "none"
+            raise ManifestError(
+                f"{manifest_path}: module must contain exactly one "
+                f"REGISTER_GLOBAL_LOGIC(func) (found: {found})"
+            )
+        name = registrations[0]
+        if name in seen_names:
+            raise ManifestError(f"{manifest_path}: duplicate global logic function: {name}")
+        seen_names.add(name)
+
+        parameter_schema = validate_parameter_schema(
+            manifest_path, manifest.get("parameters")
+        )
+        if "params" in manifest:
+            raise ManifestError(
+                f"{manifest_path}: top-level params is not supported; "
+                "declare parameters.properties only"
+            )
+        validate_parameter_accesses(manifest_path, module_dir, parameter_schema)
+        manifest["params"] = web_params_from_schema(parameter_schema)
         result.append({"name": name, **manifest})
 
     return result
@@ -417,19 +506,28 @@ def build_catalog(logic_root: Path) -> Dict[str, Any]:
         raise ManifestError(
             f"{catalog_path}: channel_logics belongs in modules/*/logic.json"
         )
+    if "global_logics" in shared:
+        raise ManifestError(
+            f"{catalog_path}: global_logics belongs in global_modules/*/logic.json"
+        )
 
     modules = load_channel_manifests(logic_root)
-    global_logics = validate_named_list(
-        catalog_path, shared.get("global_logics", []), "global_logics"
-    )
+    global_logics = load_global_manifests(logic_root)
+    channel_names = {item["name"] for item in modules}
+    global_names = {item["name"] for item in global_logics}
+    collisions = sorted(channel_names & global_names)
+    if collisions:
+        raise ManifestError(
+            f"{logic_root}: channel/global logic IDs must be unique: {', '.join(collisions)}"
+        )
     model_types = validate_named_list(
         catalog_path, shared.get("model_types", []), "model_types"
     )
 
     return {
         "_comment": (
-            "Generated from REGISTER_LOGIC(func), src/logic/modules/*/logic.json "
-            "and src/logic/catalog.json; do not edit the generated file."
+            "Generated from channel/global registration macros, module logic.json "
+            "files and src/logic/catalog.json; do not edit the generated file."
         ),
         "channel_logics": modules,
         "global_logics": global_logics,
@@ -487,7 +585,11 @@ def render_cpp_catalog(catalog: Dict[str, Any]) -> str:
         "channel_logics": [
             {"name": item["name"], "parameters": item["parameters"]}
             for item in catalog["channel_logics"]
-        ]
+        ],
+        "global_logics": [
+            {"name": item["name"], "parameters": item["parameters"]}
+            for item in catalog["global_logics"]
+        ],
     }
     payload = json.dumps(
         runtime_catalog,
@@ -544,7 +646,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             atomic_write_json(args.output.resolve(), catalog)
         if args.check:
             print(
-                f"validated {len(catalog['channel_logics'])} channel logic manifest(s)",
+                f"validated {len(catalog['channel_logics'])} channel and "
+                f"{len(catalog['global_logics'])} global logic manifest(s)",
                 file=sys.stderr,
             )
         elif not args.output and not args.cpp_output:

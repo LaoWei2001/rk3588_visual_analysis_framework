@@ -1,237 +1,180 @@
-# 告警上报与画布接线参考
+# 标准事件上报与画布接线
 
-## 一、当前上报模型
+## 开发者只做一件事
 
-业务 logic 只负责判断“发生了什么事件”，并调用统一入口 `report_alarm()`。保存图片还是事件视频、媒体上叠加哪些信息、投递到哪个 Profile、字段如何映射，均由 Web 画布生成的 `report_policy` 决定。
-
-权威接口位于 `vision_analysis/src/alarm/alarm_report.h`：
+logic 判断事件成立后调用 `report_event()`：
 
 ```cpp
-std::string report_alarm(ChannelContext *ctx,
-                         const std::string &type,
-                         const std::string &message,
-                         std::initializer_list<AlarmField> fields);
+EventRequest event;
+event.event_type = "person_intrusion";
+event.message = "有人进入危险区域";
+event.fields = {
+    event_field("track_id", hit->track_id),
+    event_field("score", hit->score),
+    event_field("roi_name", roi_name),
+};
+const EventReportResult report = report_event(ctx, event);
+
+if (!report.accepted())
+    fprintf(stderr, "status=%s detail=%s\n",
+            event_report_status_name(report.status), report.detail.c_str());
 ```
 
-返回值是事件 ID。没有有效投递配置或提交失败时返回空字符串。调用返回前会创建本地事件清单并排队媒体任务；网络投递、JPEG 编码和事件视频编码不在 logic 中执行，由后台工作线程或独立上传服务完成。
+不要在 logic 中：
 
-标准写法：
+- 调 HTTP 或 Dify；
+- 读取 URL、Token、API Key；
+- Base64 编码图片；
+- 选择上传目标；
+- 自己保存上报图片或视频；
+- 按不同目标重复提交同一个事件。
+
+JSON 对象或数组使用 `event_json_field()`。每次触发必须独立建事件时：
 
 ```cpp
-std::string event_id = report_alarm(
-    ctx,
-    "intrusion",
-    "检测到人员进入区域",
-    {
-        alarm_field("track_id", result.track_id),
-        alarm_field("score", result.score),
-        alarm_field("roi_name", roi_name),
-    });
+EventRequest event;
+event.event_type = "inspection_round";
+event.message = "巡检完成";
+event.merge_mode = EventMergeMode::NEVER;
+event.fields.set_json("result", result_json);
+const EventReportResult report = report_event(ctx, event);
 ```
 
-需要传递已经序列化的 JSON 字段时使用 `alarm_json_field()`：
+## 画布配置
 
-```cpp
-report_alarm(ctx, "inspection", "巡检异常", {
-    alarm_json_field("steps", steps_json),
-});
-```
+一个上报节点对应一条 delivery：
 
-图片到服务器、图片到 Dify 和视频到 Dify 不需要三套业务函数。logic 只提交一次事件，Web 生成的 `report_policy.deliveries` 可以让该事件同时走多个投递分支。需要关闭事件合并、设置 `record_kind` 等高级选项时，构造 `AlarmRequest` 后调用 `alarm_report(ctx, request)`；`report_alarm()` 是它的常用简化包装。
+1. 在“服务配置”中新建连接 Profile，并选择适配器；
+2. logic 节点连接上报节点；
+3. 上报节点选择 Profile 和接口模板；没有合适模板时点击“新建接口模板”；
+4. 编辑器从当前 logic 的 `logic.json.report_fields` 自动列出算法变量，并同时提供系统事件、
+   媒体和固定值；选择变量、填写远端字段名后保存；
+5. 上报节点从 `logic.json.event_types` 显示可选事件类型；默认接收全部，确需分流时才勾选子集；
+6. 模板自动带出媒体、固定值、字段 mapping 和成功条件；
+7. 点击“预览请求”；真实联调时刷新并选择一条本地事件，再点击“测试发送”；
+8. 新建或修改模板后重启事件投递服务，使运行中的发件箱重新加载模板。
 
-不要在 logic 中直接选择服务器地址、Dify 密钥、图片路径或录像编码参数，也不要自行实现 HTTP/Redis 投递。这些属于上报策略和服务层职责。
+同一个 logic 可连接多个上报节点。logic 仍然只调用一次 `report_event()`。
 
-## 二、画布上的上报配置如何生效
-
-画布保存时，`web_console/frontend/src/utils/graphToConfig.ts` 将上报节点序列化到本通道配置：
-
-- `report_policy`：投递方式、媒体种类、图片/视频叠加方式、录像前后时间、帧率、Profile 和字段映射；
-- `report_parameters`：通道级上报参数。
-
-录像参数没有独立的通道字段；C++ 加载 `report_policy` 时会生成非持久化运行参数，供预缓冲和事件录像使用。
-
-C++ 中对应字段为：
-
-```cpp
-ctx->config->report_policy_json
-ctx->config->report_parameters_json
-```
-
-logic 通常不需要读取或解析它们。`report_alarm()` 会读取当前通道配置并执行策略。
-
-没有配置有效投递时，`report_alarm()` 返回空字符串，不会生成无目标的上报任务。因此“是否上报”由策略中是否存在有效 delivery 决定，不再使用旧的 `report_enable` 开关。
-
-### 当前 `report_policy` 形态
-
-一个上报节点固定产生一条 delivery；同一 logic 可以连接多个上报节点，`graphToConfig` 会把它们合并并为 delivery ID 去重。当前支持的组合只有：
-
-| media | target | 复用的本地媒体 | 行为 |
-|---|---|---|---|
-| `image` | `server` | `snapshot.jpg` + `raw.jpg` | 发送固定业务 JSON，同时包含叠加图字段和原图字段 |
-| `image` | `dify` | `snapshot.jpg` | 上传图片并运行 Dify workflow |
-| `video` | `dify` | `clip.mp4` | 等待 MP4 完成后上传并运行 Dify workflow |
-
-当前不支持 `video/server`。同一事件连接多个相同媒体的 delivery 时会复用已经生成的媒体文件，不会要求 logic 重复截图或重复调用上报函数。
-
-当前 Web 生成的典型策略如下：
+## delivery Schema
 
 ```json
 {
+  "id": "delivery_1",
   "enabled": true,
-  "image_overlay": "custom",
-  "video_overlay": "custom",
-  "video_pre_sec": 3,
-  "video_post_sec": 3,
-  "video_fps": 15,
-  "merge_window_sec": 5,
-  "deliveries": [
-    {
-      "id": "delivery_report_1",
-      "enabled": true,
-      "media": "image",
-      "target": "dify",
-      "profile_id": "line_a_dify",
-      "file_variable": "image",
-      "file_input_mode": "single",
-      "inputs": [
-        {"key": "track_id", "source": "logic.track_id", "type": "number"}
-      ]
-    }
-  ],
-  "parameters": []
+  "profile_id": "factory",
+  "contract_id": "object_invade_det",
+  "media": ["annotated_image", "raw_image"],
+  "when": {
+    "event_types": ["person_intrusion"]
+  }
 }
 ```
 
-断开全部上报节点时，Web 写入 `{ "enabled": false, "deliveries": [] }`。C++ 以启用的有效 delivery 为准，logic 不读取顶层 `enabled`。
+`media` 是保存到 delivery 的必要快照，C++ 用它决定媒体任务。adapter、mapping、请求方式和
+成功条件都不复制到 delivery；Python 以 `service/upload/contracts/<contract_id>.json`
+为接口协议权威。
+`when.event_types` 缺省或空数组表示匹配所有事件。
 
-服务器投递当前不使用 `report_fields`/`inputs`，而是由 `EventOutboxForwarder` 生成固定 JSON，只允许画布修改 `source` 和 `eventType`。Dify 投递才根据 `inputs[].source` 从事件字段、通道参数或 logic fields 映射工作流输入。
+事件类型不再由 Web 自由输入。每个 channel logic 的 `logic.json` 都必须声明：
 
-## 三、图片、视频和叠加目标
-
-`draw_text()`、`draw_rect()` 等函数并不立即修改 `ctx->frame`，而是构造一条 `DrawCommand` 追加到当前帧的 `ctx->draw_cmds`。显示、告警图片和事件视频随后使用同一套 `render_overlays()`，按 Target mask 选择命令并映射坐标后再真正画到各自画布。
-
-`DrawCommand::Target` 支持精确声明自定义绘制允许进入哪些画面：
-
-| Target | 位值含义 | 实时画面 | 图片 `custom` | 视频 `custom` |
-|---|---|---:|---:|---:|
-| `DISPLAY` | 实时显示层 | 是 | 是 | 是 |
-| `IMAGE` | 告警图片专用层 | 否 | 是 | 否 |
-| `VIDEO` | 事件视频专用层 | 否 | 否 | 是 |
-| `UPLOAD` | `IMAGE | VIDEO` | 否 | 是 | 是 |
-| `ALL` | `DISPLAY | IMAGE | VIDEO` | 是 | 是 | 是 |
-
-例如只在上报媒体中叠加报警文字：
-
-```cpp
-draw_text(ctx, "报警", {20, 50}, cv::Scalar(0, 0, 255),
-          1.0, 2, DrawCommand::UPLOAD);
+```json
+"event_types": [
+  {"id": "person_intrusion", "label": "人员入侵", "help": "进入警戒区域时产生"}
+]
 ```
 
-实际 mask 是：实时画面取 `DISPLAY`，图片 `custom` 取 `DISPLAY|IMAGE`，视频 `custom` 取 `DISPLAY|VIDEO`。因此 `DISPLAY` 不是“永远只在屏幕显示”；当产品要求媒体与实时窗口一致时，它也会进入图片和视频。`UPLOAD` 则适合只额外写入上报媒体、不出现在实时画面的标注。
+`id` 必须与 C++ `EventRequest.event_type` 完全一致；不产生事件的 logic 显式声明空数组。
+`generate_logics_catalog.py --check` 会拒绝调用了 `report_event()` 却没有声明事件类型的模块，
+并校验 C++ 直接使用的事件类型字符串。
 
-是否渲染这些命令还受到 `report_policy.image_overlay/video_overlay` 的总控制。当前 Web 提供两档：
+## 接口模板
 
-| Web 选项 | 配置值 | 系统检测框/ROI | logic 自定义 DrawCommand |
-|---|---|---:|---:|
-| 当前原始帧/原始视频片段 | `none` | 不绘制 | 不绘制，Target 设置也不会绕过 `none` |
-| 与实时播放窗口画面一致 | `custom` | 绘制 | 按上表的图片/视频 mask 绘制 |
-
-目前 Web 不能逐条勾选“只要某个矩形、不要某段文字”，也没有分别暴露“仅自定义层”和“系统层+自定义层”。需要这种粒度时，应先扩展 `report_policy` 和 Web 选项，再统一修改图片与录像的模式映射，不能让业务 logic 自己解析策略并另画一套。
-
-服务器和 Dify 消费这些媒体的规则为：
-
-| 投递 | 收到的内容 |
-|---|---|
-| 图片 → 服务器 | `base64Data=snapshot.jpg`，`base64DataRaw=raw.jpg`；后者始终无叠加 |
-| 图片 → Dify | 只上传 `snapshot.jpg` |
-| 视频 → Dify | 上传按 `video_overlay` 生成的 `clip.mp4` |
-
-调用顺序很重要：要进入本次告警图片的 `draw_*` 命令必须在 `report_alarm()/alarm_report()` 之前提交，因为图片任务会在上报调用期间复制当前帧的 `ctx->draw_cmds`。业务代码不应跨帧保存 `draw_cmds` 指针。
-
-可直接运行的完整对照示例见 [logic_upload_teach.md](examples/logic_upload_teach.md)。它用五种 Target 各绘制一行文字和色块，通过 Web 按钮创建事件，便于并排检查实时画面、`snapshot.jpg`、`raw.jpg` 和 `clip.mp4`。
-
-## 四、事件视频
-
-当策略要求视频时，`report_alarm()` 会触发 `event_video_recorder`：
-
-- 从环形缓存取得报警前视频；
-- 继续收集报警后视频；
-- 按策略指定帧率和画面模式编码 MP4；
-- 编码完成后通过 `alarm_report_video_ready()` 更新事件清单。
-
-同一通道、同一报警类型在已有事件录像窗口内再次触发时，框架可能延长现有事件，而不是重复创建录像。logic 仍需自行实现业务层限频、闩锁或按 `track_id` 去重，避免每帧重复提交事件。
-
-推荐用 `ctx->timestamp_ms` 做间隔判断；它是单调时钟，适合计算时长。需要上报日历时间时使用 `ctx->unix_ms`、`time_hms()` 或 `time_str()`。
-
-## 五、新增一个会上报的 logic
-
-### 1. 实现并注册
-
-新建 `vision_analysis/src/logic/modules/logic_xxx/logic.cpp`：
-
-```cpp
-#include "logic/core/logic_common.h"
-
-static void logic_xxx(ChannelContext *ctx)
-{
-    if (!ctx || !ctx->results || !ctx->state) return;
-
-    // 判断业务条件，并用 ctx->state 做限频/闩锁。
-    report_alarm(ctx, "xxx", "发生 xxx 事件", {
-        alarm_field("channel", ctx->chnId),
-    });
-}
-
-REGISTER_LOGIC(logic_xxx);
-```
-
-`logic_common.h` 已包含统一告警接口，无需再包含旧的 uploader 头文件。
-
-### 2. 在模块目录声明给 Web
-
-新建同目录 `logic.json`，不要直接修改生成后的 App 根目录 `logics.json`：
+接口模板是开发者和大模型维护服务器协议的地方。通常在 Web 上报节点中通过字段选择器创建
+或编辑；保存结果写入已安装 App 的 `services/upload/contracts/*.json`，仍可进入版本管理、
+复制到仓库源码 `service/upload/contracts/`，或由大模型直接审查修改：
 
 ```json
 {
-  "label": "XXX 报警",
-  "parameters": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  },
-  "report_fields": [
-    {"key": "channel", "type": "number", "label": "通道号"}
-  ]
+  "id": "object_invade_det",
+  "adapter": "http_json",
+  "media": ["annotated_image", "raw_image"],
+  "request": {"method": "POST"},
+  "mapping": [
+    {"source": "constant", "target": "source", "value": "JNU"},
+    {"source": "fields", "target": "detResult"},
+    {"source": "media.annotated_image", "target": "base64Data", "transform": "base64"}
+  ],
+  "success": {"http_status": [200], "json_path": "code", "equals": 200}
 }
 ```
 
-`REGISTER_LOGIC(logic_xxx)` 会把函数名自动生成为 Web 和配置使用的 logic ID，源 `logic.json` 不写 `name`。`report_fields[].key` 必须与 `alarm_field()`/`request.fields` 的 key 对齐，类型只使用 `string`、`number`、`boolean`、`json`，供 Dify 字段映射界面读取。构建脚本会校验并聚合所有模块，正常打包生成 App 根目录 `logics.json`；开发者不维护生成文件。`report` 字段即使保留也只是提示元数据，不能替代画布上的上报节点。
+固定协议字段放模板；算法动态值仍由 C++ `EventRequest.fields` 提供。修改模板后重启
+`unified_upload`。如果修改了模板的 `media[]`，还要在 Web 重新选择该模板并保存配置，
+让 C++ 获得新的媒体快照。
 
-### 3. 画布接线
+Web 字段选择器展示的是声明，不是运行时数值：
 
-在目标通道中：
+```text
+logic.json.report_fields -> logics.json -> Web 可选 fields.<key>
+logic.cpp EventRequest.fields             -> 事件触发时的真实数值
+```
 
-1. 视频流连接模型和逻辑节点；
-2. 逻辑节点选择 `logic_xxx`；
-3. 按需要添加上报配置节点；
-4. 在上报配置中选择图片、视频或两者，并配置 overlay、Profile、字段映射、录像时间窗和帧率；
-5. 保存后由 `graphToConfig` 写入该通道的 `report_policy`。
+新算法变量必须同时出现在两处；服务器只改字段名时只编辑模板的 target，不修改 C++。
 
-## 六、可调业务参数
+## 稳定 source
 
-普通业务参数在当前模块 `logic.json.parameters.properties` 声明，并通过 `ctx->param_float/int/bool/string/json()` 读取。例如 `dwell_sec` 使用 Schema `number` 和 `ctx->param_float("dwell_sec")`。不要再为模块专有参数增加 `ChannelConfig/REG_C` 中央字段，也不要手改生成的 `logics.json`。
+| source | 内容 |
+|---|---|
+| `event.id` | 事件 ID |
+| `event.type` | logic 提交的事件类型 |
+| `event.message` | 事件说明 |
+| `event.trigger_unix_ms` | 触发时间戳 |
+| `source.channel_id` | 通道 ID |
+| `source.parameters.<key>` | 通道 report_parameters |
+| `fields.<key>` | logic 的自定义字段 |
+| `media.annotated_image` | 带叠加图片文件 |
+| `media.raw_image` | 原始图片文件 |
+| `media.video` | MP4 文件 |
+| `event/fields/source` | 整体对象 |
+| `constant` | 映射条目中的固定 `value` |
 
-Schema 同时提供 C++ 默认值/范围校验、Web 控件和热重载策略。完整方法见 [adding-config-parameter.md](adding-config-parameter.md)。连接地址、Profile、媒体和 `report_policy` 仍属于上报配置，不要放进模块参数。
+`logic.json.report_fields[]` 只负责让 Web 知道 `fields.<key>` 的名称、类型和说明。它必须与
+C++ `event_field()` 的 key 对齐。
 
-`report_policy` 属于通用上报配置，不应为每一种 logic 重复增加一组 server/dify 地址字段。
+## 媒体时序
 
-## 七、排查清单
+图片和视频由 delivery 的 `media[]` 自动请求：
 
-- `report_alarm()` 返回空：检查本通道 `report_policy` 是否包含有效 delivery；
-- 有清单但没有图片或视频：检查媒体类型、overlay 和事件录像参数；
-- 自定义标注只出现在显示画面：检查绘制 target 是否只有 `DISPLAY`；
-- 重复产生大量事件：在 `ctx->state` 中增加闩锁、冷却或按目标去重；
-- Web 看不到新 logic：检查已安装 App 根目录的 `logics.json`，不要只修改源码目录副本；
-- logic 不执行：核对 `REGISTER_LOGIC()` 的函数名、生成 `logics.json` 的名称和通道 `logic` 配置。
+```text
+requested -> generating -> ready
+                        \-> failed
+```
 
-学习完整媒体分层和多投递时使用 `vision_analysis/src/logic/modules/logic_upload_teach/logic.cpp`，对应 [logic_upload_teach.md](examples/logic_upload_teach.md)；实现真实 ROI 进入报警时再参考 `logic_upload/logic.cpp` 和 [logic_upload.md](examples/logic_upload.md)。
+视频会等待事件前后窗口并异步编码。logic 不等待媒体完成。希望某个 `draw_*` 进入带标注图
+时，必须先绘制，再调用 `report_event()`。
+
+## 返回结果
+
+| 状态 | 含义 |
+|---|---|
+| `CREATED` | 新事件已持久化 |
+| `MERGED` | 合并进同通道同类型事件 |
+| `CREATED_MEDIA_FAILED` | 事件已保存，但媒体请求失败 |
+| `DISABLED` | report_policy 关闭 |
+| `NO_DELIVERY` | 没有匹配当前事件类型的有效 delivery |
+| `INVALID_REQUEST` | ctx/config/type 无效 |
+| `WORKER_UNAVAILABLE` | 图片线程无法启动 |
+| `STORAGE_ERROR` | 事件目录或状态文件写入失败 |
+
+## 排错顺序
+
+1. 检查 `EventReportResult.status/detail/event_id`；
+2. 查看 `event_store/<event_id>/event.json`；
+3. 查看 `media_state.json` 的 requested/generating/ready/failed；
+4. 查看 `delivery_state.json` 的适配器、Profile、attempts 和 last_error；
+5. 在 Web 上报节点预览最终请求；
+6. 选择这条本地事件执行测试发送；
+7. 最后检查上传服务日志和远端接口响应。
+
+所有 delivery 成功后事件目录会被删除。

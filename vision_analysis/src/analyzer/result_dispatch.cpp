@@ -7,7 +7,7 @@
  * 数据流：
  *   infer_worker (NPU) → channel_results[chnId] + cv signal
  *   → algorithm_wait_result (阻塞等待) → algorithm_take_results (原子取帧+框)
- *   → process_channel_results → invoke_channel_logic → alarm_report
+ *   → process_channel_results → invoke_channel_logic → event_report
  *
  * 帧匹配保证（此文件不涉及）：
  *   algorithm_take_results 在同一把锁下原子取出 640 输入图 (infer_frame) 与检测框，

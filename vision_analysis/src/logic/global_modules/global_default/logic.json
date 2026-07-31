@@ -1,0 +1,8 @@
+{
+    "label": "默认全局逻辑",
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+    }
+}

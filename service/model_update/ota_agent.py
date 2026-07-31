@@ -32,9 +32,10 @@ ASSETS_DIR = _resolve_assets_dir()
 
 
 def _load_ota_config():
-    """读取本目录 ota_config.json（由网页控制台写入）；缺失/损坏则用默认值。
-    用标准库 json，不给本服务新增依赖。"""
-    cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ota_config.json")
+    """读取 ota_config.json；优先 OTA_CONFIG_FILE 环境变量，其次本目录。"""
+    cfg_path = os.environ.get("OTA_CONFIG_FILE")
+    if not cfg_path:
+        cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ota_config.json")
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:
             return json.load(f)

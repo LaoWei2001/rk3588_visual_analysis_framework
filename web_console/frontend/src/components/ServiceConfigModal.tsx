@@ -1,14 +1,9 @@
-/**
- * ServiceConfigModal — 管理两个微服务的「服务级」参数，可作为弹窗或独立页面内嵌面板：
- *   - 上报服务 (config.yaml): 默认地址 / Profile / 超时
- *   - OTA 升级服务 (ota_config.json): 平台地址 / 目标配置文件名
- *
- * 每通道的上报节点只保存 profile_id；地址和密钥集中在这里管理。
- */
 import { useEffect, useState, type ReactNode } from 'react'
 import {
-  fetchUploadConfig, saveUploadConfig, fetchOtaConfig, saveOtaConfig,
-  type UploadServiceConfig, type UploadProfile, type OtaConfig,
+  fetchDeliveryAdapters, fetchOtaConfig, fetchUploadConfig,
+  saveOtaConfig, saveUploadConfig,
+  type AdapterProfileField, type DeliveryAdapterDef, type OtaConfig,
+  type UploadProfile, type UploadServiceConfig,
 } from '../api/client'
 import NumberField from './NumberField'
 import { useEditorStore } from '../store/editorStore'
@@ -20,30 +15,8 @@ interface Props {
   embedded?: boolean
 }
 
-const EMPTY_UPLOAD: UploadServiceConfig = {
-  dify:   { api_url: '', api_key: '', timeout: 120 },
-  server: { url: '', timeout: 15 },
-  profiles: {},
-}
+const EMPTY_UPLOAD: UploadServiceConfig = { profiles: {} }
 const EMPTY_OTA: OtaConfig = { platform_ws_host: 'tunnel.memanager.cn', target_config: 'active' }
-
-// 服务器上报不使用鉴权 Token；读取旧配置时一并剔除，下一次保存会清理历史残留字段。
-const stripServerTokens = (profiles: Record<string, UploadProfile>): Record<string, UploadProfile> =>
-  Object.fromEntries(Object.entries(profiles).map(([id, profile]) => {
-    const clean = { ...profile } as UploadProfile & { token?: string }
-    delete clean.token
-    return [id, clean]
-  }))
-
-const overlay: React.CSSProperties = {
-  position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
-  display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
-}
-const dialog: React.CSSProperties = {
-  background: '#1a1d29', color: '#e6e9ef', borderRadius: 10, width: 560,
-  maxWidth: '92vw', maxHeight: '88vh', overflowY: 'auto',
-  border: '1px solid #2e3352', boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
-}
 const inputStyle: React.CSSProperties = {
   background: '#0f1117', color: '#e6e9ef', border: '1px solid #2e3352',
   borderRadius: 6, padding: '6px 8px', fontSize: 13, width: '100%',
@@ -54,226 +27,257 @@ const sectionTitle: React.CSSProperties = {
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
-      <span style={{ fontSize: 12, color: '#9aa4b2' }}>{label}</span>
-      {children}
-    </label>
-  )
+  return <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
+    <span style={{ fontSize: 12, color: '#9aa4b2' }}>{label}</span>
+    {children}
+  </label>
+}
+
+function JsonProfileField({
+  definition, value, onChange, onError, onEdit,
+}: {
+  definition: AdapterProfileField
+  value: unknown
+  onChange: (value: unknown) => void
+  onError: (message: string) => void
+  onEdit: () => void
+}) {
+  const [text, setText] = useState(() => JSON.stringify(value ?? definition.default ?? {}, null, 2))
+  useEffect(() => {
+    setText(JSON.stringify(value ?? definition.default ?? {}, null, 2))
+  }, [value, definition.default])
+  return <textarea style={{ ...inputStyle, minHeight: 86, fontFamily: 'monospace' }}
+    value={text} onChange={event => {
+      setText(event.target.value)
+      onEdit()
+    }}
+    onBlur={() => {
+      try { onChange(JSON.parse(text)) }
+      catch { onError(`${definition.label} 必须是有效 JSON`) }
+    }} />
+}
+
+function ProfileField({
+  definition, value, onChange, onError, onEdit,
+}: {
+  definition: AdapterProfileField
+  value: unknown
+  onChange: (value: unknown) => void
+  onError: (message: string) => void
+  onEdit: () => void
+}) {
+  const actual = value ?? definition.default ?? ''
+  if (definition.type === 'number') {
+    return <NumberField style={inputStyle} def={Number(definition.default ?? 0)}
+      value={typeof actual === 'number' ? actual : Number(actual)}
+      onChange={next => onChange(next ?? definition.default ?? 0)} />
+  }
+  if (definition.type === 'select') {
+    return <select style={inputStyle} value={String(actual)}
+      onChange={event => onChange(event.target.value)}>
+      {(definition.options ?? []).map(option => <option key={option} value={option}>{option}</option>)}
+    </select>
+  }
+  if (definition.type === 'json') {
+    return <JsonProfileField definition={definition} value={actual}
+      onChange={onChange} onError={onError} onEdit={onEdit} />
+  }
+  return <input style={inputStyle} type={definition.type === 'secret' ? 'password' : 'text'}
+    value={String(actual)} onChange={event => onChange(event.target.value)}
+    placeholder={definition.required ? '必填' : ''} />
 }
 
 export default function ServiceConfigModal({ appName, onClose, onToast, embedded = false }: Props) {
   const [upload, setUpload] = useState<UploadServiceConfig>(EMPTY_UPLOAD)
-  const [ota, setOta]       = useState<OtaConfig>(EMPTY_OTA)
+  const [adapters, setAdapters] = useState<DeliveryAdapterDef[]>([])
+  const [ota, setOta] = useState<OtaConfig>(EMPTY_OTA)
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving]   = useState(false)
-  const setUploadProfiles = useEditorStore(s => s.setUploadProfiles)
+  const [saving, setSaving] = useState(false)
+  const setUploadProfiles = useEditorStore(state => state.setUploadProfiles)
+  const serviceConfigDirty = useEditorStore(state => state.serviceConfigDirty)
+  const setServiceConfigDirty = useEditorStore(state => state.setServiceConfigDirty)
+
+  const markDirty = () => setServiceConfigDirty(true)
 
   useEffect(() => {
     let alive = true
-    Promise.all([fetchUploadConfig(appName), fetchOtaConfig(appName)])
-      .then(([u, o]) => {
+    Promise.all([fetchUploadConfig(appName), fetchDeliveryAdapters(appName), fetchOtaConfig(appName)])
+      .then(([config, catalog, otaConfig]) => {
         if (!alive) return
-        setUpload({
-          dify:   { ...EMPTY_UPLOAD.dify,   ...u.dify },
-          server: { ...EMPTY_UPLOAD.server, ...u.server },
-          profiles: stripServerTokens(u.profiles ?? {}),
-        })
-        setOta({ ...EMPTY_OTA, ...o })
+        setUpload({ profiles: config.profiles ?? {} })
+        setAdapters(catalog)
+        setOta({ ...EMPTY_OTA, ...otaConfig })
+        setServiceConfigDirty(false)
       })
-      .catch(() => onToast('加载服务配置失败', false))
+      .catch(error => onToast(`加载服务配置失败: ${String(error)}`, false))
       .finally(() => { if (alive) setLoading(false) })
-    return () => { alive = false }
-  }, [appName, onToast])
+    return () => {
+      alive = false
+      setServiceConfigDirty(false)
+    }
+  }, [appName, onToast, setServiceConfigDirty])
 
-  const patchDify   = (p: Partial<UploadServiceConfig['dify']>)   => setUpload(s => ({ ...s, dify:   { ...s.dify,   ...p } }))
-  const patchServer = (p: Partial<UploadServiceConfig['server']>) => setUpload(s => ({ ...s, server: { ...s.server, ...p } }))
-  const patchProfile = (id: string, patch: Partial<UploadProfile>) =>
-    setUpload(s => ({ ...s, profiles: { ...s.profiles, [id]: { ...s.profiles[id], ...patch } } }))
-  const nextProfileId = (type: 'server' | 'dify') => {
+  useEffect(() => {
+    if (!serviceConfigDirty) return
+    const onBeforeUnload = (event: BeforeUnloadEvent) => event.preventDefault()
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [serviceConfigDirty])
+
+  const patchProfile = (id: string, patch: Partial<UploadProfile>) => {
+    markDirty()
+    setUpload(current => ({
+      profiles: {
+        ...current.profiles,
+        [id]: { ...current.profiles[id], ...patch } as UploadProfile,
+      },
+    }))
+  }
+  const addProfile = () => {
+    if (adapters.length === 0) return
+    markDirty()
     let index = 1
-    while (upload.profiles[`${type}_${index}`]) index += 1
-    return `${type}_${index}`
+    while (upload.profiles[`connection_${index}`]) index += 1
+    const id = `connection_${index}`
+    const adapter = adapters[0]
+    const defaults = Object.fromEntries(adapter.profile_fields
+      .filter(field => field.default !== undefined)
+      .map(field => [field.key, field.default]))
+    setUpload(current => ({
+      profiles: { ...current.profiles, [id]: { adapter: adapter.id, ...defaults } },
+    }))
   }
-  const addProfile = (type: 'server' | 'dify') => {
-    const id = nextProfileId(type)
-    setUpload(s => ({ ...s, profiles: { ...s.profiles, [id]: { type } } }))
+  const removeProfile = (id: string) => {
+    markDirty()
+    setUpload(current => {
+      const profiles = { ...current.profiles }
+      delete profiles[id]
+      return { profiles }
+    })
   }
-  const removeProfile = (id: string) => setUpload(s => {
-    const profiles = { ...s.profiles }
-    delete profiles[id]
-    return { ...s, profiles }
-  })
   const renameProfile = (oldId: string, rawId: string) => {
     const id = rawId.trim()
     if (!id || id === oldId) return
-    if (!/^[A-Za-z0-9_-]+$/.test(id)) {
-      onToast('Profile ID 只能使用字母、数字、下划线和短横线', false)
+    if (!/^[A-Za-z0-9_-]+$/.test(id) || upload.profiles[id]) {
+      onToast('Profile ID 必须唯一，且只能包含字母、数字、下划线和短横线', false)
       return
     }
-    if (upload.profiles[id]) {
-      onToast(`Profile ID ${id} 已存在`, false)
-      return
-    }
-    setUpload(s => {
-      const profiles = { ...s.profiles, [id]: s.profiles[oldId] }
+    markDirty()
+    setUpload(current => {
+      const profiles = { ...current.profiles, [id]: current.profiles[oldId] }
       delete profiles[oldId]
-      return { ...s, profiles }
+      return { profiles }
     })
   }
-
+  const changeAdapter = (id: string, adapterId: string) => {
+    const adapter = adapters.find(item => item.id === adapterId)
+    if (!adapter) return
+    markDirty()
+    const defaults = Object.fromEntries(adapter.profile_fields
+      .filter(field => field.default !== undefined)
+      .map(field => [field.key, field.default]))
+    setUpload(current => ({
+      profiles: { ...current.profiles, [id]: { adapter: adapterId, ...defaults } },
+    }))
+  }
   const save = async () => {
     setSaving(true)
     try {
       await Promise.all([saveUploadConfig(appName, upload), saveOtaConfig(appName, ota)])
-      setUploadProfiles(upload.profiles ?? {})
+      setUploadProfiles(upload.profiles)
+      setServiceConfigDirty(false)
       onToast('服务配置已保存 ✓')
       if (!embedded) onClose()
-    } catch (e: unknown) {
-      onToast(`保存失败: ${e instanceof Error ? e.message : String(e)}`, false)
-    } finally { setSaving(false) }
+    } catch (error) {
+      onToast(`保存失败: ${error instanceof Error ? error.message : String(error)}`, false)
+    } finally {
+      setSaving(false)
+    }
+  }
+  const close = () => {
+    if (serviceConfigDirty &&
+        !window.confirm('服务参数有未保存的改动，确定关闭？未保存的修改将丢失。')) return
+    setServiceConfigDirty(false)
+    onClose()
   }
 
-  return (
-    <div style={embedded ? undefined : overlay} onClick={embedded ? undefined : onClose}>
-      <div style={embedded ? {
-        ...dialog, width: '100%', maxWidth: 760, maxHeight: 'none', overflowY: 'visible',
-        boxShadow: 'none', margin: '0 auto',
-      } : dialog} onClick={e => e.stopPropagation()}>
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '14px 18px', borderBottom: '1px solid #2e3352', position: embedded ? 'static' : 'sticky',
-          top: 0, background: '#1a1d29',
-        }}>
-          <span style={{ fontWeight: 600 }}>⚙ 服务参数 — {appName}</span>
-          {!embedded && <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#9aa4b2', fontSize: 18, cursor: 'pointer' }}>✕</button>}
-        </div>
-
-        <div style={{ padding: '6px 18px 18px' }}>
-          {loading ? (
-            <div style={{ padding: 40, textAlign: 'center', color: '#9aa4b2' }}>加载中…</div>
-          ) : (
-            <>
-              {/* ── 上报服务 ── */}
-              <div style={sectionTitle}>📡 上报服务 · 默认地址（通道留空时用）</div>
-
-              <Field label="HTTP 上报默认地址 (server.url)">
-                <input style={inputStyle} value={upload.server.url}
-                  onChange={e => patchServer({ url: e.target.value })}
-                  placeholder="http://192.168.2.22:9200/api/objectInvadeDet" />
-              </Field>
-              <Field label="HTTP 超时 (秒)">
-                <NumberField style={inputStyle} def={15} value={upload.server.timeout}
-                  onChange={v => patchServer({ timeout: v ?? 15 })} />
-              </Field>
-
-              <Field label="Dify 默认地址 (dify.api_url)">
-                <input style={inputStyle} value={upload.dify.api_url}
-                  onChange={e => patchDify({ api_url: e.target.value })}
-                  placeholder="http://192.168.2.98:8015" />
-              </Field>
-              <Field label="Dify 默认 API Key">
-                <input style={inputStyle} type="text" value={upload.dify.api_key}
-                  onChange={e => patchDify({ api_key: e.target.value })}
-                  placeholder="app-xxxxxxxx" />
-              </Field>
-              <Field label="Dify 超时 (秒)">
-                <NumberField style={inputStyle} def={120} value={upload.dify.timeout}
-                  onChange={v => patchDify({ timeout: v ?? 120 })} />
-              </Field>
-
-              <div style={sectionTitle}>🔐 可复用上报连接 Profile</div>
-              <div style={{ fontSize: 11, color: '#9aa4b2', lineHeight: 1.6, marginBottom: 10 }}>
-                每一路通道的投递任务可选择不同 Profile。留空使用上面的默认连接。
-              </div>
-              {Object.entries(upload.profiles).map(([id, profile]) => (
-                <div key={id} style={{ border: '1px solid #2e3352', borderRadius: 8, padding: 12, marginBottom: 10 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px auto', gap: 8, alignItems: 'center', marginBottom: 10 }}>
-                    <input style={inputStyle} defaultValue={id} key={id}
-                      title="Profile ID（画布上报节点通过此 ID 引用）"
-                      onBlur={e => renameProfile(id, e.target.value)} />
-                    <select style={inputStyle} value={profile.type ?? 'server'}
-                      onChange={e => patchProfile(id, { type: e.target.value as 'server' | 'dify' })}>
-                      <option value="server">服务器</option>
-                      <option value="dify">Dify</option>
-                    </select>
-                    <button type="button" onClick={() => removeProfile(id)}
-                      style={{ background: '#7f1d1d', color: '#fff', border: 'none', borderRadius: 6, padding: '7px 10px', cursor: 'pointer' }}>
-                      删除
-                    </button>
-                  </div>
-                  {(profile.type ?? 'server') === 'server' ? <>
-                    <Field label="服务器上报地址">
-                      <input style={inputStyle} value={profile.url ?? ''}
-                        onChange={e => patchProfile(id, { url: e.target.value })}
-                        placeholder="http://server.example.com/api/alarm" />
-                    </Field>
-                    <Field label="HTTP 超时（秒）">
-                      <NumberField style={inputStyle} def={upload.server.timeout} value={profile.timeout ?? upload.server.timeout}
-                        onChange={v => patchProfile(id, { timeout: v ?? upload.server.timeout })} />
-                    </Field>
-                  </> : <>
-                    <Field label="Dify API 地址">
-                      <input style={inputStyle} value={profile.api_url ?? ''}
-                        onChange={e => patchProfile(id, { api_url: e.target.value })}
-                        placeholder="http://dify.example.com" />
-                    </Field>
-                    <Field label="Dify API Key">
-                      <input style={inputStyle} type="text" value={profile.api_key ?? ''}
-                        onChange={e => patchProfile(id, { api_key: e.target.value })} />
-                    </Field>
-                  </>}
-                </div>
-              ))}
-              {Object.keys(upload.profiles).length === 0 && (
-                <div style={{ padding: '14px 10px', textAlign: 'center', color: '#6b7280', fontSize: 12 }}>
-                  还没有独立连接 Profile
-                </div>
-              )}
-              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                <button type="button" onClick={() => addProfile('server')}
-                  style={{ flex: 1, background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 10px', cursor: 'pointer' }}>
-                  ＋服务器 Profile
-                </button>
-                <button type="button" onClick={() => addProfile('dify')}
-                  style={{ flex: 1, background: '#7c3aed', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 10px', cursor: 'pointer' }}>
-                  ＋Dify Profile
-                </button>
-              </div>
-
-              {/* ── OTA 升级服务 ── */}
-              <div style={sectionTitle}>⬇ 模型 OTA 升级服务</div>
-              <Field label="平台 WebSocket 地址 (platform_ws_host)">
-                <input style={inputStyle} value={ota.platform_ws_host}
-                  onChange={e => setOta(s => ({ ...s, platform_ws_host: e.target.value }))}
-                  placeholder="tunnel.memanager.cn" />
-              </Field>
-              <Field label="目标配置文件名（active=跟随当前启动配置）">
-                <input style={inputStyle} value={ota.target_config}
-                  onChange={e => setOta(s => ({ ...s, target_config: e.target.value }))}
-                  placeholder="active" />
-              </Field>
-              <div style={{ fontSize: 11, color: '#9aa4b2', lineHeight: 1.5 }}>
-                建议保持 <code>active</code>，OTA 会读取 App 根目录的 <code>run.config</code>；
-                也可显式填写 assets/ 下的配置文件名。
-              </div>
-            </>
-          )}
-        </div>
-
-        <div style={{
-          display: 'flex', justifyContent: 'flex-end', gap: 10, padding: '12px 18px',
-          borderTop: '1px solid #2e3352', position: embedded ? 'static' : 'sticky', bottom: 0, background: '#1a1d29',
-        }}>
-          {!embedded && <button onClick={onClose} disabled={saving}
-            style={{ background: '#2e3352', color: '#e6e9ef', border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>取消</button>
-          }
-          <button onClick={save} disabled={saving || loading}
-            style={{ background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
-            {saving ? '保存中…' : '💾 保存'}
-          </button>
-        </div>
-      </div>
+  const content = <div style={{
+    background: '#1a1d29', color: '#e6e9ef', borderRadius: 10,
+    width: embedded ? 'min(720px, 100%)' : 620, maxWidth: '92vw',
+    margin: embedded ? '0 auto' : undefined,
+    border: '1px solid #2e3352', overflow: 'hidden',
+  }}>
+    <div style={{ padding: '14px 18px', borderBottom: '1px solid #2e3352', fontWeight: 600 }}>
+      ⚙ 服务参数 — {appName}
     </div>
-  )
+    <div style={{ padding: '6px 18px 18px', maxHeight: embedded ? undefined : '75vh', overflowY: 'auto' }}>
+      {loading ? <div style={{ padding: 40, textAlign: 'center' }}>加载中…</div> : <>
+        <div style={sectionTitle}>📡 投递连接 Profile</div>
+        <div style={{ fontSize: 11, color: '#9aa4b2', lineHeight: 1.6, marginBottom: 12 }}>
+          每个连接明确选择一个适配器。新增适配器后，字段表单会根据适配器目录自动生成。
+        </div>
+        {Object.entries(upload.profiles).map(([id, profile]) => {
+          const adapter = adapters.find(item => item.id === profile.adapter)
+          return <div key={id} style={{
+            border: '1px solid #2e3352', borderRadius: 8, padding: 12, marginBottom: 18,
+          }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 170px auto', gap: 8, marginBottom: 10 }}>
+              <input style={inputStyle} defaultValue={id} key={id}
+                onBlur={event => renameProfile(id, event.target.value)} />
+              <select style={inputStyle} value={profile.adapter}
+                onChange={event => changeAdapter(id, event.target.value)}>
+                {adapters.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+              <button type="button" onClick={() => removeProfile(id)}
+                style={{ background: '#7f1d1d', color: '#fff', border: 0, borderRadius: 6, padding: '6px 10px' }}>
+                删除
+              </button>
+            </div>
+            {adapter?.profile_fields.map(definition => <Field key={definition.key}
+              label={`${definition.label}${definition.required ? ' *' : ''}`}>
+              <ProfileField definition={definition} value={profile[definition.key]}
+                onChange={value => patchProfile(id, { [definition.key]: value })}
+                onError={message => onToast(message, false)} onEdit={markDirty} />
+            </Field>)}
+          </div>
+        })}
+        <button type="button" onClick={addProfile} disabled={adapters.length === 0}
+          style={{ width: '100%', background: '#2563eb', color: '#fff', border: 0, borderRadius: 6, padding: 9 }}>
+          ＋新增连接
+        </button>
+
+        <div style={sectionTitle}>⬇ 模型 OTA 升级服务</div>
+        <Field label="平台 WebSocket 地址">
+          <input style={inputStyle} value={ota.platform_ws_host}
+            onChange={event => {
+              markDirty()
+              setOta(current => ({ ...current, platform_ws_host: event.target.value }))
+            }} />
+        </Field>
+        <Field label="目标配置文件名">
+          <input style={inputStyle} value={ota.target_config}
+            onChange={event => {
+              markDirty()
+              setOta(current => ({ ...current, target_config: event.target.value }))
+            }} />
+        </Field>
+      </>}
+    </div>
+    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, padding: 12, borderTop: '1px solid #2e3352' }}>
+      {serviceConfigDirty && <span style={{ marginRight: 'auto', color: '#f59e0b', fontSize: 12 }}>
+        ● 有未保存修改
+      </span>}
+      {!embedded && <button onClick={close}>取消</button>}
+      <button onClick={save} disabled={saving || loading}
+        style={{ background: '#3b82f6', color: '#fff', border: 0, borderRadius: 6, padding: '8px 16px' }}>
+        {saving ? '保存中…' : '保存'}
+      </button>
+    </div>
+  </div>
+
+  if (embedded) return content
+  return <div onClick={close} style={{
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 1000,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  }}><div onClick={event => event.stopPropagation()}>{content}</div></div>
 }

@@ -165,7 +165,7 @@ static void logic_person_dwell(ChannelContext *ctx)
     if (!state.alarmed && state.elapsed_sec >= dwell_sec)
     {
         state.alarmed = true;
-        // 在这里调用 report_alarm() 或执行该逻辑需要的快速状态变更。
+        // 在这里调用 report_event() 或执行该逻辑需要的快速状态变更。
     }
 }
 
@@ -290,7 +290,8 @@ Web 会预先拦截数字越界、`integer` 输入小数以及 `array/object` �
 
 ## Web 为什么不需要为新参数写代码
 
-构建生成器将模块 Schema 投影成 Web 兼容参数元数据，其中生成字段 `storage: "logic_parameters"` 表示该值应放在嵌套对象中。前端通用表单根据类型自动生成：
+构建生成器将模块 Schema 投影成 Web 参数元数据。所有模块参数都存放在
+`logic_parameters`，因此元数据不再需要额外的存储位置标记。前端通用表单根据类型自动生成：
 
 - 数字输入框；
 - 布尔开关；
@@ -308,14 +309,16 @@ Web 会预先拦截数字越界、`integer` 输入小数以及 `array/object` �
 
 重新加载时 `configToGraph` 再还原到该逻辑节点。切换 logic 时，Web 会清掉旧模块的参数键，并使用新模块 Schema 的默认集合，避免把旧逻辑的未知键带给新逻辑。
 
-`logic_path_sop` 的历史 `path_*` 字段和专用流程编辑器暂时保留用于兼容旧配置；以后新增的普通 SOP 扩展参数也应使用本方案，它们会显示在 SOP 面板的“模块扩展参数”区域。
+`logic_path_sop` 也没有例外：专用流程编辑器将完整 `SopFlow` 写入
+`logic_parameters.flow`。它的 Schema 类型是 `object`，并设置 `x-ui-hidden: true`，
+避免通用 JSON 输入框和专用子画布同时编辑同一份数据。
 
 ## 构建、生成和部署
 
 ### 只校验模块，不编译 C++
 
 ```bash
-cd /userdata/sop_agent/vision_analysis
+cd vision_analysis
 python3 scripts/generate_logics_catalog.py --check
 ```
 

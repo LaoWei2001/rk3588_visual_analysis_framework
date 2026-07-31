@@ -30,11 +30,11 @@ HTTP、Socket、告警清单和 `ctx->chnId` 中的 `channel_id` 均指 `config.
  │           │                         │                                │
  │  capturer/decChannel                ├─ action handler                │
  │  RTSP / USB / 文件 ────────────────▶├─ channel logic                 │
- │           │                         └─ DrawCommand / report_alarm     │
+ │           │                         └─ DrawCommand / report_event     │
  │           ▼                                  │                       │
  │  analyzer/frame_inlet                       ├────────▶ player/display │
  │  ├─ 最新显示帧                              ├────────▶ rtsp_streamer │
- │  ├─ 录像源帧缓存                            ├────────▶ alarm_report  │
+ │  ├─ 录像源帧缓存                            ├────────▶ report_event  │
  │  └─ 节流后提交 RKNN                         └────────▶ event_video   │
  │           │                                                          │
  │           ▼                                                          │
@@ -43,7 +43,7 @@ HTTP、Socket、告警清单和 `ctx->chnId` 中的 `channel_id` 均指 `config.
  └────────────────────────────────────────────────────────────────────┘
 ```
 
-当前 C++ 源码没有 `src/uploader/`。业务 logic 不再调用 `alarm_uploader_enqueue()` 或向 Redis 直接写告警。
+网络投递不在 C++ 主进程中实现。业务 logic 只提交标准事件，不直接调用上传服务或消息队列。
 
 ## 2. 单通道帧与结果流
 
@@ -171,9 +171,9 @@ config.json channels[ch].logic + 参数
 
 ```text
 channel logic
-   │ report_alarm(ctx, type, message, fields)
+   │ report_event(ctx, EventRequest)
    ▼
-alarm_report
+report_event
    │ 读取本通道 report_policy_json / report_parameters_json
    │
    ├─ 图片 delivery
@@ -187,7 +187,8 @@ alarm_report
              ├─ 报警前环形缓存
              ├─ 报警后继续收帧
              ├─ 按 video_fps 异步编码 MP4
-             └─ alarm_report_video_ready
+             ├─ report_event_video_ready
+             └─ report_event_video_failed
 ```
 
 上报目标和媒体由 `report_policy` 决定，不再使用通道级 `report_enable/server_url/dify_api_url` 字段。
@@ -200,7 +201,7 @@ logic draw_*()
       ├─ DISPLAY ─────────▶ 实时显示 / 监看
       ├─ IMAGE ───────────▶ 告警图片
       ├─ VIDEO ───────────▶ 事件视频
-      ├─ UPLOAD ──────────▶ IMAGE + VIDEO
+      ├─ MEDIA ───────────▶ IMAGE + VIDEO
       └─ ALL ─────────────▶ DISPLAY + IMAGE + VIDEO
 ```
 
@@ -294,7 +295,7 @@ app_ctrl_init
   → analyzer_deinit 并等待分发线程
   → 唤醒并等待显示线程
   → event_video_recorder_deinit
-  → alarm_report_deinit
+  → report_event_deinit
   → 停监控线程
   → app_ctrl_deinit
 ```

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Dict, Iterator, Optional
 
 from services import runtime_state
+from services.data_dir import data_dir
 
 APPS_ROOT   = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 BINARY_NAME = os.environ.get("BINARY_NAME", "vision_analysis")
@@ -520,9 +521,8 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
         env = os.environ.copy()
         control_sock.unlink(missing_ok=True)
         env["RK_CHANNEL_CONTROL_SOCKET"] = str(control_sock)
-        # 与程序包 run.sh / deploy.sh 保持一致，确保 Web 手动启动和开机恢复
-        # 都使用 App 自带依赖与 assets，而不是偶然命中板端另一版本的动态库。
         env["ASSETS_DIR"] = str(assets_dir)
+        env["EVENT_STORE_DIR"] = str(data_dir(app_name) / "event_store")
         bundled_libs = str(app_dir / "libs")
         existing_ld_path = env.get("LD_LIBRARY_PATH", "")
         env["LD_LIBRARY_PATH"] = (

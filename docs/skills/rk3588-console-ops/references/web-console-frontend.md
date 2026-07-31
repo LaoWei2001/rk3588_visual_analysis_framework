@@ -6,18 +6,18 @@
 
 ```
 浏览器 (React SPA, 构建产物 dist/)
-   │  HTTP /api/*  (axios, 带 Bearer token)
+   │  HTTP /api/*  (axios 通常带 Bearer token；channel action POST 当前例外)
    │  WS   /ws/*   (WebSocket, token 走 ?token= 查询参数)
    ▼
 后端 FastAPI (:8080, rk3588-console.service, User=root)
-   ├ auth_middleware: 校验 /api/* 的 token(/api/auth/login 例外)
+   ├ auth_middleware: 校验 /api/* 的 token（login 与 channel action POST 例外）
    ├ routers/*.py: 业务路由
    └ 把 frontend/dist 当静态站点托管(SPA fallback 到 index.html)
 ```
 
 - **前端不直接碰板子**,只调后端的 `/api` 和 `/ws`。要让前端能做新事,通常是「后端加一个路由 + 前端加一个 api 调用 + 一个组件」。
 - **构建产物才是线上跑的东西**:你改 `src/` 后必须重新 `npm run build`(`install.sh` 会做),浏览器还要**硬刷新**清缓存。详见 §五。
-- **登录态**:`authStore` 里的 token 持久化在 `localStorage('rk3588-auth')`;每个 `/api` 请求由 `api/client.ts` 的拦截器自动带 `Authorization: Bearer`。
+- **登录态**：`authStore` 里的 token 持久化在 `localStorage('rk3588-auth')`；前端 `/api` 请求由 `api/client.ts` 的拦截器自动带 `Authorization: Bearer`。通道 Action POST 是项目有意保留的免登录例外，方便 PLC 和其它设备联动；不要把它误判为鉴权遗漏。
 
 ## 二、目录结构与各部分职责(`web_console/frontend/src/`)
 
@@ -38,8 +38,8 @@
 - **调后端一律走 `api/client.ts`**:在那里加一个导出函数(带 TS 类型),组件里 import 来用。不要在组件里散落裸 `fetch`/`axios`——拦截器的鉴权和 401 处理都在 client 里。
 - **WebSocket 不走 axios**:手动 `new WebSocket`,且 **token 必须走查询参数** `?token=...`。`/ws/terminal`、`/ws/logs/*` 在各自 WebSocket 路由中调用 `get_session()` 校验，不经过 HTTP `auth_middleware`。MJPEG `<img>` 请求同样不能方便地带 Authorization 头，但它属于 `/api/*` HTTP 请求，由 `auth_middleware` 从 `?token=` 取 token。范例见 `pages/terminalSession.ts`、日志路由和 `streamUrl()`。
 - **状态用 zustand store**:跨组件共享、需要持久化的状态放 `store/`。`authStore` 是范本(`persist` 中间件 → localStorage)。
-- **编辑器是“画布即配置”**：`EditorPage` 用 React Flow 画节点，`configToGraph`/`graphToConfig` 在 `config.json` 和画布之间转换。逻辑节点的可调参数由模块 `logic.json.parameters` 驱动，正常打包聚合成 App 根目录 `logics.json`；后端 `/apps/{name}/logics` 透传生成物，`NodeConfigPanel.LogicForm` 按生成的 `param.type/storage` 自动渲染并把值保存到 `logic_parameters`。给普通模块参数增加 Schema 属性时前端无需改代码。逻辑名称只能从清单下拉选择；未知配置会标记警告，而 C++ 也会在 Schema 校验阶段拒绝未编译逻辑。完整机制见 `adding-config-parameter.md` 和 `logic-naming-and-registration.md`。
-- **上报节点是一节点一 delivery**：`NodeConfigPanel.ReportForm` 当前只编辑该节点的第一条 delivery；`graphToConfig` 把同一通道连接的多个上报节点合并为 `report_policy.deliveries`。类型只提供图片→服务器、图片→Dify、视频→Dify。地址和密钥来自“服务配置”的默认连接/Profile，画布只保存 `profile_id`。Dify 字段选择来自 `logics.json.report_fields`；服务器使用固定 JSON，不消费字段映射。断开全部上报节点时写入 `enabled=false, deliveries=[]`。
+- **编辑器是“画布即配置”**：`EditorPage` 用 React Flow 画节点，`configToGraph`/`graphToConfig` 在 `config.json` 和画布之间转换。逻辑节点的可调参数由模块 `logic.json.parameters` 驱动，正常打包聚合成 App 根目录 `logics.json`；后端 `/apps/{name}/logics` 透传生成物，`NodeConfigPanel.LogicForm` 按生成的 `param.type` 自动渲染并把值统一保存到 `logic_parameters`。给普通模块参数增加 Schema 属性时前端无需改代码。逻辑名称只能从清单下拉选择；未知配置会标记警告，而 C++ 也会在 Schema 校验阶段拒绝未编译逻辑。完整机制见 `adding-config-parameter.md` 和 `logic-naming-and-registration.md`。
+- **上报节点是一节点一 delivery**：`ReportForm` 编辑该节点的第一条 delivery；`graphToConfig` 把同一通道连接的多个上报节点合并为 `report_policy.deliveries`。Profile 表单来自 adapter catalog，地址和密钥只在服务 Profile 中保存；节点选择 Profile 与 `services/upload/contracts/*.json` 中的接口契约，画布只保存 `profile_id`、`contract_id` 和 C++ 必需的媒体快照，不复制 adapter/mapping/request/success。`ReportContractEditor` 从当前 `logics.json.report_fields` 动态生成算法 source 下拉项，并合并系统事件、媒体和固定值；保存走 `PUT /apps/{name}/report-contracts/{id}`。断开全部上报节点时写入 `enabled=false, deliveries=[]`。
 
 ## 四、端到端:常见两类改动怎么做
 

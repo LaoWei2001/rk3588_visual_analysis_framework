@@ -74,18 +74,6 @@ bool ConfigValidator::validate_global(const AppConfig &cfg, std::vector<Validati
         valid = false;
     }
 
-    // 阈值
-    if (cfg.obj_thresh < 0.0f || cfg.obj_thresh > 1.0f)
-    {
-        errors.push_back({"global.obj_thresh", "必须在[0, 1]范围内"});
-        valid = false;
-    }
-    if (cfg.nms_thresh < 0.0f || cfg.nms_thresh > 1.0f)
-    {
-        errors.push_back({"global.nms_thresh", "必须在[0, 1]范围内"});
-        valid = false;
-    }
-
     // FPS
     if (cfg.max_fps <= 0)
     {
@@ -231,18 +219,6 @@ bool ConfigValidator::validate_critical(const AppConfig &cfg, std::vector<Valida
 {
     errors.clear();
     bool valid = true;
-
-    // 阈值范围 — 阻断型
-    if (cfg.obj_thresh < 0.0f || cfg.obj_thresh > 1.0f)
-    {
-        errors.push_back({"global.obj_thresh", "必须在[0, 1]范围内"});
-        valid = false;
-    }
-    if (cfg.nms_thresh < 0.0f || cfg.nms_thresh > 1.0f)
-    {
-        errors.push_back({"global.nms_thresh", "必须在[0, 1]范围内"});
-        valid = false;
-    }
 
     // 通道关键参数
     valid &= validate_channels_critical(cfg, errors);

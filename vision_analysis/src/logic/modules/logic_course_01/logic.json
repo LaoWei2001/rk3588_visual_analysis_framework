@@ -1,5 +1,6 @@
 {
     "label": "课程1：自定义文字和图形叠加",
+    "event_types": [],
     "parameters": {
         "type": "object",
         "additionalProperties": false,

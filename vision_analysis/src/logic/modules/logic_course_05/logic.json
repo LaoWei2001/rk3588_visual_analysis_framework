@@ -1,5 +1,6 @@
 {
     "label": "课程5:ROI区域与检测框的交互(前4节课的内容总结)",
+    "event_types": [],
     "parameters": {
         "type": "object",
         "additionalProperties": false,

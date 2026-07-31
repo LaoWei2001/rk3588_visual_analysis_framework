@@ -1,6 +1,6 @@
 import { Node, Edge } from '@xyflow/react'
 import { getSrcType } from './streamSource'
-import { sopFlowToConfig, type SopFlow } from './sopFlow'
+import { sopFlowToParameters, type SopFlow } from './sopFlow'
 import type { GlobalLogicEntry } from '../components/GlobalLogicsPanel'
 import type { GlobalSettingsData } from '../components/GlobalSettingsPanel'
 import type { Zone } from '../store/roiStore'
@@ -159,9 +159,9 @@ export function graphToConfig(
       const delivery = configured[0] ?? {
         id: `delivery_${reportNodes[reportIndex].id}`,
         enabled: true,
-        media: 'image',
-        target: 'server',
-        inputs: [],
+        profile_id: '',
+        contract_id: '',
+        media: [],
       }
       return { policy, delivery }
     })
@@ -171,19 +171,15 @@ export function graphToConfig(
       const id = configuredId && !usedDeliveryIds.has(configuredId)
         ? configuredId : `delivery_${reportNodes[reportIndex].id}`
       usedDeliveryIds.add(id)
-      const inputs = item.delivery.target === 'server' ? [] : Array.isArray(item.delivery.inputs)
-        ? (item.delivery.inputs as Record<string, unknown>[])
-            .filter(input => String(input.key ?? '').trim().length > 0)
-        : []
       const normalized: Record<string, unknown> = {
         ...item.delivery,
         id,
         enabled: item.delivery.enabled !== false,
-        inputs,
       }
-      if (isSop && normalized.target === 'dify' && !String(normalized.event_variable ?? '').trim()) {
-        normalized.event_variable = 'event_json'
-      }
+      delete normalized.mapping
+      delete normalized.request
+      delete normalized.success
+      delete normalized.adapter
       return normalized
     })
     const reportPolicy: Record<string, unknown> = reportEnabled
@@ -191,8 +187,13 @@ export function graphToConfig(
       : { enabled: false, deliveries: [] }
 
     // 视频录制参数取自视频上报节点；图片/视频叠加选项分别取对应媒体节点。
-    const imagePolicy = reportPolicies.find(item => item.delivery.media === 'image')?.policy
-    const videoPolicy = reportPolicies.find(item => item.delivery.media === 'video')?.policy
+    const imagePolicy = reportPolicies.find(item =>
+      Array.isArray(item.delivery.media)
+      && (item.delivery.media.includes('annotated_image') || item.delivery.media.includes('raw_image'))
+    )?.policy
+    const videoPolicy = reportPolicies.find(item =>
+      Array.isArray(item.delivery.media) && item.delivery.media.includes('video')
+    )?.policy
     if (imagePolicy?.image_overlay != null) reportPolicy.image_overlay = imagePolicy.image_overlay
     if (videoPolicy) {
       for (const key of ['video_overlay', 'video_pre_sec', 'video_post_sec', 'video_fps', 'merge_window_sec']) {
@@ -215,21 +216,12 @@ export function graphToConfig(
       ? Object.assign({}, ...reportData.map(data =>
           data.report_parameters && typeof data.report_parameters === 'object' ? data.report_parameters : {}))
       : {}
-    const moduleParameters = l.logic_parameters && typeof l.logic_parameters === 'object' && !Array.isArray(l.logic_parameters)
+    let moduleParameters = l.logic_parameters && typeof l.logic_parameters === 'object' && !Array.isArray(l.logic_parameters)
       ? l.logic_parameters as Record<string, unknown> : {}
-    if (hasLogic) ch.logic_parameters = moduleParameters
     if (hasLogic && isSop) {
-      // SOP 节点: 把流程序列化成 path_* 通道字段(逻辑集中在 sopFlowToConfig, 与普通逻辑参数解耦)
-      Object.assign(ch, sopFlowToConfig(l as unknown as SopFlow))
-      // 连了 server 型「上报配置」节点才上报 SOP 报警(顺序错误/漏检); 仅屏幕显示则不连
-      } else if (hasLogic) {
-      // 兼容旧版通道顶层逻辑字段；新模块参数统一由上面的 logic_parameters 对象保存。
-      // 上报策略由上报节点负责，这里不重复写入逻辑参数。
-        Object.entries(l).forEach(([k, v]) => {
-          if (k === 'logic' || k === 'logic_parameters') return
-        if (v != null) ch[k] = v
-      })
+      moduleParameters = sopFlowToParameters(l as unknown as SopFlow)
     }
+    if (hasLogic) ch.logic_parameters = moduleParameters
 
     // Per-channel tracker overrides (仅 YOLO 通道; 传统通道 m={} 自然跳过)
     if (m.tracker_enable   != null) ch.tracker_enable   = m.tracker_enable
@@ -269,9 +261,6 @@ export function graphToConfig(
     max_fps:            g.max_fps            ?? 25,
     queue_size:         g.queue_size         ?? 1,
     channel_threads:    g.channel_threads    ?? 3,
-    obj_thresh:         g.obj_thresh         ?? 0.3,
-    nms_thresh:         g.nms_thresh         ?? 0.45,
-    detect_classes:     g.detect_classes     ?? [],
     tracker_enable:     g.tracker_enable     ?? 1,
     tracker_iou_thresh: g.tracker_iou_thresh ?? 0.3,
     tracker_max_miss:   g.tracker_max_miss   ?? 30,

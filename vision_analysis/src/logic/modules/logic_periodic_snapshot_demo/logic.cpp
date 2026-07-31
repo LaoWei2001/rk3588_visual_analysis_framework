@@ -70,16 +70,18 @@ static void logic_periodic_snapshot_demo(ChannelContext *ctx)
     state.next_report_ms = now_ms + interval_ms;
 
     const uint64_t next_sequence = state.created_event_count + 1;
-    AlarmRequest request;
-    request.type = "periodic_snapshot_demo";
+    EventRequest request;
+    request.event_type = "periodic_snapshot_demo";
     request.message = "周期截图上报演示";
-    request.merge_enabled = false; /* 每个周期都创建独立截图，不受合并窗口影响。 */
-    request.fields.set_number("display_number", static_cast<double>(display_number));
-    request.fields.set_number("report_interval_sec", static_cast<double>(interval_ms / 1000ULL));
-    request.fields.set_number("report_sequence", static_cast<double>(next_sequence));
+    request.merge_mode = EventMergeMode::NEVER; /* 每个周期都创建独立截图，不受合并窗口影响。 */
+    request.fields = {
+        event_field("display_number", display_number),
+        event_field("report_interval_sec", interval_ms / 1000ULL),
+        event_field("report_sequence", next_sequence),
+    };
 
-    const std::string event_id = alarm_report(ctx, request);
-    if (!event_id.empty())
+    const EventReportResult report = report_event(ctx, request);
+    if (report.accepted())
     {
         state.created_event_count = next_sequence;
         state.last_failure_log_ms = 0;
@@ -91,8 +93,8 @@ static void logic_periodic_snapshot_demo(ChannelContext *ctx)
     {
         fprintf(stderr,
                 "[logic_periodic_snapshot_demo][ch%02d] screenshot event was not created; "
-                "configure an enabled image delivery and check the alarm outbox\n",
-                ctx->chnId);
+                "status=%s detail=%s\n",
+                ctx->chnId, event_report_status_name(report.status), report.detail.c_str());
         state.last_failure_log_ms = now_ms;
     }
 }

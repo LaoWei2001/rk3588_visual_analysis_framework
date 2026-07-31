@@ -11,7 +11,6 @@ APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 
 router = APIRouter()
 
-KNOWN_GLOBAL_LOGICS = ["global_default"]
 KNOWN_MODEL_TYPES = ["yolov5", "yolov8_det", "yolov8_pose", "yolov5_seg"]
 
 
@@ -52,7 +51,6 @@ async def console_info():
         "version": "1.0.0",
         "apps_root": str(APPS_ROOT),
         "binary_name": os.environ.get("BINARY_NAME", "vision_analysis"),
-        "known_global_logics": KNOWN_GLOBAL_LOGICS,
         "known_model_types": KNOWN_MODEL_TYPES,
     }
 
@@ -67,24 +65,22 @@ async def get_app_logics(name: str):
     app_dir = _app_dir(name)
     errors = []
 
-    # 1. logics.json（logic ID 来自 REGISTER_LOGIC(func)，其余元数据由模块 logic.json 聚合）
+    # 1. logics.json（通道/全局 ID 来自各自注册宏，其余元数据由模块 logic.json 聚合）
     logics_file = app_dir / "logics.json"
     if logics_file.exists():
         try:
             data = json.loads(logics_file.read_text(encoding="utf-8"))
             channel_logics = data.get("channel_logics") if isinstance(data, dict) else None
+            global_logics = data.get("global_logics") if isinstance(data, dict) else None
             if not isinstance(channel_logics, list):
                 errors.append("logics.json 缺少有效的 channel_logics 数组")
+            elif not isinstance(global_logics, list):
+                errors.append("logics.json 缺少有效的 global_logics 数组")
             else:
-                global_logics = data.get("global_logics", KNOWN_GLOBAL_LOGICS)
                 model_types = data.get("model_types", KNOWN_MODEL_TYPES)
                 return {
                     "channel_logics": channel_logics,
-                    "global_logics": (
-                        global_logics
-                        if isinstance(global_logics, list)
-                        else KNOWN_GLOBAL_LOGICS
-                    ),
+                    "global_logics": global_logics,
                     "model_types": (
                         model_types
                         if isinstance(model_types, list)
@@ -102,20 +98,30 @@ async def get_app_logics(name: str):
     binary_path = app_dir / binary_name
     if binary_path.exists():
         try:
-            result = subprocess.run(
+            channel_result = subprocess.run(
                 [str(binary_path), "--list-logics"],
                 capture_output=True, text=True, timeout=3, cwd=str(app_dir),
             )
-            if result.returncode == 0:
-                lines = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
+            global_result = subprocess.run(
+                [str(binary_path), "--list-global-logics"],
+                capture_output=True, text=True, timeout=3, cwd=str(app_dir),
+            )
+            if channel_result.returncode == 0 and global_result.returncode == 0:
+                channel_lines = [
+                    ln.strip() for ln in channel_result.stdout.splitlines() if ln.strip()
+                ]
+                global_lines = [
+                    ln.strip() for ln in global_result.stdout.splitlines() if ln.strip()
+                ]
                 return {
-                    "channel_logics": lines,
-                    "global_logics":  KNOWN_GLOBAL_LOGICS,
+                    "channel_logics": channel_lines,
+                    "global_logics": global_lines,
                     "model_types":    KNOWN_MODEL_TYPES,
                     "source": "binary",
                 }
             errors.append(
-                f"二进制 --list-logics 执行失败（退出码 {result.returncode}）"
+                "二进制 logic 清单读取失败"
+                f"（channel={channel_result.returncode}, global={global_result.returncode}）"
             )
         except subprocess.TimeoutExpired:
             errors.append("二进制 --list-logics 执行超时")
@@ -127,7 +133,7 @@ async def get_app_logics(name: str):
     # 不返回静态逻辑名，避免已删除模块重新出现在 Web 下拉框中。
     return {
         "channel_logics": [],
-        "global_logics":  KNOWN_GLOBAL_LOGICS,
+        "global_logics":  [],
         "model_types":    KNOWN_MODEL_TYPES,
         "source": "unavailable",
         "error": "；".join(errors),

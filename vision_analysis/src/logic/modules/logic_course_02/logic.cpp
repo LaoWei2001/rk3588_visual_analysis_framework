@@ -18,6 +18,9 @@ static void logic_course_02(ChannelContext *ctx)
     draw_text(ctx, str1, cv::Point(20, 100), cv::Scalar(255, 255, 255), 0.8, 1, DrawCommand::ALL);
 
     // 开发者添加的支持web界面修改的变量的调用(字符串)
+    // 自定义可修改参数支持这些类型, 在logic.json中添加
+    // 自定义可修改参数支持这些类型: string / number / integer / boolean / array / object
+    // 读取方式: ctx->param_string / param_float / param_int / param_bool / param_json
     sprintf(str2, "测试文本为:%s", ctx->param_string("test_string").c_str());
     draw_text(ctx, str2, cv::Point(20, 135), cv::Scalar(255, 255, 255), 0.8, 1, DrawCommand::ALL);
 

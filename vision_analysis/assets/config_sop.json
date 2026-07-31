@@ -8,9 +8,6 @@
     "max_fps": 25,
     "queue_size": 1,
     "channel_threads": 3,
-    "obj_thresh": 0.3,
-    "nms_thresh": 0.45,
-    "detect_classes": [],
     "tracker_enable": 1,
     "tracker_iou_thresh": 0.3,
     "tracker_max_miss": 30,
@@ -49,13 +46,20 @@
         "enabled": true,
         "deliveries": [
           {
-            "id": "delivery_report-2-1783391826181",
+            "id": "sop_normal_data",
             "enabled": true,
-            "media": "video",
-            "target": "dify",
-            "inputs": [],
-            "file_variable": "video",
-            "event_variable": "event_json"
+            "profile_id": "inspection_dify",
+            "contract_id": "dify_sop_data",
+            "media": [],
+            "when": {"event_types": ["sop_normal"]}
+          },
+          {
+            "id": "sop_violation_video",
+            "enabled": true,
+            "profile_id": "inspection_dify",
+            "contract_id": "dify_sop_video",
+            "media": ["video"],
+            "when": {"event_types": ["sop_violation"]}
           }
         ],
         "parameters": [],
@@ -67,27 +71,32 @@
         "merge_window_sec": 5
       },
       "report_parameters": {},
-      "path_target_label": "circle",
-      "path_reset_sec": 3,
-      "path_end_mode": "leave",
-      "path_end_zone": "",
-      "path_total_min_sec": 0,
-      "path_total_max_sec": 0,
-      "path_trigger_mode": "external",
-      "path_trigger_mandatory": true,
-      "path_report_normal": false,
-      "path_sequence": "区域1,区域2,区域3,区域4",
-      "path_enter_list": "0.5,0.5,0.5,0.5",
-      "path_dwell_list": "0,0,0,0",
-      "path_dwell_max_list": "0,0,0,0",
-      "path_edges": "0-1,1-2,2-3",
-      "path_entries": "0",
-      "path_exits": "3",
-      "path_edge_limits": "",
-      "path_step_x_list": "-270,-26,176,386",
-      "path_step_y_list": "-20,-18,-17,-10",
-      "path_end_x": 617,
-      "path_end_y": -18,
+      "logic_parameters": {
+        "flow": {
+          "target_label": "circle",
+          "reset_sec": 3,
+          "end_mode": "leave",
+          "end_zone": "",
+          "end_dwell_sec": 0,
+          "total_min_sec": 0,
+          "total_max_sec": 0,
+          "trigger_mode": "external",
+          "trigger_mandatory": true,
+          "report_normal": false,
+          "steps": [
+            {"zoneName": "区域1", "enter_sec": 0.5, "dwell_min_sec": 0, "dwell_max_sec": 0, "x": -270, "y": -20},
+            {"zoneName": "区域2", "enter_sec": 0.5, "dwell_min_sec": 0, "dwell_max_sec": 0, "x": -26, "y": -18},
+            {"zoneName": "区域3", "enter_sec": 0.5, "dwell_min_sec": 0, "dwell_max_sec": 0, "x": 176, "y": -17},
+            {"zoneName": "区域4", "enter_sec": 0.5, "dwell_min_sec": 0, "dwell_max_sec": 0, "x": 386, "y": -10}
+          ],
+          "edges": [[0, 1], [1, 2], [2, 3]],
+          "edge_limits": [],
+          "entries": [0],
+          "exits": [3],
+          "end_x": 617,
+          "end_y": -18
+        }
+      },
       "roi_zones": [
         {
           "name": "区域1",

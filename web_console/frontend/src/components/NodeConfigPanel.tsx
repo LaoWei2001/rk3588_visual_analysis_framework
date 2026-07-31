@@ -10,11 +10,12 @@ import { useConsoleStore } from '../store/consoleStore'
 import { useROIStore, type Zone } from '../store/roiStore'
 import {
   fetchAppLogics, asLogicDef, uploadAsset, deleteAsset,
-  type LogicDef, type LogicParam, type ReportField, type BusinessField,
+  type LogicDef, type LogicParam,
 } from '../api/client'
 import { getSrcType, SRC_TYPES } from '../utils/streamSource'
 import AssetPicker         from './AssetPicker'
 import NumberField         from './NumberField'
+import ReportForm          from './ReportForm'
 import './NodeConfigPanel.css'
 
 // Stable empty-array constant — MUST NOT be an inline `[]` literal inside a Zustand selector,
@@ -429,11 +430,7 @@ function LogicForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
     const patch: Record<string, unknown> = { logic: name }
     const moduleParameters: Record<string, unknown> = {}
     ;(def?.params ?? []).forEach(p => {
-      if (p.storage === 'logic_parameters') {
-        if (p.default !== undefined) moduleParameters[p.key] = p.default
-      } else if (d[p.key] === undefined && p.default !== undefined) {
-        patch[p.key] = p.default
-      }
+      if (p.default !== undefined) moduleParameters[p.key] = p.default
     })
     patch.logic_parameters = moduleParameters
     onUpdate(node.id, patch)
@@ -474,11 +471,6 @@ function LogicForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
       {/* 动态渲染该 logic 的可调参数（来自 logics.json） */}
       <LogicParameterFields node={node} params={params} onUpdate={onUpdate} />
 
-      {curDef?.report && (
-        <div className="ncp-hint">
-          → 该逻辑需要连接「上报配置」节点（{curDef.report === 'dify' ? 'Dify' : 'HTTP 服务器'}）
-        </div>
-      )}
     </div>
   )
 }
@@ -493,22 +485,17 @@ function LogicParameterFields({ node, params, onUpdate }: {
     !Array.isArray(data.logic_parameters)
     ? data.logic_parameters as Record<string, unknown> : {}
 
-  const valueOf = (param: LogicParam): unknown => param.storage === 'logic_parameters'
-    ? moduleParameters[param.key] : data[param.key]
+  const valueOf = (param: LogicParam): unknown => moduleParameters[param.key]
   const setParam = (param: LogicParam, value: unknown) => {
-    if (param.storage === 'logic_parameters') {
-      onUpdate(node.id, {
-        logic_parameters: { ...moduleParameters, [param.key]: value },
-      })
-    } else {
-      onUpdate(node.id, { [param.key]: value })
-    }
+    onUpdate(node.id, {
+      logic_parameters: { ...moduleParameters, [param.key]: value },
+    })
   }
 
   return <>
     {params.map(param => (
       <ParamField
-        key={`${param.storage ?? 'channel'}:${param.key}`}
+        key={param.key}
         param={param}
         value={valueOf(param)}
         onChange={value => setParam(param, value)}
@@ -635,316 +622,7 @@ function JsonParamField({ param, value, onChange, label, hint }: {
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Report form
-// ─────────────────────────────────────────────────────────────────────────────
-type DeliveryInput = { key: string; source: string; value?: unknown; type?: string; required?: boolean }
-type EventFieldMapping = {
-  source: string
-  target: string
-  type?: BusinessField['type']
-  required?: boolean
-}
-type Delivery = {
-  id: string; enabled: boolean; media: 'image' | 'video'; target: 'server' | 'dify'
-  profile_id?: string; file_variable?: string; file_input_mode?: 'single' | 'list'; event_variable?: string; inputs: DeliveryInput[]
-  event_fields?: EventFieldMapping[]
-  server_source?: string; server_event_type?: string
-}
-
-type SourceField = ReportField & { source: string }
-const BUILTIN_REPORT_FIELDS: SourceField[] = [
-  { source: 'event.id', key: 'event_id', type: 'string', label: '报警事件ID' },
-  { source: 'event.type', key: 'alarm_type', type: 'string', label: '报警类型' },
-  { source: 'event.message', key: 'message', type: 'string', label: '报警说明' },
-  { source: 'event.trigger_time', key: 'trigger_time', type: 'number', label: '报警时间戳' },
-  { source: 'channel.id', key: 'channel_id', type: 'number', label: '视频通道ID' },
-]
-
-function ReportForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'] }) {
-  const d     = node.data as Record<string, unknown>
-  const appName = useEditorStore(s => s.appName)
-  const uploadProfiles = useEditorStore(s => s.uploadProfiles)
-  const [logicDefs, setLogicDefs] = useState<LogicDef[]>([])
-  useEffect(() => {
-    if (!appName) return
-    fetchAppLogics(appName)
-      .then(result => setLogicDefs(result.channel_logics.map(asLogicDef)))
-      .catch(() => setLogicDefs([]))
-  }, [appName])
-
-  const set   = (k: string, v: unknown) => onUpdate(node.id, { [k]: v })
-  const policy = (d.report_policy && typeof d.report_policy === 'object'
-    ? d.report_policy : {}) as Record<string, unknown>
-  const storedDeliveries = (Array.isArray(policy.deliveries) ? policy.deliveries : []) as Delivery[]
-  const deliveries: Delivery[] = [storedDeliveries[0] ?? {
-    id: `delivery_${node.id}`, enabled: true, media: 'image', target: 'server', inputs: [],
-  }]
-  const delivery = deliveries[0]
-
-  const logicName = String(d.logic_name ?? '')
-  const logicDef = logicDefs.find(item => item.name === logicName)
-  const sourceFields: SourceField[] = [
-    ...BUILTIN_REPORT_FIELDS,
-    ...((logicDef?.report_fields ?? []).map(field => ({ ...field, source: `logic.${field.key}` }))),
-  ]
-  const businessFields = logicDef?.business_fields ?? []
-  const hasExplicitEventFields = Array.isArray(delivery.event_fields)
-  const effectiveEventFields: EventFieldMapping[] = hasExplicitEventFields
-    ? delivery.event_fields ?? []
-    : businessFields
-        .filter(field => field.default_selected !== false)
-        .map(field => ({
-          source: field.path,
-          target: field.path,
-          type: field.type,
-          required: field.required === true,
-        }))
-  const allEventFieldsSelected = businessFields.length > 0
-    && businessFields.every(field => effectiveEventFields.some(item => item.source === field.path))
-
-  const setPolicy = (patch: Record<string, unknown>) => set('report_policy', { ...policy, ...patch })
-  const setDeliveries = (next: Delivery[]) => setPolicy({ deliveries: next.slice(0, 1) })
-  const patchDelivery = (patch: Partial<Delivery>) => setDeliveries([{ ...delivery, ...patch }])
-  const replaceInput = (source: string, next?: DeliveryInput) => {
-    const inputs = (delivery.inputs ?? []).filter(item => item.source !== source)
-    if (next) inputs.push(next)
-    patchDelivery({ inputs })
-  }
-  const replaceEventField = (source: string, next?: EventFieldMapping) => {
-    const mappings = effectiveEventFields.filter(item => item.source !== source)
-    if (next) mappings.push(next)
-    const fieldOrder = new Map(businessFields.map((field, index) => [field.path, index]))
-    mappings.sort((a, b) => (fieldOrder.get(a.source) ?? 9999) - (fieldOrder.get(b.source) ?? 9999))
-    patchDelivery({ event_fields: mappings })
-  }
-  const toggleAllEventFields = () => patchDelivery({
-    event_fields: allEventFieldsSelected ? [] : businessFields.map(field => {
-      const current = effectiveEventFields.find(item => item.source === field.path)
-      return {
-        source: field.path,
-        target: current?.target || field.path,
-        type: field.type,
-        required: field.required === true,
-      }
-    }),
-  })
-  const clearOptionalEventFields = () => patchDelivery({
-    event_fields: businessFields
-      .filter(field => field.required)
-      .map(field => ({
-        source: field.path,
-        target: effectiveEventFields.find(item => item.source === field.path)?.target || field.path,
-        type: field.type,
-        required: true,
-      })),
-  })
-  const independentMappingRows = sourceFields.map(field => {
-    const mapping = (delivery.inputs ?? []).find(item => item.source === field.source)
-    return <div key={field.source} className="report-mapping-row">
-      <div className="report-map-main">
-        <div className="report-map-field">
-          <label>算法/事件参数（只读）</label>
-          <input disabled value={`${field.label ?? field.key} · ${field.key} (${field.type})`} />
-        </div>
-        <div className="report-map-field">
-          <label>Dify 顶层输入变量名（留空则不单独发送）</label>
-          <input value={mapping?.key ?? ''} placeholder={field.key}
-            onChange={e => replaceInput(field.source, e.target.value.trim() ? {
-              key: e.target.value, source: field.source, type: field.type,
-            } : undefined)} />
-        </div>
-      </div>
-    </div>
-  })
-  const reportKind = delivery.target === 'server' ? 'server_image'
-    : delivery.media === 'video' ? 'dify_video' : 'dify_image'
-  const changeKind = (kind: string) => {
-    const media: 'image' | 'video' = kind === 'dify_video' ? 'video' : 'image'
-    const target: 'server' | 'dify' = kind === 'server_image' ? 'server' : 'dify'
-    const profile = uploadProfiles[delivery.profile_id ?? '']
-    patchDelivery({
-      media, target,
-      profile_id: profile?.type && profile.type !== target ? '' : delivery.profile_id,
-      file_variable: target === 'dify' ? (media === 'video' ? 'video' : 'image') : undefined,
-      file_input_mode: target === 'dify' ? 'single' : undefined,
-      event_variable: target === 'dify' && logicName === 'logic_path_sop' ? 'event_json' : undefined,
-      inputs: [],
-    })
-  }
-
-  return (
-    <div className="ncp-form">
-      <div className="ncp-hint">一个节点对应一种固定投递。SOP业务JSON可在这里选择源字段、修改最终JSON路径并映射到Dify输入变量。</div>
-      <div className="report-delivery-card">
-          <F label="上报类型">
-            <select value={reportKind} onChange={e => changeKind(e.target.value)}>
-              <option value="dify_image">图片 → Dify 工作流</option>
-              <option value="dify_video">视频片段 → Dify 工作流</option>
-              <option value="server_image">图片 → 业务服务器</option>
-            </select>
-          </F>
-          <F label="发送连接（在“服务配置”中管理地址）">
-            <select value={delivery.profile_id ?? ''}
-              onChange={e => patchDelivery({ profile_id: e.target.value })}>
-              <option value="">使用默认{delivery.target === 'server' ? '服务器' : ' Dify'}配置</option>
-              {delivery.profile_id && !uploadProfiles[delivery.profile_id] && (
-                <option value={delivery.profile_id}>{delivery.profile_id}（Profile 不存在）</option>
-              )}
-              {Object.entries(uploadProfiles)
-                .filter(([, profile]) => !profile.type || profile.type === delivery.target)
-                .map(([id, profile]) => (
-                  <option key={id} value={id}>
-                    {id} — {delivery.target === 'server' ? (profile.url || '未配置地址') : (profile.api_url || '未配置地址')}
-                  </option>
-                ))}
-            </select>
-          </F>
-          {delivery.target === 'dify' ? <>
-            <F label="Dify 文件输入变量名">
-              <input value={delivery.file_variable ?? (delivery.media === 'video' ? 'video' : 'image')}
-                onChange={e => patchDelivery({ file_variable: e.target.value })} />
-            </F>
-            <F label="Dify 文件变量类型">
-              <select value={delivery.file_input_mode ?? 'single'}
-                onChange={e => patchDelivery({ file_input_mode: e.target.value as 'single' | 'list' })}>
-                <option value="single">单文件（File）</option>
-                <option value="list">文件列表（Array[File]）</option>
-              </select>
-            </F>
-            {logicName === 'logic_path_sop' && (
-              <F label="Dify SOP业务JSON变量名">
-                <input value={delivery.event_variable ?? 'event_json'} placeholder="event_json"
-                  onChange={e => patchDelivery({ event_variable: e.target.value.trim() })} />
-              </F>
-            )}
-            {!logicName && <div className="report-mapping-help">请先把上报节点连接到逻辑节点。</div>}
-            {logicName && !logicDef && <div className="report-mapping-help">逻辑 {logicName} 未在 logics.json 声明字段。</div>}
-            {logicName === 'logic_path_sop' && logicDef && <>
-              <div className="report-section-title">SOP业务JSON字段选择与路径映射</div>
-              <div className="report-mapping-help">
-                字段目录由当前 App 的 <code>logics.json</code> 自动提供。勾选项会组装进
-                <code>{delivery.event_variable ?? 'event_json'}</code>；“最终JSON路径”支持点号嵌套，
-                例如将 <code>sop.zone_history</code> 改为 <code>process.history</code>。
-                {!hasExplicitEventFields && ' 当前为兼容模式：未保存显式映射时默认发送完整业务JSON。'}
-              </div>
-              {businessFields.length > 0 ? <>
-                <div className="report-event-actions">
-                  <span>已选择 {effectiveEventFields.length} / {businessFields.length}</span>
-                  <button type="button" className="report-event-button" onClick={toggleAllEventFields}>
-                    {allEventFieldsSelected ? '取消全选' : '全选'}
-                  </button>
-                  <button type="button" className="report-event-button" onClick={clearOptionalEventFields}>只保留必填</button>
-                  <button type="button" className="report-event-button"
-                    onClick={() => patchDelivery({ event_fields: undefined })}>恢复默认</button>
-                </div>
-                {businessFields.map(field => {
-                  const mapping = effectiveEventFields.find(item => item.source === field.path)
-                  const selected = Boolean(mapping)
-                  return <div key={field.path}
-                    className={`report-event-field ${selected ? 'selected' : ''}`}
-                    title={field.help}>
-                    <label className="report-event-check">
-                      <input type="checkbox" checked={selected}
-                        onChange={e => replaceEventField(field.path, e.target.checked ? {
-                          source: field.path,
-                          target: field.path,
-                          type: field.type,
-                          required: field.required === true,
-                        } : undefined)} />
-                      <span>
-                        <strong>{field.label ?? field.path}</strong>
-                        <code>{field.path}</code>
-                      </span>
-                      <em>{field.required ? '关键字段' : field.type}</em>
-                    </label>
-                    <div className="report-event-target">
-                      <label>最终JSON路径</label>
-                      <input disabled={!selected} value={mapping?.target ?? ''} placeholder={field.path}
-                        onChange={e => replaceEventField(field.path, {
-                          ...mapping!, source: field.path, target: e.target.value,
-                          type: field.type, required: field.required === true,
-                        })} />
-                    </div>
-                  </div>
-                })}
-              </> : (
-                <div className="report-mapping-help">当前 logic 未声明 business_fields，仍按旧配置发送完整业务JSON。</div>
-              )}
-              <details className="report-extra-inputs">
-                <summary>额外独立Dify输入变量（可选）</summary>
-                <div className="report-mapping-help">
-                  这里的字段位于 <code>event_json</code> 之外，只在Dify确实还需要独立顶层输入变量时配置。
-                </div>
-                {independentMappingRows}
-              </details>
-            </>}
-            {logicName !== 'logic_path_sop' && <>
-              <div className="report-section-title">只读参数清单与Dify字段映射</div>
-              {independentMappingRows}
-            </>}
-          </> : <>
-            <div className="report-section-title">服务器固定 JSON</div>
-            <div className="report-mapping-help">服务器不接收任何算法参数；仅允许修改 source 和 eventType。</div>
-            <F label="source">
-              <input value={delivery.server_source ?? 'JNU'}
-                onChange={e => patchDelivery({ server_source: e.target.value, inputs: [] })} />
-            </F>
-            <F label="eventType">
-              <input value={delivery.server_event_type ?? '4005'}
-                onChange={e => patchDelivery({ server_event_type: e.target.value, inputs: [] })} />
-            </F>
-            <div className="report-map-preview">detResult = {'{}'}（固定）</div>
-            <div className="report-map-preview">snapTime / endTime / eventId = 系统事件信息（固定）</div>
-            <div className="report-map-preview">base64Data / base64DataRaw = 系统图片（固定）</div>
-            <div className="report-map-preview">invadeFlag = 1（固定）</div>
-          </>}
-      </div>
-      {delivery.media === 'image' && (
-        <div className="report-advanced-section">
-          <F label="上报图片叠加内容">
-            <select value={String(policy.image_overlay ?? 'custom')}
-              onChange={e => setPolicy({ image_overlay: e.target.value })}>
-              <option value="none">当前原始帧</option>
-              <option value="custom">与实时播放窗口画面一致</option>
-            </select>
-          </F>
-        </div>
-      )}
-
-      {delivery.media === 'video' && (
-        <div className="report-advanced-section">
-          <F label="上报视频叠加内容">
-            <select value={String(policy.video_overlay ?? 'custom')}
-              onChange={e => setPolicy({ video_overlay: e.target.value })}>
-              <option value="none">原始视频片段</option>
-              <option value="custom">与实时播放窗口画面一致</option>
-            </select>
-          </F>
-          <F label="报警前时长 (秒)">
-            <NumberField min={0} max={120} step={0.5} def={3}
-              value={policy.video_pre_sec ?? 3}
-              onChange={v => setPolicy({ video_pre_sec: v ?? 3 })} />
-          </F>
-          <F label="报警后时长 (秒)">
-            <NumberField min={0} max={120} step={0.5} def={3}
-              value={policy.video_post_sec ?? 3}
-              onChange={v => setPolicy({ video_post_sec: v ?? 3 })} />
-          </F>
-          <F label="录像帧率 (FPS)">
-            <NumberField min={1} max={30} step={1} def={15}
-              value={policy.video_fps ?? 15}
-              onChange={v => setPolicy({ video_fps: v ?? 15 })} />
-          </F>
-        </div>
-      )}
-      <details className="report-advanced-section">
-        <summary>配置 JSON 预览</summary>
-        <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{JSON.stringify({ report_policy: policy }, null, 2)}</pre>
-      </details>
-    </div>
-  )
-}
+// Report form is implemented in ReportForm.tsx.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ROI info — 一个 ROI 节点连接一个视频流通道，可包含多个命名区域。
@@ -986,8 +664,7 @@ function SopInfo({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'] }
       .then(result => {
         const def = result.channel_logics.map(asLogicDef)
           .find(item => item.name === 'logic_path_sop')
-        setModuleParams((def?.params ?? []).filter(
-          param => param.storage === 'logic_parameters'))
+        setModuleParams(def?.params ?? [])
       })
       .catch(() => setModuleParams([]))
   }, [appName])

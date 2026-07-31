@@ -11,7 +11,14 @@
 
 项目仓库配有演示基本功能的demo便于二次开发者了解利用引擎基本功能构建自己视觉分析应用的过程。   
 
-下载源码到自己环境运行的朋友们请注意：某些涉及到服务器/Dify上报的功能目前只是由我自己在实验室测试的时候可以使用，如需使用,需要修改对应部分的代码以适配自己的后端接口。
+第一次开发报警、图片/视频或 HTTP/Dify 上报功能，请从
+[报警事件与上报开发指南](docs/报警事件与上报开发指南.md) 开始；该文档同时提供人类快速上手流程
+和可直接交给大模型的开发提示词。
+
+事件投递采用“连接 Profile + 接口契约 + adapter”三层配置。算法 logic 只填写标准事件和动态
+`fields`；服务器要求的固定值、远端字段名、媒体和成功条件集中写在
+`service/upload/contracts/*.json`；Profile 只保存地址、密钥和 Header。只有接入全新交互协议
+或签名算法时才需要新增 adapter，不应修改算法 logic 或 C++ 事件核心。
 
 项目由三层组成：
 
@@ -53,15 +60,16 @@
 - 任意逻辑与任意视频通道可自由组合。
 - 新增逻辑时无需变动旧的逻辑的相关代码，且上层通道逻辑与底层（线程调度，视频解码等模块）解耦。
 
-### 显示、录像与上报
+### 显示、录像与事件投递
 
 - HDMI/GTK 窗格显示；
 - 内置 RTSP 服务，可流式输出与本地显示一致的拼接画面；
 - ROI、检测框、姿态、分割和自定义绘制统一渲染；
-- 告警图片与原始分辨率事件视频；
-- 报警前后视频环形缓冲和异步 MP4 编码；
+- 带标注图片、原始图片与原始分辨率事件视频；
+- 事件前后视频环形缓冲和异步 MP4 编码；
 - 本地持久化事件发件箱，断网时保留并自动重试；
-- 图片投递到业务服务器或 Dify，图片、视频和纯 JSON 事件可投递到 Dify；
+- `http_json` 与 `dify_workflow` adapter，支持可复用接口契约、图片、视频和纯数据事件；
+- Web 请求预览、本地事件测试发送与可扩展 adapter catalog；
 - 每个 delivery 独立维护上传状态，全部成功后自动删除本地事件。
 
 ### Web 管理平台
@@ -89,10 +97,10 @@ flowchart LR
     Logic[ChannelContext + logic_xxx]
 
     Display[HDMI / RTSP 输出]
-    Alarm[图片与事件视频]
+    EventMedia[标准事件与媒体]
     Outbox[本地事件发件箱]
-    Upload[统一上传服务]
-    Remote[业务服务器 / Dify]
+    Upload[事件投递服务]
+    Remote[HTTP / Dify / 自定义 adapter]
     OTA[模型 OTA 服务]
 
     Web --> API
@@ -106,8 +114,8 @@ flowchart LR
     Track --> Logic
     Inlet --> Display
     Logic --> Display
-    Logic --> Alarm
-    Alarm --> Outbox
+    Logic --> EventMedia
+    EventMedia --> Outbox
     Outbox --> Upload
     Upload --> Remote
     OTA -->|更新模型和配置| Infer
@@ -128,10 +136,10 @@ GStreamer appsink
        → 执行动作处理器
        → 执行当前 logic_xxx
        → 原子写回 frame / results / state / draw commands
-       → 显示、告警、录像和跨通道快照
+       → 显示、事件媒体、录像和跨通道快照
 ```
 
-业务 logic 和告警路径使用严格匹配的同帧图像与结果；实时预览优先显示最新解码帧，并使用最近结果进行叠加，以降低观看延迟。
+业务 logic 和事件媒体路径使用严格匹配的同帧图像与结果；实时预览优先显示最新解码帧，并使用最近结果进行叠加，以降低观看延迟。
 
 ## 仓库结构
 
@@ -147,8 +155,8 @@ GStreamer appsink
 │   │   ├── logic/core/          # ChannelContext、注册表、参数和全局逻辑
 │   │   ├── logic/modules/       # 可扩展业务逻辑模块
 │   │   ├── player/              # HDMI 显示、叠加和 RTSP 输出
-│   │   ├── alarm/               # 告警事件与图片发件箱生产端
-│   │   ├── recorder/            # 报警前后事件视频
+│   │   ├── event/               # 标准事件与媒体发件箱生产端
+│   │   ├── recorder/            # 事件前后视频
 │   │   ├── control/             # Web/外部通道动作控制
 │   │   ├── config/              # 配置解析、校验和热重载字段
 │   │   └── core/                # 全局控制块与运行时基础能力
@@ -321,7 +329,7 @@ Web 画布中 ROI 节点直接连接视频流节点，表示它归属于该视�
           "npu_core": 0
         }
       ],
-      "logic": "logic_upload",
+      "logic": "logic_default",
       "logic_parameters": {},
       "roi_zones": [
         {
@@ -410,9 +418,7 @@ REGISTER_LOGIC(logic_people_count);
 | Logic ID | 作用 |
 |---|---|
 | `logic_path_sop` | SOP 路径、顺序、停留、分支、环路和耗时合规检测 |
-| `logic_upload` | ROI 目标告警与统一上报示例 |
-| `logic_upload_teach` | Web 按钮触发的图片/视频上报告警示例 |
-| `logic_button_demo` | Web `+1` / `-1` 按钮与画面数字变化演示 |
+| `logic_upload_teach` | Web 按钮触发的标准事件示例 |
 | `logic_periodic_snapshot_demo` | 周期截图与参数热重载演示 |
 | `logic_save_frame_pair` | 保存原始分辨率帧和模型输入帧 |
 | `logic_default` | 可删除的空白逻辑示例 |
@@ -445,30 +451,42 @@ REGISTER_LOGIC(logic_people_count);
 业务逻辑只调用统一入口：
 
 ```cpp
-report_alarm(ctx, "person_enter", "检测到人员进入", {
-    alarm_field("label", "person"),
-    alarm_field("count", 1),
-});
+EventRequest request;
+request.event_type = "person_enter";
+request.message = "检测到人员进入";
+request.fields = {
+    event_field("label", "person"),
+    event_field("count", 1),
+};
+EventReportResult report = report_event(ctx, request);
+if (!report.accepted())
+    fprintf(stderr, "report rejected: %s (%s)\n",
+            event_report_status_name(report.status), report.detail.c_str());
 ```
 
 媒体类型、叠加方式、视频前后时间窗、接收端和字段映射由 Web 保存的 `report_policy` 决定。
+`report.accepted()` 表示本地事件已创建或合并；失败时通过 `status/detail` 精确定位。
 
 事件链路：
 
 ```text
 channel logic
-  → alarm_store/<event_id>/manifest.json
-  → snapshot.jpg / raw.jpg / clip.mp4
+  → event_store/<event_id>/event.json
+  → media_state.json / delivery_state.json
+  → annotated.jpg / raw.jpg / clip.mp4
   → unified_upload 扫描
   → delivery 独立上传和重试
   → 全部成功后删除事件目录
 ```
 
+事件目录按写入者拆分：C++ 维护 `event.json` 和 `media_state.json`，上传服务独占
+`delivery_state.json`，避免两个进程并发覆盖同一份状态。
+
 默认发件箱上限为 1 GiB，并保留至少 512 MiB 可用磁盘空间。可以通过以下环境变量覆盖：
 
-- `ALARM_STORE_DIR`；
-- `ALARM_STORE_MAX_BYTES`；
-- `ALARM_STORE_MIN_FREE_BYTES`。
+- `EVENT_STORE_DIR`；
+- `EVENT_STORE_MAX_BYTES`；
+- `EVENT_STORE_MIN_FREE_BYTES`。
 
 ## 一致性检查
 

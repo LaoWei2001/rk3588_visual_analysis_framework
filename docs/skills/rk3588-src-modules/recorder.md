@@ -28,6 +28,9 @@
 
 ## 公共接口边界
 
-`event_video_recorder_push_source_frame()` 仅由帧入口持续喂帧；`event_video_recorder_trigger()` 由 alarm 模块触发；`event_video_recorder_extend()` 合并连续报警；编码成功后模块调用 `alarm_report_video_ready()`。业务 logic 不应直接拼装录像路径或自己调用 GStreamer 编码。
+`event_video_recorder_push_source_frame()` 仅由帧入口持续喂帧；`event_video_recorder_trigger()` 由
+alarm 模块触发；`event_video_recorder_extend()` 合并连续报警；编码成功后调用
+`report_event_video_ready()`，无帧或编码失败时调用 `report_event_video_failed()`。业务 logic
+不应直接拼装录像路径或自己调用 GStreamer 编码。
 
 `EventVideoRequest` 自身的结构默认值是兜底值，不等同于产品配置默认值；正常调用由 alarm 模块显式填入当前策略中的 3/3/15 等参数。

@@ -14,6 +14,7 @@
   width: clamp(360px, 25vw, 430px);
 }
 
+
 /* Empty state */
 .ncp.ncp-empty {
   display: flex;
@@ -173,8 +174,94 @@
   font-size: 11px;
 }
 
+.report-event-actions > button {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface2);
+  color: var(--text2);
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.report-event-actions > button:hover:not(:disabled) {
+  border-color: #3b82f6;
+  color: #bfdbfe;
+}
+
+.report-event-actions > button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .report-event-actions > span {
   margin-right: auto;
+}
+
+.report-event-type-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 10px;
+}
+
+.report-event-type-picker > label {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(17, 24, 39, 0.35);
+  cursor: pointer;
+}
+
+.report-event-type-picker > label.selected {
+  border-color: rgba(59, 130, 246, 0.65);
+  background: rgba(37, 99, 235, 0.1);
+}
+
+.report-event-type-picker input {
+  width: auto;
+  margin: 2px 0 0;
+}
+
+.report-event-type-picker span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.report-event-type-picker strong {
+  font-size: 11px;
+}
+
+.report-event-type-picker code {
+  color: #93c5fd;
+  font-size: 10px;
+}
+
+.report-event-type-picker small {
+  color: var(--text2);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.report-contract-error button {
+  margin-left: 8px;
+  padding: 4px 10px;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  border-radius: 5px;
+  background: rgba(127, 29, 29, 0.3);
+  color: #fca5a5;
+  font-size: 11px;
+  cursor: pointer;
+}
+.report-contract-error button:hover {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.2);
 }
 
 .report-event-button {
@@ -424,15 +511,222 @@
   justify-self: end;
   width: 34px;
   min-height: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface2);
+  color: var(--text2);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.report-row-delete:hover {
+  border-color: #ef4444;
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .report-add-mapping {
   margin-top: 2px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface2);
+  color: var(--text2);
+  font-size: 11px;
+  cursor: pointer;
+  width: 100%;
+}
+.report-add-mapping:hover {
+  border-color: #3b82f6;
+  color: #bfdbfe;
+}
+
+.report-contract-editor {
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.report-contract-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 60px 20px;
+  overflow: auto;
+}
+
+.report-contract-modal {
+  position: relative;
+  width: clamp(520px, 60vw, 900px);
+  max-height: calc(100vh - 120px);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 24px;
+}
+
+.report-contract-close {
+  position: sticky;
+  top: 0;
+  float: right;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: -12px;
+  margin-top: -8px;
+  width: 32px;
+  height: 32px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text2);
+  font-size: 18px;
+  cursor: pointer;
+}
+.report-contract-close:hover {
+  border-color: var(--border);
+  background: var(--surface2);
+  color: var(--text);
+}
+
+.report-contract-grid,
+.report-contract-http {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 9px;
+}
+
+.report-contract-description {
+  grid-column: 1 / -1;
+}
+
+.report-success-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.report-success-check > span {
+  color: var(--text2);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.report-media-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-bottom: 10px;
+  color: var(--text2);
+  font-size: 11px;
+}
+
+.report-media-picker label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.report-media-disabled {
+  opacity: 0.4;
+  cursor: not-allowed !important;
+}
+
+.report-media-only-data {
+  font-weight: 600;
+  color: #93c5fd;
+}
+
+.report-media-picker input {
+  width: auto;
+  margin: 0;
+}
+
+.report-constant-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.report-contract-error {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  border-radius: 6px;
+  background: rgba(127, 29, 29, 0.2);
+  color: #fca5a5;
+  font-size: 11px;
+}
+
+.report-contract-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.report-contract-actions button {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface2);
+  color: var(--text2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.report-contract-actions button:hover {
+  border-color: #3b82f6;
+  color: #bfdbfe;
+}
+
+.report-contract-actions button:last-child {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+
+.report-contract-actions button:last-child:hover {
+  border-color: #3b82f6;
+  background: #3b82f6;
+}
+
+.report-contract-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 @media (max-width: 1200px) {
   .ncp.ncp-report {
     width: 350px;
+  }
+
+  .report-contract-modal {
+    width: calc(100vw - 40px);
+    max-height: calc(100vh - 40px);
+    border-radius: 0;
+  }
+
+  .report-contract-overlay {
+    padding: 8px;
+  }
+
+  .report-contract-grid,
+  .report-contract-http,
+  .report-constant-grid {
+    grid-template-columns: 1fr;
   }
 }
 

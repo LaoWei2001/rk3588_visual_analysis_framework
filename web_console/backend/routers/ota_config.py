@@ -19,6 +19,8 @@ from fastapi import APIRouter, HTTPException
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 
+from services.data_dir import data_dir, migrate_app_data
+
 router = APIRouter()
 
 DEFAULT_OTA_CONFIG: Dict[str, Any] = {
@@ -31,7 +33,8 @@ def _config_path(name: str) -> Path:
     app_dir = APPS_ROOT / name
     if not app_dir.exists():
         raise HTTPException(status_code=404, detail=f"App '{name}' not found")
-    return app_dir / "services" / "model_update" / "ota_config.json"
+    migrate_app_data(name, app_dir)
+    return data_dir(name) / "ota_config.json"
 
 
 @router.get("/apps/{name}/ota-config")

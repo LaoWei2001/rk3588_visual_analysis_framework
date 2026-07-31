@@ -2,12 +2,13 @@
  * @file logic_path_sop.cpp
  * logic_path_sop —— 目标 SOP 路径合规检测 (单目标·按类别·允许任意有向图, 含环)
  *
- * 目标沿"配置图"的合法边推进; path_edges 为空 = 默认线性链 0→1→…→N-1。
+ * 目标沿 flow 配置图的合法边推进。步骤、边、入口、出口及阈值均存放在
+ * logic_parameters.flow 中，网页子画布和 C++ 运行时使用同一份结构化数据。
  * 图允许: 同源多出(分岔) / 多源汇合 / 反向边 / 环 / 多入口 / 多出口。
  * 例如 a→b→c 与 a→d→c 共存; b→a 形成短环; a→b, b→a, a 走一次返回再走 b 也合法。
  *
- * 起点: 被标记为「🚩 起点」的 step(path_entries = 这些 step 的索引), 即"一条路线的第一步"。
- * 允许多起点(多条路线)+ 多个起点共用同一区域。空 → fallback step 0(严格单入口)。
+ * 起点: 被标记为「🚩 起点」的 step(entries = 这些 step 的索引), 即"一条路线的第一步"。
+ * 允许多起点(多条路线)+ 多个起点共用同一区域。
  * 路线确定靠"并行候选 + 逐步收敛": 目标进入某区域 → 当前候选里所有匹配该区域的 step 都作为候选
  * (典型: 多个起点同区域 → 都候选); 目标走到下一个区域 → 只有匹配的分支存活, 其余被悄悄放弃
  * (不计 dwell 违规)。如此一步步收敛到唯一路线; 一旦只剩一条, 之后严格只走那条(锁定)。
@@ -23,86 +24,180 @@
  *   ④ 停留超时: 在某步停留 > 配置的最大停留(0=不限) → 即时报警(每步每轮一次)。
  *   ⑤ 总耗时上下限: settle 时, 总耗时 > 上限="总耗时超时" / < 下限="总耗时不足"。
  * 上报内容: 两张图 —— 一张叠加了检测框/区域/状态文字(同视频窗口), 一张原始视频帧。
- * 正常结果: path_report_normal=true 时，一轮正式结算、到达合法出口且没有任何违规，
- *           额外上报一次 sop_normal；默认 false，兼容旧配置只上报违规的行为。
+ * 正常结果: report_normal=true 时，一轮正式结算、到达合法出口且没有任何违规，
+ *           额外上报一次 sop_normal。
  *
- * 何时算"工序结束"(决定漏检何时结算), 由 path_end_mode 选:
- *   - "leave"  (离场超时): 目标持续检测不到超过 path_reset_sec 秒 → 工序结束。
+ * 何时算"工序结束"(决定漏检何时结算), 由 flow.end_mode 选:
+ *   - "leave"  (离场超时): 目标持续检测不到超过 reset_sec 秒 → 工序结束。
  *                          走到 exit step / 按序走完不立即结束 —— 只标记 completed, 仍等离场。
  *                          这样环图/回边场景下, 目标走完 exit 还能继续走环, 直到真正离场才 settle。
- *   - "endzone"(终点区域): 目标在 path_end_zone 连续停留达到 path_end_dwell_sec → 工序结束;
- *                          目标中途离场超过 path_reset_sec 秒 → 兜底也判结束;
+ *   - "endzone"(终点区域): 目标在 end_zone 连续停留达到 end_dwell_sec → 工序结束;
+ *                          目标中途离场超过 reset_sec 秒 → 兜底也判结束;
  *                          按序走完全部步骤【不立即结束】 —— 需等"进入终点"或"离场超时"才 settle,
  *                          这样最后一步的 dwell_min 仍可正常累计/检查, 终点区域也才真正生效。
  *   - "trigger"(外部触发): 收到 sop_end_trigger 外部信号 → 工序结束(与开始的 sop_trigger 对称);
- *                          目标离场超过 path_reset_sec 秒 → 兜底也判结束(防卡死);
+ *                          目标离场超过 reset_sec 秒 → 兜底也判结束(防卡死);
  *                          外部信号可由按钮、PLC、扫码枪等通过 API 发送, 触发方式不局限于按钮。
  *   settle 完成当帧, 主函数末尾会调用 reset_state 把所有 runtime + 显示 latch 清零 →
  *   下一帧屏幕回到初始空白(右上 6 行全绿, 步骤列表全灰, 总耗时"待开始")。
  *   报警当帧已通过 alarms 队列 + 叠加图上报, 历史可在上报记录里查; 屏幕不保留上一轮痕迹。
  *   无论何路径 settle, 最后所在步的 dwell_min 都会在 settle 内被统一判一次。
  *
- * 配置(每帧热读, 由网页 SOP 流程画布生成):
- *   path_sequence      步骤序列: 逗号分隔区域名(可重复=多次进入), 顺序=严格期望顺序
- *   path_target_label  目标类别名
- *   path_enter_list    每步进入确认(秒), 与 path_sequence 对齐(空项回退 path_enter_sec)
- *   path_dwell_list    每步最小停留(秒), 与 path_sequence 对齐(空项回退 path_dwell_min_sec; 不足则报警)
- *   path_dwell_max_list 每步最大停留(秒), 与 path_sequence 对齐(空项回退 path_dwell_max_sec; 0=不限, 超则报警)
- *   path_reset_sec     离场超时(秒): 工序结束确认时长
- *   path_end_mode      "leave" | "endzone" | "trigger"
- *   path_end_zone      终点区域名(endzone 模式)
- *   path_end_dwell_sec 终点区域连续停留阈值(秒; 0=进入确认后立即结束)
- * 坐标=模型输入尺寸; 中文经 freetype 直接显示。
+ * flow.steps[].zoneName 必须与本通道 ROI 名完全一致。参数热更新策略为 reset_state，
+ * 因此配置图变化时不会把旧图的运行状态带到新图。
  * ==========================================================================*/
 #include "logic/core/logic_common.h"
 #include "third_party/json/cJSON.h"
 
-/* 逗号分隔 → 去首尾空白的非空片段 */
-static std::vector<std::string> path_split_csv(const std::string &s)
+#include <cstdio>
+
+struct PathSopStepConfig
 {
-    std::vector<std::string> out;
-    std::string cur;
-    auto flush = [&]() {
-        size_t b = cur.find_first_not_of(" \t\r\n");
-        size_t e = cur.find_last_not_of(" \t\r\n");
-        if (b != std::string::npos)
-            out.push_back(cur.substr(b, e - b + 1));
-        cur.clear();
-    };
-    for (char c : s)
-    {
-        if (c == ',')
-            flush();
-        else
-            cur += c;
-    }
-    flush();
-    return out;
+    std::string zone;
+    float enter_sec = 0.5f;
+    float dwell_min_sec = 0.0f;
+    float dwell_max_sec = 0.0f;
+};
+
+struct PathSopEdgeLimit
+{
+    int src = -1;
+    int dst = -1;
+    int min_count = 0;
+    int max_count = 0;
+};
+
+struct PathSopFlowConfig
+{
+    std::string target_label;
+    float reset_sec = 5.0f;
+    std::string end_mode = "leave";
+    std::string end_zone;
+    float end_dwell_sec = 0.0f;
+    float total_min_sec = 0.0f;
+    float total_max_sec = 0.0f;
+    std::string trigger_mode = "auto";
+    bool trigger_mandatory = false;
+    bool report_normal = false;
+    std::vector<PathSopStepConfig> steps;
+    std::vector<std::pair<int, int>> edges;
+    std::vector<PathSopEdgeLimit> edge_limits;
+    std::vector<int> entries;
+    std::vector<int> exits;
+};
+
+static float path_json_number(const cJSON *object, const char *key, float fallback)
+{
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, key);
+    return cJSON_IsNumber(item) ? static_cast<float>(item->valuedouble) : fallback;
 }
 
-/* 按 ',' 拆分但保留空字段(与 path_sequence 对齐的 per-step 列表用) */
-static std::vector<std::string> path_split_keep(const std::string &s)
+static std::string path_json_string(const cJSON *object, const char *key, const std::string &fallback = {})
 {
-    std::vector<std::string> out;
-    std::string cur;
-    for (char c : s)
-    {
-        if (c == ',')
-        {
-            out.push_back(cur);
-            cur.clear();
-        }
-        else
-            cur += c;
-    }
-    out.push_back(cur);
-    return out;
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, key);
+    return cJSON_IsString(item) && item->valuestring ? item->valuestring : fallback;
 }
 
-static float path_parse_f(const std::string &s, float dflt)
+static bool path_json_bool(const cJSON *object, const char *key, bool fallback)
 {
-    float v = dflt;
-    return (sscanf(s.c_str(), "%f", &v) == 1) ? v : dflt;
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, key);
+    return cJSON_IsBool(item) ? cJSON_IsTrue(item) : fallback;
+}
+
+static std::vector<int> path_json_indices(const cJSON *root, const char *key, int step_count)
+{
+    std::vector<int> result;
+    const cJSON *array = cJSON_GetObjectItemCaseSensitive(root, key);
+    if (!cJSON_IsArray(array))
+        return result;
+    const cJSON *item = nullptr;
+    cJSON_ArrayForEach(item, array)
+    {
+        if (!cJSON_IsNumber(item))
+            continue;
+        const int value = item->valueint;
+        if (value >= 0 && value < step_count && std::find(result.begin(), result.end(), value) == result.end())
+            result.push_back(value);
+    }
+    return result;
+}
+
+static PathSopFlowConfig path_parse_flow(const std::string &json)
+{
+    PathSopFlowConfig flow;
+    cJSON *root = cJSON_Parse(json.c_str());
+    if (!cJSON_IsObject(root))
+    {
+        cJSON_Delete(root);
+        return flow;
+    }
+
+    flow.target_label = path_json_string(root, "target_label");
+    flow.reset_sec = std::max(0.0f, path_json_number(root, "reset_sec", 5.0f));
+    flow.end_mode = path_json_string(root, "end_mode", "leave");
+    if (flow.end_mode != "leave" && flow.end_mode != "endzone" && flow.end_mode != "trigger")
+        flow.end_mode = "leave";
+    flow.end_zone = path_json_string(root, "end_zone");
+    flow.end_dwell_sec = std::max(0.0f, path_json_number(root, "end_dwell_sec", 0.0f));
+    flow.total_min_sec = std::max(0.0f, path_json_number(root, "total_min_sec", 0.0f));
+    flow.total_max_sec = std::max(0.0f, path_json_number(root, "total_max_sec", 0.0f));
+    flow.trigger_mode = path_json_string(root, "trigger_mode", "auto");
+    if (flow.trigger_mode != "auto" && flow.trigger_mode != "external")
+        flow.trigger_mode = "auto";
+    flow.trigger_mandatory = path_json_bool(root, "trigger_mandatory", false);
+    flow.report_normal = path_json_bool(root, "report_normal", false);
+
+    const cJSON *steps = cJSON_GetObjectItemCaseSensitive(root, "steps");
+    const cJSON *step = nullptr;
+    cJSON_ArrayForEach(step, steps)
+    {
+        if (!cJSON_IsObject(step))
+            continue;
+        PathSopStepConfig parsed;
+        parsed.zone = path_json_string(step, "zoneName");
+        parsed.enter_sec = std::max(0.0f, path_json_number(step, "enter_sec", 0.5f));
+        parsed.dwell_min_sec = std::max(0.0f, path_json_number(step, "dwell_min_sec", 0.0f));
+        parsed.dwell_max_sec = std::max(0.0f, path_json_number(step, "dwell_max_sec", 0.0f));
+        flow.steps.push_back(parsed);
+    }
+
+    const int step_count = static_cast<int>(flow.steps.size());
+    const cJSON *edges = cJSON_GetObjectItemCaseSensitive(root, "edges");
+    const cJSON *edge = nullptr;
+    cJSON_ArrayForEach(edge, edges)
+    {
+        if (!cJSON_IsArray(edge) || cJSON_GetArraySize(edge) != 2)
+            continue;
+        const cJSON *src = cJSON_GetArrayItem(edge, 0);
+        const cJSON *dst = cJSON_GetArrayItem(edge, 1);
+        if (!cJSON_IsNumber(src) || !cJSON_IsNumber(dst))
+            continue;
+        const int a = src->valueint, b = dst->valueint;
+        if (a >= 0 && a < step_count && b >= 0 && b < step_count &&
+            std::find(flow.edges.begin(), flow.edges.end(), std::make_pair(a, b)) == flow.edges.end())
+            flow.edges.push_back({a, b});
+    }
+
+    const cJSON *limits = cJSON_GetObjectItemCaseSensitive(root, "edge_limits");
+    const cJSON *limit = nullptr;
+    cJSON_ArrayForEach(limit, limits)
+    {
+        if (!cJSON_IsObject(limit))
+            continue;
+        PathSopEdgeLimit parsed;
+        parsed.src = static_cast<int>(path_json_number(limit, "src", -1));
+        parsed.dst = static_cast<int>(path_json_number(limit, "dst", -1));
+        parsed.min_count = std::max(0, static_cast<int>(path_json_number(limit, "min", 0)));
+        parsed.max_count = std::max(0, static_cast<int>(path_json_number(limit, "max", 0)));
+        if (parsed.src >= 0 && parsed.src < step_count && parsed.dst >= 0 && parsed.dst < step_count &&
+            (parsed.min_count > 0 || parsed.max_count > 0))
+            flow.edge_limits.push_back(parsed);
+    }
+
+    flow.entries = path_json_indices(root, "entries", step_count);
+    flow.exits = path_json_indices(root, "exits", step_count);
+    cJSON_Delete(root);
+    return flow;
 }
 
 static cJSON *path_string_array(const std::vector<std::string> &values)
@@ -125,7 +220,9 @@ static std::string path_json_text(cJSON *root)
 
 struct PathSopState
 {
-    int expect = 0;             /* (兼容字段) 已访问 step 数, 用于进度显示 N/M */
+    bool flow_loaded = false;
+    PathSopFlowConfig flow;
+    int expect = 0;             /* 已访问 step 数, 用于进度显示 N/M */
     std::vector<int> cur_steps; /* 当前所在 step 集合(空 = 入口前/已结束)。
                                  * 并行漫游: 进入同 zone 时, 所有当前合法后继中匹配 zone 的 step 都纳入 cur_steps,
                                  * 各自独立累计 dwell, 任一是 exit 节点 → completed。这样 DAG 上"同 zone 兄弟分支"
@@ -134,7 +231,6 @@ struct PathSopState
     std::string cand_zone;      /* 候选区域(进入防抖) */
     uint64_t cand_since_ms = 0;
     std::vector<bool> visited_steps; /* 已访问 step 集合(DAG 漏检判定: 是否存在 entry→exit 完整路径) */
-    std::vector<std::string> visited;      /* 已访问区域名(向后兼容/显示) */
     std::vector<std::string> zone_history; /* 按实际确认顺序记录区域，允许重复，用于 Dify 二次核验 */
     std::vector<uint64_t> dwell_ms;
     std::vector<uint64_t> dwell_out_since; /* 每步: 目标离开该步区域的时刻(0=当前在内)。用于"重进则重新计时" */
@@ -219,23 +315,35 @@ static void logic_path_sop(ChannelContext *ctx)
         *ctx->state = std::make_shared<PathSopState>();
     auto &s = *std::static_pointer_cast<PathSopState>(*ctx->state);
 
-    /* ---- 参数 ---- */
-    const ChannelConfig *cfg = ctx->config;
-    const std::vector<std::string> seq = path_split_csv(cfg ? cfg->path_sequence : std::string());
-    const std::string targetLab = cfg ? cfg->path_target_label : std::string();
-    const float endSec = cfg ? cfg->path_reset_sec : 5.0f;
+    /* ---- 参数：仅在状态创建时解析；flow 变更会由 x-hot-reload=reset_state 重建状态 ---- */
+    if (!s.flow_loaded)
+    {
+        s.flow = path_parse_flow(ctx->param_json("flow"));
+        s.flow_loaded = true;
+    }
+    const PathSopFlowConfig &flow = s.flow;
+    std::vector<std::string> seq;
+    seq.reserve(flow.steps.size());
+    for (const auto &step : flow.steps)
+        seq.push_back(step.zone);
+    const std::string &targetLab = flow.target_label;
+    const float endSec = flow.reset_sec;
     const uint64_t end_ms = (uint64_t)std::max(0, (int)(endSec * 1000.0f + 0.5f));
-    const std::string endMode = cfg ? cfg->path_end_mode : std::string("leave");
-    const std::string endZone = cfg ? cfg->path_end_zone : std::string();
-    const float endDwellSec = cfg ? std::max(0.0f, cfg->path_end_dwell_sec) : 0.0f;
+    const std::string &endMode = flow.end_mode;
+    const std::string &endZone = flow.end_zone;
+    const float endDwellSec = flow.end_dwell_sec;
     const uint64_t end_dwell_ms = (uint64_t)std::max(0, (int)(endDwellSec * 1000.0f + 0.5f));
     const bool useEndZone = (endMode == "endzone") && !endZone.empty();
     const bool useTriggerEnd = (endMode == "trigger");
     const int nseq = (int)seq.size();
 
-    if (nseq < 1 || targetLab.empty())
+    bool has_empty_zone = false;
+    for (const auto &zone : seq)
+        has_empty_zone = has_empty_zone || zone.empty();
+    if (nseq < 1 || targetLab.empty() || has_empty_zone || flow.entries.empty() || flow.exits.empty() ||
+        (nseq > 1 && flow.edges.empty()) || (endMode == "endzone" && endZone.empty()))
     {
-        draw_text(ctx, "path_sop: 设置 path_sequence + 目标类别, 并画好同名 ROI 区域", cv::Point(20, 30),
+        draw_text(ctx, "path_sop: flow 配置不完整（目标、步骤、边、入口、出口均需显式设置）", cv::Point(20, 30),
                   cv::Scalar(0, 165, 255), 0.55, 2);
         return;
     }
@@ -244,157 +352,58 @@ static void logic_path_sop(ChannelContext *ctx)
     if ((int)s.dwell_out_since.size() != nseq)
         s.dwell_out_since.assign(nseq, 0);
 
-    /* ---- 每步进入确认/最小停留(对齐 path_sequence) ---- */
-    const std::vector<std::string> enterList = path_split_keep(cfg ? cfg->path_enter_list : std::string());
-    const std::vector<std::string> dwellList = path_split_keep(cfg ? cfg->path_dwell_list : std::string());
-    const float enterDflt = cfg ? cfg->path_enter_sec : 0.5f;
-    const float dwellDflt = cfg ? cfg->path_dwell_min_sec : 0.0f;
+    /* ---- 每步进入确认/最小停留 ---- */
     std::vector<uint64_t> enter_ms(nseq);
     std::vector<float> dwell_min(nseq);
     for (int i = 0; i < nseq; ++i)
     {
-        const float e = (i < (int)enterList.size()) ? path_parse_f(enterList[i], enterDflt) : enterDflt;
-        const float d = (i < (int)dwellList.size()) ? path_parse_f(dwellList[i], dwellDflt) : dwellDflt;
+        const float e = flow.steps[i].enter_sec;
+        const float d = flow.steps[i].dwell_min_sec;
         enter_ms[i] = (uint64_t)std::max(0, (int)(e * 1000.0f + 0.5f));
         dwell_min[i] = std::max(0.0f, d);
     }
 
     /* ---- 每步最大停留(0 = 不限, 用户可忽略) ---- */
-    const std::vector<std::string> maxList = path_split_keep(cfg ? cfg->path_dwell_max_list : std::string());
-    const float maxDflt = cfg ? cfg->path_dwell_max_sec : 0.0f;
     std::vector<float> dwell_max(nseq);
     for (int i = 0; i < nseq; ++i)
-    {
-        const float mx = (i < (int)maxList.size()) ? path_parse_f(maxList[i], maxDflt) : maxDflt;
-        dwell_max[i] = std::max(0.0f, mx);
-    }
+        dwell_max[i] = flow.steps[i].dwell_max_sec;
     if ((int)s.short_done.size() != nseq)
         s.short_done.assign(nseq, false);
     if ((int)s.long_done.size() != nseq)
         s.long_done.assign(nseq, false);
 
     /* ---- 总耗时上下限(0 = 不限) ---- */
-    const float totalMin = cfg ? std::max(0.0f, cfg->path_total_min_sec) : 0.0f;
-    const float totalMax = cfg ? std::max(0.0f, cfg->path_total_max_sec) : 0.0f;
+    const float totalMin = flow.total_min_sec;
+    const float totalMax = flow.total_max_sec;
 
-    /* ---- 边解析(path_edges 空 → 默认线性链 0→1→...→N-1; 允许任意图含环) ---- */
+    /* ---- 显式边（允许任意图含环） ---- */
     std::vector<std::vector<int>> succ(nseq); /* succ[i] = i 的所有后继 step 索引 */
-    std::vector<int> indeg(nseq, 0); /* 入度(算 entry 节点; 全环图时全员都有入度 → fallback 全员可作 entry) */
     std::vector<bool> self_loop(
         nseq, false); /* 该 step 是否画了自环(a==a): 语义=可"重进同区域", 用于把该区域也高亮成"可走" */
+    for (const auto &edge : flow.edges)
     {
-        const std::string &eStr = cfg ? cfg->path_edges : std::string();
-        if (eStr.empty())
+        const int a = edge.first, b = edge.second;
+        if (a == b)
         {
-            for (int i = 0; i + 1 < nseq; ++i)
-            {
-                succ[i].push_back(i + 1);
-                ++indeg[i + 1];
-            }
+            self_loop[a] = true;
+            continue;
         }
-        else
-        {
-            const std::vector<std::string> tokens = path_split_csv(eStr);
-            for (const auto &tk : tokens)
-            {
-                int a = -1, b = -1;
-                if (sscanf(tk.c_str(), "%d-%d", &a, &b) != 2)
-                    continue;
-                if (a < 0 || a >= nseq || b < 0 || b >= nseq)
-                    continue;
-                if (a == b)
-                {
-                    self_loop[a] = true;
-                    continue;
-                } /* 自环: 不进 succ, 只标记 */
-                /* 去重: 同一条边只算一次 */
-                if (std::find(succ[a].begin(), succ[a].end(), b) == succ[a].end())
-                {
-                    succ[a].push_back(b);
-                    ++indeg[b];
-                }
-            }
-        }
+        succ[a].push_back(b);
     }
-    /* entry 节点: 显式指定 — 来自 path_entries(用户在 SOP 子画布上「🚩 起点」连到的 step)。
-     * 支持多起点(每条 起点→step 连线 = 一条可选路线)+ 同 zone 多起点。
-     * 空 → fallback 到 step 0(严格单入口; 老配置/未连起点时的默认)。
-     *
-     * 不再用"所有入度 0 的 step": 那样用户漏画一条边就会让中间 step 意外变成可作起点。
-     * 显式指定避免歧义, 且把"哪些 step 能当第一步"的控制权交给用户。 */
-    std::vector<int> entries;
-    {
-        const std::string &enStr = cfg ? cfg->path_entries : std::string();
-        if (!enStr.empty())
-        {
-            const std::vector<std::string> tokens = path_split_csv(enStr);
-            for (const auto &tk : tokens)
-            {
-                int v = -1;
-                if (sscanf(tk.c_str(), "%d", &v) == 1 && v >= 0 && v < nseq)
-                {
-                    if (std::find(entries.begin(), entries.end(), v) == entries.end())
-                        entries.push_back(v);
-                }
-            }
-        }
-        if (entries.empty() && nseq > 0)
-            entries.push_back(0); /* fallback: 严格单入口 step 0 */
-    }
-
-    /* exit 节点解析: 优先用 path_exits(用户在 SOP 子画布连"step→🏁 结束判定"的 source step);
-     * 空 → fallback 到出度0(老 DAG 行为, 兼容老配置)。
-     * 漏检判定 = "visited 子图上是否存在 entry→exit 路径": 任何 exit 命中即合规。 */
-    std::vector<int> exits;
-    {
-        const std::string &xStr = cfg ? cfg->path_exits : std::string();
-        if (!xStr.empty())
-        {
-            const std::vector<std::string> tokens = path_split_csv(xStr);
-            for (const auto &tk : tokens)
-            {
-                int v = -1;
-                if (sscanf(tk.c_str(), "%d", &v) == 1 && v >= 0 && v < nseq)
-                {
-                    if (std::find(exits.begin(), exits.end(), v) == exits.end())
-                        exits.push_back(v);
-                }
-            }
-        }
-        if (exits.empty())
-        { /* fallback: 出度 0 的 step */
-            for (int i = 0; i < nseq; ++i)
-                if (succ[i].empty())
-                    exits.push_back(i);
-        }
-        /* 注: 全环图且用户没标 exits 时, exits 仍可能为空; 此时漏检退化为"全 visited 才合规" */
-    }
+    const std::vector<int> &entries = flow.entries;
+    const std::vector<int> &exits = flow.exits;
 
     /* ---- 边循环次数约束解析 ----
-     * path_edge_limits 格式: "src-dst:min-max,src-dst:min-max"; min/max 为 0 表示该侧不限。
      * 密集存储: limit_min[src*nseq+dst] / limit_max[src*nseq+dst]; 0 = 无约束。 */
     std::vector<int> limit_min(nseq * nseq, 0);
     std::vector<int> limit_max(nseq * nseq, 0);
     std::vector<std::pair<int, int>> limited_edges; /* 列出有约束的边, settle 时遍历判定 */
+    for (const auto &limit : flow.edge_limits)
     {
-        const std::string &lStr = cfg ? cfg->path_edge_limits : std::string();
-        if (!lStr.empty())
-        {
-            const std::vector<std::string> tokens = path_split_csv(lStr);
-            for (const auto &tk : tokens)
-            {
-                int a = -1, b = -1, mn = 0, mx = 0;
-                if (sscanf(tk.c_str(), "%d-%d:%d-%d", &a, &b, &mn, &mx) == 4 && a >= 0 && a < nseq && b >= 0 &&
-                    b < nseq /* 允许 a==b 自环 (语义见状态机推进处) */
-                    && (mn > 0 || mx > 0))
-                {
-                    const int idx = a * nseq + b;
-                    limit_min[idx] = std::max(0, mn);
-                    limit_max[idx] = std::max(0, mx);
-                    limited_edges.push_back({a, b});
-                }
-            }
-        }
+        const int idx = limit.src * nseq + limit.dst;
+        limit_min[idx] = limit.min_count;
+        limit_max[idx] = limit.max_count;
+        limited_edges.push_back({limit.src, limit.dst});
     }
 
     /* ---- 业务 JSON 需要完整呈现的循环边 ----
@@ -486,7 +495,7 @@ static void logic_path_sop(ChannelContext *ctx)
     };
 
     /* 完整重置 PathSopState 所有 runtime + 显示用 latch 字段, 回到"初始空白"状态。
-     * start_round 调它启动新一轮; 主函数末尾 settle 完成的那一帧也调它, 让下一帧屏幕完全归零。 */
+     * 主函数末尾在 settle 完成的那一帧调用，让下一帧屏幕完全归零。 */
     auto reset_state = [&]() {
         s.expect = 0;
         s.cur_steps.clear();
@@ -494,7 +503,6 @@ static void logic_path_sop(ChannelContext *ctx)
         s.cand_zone.clear();
         s.cand_since_ms = 0;
         s.last_seen_ms = 0;
-        s.visited.clear();
         s.zone_history.clear();
         std::fill(s.visited_steps.begin(), s.visited_steps.end(), false);
         s.order_error = false;
@@ -551,7 +559,10 @@ static void logic_path_sop(ChannelContext *ctx)
             }
 
     auto inVisited = [&](const std::string &nm) {
-        return std::find(s.visited.begin(), s.visited.end(), nm) != s.visited.end();
+        for (int i = 0; i < nseq; ++i)
+            if (s.visited_steps[i] && seq[i] == nm)
+                return true;
+        return false;
     };
 
     /* SOP事件稀疏, 不做业务层时间冷却:
@@ -681,8 +692,6 @@ static void logic_path_sop(ChannelContext *ctx)
                           }
                           s.ended = true;
     };
-    auto start_round = [&]() { reset_state(); }; /* 开新一轮 = 完整重置 */
-
     const uint64_t now = ctx->timestamp_ms;
     if (target)
         s.last_seen_ms = now;
@@ -698,8 +707,8 @@ static void logic_path_sop(ChannelContext *ctx)
         settle();
 
     /* ---- 进入防抖 + DAG 并行漫游 + 终点/新一轮 ---- */
-    const bool external_mode = (cfg && cfg->path_trigger_mode == "external");
-    if (target && (!external_mode || s.triggered))
+    const bool external_mode = flow.trigger_mode == "external";
+    if (!s.ended && target && (!external_mode || s.triggered))
     {
         /* 候选 step 解析: 在当前 cur_steps 的合法后继并集里, 找【全部】匹配 zone 的 step */
         const std::vector<int> nextCand = current_next();
@@ -723,21 +732,12 @@ static void logic_path_sop(ChannelContext *ctx)
 
         if (!inZone.empty() && inZone != s.cur_zone && (now - s.cand_since_ms) >= confirm_ms)
         {
-            /* (历史防御: 之前 reset 时机在 ended 期间, 这里负责重置。
-             *  现在 reset_state 在主函数末尾立即触发, ended 在每帧末尾就被清零,
-             *  这一分支几乎永远不会执行。保留作为安全垫子, 不影响行为。) */
-            if (s.ended)
-                start_round();
-
             if (!s.ended)
             {
                 s.cur_zone = inZone;
                 s.zone_history.push_back(inZone);
-                if (!inVisited(inZone))
-                    s.visited.push_back(inZone);
 
-                /* 重新算命中集合(因为 start_round 可能刚把 cur_steps 清空)。
-                 * 并行候选: 同一 zone 匹配多个合法后继(典型: 同 zone 多起点 / 同 zone 兄弟分支)时,
+                /* 并行候选: 同一 zone 匹配多个合法后继(典型: 同 zone 多起点 / 同 zone 兄弟分支)时,
                  * 全部纳入 cur_steps 作为"候选路线"; 之后目标走出区分动作, 只有匹配的分支存活,
                  * 其余分支被悄悄放弃(见下方 judgeShort 跳过逻辑)→ 自然收敛到唯一路线。 */
                 const std::vector<int> hits = match_steps(current_next(), inZone);
@@ -880,7 +880,7 @@ static void logic_path_sop(ChannelContext *ctx)
     /* 外部触发必须模式: 未触发但目标进入了设计区域 → 违规(latch, 本轮一次) */
     if (external_mode && !s.triggered && target && !inZone.empty() && is_designed_zone(inZone))
     {
-        const bool mandatory = cfg && cfg->path_trigger_mandatory;
+        const bool mandatory = flow.trigger_mandatory;
         if (mandatory && !s.untriggered_entry)
         {
             s.untriggered_entry = true;
@@ -1024,7 +1024,7 @@ static void logic_path_sop(ChannelContext *ctx)
     }
 
     /* 3) 右上"四行合规状态"(始终显示, 合规=绿/违规=红): 一种报警单独一行。
-     *    工序结束并 start_round() 重置后, 四行自动全部回到绿色(无需额外清理)。
+     *    工序结束并 reset_state() 后, 四行自动全部回到绿色(无需额外清理)。
      *    漏检在工序结束(s.ended)前一律绿色 —— 此时还无法判定有没有漏。 */
     const int W = ctx->frame ? ctx->frame->cols : 640;
     const int x_right = std::max(180, W - 200); /* 右上起始列, 留 200px 给状态行 */
@@ -1300,11 +1300,6 @@ static void logic_path_sop(ChannelContext *ctx)
         cJSON_AddItemToObject(sop, "configured_sequence", path_string_array(seq));
         cJSON_AddItemToObject(sop, "zone_history", path_string_array(s.zone_history));
 
-        /* 输出状态机本轮实际采用的完整图配置，而不是只输出步骤清单和循环边子集。
-         * 即使老配置没有 path_edges/path_entries/path_exits，也输出回退后真正生效的线性边、入口和出口。 */
-        const bool explicit_edges = cfg && !cfg->path_edges.empty();
-        cJSON_AddStringToObject(sop, "configured_graph_mode", explicit_edges ? "explicit" : "linear_fallback");
-
         cJSON *configured_edges = cJSON_CreateArray();
         for (int src = 0; src < nseq; ++src)
         {
@@ -1511,12 +1506,10 @@ static void logic_path_sop(ChannelContext *ctx)
     };
 
     auto report_sop_result = [&](const std::string &type, const std::string &message, bool normal) {
-        AlarmRequest request;
-        request.type = type;
+        EventRequest request;
+        request.event_type = type;
         request.message = message;
-        request.record_kind = normal ? "normal" : "violation";
-        request.dify_json_only = normal;
-        request.merge_enabled = false;
+        request.merge_mode = EventMergeMode::NEVER;
         request.fields.set_string("current_zone", s.cur_zone);
         request.fields.set_number("progress", s.expect);
         request.fields.set_number("step_count", nseq);
@@ -1525,7 +1518,10 @@ static void logic_path_sop(ChannelContext *ctx)
         request.fields.set_bool("completed", s.completed);
         request.fields.set_string("edge_verdict", normal ? "normal" : "violation");
         request.fields.set_json("event_payload", make_event_payload(normal, message));
-        alarm_report(ctx, request);
+        const EventReportResult report = report_event(ctx, request);
+        if (!report.accepted())
+            fprintf(stderr, "[logic_path_sop][ch%02d] report rejected: status=%s detail=%s\n", ctx->chnId,
+                    event_report_status_name(report.status), report.detail.c_str());
     };
 
     if (!alarms.empty())
@@ -1566,7 +1562,7 @@ static void logic_path_sop(ChannelContext *ctx)
     const bool normal_result = s.ended && s.round_start_ms != 0 && s.completed && alarms.empty() && !s.order_error &&
                                s.missed.empty() && !s.dwell_short && !s.dwell_over && !s.total_short && !s.total_over &&
                                !s.loop_violation && !s.untriggered_entry;
-    if (cfg && cfg->path_report_normal && normal_result)
+    if (flow.report_normal && normal_result)
     {
         report_sop_result("sop_normal", "SOP工序正常完成", true);
     }
