@@ -1,0 +1,864 @@
+{
+    "_comment": "Generated from channel/global registration macros, module logic.json files and src/logic/catalog.json; do not edit the generated file.",
+    "channel_logics": [
+        {
+            "name": "logic_course_01",
+            "label": "课程1：自定义文字和图形叠加",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "params": []
+        },
+        {
+            "name": "logic_course_02",
+            "label": "课程2：ctx变量调用",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "test_string": {
+                        "type": "string",
+                        "title": "测试文本",
+                        "description": "用于测试文本显示功能",
+                        "default": "Hello RK3588"
+                    },
+                    "test_num": {
+                        "type": "number",
+                        "title": "测试数字",
+                        "description": "用于测试数字显示功能",
+                        "default": 666
+                    }
+                }
+            },
+            "report_fields": [],
+            "params": [
+                {
+                    "key": "test_string",
+                    "type": "string",
+                    "default": "Hello RK3588",
+                    "hot_reload": "preserve_state",
+                    "label": "测试文本",
+                    "help": "用于测试文本显示功能"
+                },
+                {
+                    "key": "test_num",
+                    "type": "float",
+                    "default": 666,
+                    "hot_reload": "preserve_state",
+                    "label": "测试数字",
+                    "help": "用于测试数字显示功能"
+                }
+            ]
+        },
+        {
+            "name": "logic_course_03",
+            "label": "课程3: 模型推理结果获取示例",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "params": []
+        },
+        {
+            "name": "logic_course_04",
+            "label": "课程4:ROI区域信息获取示例",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "params": []
+        },
+        {
+            "name": "logic_course_05",
+            "label": "课程5:ROI区域与检测框的交互(前4节课的内容总结)",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "roi_name": {
+                        "type": "string",
+                        "title": "roi区域名称",
+                        "description": "把该区域内部的目标找出来",
+                        "default": ""
+                    }
+                }
+            },
+            "report_fields": [],
+            "params": [
+                {
+                    "key": "roi_name",
+                    "type": "string",
+                    "default": "",
+                    "hot_reload": "preserve_state",
+                    "label": "roi区域名称",
+                    "help": "把该区域内部的目标找出来"
+                }
+            ]
+        },
+        {
+            "name": "logic_course_06",
+            "label": "课程6:如何保存跨帧状态变量",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "params": []
+        },
+        {
+            "name": "logic_course_07",
+            "label": "课程7:如何添加一个带自定义功能的按钮",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "actions": [
+                {
+                    "id": "increment",
+                    "label": "+1",
+                    "style": "primary",
+                    "help": "将当前通道画面中的数字加 1"
+                },
+                {
+                    "id": "decrement",
+                    "label": "-1",
+                    "style": "default",
+                    "help": "将当前通道画面中的数字减 1"
+                },
+                {
+                    "id": "change",
+                    "label": "切换数字",
+                    "style": "default",
+                    "help": "切换控制的数字"
+                }
+            ],
+            "params": []
+        },
+        {
+            "name": "logic_course_08",
+            "label": "课程8:如何定时上报图片",
+            "event_types": [
+                {
+                    "id": "logic_course_08",
+                    "label": "定时触发告警",
+                    "help": "按照设定的报警时间间隔上报图片"
+                }
+            ],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "time_interval": {
+                        "type": "number",
+                        "title": "报警时间间隔",
+                        "description": "报警时间间隔",
+                        "default": 3.0
+                    }
+                }
+            },
+            "report_fields": [],
+            "params": [
+                {
+                    "key": "time_interval",
+                    "type": "float",
+                    "default": 3.0,
+                    "hot_reload": "preserve_state",
+                    "label": "报警时间间隔",
+                    "help": "报警时间间隔"
+                }
+            ]
+        },
+        {
+            "name": "logic_course_09",
+            "label": "课程9:如何通过自定义的按钮上报图片",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "params": []
+        },
+        {
+            "name": "logic_course_10",
+            "label": "课程10:实际案例:行车吊钩歪拉斜吊检测",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "params": []
+        },
+        {
+            "name": "logic_default",
+            "label": "空白逻辑示例",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "params": []
+        },
+        {
+            "name": "logic_hook",
+            "label": "行车吊钩歪拉斜吊检测",
+            "event_types": [
+                {
+                    "id": "hook_oblique_pull",
+                    "label": "歪拉斜吊告警",
+                    "help": "吊钩超出安全圆形区域且持续时间超过阈值时触发。"
+                }
+            ],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "target_label": {
+                        "type": "string",
+                        "title": "吊钩目标标签",
+                        "description": "YOLO模型检测的吊钩类别名称",
+                        "default": "hook"
+                    },
+                    "safe_radius": {
+                        "type": "integer",
+                        "title": "安全区域半径",
+                        "description": "屏幕中心圆形安全区域的半径(像素, 模型坐标系640x640)",
+                        "default": 150,
+                        "minimum": 20,
+                        "maximum": 320
+                    },
+                    "exceed_threshold_sec": {
+                        "type": "number",
+                        "title": "超限时间阈值(秒)",
+                        "description": "吊钩超出安全区域持续多少秒后触发告警",
+                        "default": 1.0,
+                        "minimum": 0.1,
+                        "maximum": 3600.0
+                    },
+                    "cooldown_sec": {
+                        "type": "number",
+                        "title": "冷却时间(秒)",
+                        "description": "告警后吊钩回到圈内需连续保持多少秒才复位",
+                        "default": 3.0,
+                        "minimum": 0.5,
+                        "maximum": 3600.0
+                    },
+                    "target_lost_tolerance_sec": {
+                        "type": "number",
+                        "title": "目标丢失容忍时间(秒)",
+                        "description": "吊钩目标短暂丢失多长时间内视为遮挡不视为真正丢失, 此期间计时暂停",
+                        "default": 0.3,
+                        "minimum": 0.05,
+                        "maximum": 5.0
+                    },
+                    "min_target_score": {
+                        "type": "number",
+                        "title": "最低置信度",
+                        "description": "YOLO检测结果的最低置信度阈值, 低于此值视为未检测到目标",
+                        "default": 0.0,
+                        "minimum": 0.0,
+                        "maximum": 1.0
+                    }
+                }
+            },
+            "report_fields": [
+                {
+                    "key": "target_label",
+                    "type": "string",
+                    "label": "检测目标标签"
+                },
+                {
+                    "key": "hook_center_x",
+                    "type": "number",
+                    "label": "吊钩中心X坐标"
+                },
+                {
+                    "key": "hook_center_y",
+                    "type": "number",
+                    "label": "吊钩中心Y坐标"
+                },
+                {
+                    "key": "safe_radius",
+                    "type": "number",
+                    "label": "安全区域半径"
+                },
+                {
+                    "key": "center_distance",
+                    "type": "number",
+                    "label": "吊钩距中心距离(px)"
+                },
+                {
+                    "key": "exceed_distance",
+                    "type": "number",
+                    "label": "越界距离(px)"
+                },
+                {
+                    "key": "actual_exceed_duration_seconds",
+                    "type": "number",
+                    "label": "实际超限时长(秒)"
+                },
+                {
+                    "key": "threshold_seconds",
+                    "type": "number",
+                    "label": "告警阈值(秒)"
+                }
+            ],
+            "actions": [
+                {
+                    "id": "increase_value",
+                    "label": "+0.1秒",
+                    "style": "default",
+                    "help": "增加当前选中目标(超限阈值/冷却时间) 0.1秒"
+                },
+                {
+                    "id": "decrease_value",
+                    "label": "-0.1秒",
+                    "style": "default",
+                    "help": "减少当前选中目标(超限阈值/冷却时间) 0.1秒"
+                },
+                {
+                    "id": "toggle_adjust_target",
+                    "label": "切换调整目标",
+                    "style": "default",
+                    "help": "切换+/-按钮控制的参数: 超限阈值 / 冷却时间"
+                },
+                {
+                    "id": "increase_radius",
+                    "label": "+5px半径",
+                    "style": "default",
+                    "help": "增加安全区域半径5像素"
+                },
+                {
+                    "id": "decrease_radius",
+                    "label": "-5px半径",
+                    "style": "default",
+                    "help": "减少安全区域半径5像素"
+                },
+                {
+                    "id": "reset_alarm",
+                    "label": "复位告警",
+                    "style": "primary",
+                    "help": "手动清除当前告警/冷却状态(需确认吊钩在圈内)"
+                },
+                {
+                    "id": "infer_toggle",
+                    "label": "推理开关",
+                    "style": "default",
+                    "help": "系统级动作: 翻转本通道YOLO推理的启停状态"
+                }
+            ],
+            "params": [
+                {
+                    "key": "target_label",
+                    "type": "string",
+                    "default": "hook",
+                    "hot_reload": "preserve_state",
+                    "label": "吊钩目标标签",
+                    "help": "YOLO模型检测的吊钩类别名称"
+                },
+                {
+                    "key": "safe_radius",
+                    "type": "int",
+                    "default": 150,
+                    "hot_reload": "preserve_state",
+                    "label": "安全区域半径",
+                    "help": "屏幕中心圆形安全区域的半径(像素, 模型坐标系640x640)",
+                    "min": 20,
+                    "max": 320
+                },
+                {
+                    "key": "exceed_threshold_sec",
+                    "type": "float",
+                    "default": 1.0,
+                    "hot_reload": "preserve_state",
+                    "label": "超限时间阈值(秒)",
+                    "help": "吊钩超出安全区域持续多少秒后触发告警",
+                    "min": 0.1,
+                    "max": 3600.0
+                },
+                {
+                    "key": "cooldown_sec",
+                    "type": "float",
+                    "default": 3.0,
+                    "hot_reload": "preserve_state",
+                    "label": "冷却时间(秒)",
+                    "help": "告警后吊钩回到圈内需连续保持多少秒才复位",
+                    "min": 0.5,
+                    "max": 3600.0
+                },
+                {
+                    "key": "target_lost_tolerance_sec",
+                    "type": "float",
+                    "default": 0.3,
+                    "hot_reload": "preserve_state",
+                    "label": "目标丢失容忍时间(秒)",
+                    "help": "吊钩目标短暂丢失多长时间内视为遮挡不视为真正丢失, 此期间计时暂停",
+                    "min": 0.05,
+                    "max": 5.0
+                },
+                {
+                    "key": "min_target_score",
+                    "type": "float",
+                    "default": 0.0,
+                    "hot_reload": "preserve_state",
+                    "label": "最低置信度",
+                    "help": "YOLO检测结果的最低置信度阈值, 低于此值视为未检测到目标",
+                    "min": 0.0,
+                    "max": 1.0
+                }
+            ]
+        },
+        {
+            "name": "logic_path_sop",
+            "label": "目标路径/顺序/停留检测(SOP编排)",
+            "event_types": [
+                {
+                    "id": "sop_violation",
+                    "label": "SOP 违规",
+                    "help": "工序顺序、停留、耗时、循环或触发条件不符合要求。"
+                },
+                {
+                    "id": "sop_normal",
+                    "label": "SOP 正常完成",
+                    "help": "仅在流程启用正常结果上报且本轮合规完成时产生。"
+                }
+            ],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "flow": {
+                        "type": "object",
+                        "title": "SOP流程",
+                        "description": "SOP子画布生成的完整结构化流程；步骤引用的zoneName必须与ROI名称一致",
+                        "default": {
+                            "target_label": "",
+                            "reset_sec": 5,
+                            "end_mode": "leave",
+                            "end_zone": "",
+                            "end_dwell_sec": 0,
+                            "total_min_sec": 0,
+                            "total_max_sec": 0,
+                            "trigger_mode": "auto",
+                            "trigger_mandatory": false,
+                            "report_normal": false,
+                            "steps": [],
+                            "edges": [],
+                            "edge_limits": [],
+                            "entries": [],
+                            "exits": []
+                        },
+                        "x-hot-reload": "reset_state",
+                        "x-ui-hidden": true
+                    }
+                }
+            },
+            "report_fields": [
+                {
+                    "key": "current_zone",
+                    "type": "string",
+                    "label": "当前区域"
+                },
+                {
+                    "key": "progress",
+                    "type": "number",
+                    "label": "当前步骤序号"
+                },
+                {
+                    "key": "step_count",
+                    "type": "number",
+                    "label": "步骤总数"
+                },
+                {
+                    "key": "round_total_seconds",
+                    "type": "number",
+                    "label": "本轮总耗时(秒)"
+                },
+                {
+                    "key": "order_error",
+                    "type": "boolean",
+                    "label": "是否顺序错误"
+                },
+                {
+                    "key": "completed",
+                    "type": "boolean",
+                    "label": "是否完成"
+                }
+            ],
+            "business_fields": [
+                {
+                    "path": "schema_version",
+                    "type": "number",
+                    "label": "业务JSON版本",
+                    "required": true,
+                    "default_selected": true
+                },
+                {
+                    "path": "event_id",
+                    "type": "string",
+                    "label": "事件ID",
+                    "required": true,
+                    "default_selected": true,
+                    "help": "用于边缘端、Dify核验结果和PostgreSQL记录的一对一关联"
+                },
+                {
+                    "path": "channel_id",
+                    "type": "number",
+                    "label": "视频通道ID",
+                    "default_selected": true
+                },
+                {
+                    "path": "trigger_unix_ms",
+                    "type": "number",
+                    "label": "触发时间戳(毫秒)",
+                    "default_selected": true
+                },
+                {
+                    "path": "snap_time",
+                    "type": "string",
+                    "label": "触发时间文本",
+                    "default_selected": true
+                },
+                {
+                    "path": "end_time",
+                    "type": "string",
+                    "label": "工序结束时间",
+                    "default_selected": true
+                },
+                {
+                    "path": "event_type",
+                    "type": "string",
+                    "label": "业务事件类型",
+                    "required": true,
+                    "default_selected": true
+                },
+                {
+                    "path": "edge_verdict",
+                    "type": "string",
+                    "label": "边缘端初判结果",
+                    "required": true,
+                    "default_selected": true
+                },
+                {
+                    "path": "message",
+                    "type": "string",
+                    "label": "工序结果说明",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.target_label",
+                    "type": "string",
+                    "label": "检测目标类别",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.completed",
+                    "type": "boolean",
+                    "label": "是否完成",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.current_zone",
+                    "type": "string",
+                    "label": "结束时所在区域",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.progress",
+                    "type": "number",
+                    "label": "完成进度",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.step_count",
+                    "type": "number",
+                    "label": "工序步骤总数",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.round_total_seconds",
+                    "type": "number",
+                    "label": "本轮总耗时(秒)",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.end_mode",
+                    "type": "string",
+                    "label": "结束判定方式",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.end_zone",
+                    "type": "string",
+                    "label": "配置的终点区域",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.required_end_dwell_seconds",
+                    "type": "number",
+                    "label": "终点要求停留时间(秒)",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.actual_end_zone_stay_seconds",
+                    "type": "number",
+                    "label": "终点实际连续停留时间(秒)",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.configured_sequence",
+                    "type": "json",
+                    "label": "配置的工序区域序列",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.configured_edges",
+                    "type": "json",
+                    "label": "实际生效的全部路径边",
+                    "default_selected": true,
+                    "help": "包含普通边、分支、回边和自环，可与configured_sequence组合还原完整路径图"
+                },
+                {
+                    "path": "sop.configured_entry_steps",
+                    "type": "json",
+                    "label": "实际生效的入口步骤",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.configured_exit_steps",
+                    "type": "json",
+                    "label": "实际生效的出口步骤",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.zone_history",
+                    "type": "json",
+                    "label": "实际经历区域历史",
+                    "default_selected": true
+                },
+                {
+                    "path": "sop.configured_loop_edges",
+                    "type": "json",
+                    "label": "配置的循环边及次数范围",
+                    "default_selected": true,
+                    "help": "每项包含起止步骤/区域与次数上下限；上下限均为0表示任意次数"
+                },
+                {
+                    "path": "sop.actual_loop_counts",
+                    "type": "json",
+                    "label": "本轮各循环边实际次数",
+                    "default_selected": true,
+                    "help": "正常和违规结果均输出，每项含actual_count与within_range"
+                },
+                {
+                    "path": "alarm_type",
+                    "type": "json",
+                    "label": "正常/违规类型及专属明细",
+                    "default_selected": true,
+                    "help": "完整保留动态违规对象，例如顺序错误、停留不足、停留过长和总耗时异常"
+                }
+            ],
+            "actions": [
+                {
+                    "id": "start_new_run",
+                    "label": "开始新一轮",
+                    "style": "primary",
+                    "help": "适合人工干预后手动开始新工序，或调试时重置当前 SOP 轮次"
+                },
+                {
+                    "id": "sop_trigger",
+                    "label": "外部触发",
+                    "style": "primary",
+                    "help": "在「外部触发」模式下，发送此信号启动新一轮SOP检测。也可由扫码枪、PLC等外部设备通过API调用。"
+                },
+                {
+                    "id": "sop_end_trigger",
+                    "label": "结束触发",
+                    "style": "primary",
+                    "help": "在「外部触发」结束模式下，发送此信号结束当前SOP工序。也可由扫码枪、PLC等外部设备通过API调用。"
+                },
+                {
+                    "id": "infer_toggle",
+                    "label": "推理开关",
+                    "style": "default",
+                    "help": "系统级动作: 翻转本通道YOLO推理的启停状态。点击一次关闭, 再点一次开启, 画面始终正常显示。"
+                }
+            ],
+            "params": []
+        },
+        {
+            "name": "logic_periodic_snapshot_demo",
+            "label": "周期截图与热重载演示",
+            "event_types": [
+                {
+                    "id": "periodic_snapshot_demo",
+                    "label": "周期截图事件",
+                    "help": "达到配置的截图间隔时产生。"
+                }
+            ],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "report_interval_sec": {
+                        "type": "integer",
+                        "title": "参数1：截图上报间隔",
+                        "description": "每隔多少秒创建一条独立截图事件。修改后会清空该逻辑的计时状态，并从新的完整间隔重新计时。",
+                        "minimum": 1,
+                        "maximum": 86400,
+                        "default": 10,
+                        "x-step": 1,
+                        "x-unit": "秒",
+                        "x-hot-reload": "reset_state"
+                    },
+                    "display_number": {
+                        "type": "integer",
+                        "title": "参数2：右上角显示数字",
+                        "description": "显示在实时画面右上角；Web 保存新值后，下一次业务帧立即显示新数字，不重置截图计时。",
+                        "minimum": -999999999,
+                        "maximum": 999999999,
+                        "default": 100,
+                        "x-step": 1,
+                        "x-hot-reload": "preserve_state"
+                    }
+                }
+            },
+            "report_fields": [
+                {
+                    "key": "display_number",
+                    "type": "number",
+                    "label": "截图时显示数字"
+                },
+                {
+                    "key": "report_interval_sec",
+                    "type": "number",
+                    "label": "截图上报间隔（秒）"
+                },
+                {
+                    "key": "report_sequence",
+                    "type": "number",
+                    "label": "本次状态周期事件序号"
+                }
+            ],
+            "params": [
+                {
+                    "key": "report_interval_sec",
+                    "type": "int",
+                    "default": 10,
+                    "hot_reload": "reset_state",
+                    "label": "参数1：截图上报间隔",
+                    "help": "每隔多少秒创建一条独立截图事件。修改后会清空该逻辑的计时状态，并从新的完整间隔重新计时。",
+                    "min": 1,
+                    "max": 86400,
+                    "step": 1,
+                    "unit": "秒"
+                },
+                {
+                    "key": "display_number",
+                    "type": "int",
+                    "default": 100,
+                    "hot_reload": "preserve_state",
+                    "label": "参数2：右上角显示数字",
+                    "help": "显示在实时画面右上角；Web 保存新值后，下一次业务帧立即显示新数字，不重置截图计时。",
+                    "min": -999999999,
+                    "max": 999999999,
+                    "step": 1
+                }
+            ]
+        },
+        {
+            "name": "logic_save_frame_pair",
+            "label": "保存原始帧与缩放帧",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "output_dir": {
+                        "type": "string",
+                        "title": "图片保存目录",
+                        "description": "启用逻辑后保存一张原始分辨率帧和一张模型输入尺寸帧。相对路径以程序工作目录为基准。",
+                        "default": "./captures/frame_pair",
+                        "x-hot-reload": "reset_state"
+                    }
+                }
+            },
+            "report_fields": [],
+            "params": [
+                {
+                    "key": "output_dir",
+                    "type": "string",
+                    "default": "./captures/frame_pair",
+                    "hot_reload": "reset_state",
+                    "label": "图片保存目录",
+                    "help": "启用逻辑后保存一张原始分辨率帧和一张模型输入尺寸帧。相对路径以程序工作目录为基准。"
+                }
+            ]
+        },
+        {
+            "name": "logic_upload_teach",
+            "label": "按钮上报告警示例",
+            "event_types": [
+                {
+                    "id": "upload_teach_demo",
+                    "label": "按钮触发告警",
+                    "help": "点击“生成报警事件”按钮后，在下一张有效视频帧产生。"
+                }
+            ],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "actions": [
+                {
+                    "id": "trigger_teach_report",
+                    "label": "生成报警事件",
+                    "style": "primary",
+                    "help": "点击后按当前连接的告警节点配置生成图片或视频上报事件。"
+                }
+            ],
+            "params": []
+        }
+    ],
+    "global_logics": [
+        {
+            "name": "global_default",
+            "label": "默认全局逻辑",
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "params": []
+        }
+    ],
+    "model_types": [
+        "yolov5",
+        "yolov8_det",
+        "yolov8_pose",
+        "yolov5_seg"
+    ]
+}

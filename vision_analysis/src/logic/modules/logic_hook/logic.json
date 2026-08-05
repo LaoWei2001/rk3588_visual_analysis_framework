@@ -1,0 +1,148 @@
+{
+    "label": "行车吊钩歪拉斜吊检测",
+    "event_types": [
+        {
+            "id": "hook_oblique_pull",
+            "label": "歪拉斜吊告警",
+            "help": "吊钩超出安全圆形区域且持续时间超过阈值时触发。"
+        }
+    ],
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "target_label": {
+                "type": "string",
+                "title": "吊钩目标标签",
+                "description": "YOLO模型检测的吊钩类别名称",
+                "default": "hook"
+            },
+            "safe_radius": {
+                "type": "integer",
+                "title": "安全区域半径",
+                "description": "屏幕中心圆形安全区域的半径(像素, 模型坐标系640x640)",
+                "default": 150,
+                "minimum": 20,
+                "maximum": 320
+            },
+            "exceed_threshold_sec": {
+                "type": "number",
+                "title": "超限时间阈值(秒)",
+                "description": "吊钩超出安全区域持续多少秒后触发告警",
+                "default": 1.0,
+                "minimum": 0.1,
+                "maximum": 3600.0
+            },
+            "cooldown_sec": {
+                "type": "number",
+                "title": "冷却时间(秒)",
+                "description": "告警后吊钩回到圈内需连续保持多少秒才复位",
+                "default": 3.0,
+                "minimum": 0.5,
+                "maximum": 3600.0
+            },
+            "target_lost_tolerance_sec": {
+                "type": "number",
+                "title": "目标丢失容忍时间(秒)",
+                "description": "吊钩目标短暂丢失多长时间内视为遮挡不视为真正丢失, 此期间计时暂停",
+                "default": 0.3,
+                "minimum": 0.05,
+                "maximum": 5.0
+            },
+            "min_target_score": {
+                "type": "number",
+                "title": "最低置信度",
+                "description": "YOLO检测结果的最低置信度阈值, 低于此值视为未检测到目标",
+                "default": 0.0,
+                "minimum": 0.0,
+                "maximum": 1.0
+            }
+        }
+    },
+    "report_fields": [
+        {
+            "key": "target_label",
+            "type": "string",
+            "label": "检测目标标签"
+        },
+        {
+            "key": "hook_center_x",
+            "type": "number",
+            "label": "吊钩中心X坐标"
+        },
+        {
+            "key": "hook_center_y",
+            "type": "number",
+            "label": "吊钩中心Y坐标"
+        },
+        {
+            "key": "safe_radius",
+            "type": "number",
+            "label": "安全区域半径"
+        },
+        {
+            "key": "center_distance",
+            "type": "number",
+            "label": "吊钩距中心距离(px)"
+        },
+        {
+            "key": "exceed_distance",
+            "type": "number",
+            "label": "越界距离(px)"
+        },
+        {
+            "key": "actual_exceed_duration_seconds",
+            "type": "number",
+            "label": "实际超限时长(秒)"
+        },
+        {
+            "key": "threshold_seconds",
+            "type": "number",
+            "label": "告警阈值(秒)"
+        }
+    ],
+    "actions": [
+        {
+            "id": "increase_value",
+            "label": "+0.1秒",
+            "style": "default",
+            "help": "增加当前选中目标(超限阈值/冷却时间) 0.1秒"
+        },
+        {
+            "id": "decrease_value",
+            "label": "-0.1秒",
+            "style": "default",
+            "help": "减少当前选中目标(超限阈值/冷却时间) 0.1秒"
+        },
+        {
+            "id": "toggle_adjust_target",
+            "label": "切换调整目标",
+            "style": "default",
+            "help": "切换+/-按钮控制的参数: 超限阈值 / 冷却时间"
+        },
+        {
+            "id": "increase_radius",
+            "label": "+5px半径",
+            "style": "default",
+            "help": "增加安全区域半径5像素"
+        },
+        {
+            "id": "decrease_radius",
+            "label": "-5px半径",
+            "style": "default",
+            "help": "减少安全区域半径5像素"
+        },
+        {
+            "id": "reset_alarm",
+            "label": "复位告警",
+            "style": "primary",
+            "help": "手动清除当前告警/冷却状态(需确认吊钩在圈内)"
+        },
+        {
+            "id": "infer_toggle",
+            "label": "推理开关",
+            "style": "default",
+            "help": "系统级动作: 翻转本通道YOLO推理的启停状态"
+        }
+    ]
+}

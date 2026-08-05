@@ -1,0 +1,13 @@
+# Dify 投递连接。通道 delivery 引用 profile_id。
+# 地址和密钥集中在这里；字段 mapping、媒体由 contracts/*.json 定义。
+profiles:
+  server_22:
+    adapter: http_json
+    url: http://192.168.2.22:9200/api/objectInvadeDet
+    timeout: 15
+
+  inspection_dify:
+    adapter: dify_workflow
+    api_url: "http://127.0.0.1:9201"
+    api_key: "test-key-123"
+    timeout: 120

@@ -742,7 +742,8 @@ int DecChannel::createVideoDecChannel(bool start_thread)
         return -1;
     }
 
-    g_object_set(mGstChn.source, "location", mCfg.location.c_str(), "latency", 100, "protocols", 0x04, NULL);
+    g_object_set(mGstChn.source, "location", mCfg.location.c_str(), "latency", 100, "protocols", 0x04,
+                 "drop-on-latency", TRUE, NULL);
     g_signal_connect(mGstChn.source, "pad-added", G_CALLBACK(rtsp_pad_added), &mGstChn);
 
     g_object_set_data(G_OBJECT(mGstChn.pipeline), "dec_channel_ptr", this);

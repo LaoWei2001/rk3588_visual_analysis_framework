@@ -220,3 +220,6 @@ TODO:后续需要测试关于添加, 修改参数的这一整套流程。还有�
 
 模块源 `logic.json` 不再声明 `name`；构建生成器从 `REGISTER_LOGIC(logic_func)` 提取函数名并注入生成的 App `logics.json`。模块目录只用于组织源码，可以与 logic ID 不同；每个模块仍必须有 `logic.json`。`REGISTER_LOGIC_ACTION` 的第一参数也改为 logic 入口函数标识符，由宏自动生成同一 logic ID。
 
+#########################
+
+项目移至github进行版本管理

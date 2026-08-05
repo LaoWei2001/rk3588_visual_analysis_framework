@@ -1,0 +1,18 @@
+{
+  "id": "dify_event_video",
+  "label": "Dify 标准事件视频",
+  "description": "提交标准事件、算法字段和事件视频",
+  "adapter": "dify_workflow",
+  "media": ["video"],
+  "mapping": [
+    {"source": "event", "target": "event_json", "transform": "json_string", "required": true},
+    {"source": "fields", "target": "fields_json", "transform": "json_string", "required": true},
+    {
+      "source": "media.video",
+      "target": "video",
+      "transform": "file",
+      "file_mode": "single",
+      "required": true
+    }
+  ]
+}
