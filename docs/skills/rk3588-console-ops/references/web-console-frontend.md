@@ -27,9 +27,9 @@
 | `App.tsx` | 路由 + 侧边栏外壳(`AppShell`):`<Routes>` 定义页面,`<NavLink>` 定义侧边栏入口,登录守卫 `ProtectedRoute` |
 | `api/client.ts` | **所有后端调用的唯一出口**:axios 实例(baseURL `/api`)、Bearer 注入、401 自动登出;每个接口一个导出函数 + TS 类型 |
 | `store/` | 全局状态(zustand):`authStore`(登录 token,持久化)、`consoleStore`、`editorStore`、`roiStore`、`sopUiStore` |
-| `pages/` | 路由页面:`LoginPage` `AppsPage`(程序管理)`EditorPage`(配置画布)`LogsPage` `RecordsPage` `TerminalPage` |
+| `pages/` | 路由页面：`LoginPage`、`AppsPage`、`LiveViewPage`、`EditorPage`、`LogsPage`、`RecordsPage`、`ServicesPage`、`SystemSettingsPage`、`TerminalPage`；系统设置子区在 `pages/settings/` |
 | `pages/terminalSession.ts` | 终端会话单例/注册表(xterm 实例 + WebSocket 常驻,跨路由保活);非 React 组件 |
-| `components/` | 复用组件:`ServicesPanel`(后台服务)`ServiceConfigModal` `NodeConfigPanel`(节点配置面板)`GlobalSettingsPanel`/`GlobalLogicsPanel` `AssetPicker` `NumberField` `ErrorBoundary` 等(ROI 绘制弹窗 `ROIDrawModal` 在 `nodes/ROINode.tsx` 内,不是单独组件) |
+| `components/` | 复用组件:`ServicesPanel`(后台服务)`ServiceConfigModal` `NodeConfigPanel`(节点配置面板)`GlobalSettingsPanel` `AssetPicker` `NumberField` `ErrorBoundary` 等；全局逻辑已是主画布 `GlobalLogicNode`，不再使用底部配置面板(ROI 绘制弹窗 `ROIDrawModal` 在 `nodes/ROINode.tsx` 内,不是单独组件) |
 | `nodes/` | 主画布节点：`StreamNode` `ModelNode` `ROINode` `LogicNode` `ReportNode`，以及 `GlobalNode` / `GlobalLogicNode`；SOP 子画布还使用 `SopNode`、`SopStepNode`、`SopEndStepNode`、`SopSelfLoopEdge` |
 | `utils/configToGraph.ts` / `graphToConfig.ts` | **配置 ↔ 画布的双向转换**:把 `config.json` 还原成画布节点/连线,以及把画布存回 `config.json` |
 
@@ -39,7 +39,7 @@
 - **WebSocket 不走 axios**:手动 `new WebSocket`,且 **token 必须走查询参数** `?token=...`。`/ws/terminal`、`/ws/logs/*` 在各自 WebSocket 路由中调用 `get_session()` 校验，不经过 HTTP `auth_middleware`。MJPEG `<img>` 请求同样不能方便地带 Authorization 头，但它属于 `/api/*` HTTP 请求，由 `auth_middleware` 从 `?token=` 取 token。范例见 `pages/terminalSession.ts`、日志路由和 `streamUrl()`。
 - **状态用 zustand store**:跨组件共享、需要持久化的状态放 `store/`。`authStore` 是范本(`persist` 中间件 → localStorage)。
 - **编辑器是“画布即配置”**：`EditorPage` 用 React Flow 画节点，`configToGraph`/`graphToConfig` 在 `config.json` 和画布之间转换。逻辑节点的可调参数由模块 `logic.json.parameters` 驱动，正常打包聚合成 App 根目录 `logics.json`；后端 `/apps/{name}/logics` 透传生成物，`NodeConfigPanel.LogicForm` 按生成的 `param.type` 自动渲染并把值统一保存到 `logic_parameters`。给普通模块参数增加 Schema 属性时前端无需改代码。逻辑名称只能从清单下拉选择；未知配置会标记警告，而 C++ 也会在 Schema 校验阶段拒绝未编译逻辑。完整机制见 `adding-config-parameter.md` 和 `logic-naming-and-registration.md`。
-- **上报节点是一节点一 delivery**：`ReportForm` 编辑该节点的第一条 delivery；`graphToConfig` 把同一通道连接的多个上报节点合并为 `report_policy.deliveries`。Profile 表单来自 adapter catalog，地址和密钥只在服务 Profile 中保存；节点选择 Profile 与 `services/upload/contracts/*.json` 中的接口契约，画布只保存 `profile_id`、`contract_id` 和 C++ 必需的媒体快照，不复制 adapter/mapping/request/success。`ReportContractEditor` 从当前 `logics.json.report_fields` 动态生成算法 source 下拉项，并合并系统事件、媒体和固定值；保存走 `PUT /apps/{name}/report-contracts/{id}`。断开全部上报节点时写入 `enabled=false, deliveries=[]`。
+- **上报节点是一节点一 delivery**：`ReportForm` 编辑该节点的第一条 delivery；`graphToConfig` 把同一通道连接的多个上报节点合并为 `report_policy.deliveries`。每个节点都有上报开关；关闭的节点保留 delivery 和画布位置但写入 `delivery.enabled=false`，全部节点关闭时同时写入 `report_policy.enabled=false`，C++ 在创建告警箱记录前直接短路。Profile 表单来自 adapter catalog，地址和密钥只在服务 Profile 中保存；节点选择 `.data/<App>/contracts/*.json` 中的接口契约，画布只保存 `profile_id`、`contract_id` 和 C++ 必需的媒体快照，不复制 adapter/mapping/request/success。`ReportContractEditor` 从当前 `logics.json.report_fields` 动态生成算法 source 下拉项，并合并系统事件、媒体和固定值；保存走 `PUT /apps/{name}/report-contracts/{id}`。程序包的 `services/upload/contracts/` 只提供首次迁移默认值。断开全部上报节点时写入 `enabled=false, deliveries=[]`。
 
 ## 四、端到端:常见两类改动怎么做
 

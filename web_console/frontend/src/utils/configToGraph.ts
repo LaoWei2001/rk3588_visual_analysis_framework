@@ -1,6 +1,6 @@
 import { Node, Edge, MarkerType } from '@xyflow/react'
 import { sopParametersToFlow } from './sopFlow'
-import type { GlobalLogicEntry } from '../components/GlobalLogicsPanel'
+import type { GlobalLogicEntry } from './globalLogic'
 import type { GlobalSettingsData } from '../components/GlobalSettingsPanel'
 import { DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
 import type { Zone as RoiZone } from '../store/roiStore'
@@ -25,7 +25,6 @@ export function configToGraph(
   nodes: Node[]
   edges: Edge[]
   roiMapping: Record<string, RoiZone[]>
-  globalLogics: GlobalLogicEntry[]
   globalSettings: GlobalSettingsData
 } {
   // Node IDs are local to this call (counter resets each call); they only wire up
@@ -66,10 +65,17 @@ export function configToGraph(
     enable:           (gl.enable          as boolean) ?? true,
     logic:            (gl.logic           as string)  ?? 'global_default',
     channels:         (gl.channels        as number[]) ?? [],
+    channels_explicit: (gl.channels_explicit as boolean) ?? false,
     poll_interval_ms: (gl.poll_interval_ms as number) ?? 200,
     logic_parameters: gl.logic_parameters && typeof gl.logic_parameters === 'object' &&
       !Array.isArray(gl.logic_parameters)
       ? gl.logic_parameters as Record<string, unknown> : {},
+    report_policy: gl.report_policy && typeof gl.report_policy === 'object' &&
+      !Array.isArray(gl.report_policy) ? gl.report_policy as Record<string, unknown> : undefined,
+    report_parameters: gl.report_parameters && typeof gl.report_parameters === 'object' &&
+      !Array.isArray(gl.report_parameters) ? gl.report_parameters as Record<string, unknown> : undefined,
+    media_source_channel_id: typeof gl.media_source_channel_id === 'number'
+      ? gl.media_source_channel_id : undefined,
   }))
 
   const { global_logics: _gl, ...rawGD } = global
@@ -84,6 +90,7 @@ export function configToGraph(
   const ROW_H     = 360  // leave room for the ROI card above each stream
 
   let modelCoreIndex = 0
+  const channelLogicNodes = new Map<number, string>()
   channels.forEach((ch, idx) => {
     const y      = idx * ROW_H + 60
     const origId = (ch.id as number) ?? idx
@@ -186,6 +193,7 @@ export function configToGraph(
         position: pos('logic', hasModel ? LOGIC_X : MODEL_X, y),  // 传统通道 logic 占据 model 的列位置, 更紧凑
         data: logicData,
       })
+      channelLogicNodes.set(origId, logicId)
       if (hasModel) {
         modelIds.forEach(modelId =>
           edges.push(edge(modelId, 'logic-out', logicId!, 'logic-in', isSop ? '#06b6d4' : '#a855f7')))
@@ -195,12 +203,13 @@ export function configToGraph(
       }
     }
 
-    // ── Report node ── 截图上报或事件视频任一启用时重建。
+    // ── Report node ── deliveries 非空时即重建；禁用节点也必须保留在画布上。
     const policyObj = (_reportPolicy && typeof _reportPolicy === 'object'
       ? _reportPolicy : null) as Record<string, unknown> | null
     const configuredDeliveries = Array.isArray(policyObj?.deliveries)
       ? policyObj!.deliveries as Record<string, unknown>[] : []
-    const hasReportNode = logicId !== null && policyObj?.enabled === true
+    const hasReportNode = logicId !== null &&
+      (policyObj?.enabled === true || configuredDeliveries.length > 0)
     if (hasReportNode && logicId) {
       const nodeDeliveries = configuredDeliveries.length > 0 ? configuredDeliveries : [{
         id: `delivery_ch${origId}`,
@@ -210,13 +219,14 @@ export function configToGraph(
         media: [],
       }]
       nodeDeliveries.forEach((delivery, reportIndex) => {
+        const deliveryEnabled = policyObj?.enabled !== false && delivery.enabled !== false
         const reportId = uid('report')
         const reportData: Record<string, unknown> = {
           logic_name: logic,
           report_policy: {
             ...(policyObj ?? {}),
-            enabled: true,
-            deliveries: [{ ...delivery, enabled: delivery.enabled !== false }],
+            enabled: deliveryEnabled,
+            deliveries: [{ ...delivery, enabled: deliveryEnabled }],
             image_overlay: policyObj?.image_overlay ?? 'custom',
             video_overlay: policyObj?.video_overlay ?? 'custom',
             video_pre_sec: policyObj?.video_pre_sec ?? 3,
@@ -237,5 +247,74 @@ export function configToGraph(
     }
   })
 
-  return { nodes, edges, roiMapping, globalLogics, globalSettings }
+  // ── Global logic nodes ── 输入通道由画布连线表达；旧配置中的 channels: [] 会
+  // 自动连接所有已有的单通道逻辑节点，保存后转成明确的通道 ID 列表。
+  const globalLayout = layout.global ?? {}
+  globalLogics.forEach((entry, globalIndex) => {
+    const globalId = uid('global-logic')
+    const inputChannels = entry.channels.length > 0 || entry.channels_explicit
+      ? entry.channels
+      : [...channelLogicNodes.keys()]
+    const fallbackY = channels.length > 0
+      ? ((channels.length - 1) * ROW_H) / 2 + 60
+      : 80 + globalIndex * 180
+    nodes.push({
+      id: globalId,
+      type: 'globalLogic',
+      position: globalLayout[`logic_${globalIndex}`] ?? { x: 1220, y: fallbackY + globalIndex * 120 },
+      data: {
+        enable: entry.enable,
+        logic: entry.logic,
+        poll_interval_ms: entry.poll_interval_ms,
+        logic_parameters: entry.logic_parameters,
+      },
+    })
+    inputChannels.forEach(channelId => {
+      const sourceId = channelLogicNodes.get(channelId)
+      if (sourceId)
+        edges.push(edge(sourceId, 'global-out', globalId, 'global-in', '#06b6d4'))
+    })
+
+    const policy = entry.report_policy
+    const deliveries = Array.isArray(policy?.deliveries)
+      ? policy!.deliveries as Record<string, unknown>[] : []
+    if (policy?.enabled === true || deliveries.length > 0) {
+      const reportDeliveries = deliveries.length > 0 ? deliveries : [{
+        id: `delivery_global_${globalIndex}`,
+        enabled: true,
+        profile_id: '',
+        contract_id: '',
+        media: [],
+      }]
+      reportDeliveries.forEach((delivery, reportIndex) => {
+        const deliveryEnabled = policy?.enabled !== false && delivery.enabled !== false
+        const reportId = uid('report')
+        nodes.push({
+          id: reportId,
+          type: 'report',
+          position: globalLayout[`report_${globalIndex}_${reportIndex}`]
+            ?? { x: 1500 + reportIndex * 250, y: fallbackY + globalIndex * 120 },
+          data: {
+            logic_name: entry.logic,
+            logic_kind: 'global',
+            media_source_channel_id: entry.media_source_channel_id ?? inputChannels[0],
+            report_policy: {
+              ...policy,
+              enabled: deliveryEnabled,
+              deliveries: [{ ...delivery, enabled: deliveryEnabled }],
+              image_overlay: policy?.image_overlay ?? 'custom',
+              video_overlay: policy?.video_overlay ?? 'custom',
+              video_pre_sec: policy?.video_pre_sec ?? 3,
+              video_post_sec: policy?.video_post_sec ?? 3,
+              video_fps: policy?.video_fps ?? 15,
+            },
+            report_parameters: entry.report_parameters ?? {},
+          },
+        })
+        edges.push(edge(globalId, 'report-out', reportId, 'report-in', '#ef4444'))
+      })
+    }
+  })
+
+  return { nodes, edges, roiMapping, globalSettings }
 }

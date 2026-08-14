@@ -152,12 +152,19 @@ bool analyzer_publish_runtime_snapshot(const AppConfig &config, uint64_t generat
             pthread_mutex_lock(&g_pCtrl->chn_mtx[channel_id]);
             ChannelState &state = g_pCtrl->channels_state[channel_id];
             state.logic_state.reset();
+            state.logic_outputs = LogicOutputSet();
             state.last_results.clear();
             state.draw_cmds.clear();
+            state.last_frame.release();
+            state.last_logic_frame.release();
             state.logic_display_frame.release();
             state.logic_frame_id = 0;
-            state.result_frame_seq = 0;
-            state.last_logic_ts_ms = steady_now_ms();
+            state.published_frame_seq = 0;
+            const uint64_t now_ms = steady_now_ms();
+            state.last_logic_ts_ms = now_ms;
+            const bool configured_infer = config_utils::is_channel_infer_enabled(*next_channel);
+            const int effective_infer = configured_infer && state.infer_runtime_enable;
+            state.commit_publication(next, now_ms, 0, 0, effective_infer);
             pthread_mutex_unlock(&g_pCtrl->chn_mtx[channel_id]);
         }
     }
@@ -210,19 +217,21 @@ static const cv::Mat *get_source_frame_bgr(void *opaque)
  *
  * 持 chn_mtx[chnId] 的时间窗口（已优化）：
  *   fn(&ctx) 在锁外运行；仅写回 last_logic_frame/last_results/draw_cmds 时短暂持锁。
- * 这使 get_channel_snapshot() 等待时间从"logic 执行时长"降至"赋值时长"（μs 级）。
+ * 这使快照读取等待时间从"logic 执行时长"降至"赋值时长"（μs 级）。
  *
  * @param chnId          通道号
  * @param frame_for_logic 与 current_results 严格同帧的 640 BGR 图
  * @param current_results 当帧检测结果（tracker 已更新 track_id）
- * @param frame_id        帧序号（用于写 result_frame_seq）
+ * @param frame_id        帧序号（用于写 published_frame_seq）
  * @param timestamp_ms    帧时间戳（毫秒）
+ * @param unix_ms         帧 Unix epoch 时间戳（毫秒）
  * @param dt_ms           距上一帧的时间间隔（毫秒），供 logic 做积分
  * @param infer_enabled   本通道是否开启推理（透传给 ctx）
  * @param raw_frame       当前同步解码源帧；异步推理路径中不含有效 source_data
  */
 static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std::vector<AlgoResult> &current_results,
-                                 int64_t frame_id, uint64_t timestamp_ms, float dt_ms, int infer_enabled,
+                                 int64_t frame_id, uint64_t timestamp_ms, uint64_t unix_ms, float dt_ms,
+                                 int infer_enabled,
                                  const ChannelRawFrame *raw_frame,
                                  const std::shared_ptr<const AppRuntimeSnapshot> &runtime)
 {
@@ -241,18 +250,32 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         ch_state.last_logic_frame = frame_for_logic;
         ch_state.logic_state.reset();
+        ch_state.logic_outputs = LogicOutputSet();
         ch_state.last_results = current_results;
-        ch_state.result_frame_seq = frame_id;
-        ch_state.last_result_ts_ms = steady_now_ms();
+        ch_state.published_frame_seq = frame_id;
         ch_state.draw_cmds.clear();
         ch_state.logic_display_frame.release();
+        ch_state.commit_publication(runtime, steady_now_ms(), timestamp_ms, unix_ms, infer_enabled);
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
         return;
     }
 
     ChannelLogicFunc fn = channel_logic_get(logic_name.c_str());
     if (!fn)
+    {
+        pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
+        ChannelState &state = g_pCtrl->channels_state[chnId];
+        state.last_logic_frame = frame_for_logic;
+        state.logic_state.reset();
+        state.logic_outputs = LogicOutputSet();
+        state.last_results = current_results;
+        state.published_frame_seq = frame_id;
+        state.draw_cmds.clear();
+        state.logic_display_frame.release();
+        state.commit_publication(runtime, steady_now_ms(), timestamp_ms, unix_ms, infer_enabled);
+        pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
         return;
+    }
 
     ChannelState &ch_state = g_pCtrl->channels_state[chnId];
     std::shared_ptr<void> logic_state;
@@ -269,15 +292,14 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
     pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
     ctx.frame_id = frame_id;
     ctx.timestamp_ms = timestamp_ms;
-    /* 墙上时钟(epoch ms): RTSP/USB/文件 三源统一在此盖一次, logic 读 ctx->unix_ms / time_hms()
-     * 即得本帧真实时间。这是"处理本帧的时刻", 与采集相差一个管线延迟(对 HH:MM:SS 显示无感)。 */
-    ctx.unix_ms = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count());
+    /* RTSP/USB/文件统一透传业务帧进入分析管线时的墙钟，异步推理不会把完成时间误当帧时间。 */
+    ctx.unix_ms = unix_ms;
     ctx.dt_ms = dt_ms;
     ctx.results = &current_results;
     ctx.config = channel_config;
     ctx.logic_parameters = runtime_logic_parameters;
+    LogicOutputSet logic_outputs;
+    ctx.outputs = &logic_outputs;
     /* 多 ROI 顶点均为模型坐标系。 */
     ctx.rois = runtime_rois;
     ctx.state = &logic_state;
@@ -329,14 +351,14 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
     }
     fn(&ctx);
 
-    /* 原子写回共享状态：get_channel_snapshot() 在同一把锁内读出，三者必定同帧。*/
+    /* 原子写回共享状态：媒体快照在同一把锁内读出，三者必定同帧。*/
     {
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         ch_state.last_logic_frame = frame_for_logic;
         ch_state.logic_state = std::move(logic_state);
+        ch_state.logic_outputs = std::move(logic_outputs);
         ch_state.last_results = current_results;
-        ch_state.result_frame_seq = frame_id;
-        ch_state.last_result_ts_ms = steady_now_ms();
+        ch_state.published_frame_seq = frame_id;
         ch_state.draw_cmds = std::move(draw_cmds);
         /* logic 拦截了整帧 → 存为本通道显示底图；否则清掉，显示回到实时采集帧 */
         if (show_canvas && !canvas_buf.empty())
@@ -348,6 +370,7 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
         {
             ch_state.logic_display_frame.release();
         }
+        ch_state.commit_publication(runtime, steady_now_ms(), timestamp_ms, unix_ms, infer_enabled);
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
     }
 }
@@ -385,20 +408,44 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
     }
 
     const uint64_t now_ms = steady_now_ms();
+    const uint64_t logic_time_ms = raw_frame.frame_steady_ms != 0 ? raw_frame.frame_steady_ms : now_ms;
 
-    int infer_enabled = 0;
-    infer_enabled = config_utils::is_channel_infer_enabled(*channel_config) ? 1 : 0;
+    int infer_enabled = config_utils::is_channel_infer_enabled(*channel_config) ? 1 : 0;
+    if (infer_enabled)
+    {
+        pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
+        infer_enabled = ch_state.infer_runtime_enable ? 1 : 0;
+        pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
+    }
+
+    if (new_results)
+    {
+        pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
+        const bool stale_after_reconnect =
+            ch_state.online_ts_ms != 0 && raw_frame.frame_steady_ms != 0 &&
+            raw_frame.frame_steady_ms <= ch_state.online_ts_ms;
+        const bool reject_result = ch_state.online_state != CH_ONLINE || stale_after_reconnect;
+        pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
+        if (reject_result)
+            return {};
+    }
+
+    /* 运行时关闭推理后，丢弃关闭前仍在途的旧 NPU 结果；后续解码帧会走同步传统 CV 路径。 */
+    if (!infer_enabled && new_results)
+        return {};
 
     /* ---- 路径1：非推理通道 / 无结果直通 ---- */
-    if (!infer_enabled || !new_results)
+    if (!new_results)
     {
         int64_t logic_frame_id = 0;
         float dt_ms = 0.0f;
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         logic_frame_id = ++ch_state.logic_frame_id;
         if (logic_frame_id > 1)
-            dt_ms = static_cast<float>(now_ms - ch_state.last_logic_ts_ms);
-        ch_state.last_logic_ts_ms = now_ms;
+            dt_ms = logic_time_ms >= ch_state.last_logic_ts_ms
+                        ? static_cast<float>(logic_time_ms - ch_state.last_logic_ts_ms)
+                        : 0.0f;
+        ch_state.last_logic_ts_ms = logic_time_ms;
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
 
         std::vector<AlgoResult> empty_results;
@@ -406,8 +453,9 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
          * 跳过 logic 调用，避免 logic 对空 cv::Mat 做矩阵运算崩溃。 */
         if (!raw_frame.model_input_mat.empty())
         {
-            invoke_channel_logic(chnId, raw_frame.model_input_mat, empty_results, logic_frame_id, now_ms, dt_ms,
-                                 infer_enabled, &raw_frame, runtime);
+            const uint64_t frame_unix_ms = raw_frame.frame_unix_ms != 0 ? raw_frame.frame_unix_ms : system_now_ms();
+            invoke_channel_logic(chnId, raw_frame.model_input_mat, empty_results, logic_frame_id, logic_time_ms,
+                                 frame_unix_ms, dt_ms, infer_enabled, &raw_frame, runtime);
         }
         return empty_results;
     }
@@ -419,15 +467,20 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
     pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
     const int64_t logic_frame_id = ++ch_state.logic_frame_id;
     if (logic_frame_id > 1)
-        dt_ms = static_cast<float>(now_ms - ch_state.last_logic_ts_ms);
-    ch_state.last_logic_ts_ms = now_ms;
+        dt_ms = logic_time_ms >= ch_state.last_logic_ts_ms
+                    ? static_cast<float>(logic_time_ms - ch_state.last_logic_ts_ms)
+                    : 0.0f;
+    ch_state.last_logic_ts_ms = logic_time_ms;
     pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
 
     if (Tracker *tracker = get_tracker(chnId, channel_config))
         tracker->update(results);
 
     const int64_t frame_seq = result_frame_id;
-    const uint64_t frame_ts = !results.empty() ? results.front().timestamp_ms : now_ms;
+    const uint64_t frame_ts = raw_frame.frame_steady_ms != 0
+                                  ? raw_frame.frame_steady_ms
+                                  : (!results.empty() ? results.front().timestamp_ms : now_ms);
+    const uint64_t frame_unix_ms = raw_frame.frame_unix_ms != 0 ? raw_frame.frame_unix_ms : system_now_ms();
 
     const cv::Mat &frame_for_logic = (infer_frame && !infer_frame->empty()) ? *infer_frame : raw_frame.model_input_mat;
 
@@ -437,6 +490,7 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
     /* 防御：若 infer_frame 与 last_frame 均为空（极少见），跳过 logic 调用。*/
     if (frame_for_logic.empty())
         return out;
-    invoke_channel_logic(chnId, frame_for_logic, out, frame_seq, frame_ts, dt_ms, infer_enabled, &raw_frame, runtime);
+    invoke_channel_logic(chnId, frame_for_logic, out, frame_seq, frame_ts, frame_unix_ms, dt_ms, infer_enabled,
+                         &raw_frame, runtime);
     return out;
 }

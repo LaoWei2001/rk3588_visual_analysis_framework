@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 #include <pthread.h>
 #include <unistd.h>
 
@@ -28,10 +29,13 @@ struct GlobalLogicThread
     std::shared_ptr<void> state;
     LogicParameterSet logic_parameters;
     int64_t tick_id;
+    uint64_t last_tick_steady_ms;
 
-    std::vector<std::vector<AlgoResult>> results_cache;
     std::vector<int> channel_ids;
-    std::vector<uint64_t> last_infer_ts_ms;
+    std::vector<unsigned char> channel_observed;
+    std::vector<uint64_t> last_publication_seq;
+    std::vector<ChannelLogicSnapshot> channel_snapshots;
+    std::vector<ChannelUpdate> updated_channels;
 
     GlobalContext gctx;
     GlobalLogicFunc func;
@@ -127,6 +131,12 @@ static uint64_t steady_now_ms(void)
     return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 }
 
+static uint64_t system_now_ms(void)
+{
+    auto now = std::chrono::system_clock::now();
+    return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+}
+
 /*======================== 全局逻辑线程入口 (pthread) ========================*/
 void *global_logic_thread_func(void *arg)
 {
@@ -137,7 +147,7 @@ void *global_logic_thread_func(void *arg)
     printf("[GlobalLogic] Thread started: logic=%s poll=%dms channels=", t->config.logic.c_str(),
            t->config.poll_interval_ms);
     if (t->config.channels.empty())
-        printf("ALL\n");
+        printf("%s\n", t->config.channels_explicit ? "NONE" : "ALL");
     else
     {
         for (size_t i = 0; i < t->config.channels.size(); ++i)
@@ -146,7 +156,7 @@ void *global_logic_thread_func(void *arg)
 
     APP_CTRL *ctrl = g_pCtrl;
     t->channel_ids.clear();
-    if (t->config.channels.empty() && ctrl)
+    if (t->config.channels.empty() && !t->config.channels_explicit && ctrl)
     {
         auto runtime = app_ctrl_get_runtime_snapshot();
         if (runtime)
@@ -167,10 +177,10 @@ void *global_logic_thread_func(void *arg)
     }
 
     int ch_count = (int)t->channel_ids.size();
-    t->results_cache.assign(ch_count, {});
-    t->last_infer_ts_ms.assign(ch_count, 0);
-    for (int i = 0; i < ch_count; ++i)
-        t->last_infer_ts_ms[i] = app_ctrl_get_last_infer_ts_ms(t->channel_ids[i]);
+    t->channel_observed.assign(ch_count, 0);
+    t->last_publication_seq.assign(ch_count, 0);
+    t->channel_snapshots.reserve(ch_count);
+    t->updated_channels.reserve(ch_count);
 
     int poll_ms = std::max(10, t->config.poll_interval_ms);
     if (ctrl && !t->channel_ids.empty())
@@ -200,38 +210,57 @@ void *global_logic_thread_func(void *arg)
         if (!t->running.load())
             break;
 
-        uint64_t tick_begin_ms = steady_now_ms();
+        const uint64_t tick_begin_ms = steady_now_ms();
+        const uint64_t tick_unix_ms = system_now_ms();
+        const float dt_ms = t->last_tick_steady_ms == 0
+                                ? 0.0f
+                                : static_cast<float>(tick_begin_ms - t->last_tick_steady_ms);
+        t->last_tick_steady_ms = tick_begin_ms;
 
-        int has_new_infer = 0;
-        int latest_infer_channel = -1;
-        uint64_t latest_infer_ts_ms = 0;
+        t->channel_snapshots.clear();
+        t->updated_channels.clear();
 
         for (int i = 0; i < ch_count; ++i)
         {
             const int channel_id = t->channel_ids[i];
-            uint64_t infer_ts_ms = app_ctrl_get_last_infer_ts_ms(channel_id);
-            if (infer_ts_ms > t->last_infer_ts_ms[i])
+            ChannelLogicSnapshot snapshot;
+            if (!app_ctrl_get_channel_logic_snapshot(channel_id, &snapshot))
+                continue;
+
+            const uint64_t previous_seq = t->last_publication_seq[i];
+            const uint64_t current_seq = snapshot.publication_seq;
+            if (current_seq != previous_seq)
             {
-                t->last_infer_ts_ms[i] = infer_ts_ms;
-                has_new_infer = 1;
-                t->results_cache[i] = app_ctrl_get_results_fresh(channel_id, t->config.poll_interval_ms * 3);
+                const bool initial_snapshot = t->channel_observed[i] == 0;
+                const uint64_t revision_count =
+                    initial_snapshot ? 1 : (current_seq > previous_seq ? current_seq - previous_seq : 1);
+                ChannelUpdate update;
+                update.channel_id = channel_id;
+                update.initial_snapshot = initial_snapshot;
+                update.previous_publication_seq = previous_seq;
+                update.publication_seq = current_seq;
+                update.revision_count = revision_count;
+                update.missed_revisions = revision_count > 0 ? revision_count - 1 : 0;
+                update.published_steady_ms = snapshot.published_steady_ms;
+                t->updated_channels.push_back(update);
+                t->last_publication_seq[i] = current_seq;
             }
-            if (t->last_infer_ts_ms[i] > latest_infer_ts_ms)
-            {
-                latest_infer_ts_ms = t->last_infer_ts_ms[i];
-                latest_infer_channel = t->channel_ids[i];
-            }
+            t->channel_observed[i] = 1;
+            t->channel_snapshots.push_back(std::move(snapshot));
         }
 
+        const auto runtime = app_ctrl_get_runtime_snapshot();
         t->gctx.config = &t->config;
         t->gctx.state = &t->state;
         t->gctx.logic_parameters = &t->logic_parameters;
-        t->gctx.timestamp_ms = steady_now_ms();
-        t->gctx.tick_id = ++t->tick_id;
-        t->gctx.channel_ids = &t->channel_ids;
-        t->gctx.has_new_infer = has_new_infer;
-        t->gctx.latest_infer_channel = latest_infer_channel;
-        t->gctx.latest_infer_ts_ms = latest_infer_ts_ms;
+        t->gctx.steady_ms = tick_begin_ms;
+        t->gctx.unix_ms = tick_unix_ms;
+        t->gctx.dt_ms = dt_ms;
+        t->gctx.tick_id = t->tick_id++;
+        t->gctx.effective_poll_interval_ms = poll_ms;
+        t->gctx.runtime_generation = runtime ? runtime->generation : 0;
+        t->gctx.channel_snapshots = &t->channel_snapshots;
+        t->gctx.updated_channels = &t->updated_channels;
 
         if (t->func)
             t->func(&t->gctx);
@@ -283,6 +312,7 @@ int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs)
         t->stop_requested.store(false);
         t->func = fn;
         t->tick_id = 0;
+        t->last_tick_steady_ms = 0;
         std::vector<LogicParameterError> parameter_errors;
         if (!logic_parameters_resolve(cfg.logic, cfg.logic_parameters_json, nullptr, &t->logic_parameters,
                                       &parameter_errors))

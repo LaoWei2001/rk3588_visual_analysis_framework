@@ -82,7 +82,7 @@ struct ChannelConfig
 {
     int id = -1;
     bool enable = true;
-    bool infer_enable = true; /* 是否启用 YOLO 推理。false=不进 NPU；仍解码/显示，配置了后处理时以空 results 逐帧调用 */
+    bool infer_enable = true; /* false=不进 NPU；仍解码/显示，并在 max_fps 节流命中的业务帧以空 results 调用后处理 */
     bool swap_rb = false; /* 仅显示: 1=该通道画面 R/B 互换显示(跳过显示前 BGR→RGB);不影响推理/上报 */
     StreamConfig stream;
     std::string logic = ""; /* 可选后处理模块；空=不执行模块，仅保留视频/模型结果绘制 */
@@ -113,17 +113,26 @@ struct GlobalLogicConfig
     bool enable = false;                  /* 是否启用 */
     std::string logic = "global_default"; /* 逻辑名称 */
     std::vector<int> channels;            /* 监控的通道列表，空 = 全部 */
+    bool channels_explicit = false;       /* true 时空数组=无输入；画布节点使用，旧配置保持空=全部 */
     int poll_interval_ms = 100;           /* 轮询间隔 (毫秒) */
     /* 全局逻辑模块专有参数：由 global_modules/<name>/logic.json 统一定义和校验。 */
     std::string logic_parameters_json = "{}";
+    /* 与 ChannelConfig 完全相同的统一事件上报配置，由画布上的上报节点生成。 */
+    std::string report_policy_json = "{}";
+    std::string report_parameters_json = "{}";
+    int media_source_channel_id = -1; /* 全局事件来源/视频通道；-1 = EventRequest 未指定时使用首个输入通道 */
+    EventVideoRuntimeConfig event_video;
 };
 
 /* 用于热重载时检测 global_logics 数组是否变化, 任一字段不同即视为变化 */
 inline bool operator==(const GlobalLogicConfig &a, const GlobalLogicConfig &b)
 {
     return a.enable == b.enable && a.logic == b.logic && a.channels == b.channels &&
+           a.channels_explicit == b.channels_explicit &&
            a.poll_interval_ms == b.poll_interval_ms &&
-           a.logic_parameters_json == b.logic_parameters_json;
+           a.logic_parameters_json == b.logic_parameters_json && a.report_policy_json == b.report_policy_json &&
+           a.report_parameters_json == b.report_parameters_json &&
+           a.media_source_channel_id == b.media_source_channel_id;
 }
 inline bool operator!=(const GlobalLogicConfig &a, const GlobalLogicConfig &b)
 {

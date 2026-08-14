@@ -30,11 +30,14 @@
 
 /*======================== 取结果（dispatch_worker 调用）========================*/
 
-bool algorithm_take_results(int chnId, std::vector<AlgoResult> &out, cv::Mat &out_frame, int64_t &out_frame_id)
+bool algorithm_take_results(int chnId, std::vector<AlgoResult> &out, cv::Mat &out_frame, int64_t &out_frame_id,
+                            uint64_t &out_frame_steady_ms, uint64_t &out_frame_unix_ms)
 {
     out.clear();
     out_frame.release();
     out_frame_id = 0;
+    out_frame_steady_ms = 0;
+    out_frame_unix_ms = 0;
     if (chnId < 0 || chnId >= MAX_CHANNEL_NUM)
         return false;
 
@@ -44,6 +47,8 @@ bool algorithm_take_results(int chnId, std::vector<AlgoResult> &out, cv::Mat &ou
         out = std::move(g_algo.channel_results[chnId].data);
         out_frame = std::move(g_algo.channel_results[chnId].data_frame);
         out_frame_id = g_algo.channel_results[chnId].latest_seq;
+        out_frame_steady_ms = g_algo.channel_results[chnId].frame_steady_ms;
+        out_frame_unix_ms = g_algo.channel_results[chnId].frame_unix_ms;
         g_algo.channel_results[chnId].has_new = 0;
         pthread_mutex_unlock(&g_algo.channel_results[chnId].mtx);
         return true;
@@ -326,7 +331,7 @@ void algorithm_deinit()
 /*======================== 帧入队（videoOutHandle 调用）========================*/
 
 int algorithm_process_mat(int chnId, cv::Mat &&frame, int fd, int srcW, int srcH, int srcFmt, int srcStrH, int srcStrV,
-                          int64_t frame_seq)
+                          int64_t frame_seq, uint64_t frame_steady_ms, uint64_t frame_unix_ms)
 {
     if (!g_algo.running)
         return -1;
@@ -371,6 +376,8 @@ int algorithm_process_mat(int chnId, cv::Mat &&frame, int fd, int srcW, int srcH
                 task.img = std::move(frame);
                 task.enqueue_tp = std::chrono::steady_clock::now();
                 task.frame_seq = frame_seq > 0 ? frame_seq : g_fps[chnId].next_frame_seq();
+                task.frame_steady_ms = frame_steady_ms;
+                task.frame_unix_ms = frame_unix_ms;
                 if (fd >= 0)
                     task.src_buf = rga_import_src_fd(fd, srcW, srcH, srcStrH, srcStrV, srcFmt);
                 task.srcW = srcW;

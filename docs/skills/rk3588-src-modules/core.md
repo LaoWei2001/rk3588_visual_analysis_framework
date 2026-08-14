@@ -20,16 +20,20 @@
 | 字段组 | 主要写方 | 访问约束 |
 |---|---|---|
 | `tile_staging`、显示 FPS 计数 | display worker | worker 独占；跨线程读取 FPS 走 API/锁 |
-| `last_infer_ts_ms` | frame inlet | 健康检查按现有接口读取 |
-| 在线状态、结果、ROI、draw、logic state、匹配帧和序号、运行时推理开关 | analyzer/control/config reload | 由 `chn_mtx[chnId]` 保护 |
+| `last_input_frame_steady_ms` | frame inlet | 所有通道统一的输入健康时间，不依赖是否启用 NPU |
+| 在线状态、结果、ROI、draw、logic state、匹配帧、发布序号和运行时推理开关 | analyzer/control/config reload | 由 `chn_mtx[chnId]` 保护 |
 
 不要长时间持有 `chn_mtx` 做 OpenCV、推理、网络或磁盘工作。惯用模式是锁内复制必要值，锁外计算，再锁内一次性提交。
 
-## 同帧快照
+## 发布与快照
 
-`app_ctrl_get_channel_snapshot()` 在一把通道锁内复制 `last_logic_frame`、`last_results`、logic state、FPS、在线状态、帧序号和结果年龄。`ChannelContext::get_channel_snapshot()` 与 `GlobalContext::get_channel_snapshot()` 是业务层包装。
+通道管线在一把锁内提交 frame/results/outputs、生产配置代和单调递增的 `publication_seq`。
+`app_ctrl_get_channel_logic_snapshot()` 只复制业务变量、同代参数、版本、时间、在线状态和性能元信息；
+全局线程每个 tick 先为所有输入通道固定一批此类快照。`app_ctrl_get_channel_frame_snapshot()` 在同一
+轻量元信息之外深拷贝 frame/results/draw，供媒体和确实需要原始结果的算法使用。
 
-快照的 frame/results 同帧；普通实时显示则允许“最新画面 + 最近结果”。跨通道逻辑需要同帧语义时只能用快照，不要分别调用多个 getter 拼接。
+单通道快照内部同代；不同摄像头仍不保证同一采集时刻，时序融合要比较 `frame_steady_ms` 并定义偏差。
+`publication_seq` 的差值还能识别轮询期间跳过的中间版本，但瞬时 outputs 本身只保留最新值。
 
 其他安全查询包括结果/新鲜结果、目标数量、display/infer FPS、最后推理时间和 logic 名称。调用前仍应检查通道范围和返回值；新鲜结果 API 的年龄阈值用于避免断流后使用旧检测。
 

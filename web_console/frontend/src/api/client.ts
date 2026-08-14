@@ -168,6 +168,12 @@ export interface ReportField {
   label?: string
   help?: string
 }
+export interface LogicOutputDef {
+  key: string
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'json'
+  label?: string
+  help?: string
+}
 export interface EventTypeDef {
   id: string
   label?: string
@@ -189,6 +195,7 @@ export interface LogicDef {
   event_types?: EventTypeDef[]                            // 本逻辑可产生的 EventRequest.event_type
   report_fields?: ReportField[]                            // C++ EventRequest.fields 只读字段清单
   business_fields?: BusinessField[]                        // 完整业务 JSON 字段目录
+  outputs?: LogicOutputDef[]                               // 通道 logic 向全局 logic 公开的同帧变量
 }
 
 export interface AppLogics {
@@ -328,6 +335,124 @@ export interface StreamHealth {
 
 export const fetchStreamHealth = (name: string) =>
   api.get<StreamHealth>(`/apps/${name}/stream-health`).then(r => r.data)
+
+// ── 设备系统设置 ────────────────────────────────────────────────────────────
+export interface DailyRebootSettings {
+  enabled: boolean
+  time: string
+  installed: boolean
+  active: boolean
+  unit_enabled: boolean
+  next_run: string | null
+  timezone: string
+  current_time: string
+  current_time_epoch_ms: number
+  utc_offset_minutes: number
+  error: string | null
+}
+
+export const fetchDailyRebootSettings = () =>
+  api.get<DailyRebootSettings>('/system/daily-reboot').then(r => r.data)
+
+export const saveDailyRebootSettings = (enabled: boolean, time: string) =>
+  api.put<DailyRebootSettings & { ok: boolean }>('/system/daily-reboot', { enabled, time }).then(r => r.data)
+
+export const fetchSystemTimezones = () =>
+  api.get<{ timezones: string[] }>('/system/timezones').then(r => r.data.timezones)
+
+export const saveSystemTimezone = (timezone: string) =>
+  api.put<DailyRebootSettings & { ok: boolean }>('/system/timezone', { timezone }).then(r => r.data)
+
+export interface StorageCleanupResult {
+  finished_unix_ms: number
+  deleted_count: number
+  deleted_bytes: number
+  skipped_active: number
+}
+
+export interface RootCleanupTarget {
+  key: string
+  label: string
+  description: string
+  path: string
+  exists: boolean
+  bytes: number
+}
+
+export interface RootCleanupResult {
+  finished_unix_ms: number
+  deleted_count: number
+  freed_bytes: number
+  deleted: Array<{ key: string; path: string; bytes: number }>
+  errors: Array<{ key: string; path: string; error: string }>
+}
+
+export interface StorageSettings {
+  auto_cleanup: boolean
+  retention_days: number
+  max_event_store_gb: number
+  min_free_gb: number
+  storage_path: string
+  total_bytes: number
+  used_bytes: number
+  free_bytes: number
+  used_percent: number
+  event_bytes: number
+  event_count: number
+  root_cleanup_targets: RootCleanupTarget[]
+  last_cleanup: StorageCleanupResult | null
+}
+
+export const fetchStorageSettings = () =>
+  api.get<StorageSettings>('/system/storage').then(r => r.data)
+
+export const saveStorageSettings = (settings: Pick<StorageSettings,
+  'auto_cleanup' | 'retention_days' | 'max_event_store_gb' | 'min_free_gb'>) =>
+  api.put<StorageSettings & { ok: boolean }>('/system/storage', settings).then(r => r.data)
+
+export const cleanupStorageNow = () =>
+  api.post<StorageSettings & { ok: boolean; cleanup: StorageCleanupResult }>('/system/storage/cleanup').then(r => r.data)
+
+export const cleanupRootStorageTargets = (targets: string[]) =>
+  api.post<StorageSettings & { ok: boolean; root_cleanup: RootCleanupResult }>(
+    '/system/storage/root-cleanup', { targets },
+  ).then(r => r.data)
+
+export interface NetworkInterfaceInfo {
+  device: string
+  type: 'ethernet' | 'wifi'
+  state: string
+  connection: string
+  connection_uuid: string | null
+  mac: string
+  addresses: string[]
+  gateway: string
+  dns: string[]
+  ipv4_method: string
+  configurable: boolean
+}
+
+export interface NetworkSettings {
+  hostname: string
+  manager: string
+  config_supported: boolean
+  interfaces: NetworkInterfaceInfo[]
+  error: string | null
+}
+
+export const fetchNetworkSettings = () =>
+  api.get<NetworkSettings>('/system/network').then(r => r.data)
+
+export const saveDeviceHostname = (hostname: string) =>
+  api.put<{ ok: boolean; hostname: string }>('/system/network/hostname', { hostname }).then(r => r.data)
+
+export const saveNetworkIPv4 = (config: {
+  connection_uuid: string
+  method: 'auto' | 'manual'
+  address: string
+  gateway: string
+  dns: string[]
+}) => api.put<{ ok: boolean; activation_scheduled: boolean }>('/system/network/ipv4', config).then(r => r.data)
 
 // ── 板端后台服务 (systemd 单元: OTA 升级 / 告警上报) ────────────────────────
 export interface ServiceInfo {

@@ -90,7 +90,7 @@ build.sh现可以自动判断平台类型(arm/x86)进行不同的编译方式，
 
 ## 2026.05.15
 
-如果多个通道共用同一个逻辑，逻辑内部需要跨帧保存的变量必须使用 `ctx->state` 维护，否则不同通道的数据会混在一起。当前可对照 `logic_upload` 的闩锁和 `logic_button_demo` 的动作状态。
+如果多个通道共用同一个逻辑，逻辑内部需要跨帧保存的变量必须使用 `ctx->state` 维护，否则不同通道的数据会混在一起。当时可对照 `logic_upload` 和 `logic_button_demo`；这两个模块后来已删除，现行示例从通道 logic Skill 的模块清单选择。
 
 错误例子:
 
@@ -112,9 +112,11 @@ struct XxxState
 };
 static void logic_xxx(ChannelContext *ctx)
 {
-    if (!ctx->state)
-        ctx->state = std::make_shared<XxxState>();
-    auto &s = *std::static_pointer_cast<XxxState>(ctx->state);
+    if (!ctx || !ctx->state)
+        return;
+    if (!*ctx->state)
+        *ctx->state = std::make_shared<XxxState>();
+    auto &s = *std::static_pointer_cast<XxxState>(*ctx->state);
 
     // 直接用 s.last_ts、s.first，每个通道就使用的是独立的变量
 }
@@ -213,6 +215,10 @@ TODO:后续需要测试关于添加, 修改参数的这一整套流程。还有�
 截至 2026.07.14，当时生产 `src/logic/` 的具体实现为 `logic_default`、`logic_upload`、`logic_button_demo` 和 `logic_path_sop`。当日删除了文档中对已不存在的 `logic_server`、`logic_dify`、`logic_hook` 等示例的现行引用，并按当时源码补齐四篇示例。后续又增加了正式模块，因此这四项不能作为现行清单。ROI 在该阶段从通道内嵌配置加载并支持热更新；通道数量、顺序或 id 的拓扑变化仍要求重启。
 
 全局逻辑当前没有接受 `GlobalContext*` 的统一媒体告警入口。跨通道规则若需图片/视频告警，应由明确的锚点通道 logic 提交，或先新增线程安全的公共 API；不能伪造 `ChannelContext`。
+
+> 后续更正（2026-08-14）：现行 `event_report.h` 已提供
+> `report_event(GlobalContext*, const EventRequest&)`。全局事件图片拼接该实例全部输入通道，来源标识
+> 和事件视频通道可由 `EventRequest.source_channel_id` 选择；上面一句只代表 2026.07.14 当时边界。
 
 ## 2026.07.16
 

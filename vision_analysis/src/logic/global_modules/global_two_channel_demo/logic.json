@@ -1,0 +1,41 @@
+{
+    "label": "示例：双通道变量聚合与上报",
+    "event_types": [
+        {
+            "id": "two_channel_combined_alarm",
+            "label": "双通道组合告警",
+            "help": "两路通道变量通过全局规则组合后满足条件时触发。"
+        }
+    ],
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "total_count_threshold": {
+                "type": "integer",
+                "title": "两路目标总数阈值",
+                "description": "两路 target_count 之和达到该值时满足第一项条件。",
+                "minimum": 1,
+                "maximum": 20000,
+                "default": 3,
+                "x-step": 1
+            },
+            "require_both_local_alarms": {
+                "type": "boolean",
+                "title": "要求两路都达到局部阈值",
+                "description": "开启后，除了总数达标，还要求两个通道发布的 local_alarm 都为 true。",
+                "default": false
+            }
+        }
+    },
+    "report_fields": [
+        {"key": "channel_a_role", "type": "string", "label": "通道A业务角色"},
+        {"key": "channel_a_count", "type": "number", "label": "通道A目标数量"},
+        {"key": "channel_a_threshold", "type": "number", "label": "通道A局部阈值"},
+        {"key": "channel_b_role", "type": "string", "label": "通道B业务角色"},
+        {"key": "channel_b_count", "type": "number", "label": "通道B目标数量"},
+        {"key": "channel_b_threshold", "type": "number", "label": "通道B局部阈值"},
+        {"key": "total_count", "type": "number", "label": "两路目标总数"}
+    ],
+    "business_fields": []
+}

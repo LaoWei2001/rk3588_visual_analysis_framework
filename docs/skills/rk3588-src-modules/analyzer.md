@@ -17,15 +17,19 @@
 
 ## 单帧路径
 
-appsink 调用 `videoOutHandle()` 后，frame inlet 首先更新源尺寸并把原始帧送入事件录像预缓存。随后检查 `infer_enable` 与运行时开关、按 `max_fps` 做相位错开的推理节流，将帧送显示单槽，并在需要推理时转换为模型输入后调用 `algorithm_process_mat()`。
+appsink 调用 `videoOutHandle()` 后，frame inlet 先把启用录像的原始帧送入事件录像有界队列，
+再检查 `infer_enable` 与运行时开关、按 `max_fps` 做相位错开的业务节流。节流命中时才转换
+模型输入并进入 NPU 或同步传统 CV；每个解码帧都会更新源尺寸/帧号，并在显示或 RTSP 启用时
+覆盖显示单槽。
 
-未启用推理的通道不进 NPU，但会把空结果和模型输入帧交给通道 logic，因此传统 OpenCV logic 仍可逐帧工作。
+未启用推理的通道不进 NPU，但会在 `max_fps` 节流命中时把空结果和模型输入帧交给通道 logic，
+因此传统 OpenCV logic 可同步工作而不会按解码原始帧率无界执行。
 
 每个推理通道的 dispatch worker 等待 NPU 结果，取出“结果 + 产生结果的模型输入帧 + frame id”。`channel_pipeline` 先执行 tracker，再构造 `ChannelContext`；它在逐帧 logic 之前消费 Web 动作，最后把匹配帧、结果、状态、绘制指令和可选 canvas 原子写回 `ChannelState`。
 
 ## 显示与业务一致性的差别
 
-显示路径追求低延迟：每通道只有一个待显示槽位，新帧覆盖旧帧；渲染可使用最近一次结果，并用 tracker 速度对结果延迟做有限外推。业务路径追求确定性：logic、告警和 `ChannelSnapshot` 使用与结果相同的模型输入帧。二次开发不能把显示帧误当作同帧推理证据。
+显示路径追求低延迟：每通道只有一个待显示槽位，新帧覆盖旧帧；渲染可使用最近一次结果，并用 tracker 速度对结果延迟做有限外推。业务路径追求确定性：logic、告警和 `ChannelFrameSnapshot` 使用与结果相同的模型输入帧。二次开发不能把显示帧误当作同帧推理证据。
 
 ## `AlgoResult`
 
@@ -39,6 +43,9 @@ appsink 调用 `videoOutHandle()` 后，frame inlet 首先更新源尺寸并把�
 
 ## 生命周期
 
-`analyzer_init()` 初始化数据结构、算法、tracker、logic/global logic，但 display/dispatch pthread 由 `main()` 创建。`analyzer_deinit()` 停推理与业务子系统；main 随后 join dispatch/display，最后才销毁显示队列同步原语。
+`analyzer_init()` 初始化数据结构、算法、tracker、logic/global logic，但 display/dispatch pthread 由
+`main()` 创建。退出时 main 先调用 `analyzer_request_stop()` 唤醒推理/结果等待，再停止采集并 join
+dispatch/display；线程都退出后才调用 `analyzer_deinit()` 释放推理、tracker 和 logic，最后销毁
+显示队列同步原语。
 
 断流调用 `analyzer_channel_offline()` 清理节流/tracker 并通知 recorder；恢复调用 online 入口清旧结果和绘制，避免冻结框污染新流。

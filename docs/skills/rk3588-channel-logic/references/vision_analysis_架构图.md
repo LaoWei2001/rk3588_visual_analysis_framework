@@ -2,8 +2,9 @@
 
 > 配套说明：[vision_analysis_系统说明文档.md](vision_analysis_系统说明文档.md)
 
-本文只描述当前 `vision_analysis/src/` 实现。图中 C++ 数组旁的 `ch/slot` 指内部运行槽位；
-HTTP、Socket、告警清单和 `ctx->chnId` 中的 `channel_id` 均指 `config.channels[].id`。
+本文只描述当前 `vision_analysis/src/` 实现。`config.channels[].id` 是稳定通道身份，同时在合法
+范围内作为固定 C++ 运行槽下标；配置数组位置只决定显示布局顺序。HTTP、Socket、告警清单和
+`ctx->chnId` 都使用这个稳定 ID。
 
 ## 1. 总体模块图
 
@@ -62,11 +63,11 @@ display_worker(ch)         event_video_recorder ring buffer
 
 frame_inlet(ch)
       │ max_fps 节流、缩放/预处理
-      ▼
-infer queue → RKNN infer worker
+      ├─ 推理开启 → infer queue → RKNN infer worker → dispatch_worker(ch)
+      └─ 推理关闭 → 空 results 同步处理
       │
       ▼
-dispatch_worker(ch)
+channel_pipeline(ch)
       ├─ tracker
       ├─ 构造 ChannelContext
       ├─ channel_control_take(ch)
@@ -100,7 +101,7 @@ APP_CTRL
 
 ```text
 logic(ch A)
-   └─ ctx->get_channel_snapshot(ch B)
+   └─ ctx->get_channel_frame_snapshot(ch B, &out)
           └─ 在 chn_mtx[B] 内取得同帧 frame + results + fps + age
                  └─ 返回深拷贝快照
 ```
@@ -176,11 +177,13 @@ channel logic
 report_event
    │ 读取本通道 report_policy_json / report_parameters_json
    │
+   ├─ 原子写 event.json / media_state.json / delivery_state.json
+   │
    ├─ 图片 delivery
-   │    └─ alarm_image_worker
+   │    └─ event_image_worker
    │         ├─ 按策略选择画面与 overlay
    │         ├─ 编码/落盘
-   │         └─ 写事件清单
+   │         └─ 更新 media_state.json
    │
    └─ 视频 delivery
         └─ event_video_recorder_trigger
@@ -205,7 +208,9 @@ logic draw_*()
       └─ ALL ─────────────▶ DISPLAY + IMAGE + VIDEO
 ```
 
-`report_policy` 还会进一步决定图片或视频是否启用系统叠加、自定义叠加以及使用原始源帧还是通道显示画面。
+`report_policy` 还会进一步决定图片或视频是否启用系统叠加和自定义叠加。通道图片以模型输入帧
+为底图，`raw.jpg` 表示未叠加版本；原始事件视频才使用解码源帧，视频显示模式则按实时 tile
+尺寸与统一叠加规则生成。不要把两种媒体的“原始”理解成相同分辨率。
 
 ## 8. 自定义按钮控制链
 
@@ -216,7 +221,7 @@ logic draw_*()
   → POST 控制 API
   → backend 连接 vision_analysis Unix Socket
   → channel_control 解析请求
-       ├─ 系统动作：直接执行上下线/重连等操作
+       ├─ 系统动作：当前 `infer_toggle` 直接执行
        └─ 业务动作：记录 channel_id + logic_name + action + payload
                          │
                          ▼
@@ -262,8 +267,8 @@ main thread
 ├─ global_logic thread                   ×启用的全局逻辑实例
 ├─ channel_control server thread         ×1
 ├─ rtsp loop + feeder thread             启用 RTSP 推流时
-├─ alarm_image_worker                    首次告警图片任务时
-└─ event_video_worker                    首次启用事件录像时创建固定大小的 worker pool
+├─ event_image_worker                    首次告警图片任务时
+└─ event_video_worker                    首次启用事件录像时创建固定大小的 worker pool（当前 3 个）
 ```
 
 此外存在 GStreamer、RKNN 等库内部线程。不要用固定数字推断实际线程总数。
@@ -278,10 +283,10 @@ app_ctrl_init
   → analyzer_init
        → infer workers / ROI / global logics
   → channel_control_init
-  → config + fd monitors
   → DecChannel
   → display + dispatch workers
   → rtsp_streamer_init（按配置）
+  → config + fd monitors（固定拓扑就绪后）
   → main loop
 ```
 
@@ -291,12 +296,14 @@ app_ctrl_init
 设置停止标志并唤醒等待者
   → rtsp_streamer_deinit
   → channel_control_deinit
+  → 等待 config/fd monitors
+  → analyzer_request_stop
   → 停止通道采集器
-  → analyzer_deinit 并等待分发线程
-  → 唤醒并等待显示线程
+  → 等待 dispatch/display 线程
+  → analyzer_deinit
   → event_video_recorder_deinit
   → report_event_deinit
-  → 停监控线程
+  → 销毁显示队列和缓冲
   → app_ctrl_deinit
 ```
 

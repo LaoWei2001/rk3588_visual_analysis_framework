@@ -762,3 +762,19 @@
   border: 1px solid var(--border);
   border-radius: 4px;
 }
+.ncp-global-input {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 10px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(8, 145, 178, 0.35);
+  border-radius: 6px;
+  background: rgba(8, 145, 178, 0.08);
+  font-size: 12px;
+}
+
+.ncp-global-input small {
+  color: var(--text2);
+  line-height: 1.45;
+}

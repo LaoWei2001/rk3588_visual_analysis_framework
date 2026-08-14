@@ -5,8 +5,17 @@
 #   ssh root@<板子IP> "cd ~/web_console && bash install.sh"
 set -e
 
-INSTALL_DIR=/opt/ai_apps/_console
+# 可移植安装路径：默认保持向后兼容；迁移到其他目录时可执行
+#   APPS_ROOT=/data/ai_apps bash install.sh
+APPS_ROOT="${APPS_ROOT:-/opt/ai_apps}"
+INSTALL_DIR="${INSTALL_DIR:-$APPS_ROOT/_console}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_BIN="$(command -v python3)"
+
+if [ -z "$PYTHON_BIN" ]; then
+    echo "[错误] 未找到 python3"
+    exit 1
+fi
 
 echo "=== RK3588 Web Console 安装 ==="
 
@@ -65,6 +74,16 @@ fi
 # 3. 安装 systemd 服务
 echo "[3/4] 安装 systemd 服务..."
 cp "$SCRIPT_DIR/rk3588-console.service" /etc/systemd/system/
+# 基础 unit 保留默认路径以兼容旧安装方式；安装器用 drop-in 覆盖为本次实际路径。
+# 同时覆盖 Python 路径，适配 python3 位于 /usr/local/bin 等布局的系统。
+mkdir -p /etc/systemd/system/rk3588-console.service.d
+{
+    echo "[Service]"
+    printf 'WorkingDirectory=%s\n' "$INSTALL_DIR/backend"
+    printf 'Environment="APPS_ROOT=%s"\n' "$APPS_ROOT"
+    echo "ExecStart="
+    printf 'ExecStart="%s" -m uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --log-level info\n' "$PYTHON_BIN"
+} > /etc/systemd/system/rk3588-console.service.d/paths.conf
 systemctl daemon-reload
 systemctl enable rk3588-console
 
@@ -80,3 +99,5 @@ if [ -z "$LAN_IP" ]; then
 fi
 echo ""
 echo "✓ 安装完成！访问地址: http://${LAN_IP}:8080"
+echo "  程序根目录: $APPS_ROOT"
+echo "  控制台目录: $INSTALL_DIR"

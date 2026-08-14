@@ -10,7 +10,8 @@
 
 系统的核心原则：
 
-- 通道运行时编号是 `config.channels[]` 的数组下标；
+- `config.channels[].id` 是稳定通道身份，并在 `0..MAX_CHANNEL_NUM-1` 范围内作为固定运行槽
+  下标；配置数组位置只决定显示顺序，二者不能混用；
 - 每通道配置、检测结果、logic 状态、ROI 和绘制指令相互隔离；
 - 推理和显示通过队列、快照及互斥量解耦；
 - channel logic 只表达业务事件，不直接实现上报服务；
@@ -26,7 +27,7 @@
 | `yolo/` | RKNN 模型推理与不同 YOLO 输出解析 | `yolo.*`、各模型实现 |
 | `logic/` | channel logic、global logic、自注册表和业务实现 | `channel_logic.*`、`global_logic.*`、`logic_*.cpp` |
 | `player/` | 叠加渲染、显示和内置 RTSP 推流 | `display.*`、`rtsp_streamer.*` |
-| `event/` | 标准事件入口、图片和投递清单异步落盘 | `event_report.*` |
+| `event/` | 标准事件入口、三份状态 JSON 同步原子建档、图片异步生成 | `event_report.*` |
 | `recorder/` | 报警前后帧缓存和事件 MP4 异步编码 | `event_video_recorder.*` |
 | `control/` | Web 控制 Unix Socket、系统动作和每通道业务动作队列 | `channel_control.*` |
 | `config/` | JSON 配置解析、字段注册和热拷贝 | `config.*`、`config_registry.*`、`config_init.cpp` |
@@ -46,22 +47,22 @@ DecChannel + GStreamer
 frame_inlet
     ├─ 推送事件录像源帧环形缓存
     ├─ 更新实时显示所需最新帧
-    └─ 按 max_fps 节流并提交推理
-          ↓
-      RKNN infer worker
-          ↓
-      result dispatch
-          ↓
-      跟踪 + ChannelContext
-          ↓
-      自定义 action handler
-          ↓
-      channel logic
-          ├─ DrawCommand → 显示 / 图片 / 视频
-          └─ report_event → 告警图片 / 事件视频 / 事件清单
+    └─ 按 max_fps 节流业务帧
+          ├─ 推理通道 → RKNN infer worker → result dispatch → 跟踪
+          └─ 非推理通道 → 空 results 同步路径
+                                  ↓
+                         ChannelContext
+                                  ↓
+                         自定义 action handler
+                                  ↓
+                         channel logic
+                           ├─ DrawCommand → 显示 / 图片 / 视频
+                           └─ report_event → 告警图片 / 事件视频 / 事件清单
 ```
 
-显示路径使用最新解码帧，并叠加最近的推理结果；告警图片和事件视频根据 `report_policy` 决定使用原始画面、显示画面和哪些叠加信息。
+显示路径使用最新解码帧，并叠加最近的推理结果；告警图片和事件视频根据 `report_policy` 决定
+叠加模式。通道告警图片的底图是模型输入帧（`raw.jpg` 只是未叠加，不是源分辨率），事件视频
+的原始模式才使用解码源帧；显示模式会按统一渲染规则生成画面。
 
 ## 4. 线程与后台任务
 
@@ -76,8 +77,9 @@ frame_inlet
 5. `dispatch_worker[N]`：消费推理结果并执行跟踪和 channel logic；
 6. `infer_worker[N]`：RKNN 推理 worker；
 7. `global_logic[N]`：跨通道全局逻辑；
-8. `alarm_image_worker`：告警图片和事件清单异步落盘，首次需要时创建；
-9. `event_video_worker[N]`：事件视频编码，首次需要时按实现中的固定 worker-pool 大小创建。
+8. `event_image_worker`：告警图片异步渲染、编码并更新媒体状态，首次图片事件时创建；三份事件
+   状态 JSON 由 `report_event()` 在接受事件时同步原子写入；
+9. `event_video_worker`：事件录像的固定 worker pool，首次启用录像时创建。
 
 此外还有两个不应遗漏的后台组件：
 
@@ -98,7 +100,10 @@ GStreamer、RKNN 或底层库还可能创建自己的内部线程，因此“线
 | 事件录像队列锁/条件变量 | 录像任务和帧缓存 |
 | 控制队列锁 | 每通道自定义按钮动作 FIFO |
 
-跨通道读取必须通过 `ChannelContext::get_channel_snapshot()`，它会在通道锁内取得同一时刻的帧、结果和统计信息，并返回可安全持有的深拷贝。
+通道 logic 需要读取另一通道的画面/结果时，使用
+`get_channel_frame_snapshot(channel_id, &out)`；它在一把通道锁内取得匹配帧、结果、类型化
+outputs、绘制和发布元信息，并返回可安全持有的深拷贝。全局 logic 默认使用框架在 tick 开始时
+固定采样的 `ChannelLogicSnapshot` 批次，不复制画面，也不会在一次算法调用中跨版本。
 
 ## 5. ChannelContext 与业务逻辑
 
@@ -106,7 +111,8 @@ GStreamer、RKNN 或底层库还可能创建自己的内部线程，因此“线
 
 - `frame`、`results`：本通道当前逻辑帧和检测结果；
 - `config`：本通道只读配置；
-- `roi`、`rois`：模型输入坐标系中的单/多 ROI；
+- `rois`：模型输入坐标系中的全部命名 ROI；单区使用 `roi_at()`、`roi_by_name()` 等方法；
+- `outputs`：本帧向全局 logic 发布的类型化业务变量；
 - `draw_cmds`：本帧自定义绘制输出；
 - `state`：本通道跨帧持久状态；
 - `src_width/src_height`：原始视频分辨率；
@@ -182,7 +188,9 @@ if (!report.accepted())
             event_report_status_name(report.status), report.detail.c_str());
 ```
 
-logic 只提交事件类型、消息和运行时字段。以下内容由 Web 保存的 `report_policy` 决定：
+channel logic 只提交事件类型、消息和运行时字段；global logic 还可用
+`request.source_channel_id` 选择事件来源和视频通道，并调用 `report_event(gctx, request)`。
+以下内容由 Web 保存的 `report_policy` 决定：
 
 - 图片、视频或两者；
 - 图片/视频使用哪种画面；
@@ -195,7 +203,9 @@ logic 只提交事件类型、消息和运行时字段。以下内容由 Web 保
 
 ### 8.2 图片路径
 
-`report_event` 根据策略生成图片任务。后台 `alarm_image_worker` 负责渲染、编码、落盘并写事件清单，避免在推理线程内进行耗时 I/O。
+`report_event` 先同步原子写入三份事件状态 JSON，再根据策略生成图片任务。后台
+`event_image_worker`（源码入口函数为 `image_worker`）负责渲染、编码、落盘并更新
+`media_state.json`，避免在推理线程内进行耗时图片编码。
 
 ### 8.3 事件视频路径
 
@@ -226,7 +236,8 @@ MP4；成功后调用 `report_event_video_ready()`，无帧或编码失败时调
   → 下一次该通道处理逻辑帧时执行 action handler
 ```
 
-系统动作如上下线、重连等由 `channel_control` 直接处理；业务动作记录入队时的 logic 名称，消费时若通道已经切换到其他 logic，会丢弃旧动作，防止错误投递。
+当前唯一系统动作 `infer_toggle` 由 `channel_control` 直接处理；业务动作记录入队时的 logic 名称，
+消费时若通道已经切换到其他 logic，会丢弃旧动作，防止错误投递。
 
 HTTP 返回 `accepted` 只表示动作成功进入队列，不代表业务 handler 已执行成功。详细开发方法见 `custom-button-actions.md`。
 
@@ -245,10 +256,10 @@ HTTP 返回 `accepted` 只表示动作成功进入队列，不代表业务 handl
    ├─ ROI 加载
    └─ global logic 启动
 → channel_control_init
-→ config monitor / fd monitor
 → 各通道 DecChannel 初始化
 → display workers / dispatch workers
 → rtsp_streamer_init（按配置）
+→ config monitor / fd monitor（固定拓扑就绪后启动）
 → main 事件循环
 ```
 
@@ -260,13 +271,15 @@ HTTP 返回 `accepted` 只表示动作成功进入队列，不代表业务 handl
 
 ```text
 停止 RTSP streamer
-→ 停止 channel_control，设置全局退出标志
+→ 设置全局停止、解除暂停并停止 channel_control
+→ 等待 config/fd 监控线程退出
+→ analyzer_request_stop 唤醒推理/分发等待
 → 停止通道采集器
-→ 停止 analyzer（推理、global logic、跟踪等）并等待分发线程
-→ 唤醒并等待显示线程
+→ 等待 dispatch/display 线程
+→ analyzer_deinit 释放推理、global logic、跟踪等
 → 停止 event_video_recorder
 → 停止 report_event worker
-→ 停止配置与 fd 监控
+→ 销毁显示队列和缓冲
 → app_ctrl_deinit
 ```
 
@@ -297,5 +310,6 @@ HTTP 返回 `accepted` 只表示动作成功进入队列，不代表业务 handl
 - 不要把服务地址或密钥硬编码进 logic；
 - 不要在当前运行配置之外另建 ROI 数据源；
 - 不要用 `static` 保存每通道状态；
-- 不要直接读取其他通道的内部状态，使用 `get_channel_snapshot()`；
+- 不要直接读取其他通道的内部状态；通道 logic 使用 `get_channel_frame_snapshot()`，全局 logic
+  使用本 tick 的 `ChannelLogicSnapshot`；
 - 不要把 HTTP `accepted` 当成业务动作完成。

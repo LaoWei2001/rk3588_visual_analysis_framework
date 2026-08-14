@@ -1,7 +1,7 @@
 import { Node, Edge } from '@xyflow/react'
 import { getSrcType } from './streamSource'
 import { sopFlowToParameters, type SopFlow } from './sopFlow'
-import type { GlobalLogicEntry } from '../components/GlobalLogicsPanel'
+import type { GlobalLogicEntry } from './globalLogic'
 import type { GlobalSettingsData } from '../components/GlobalSettingsPanel'
 import type { Zone } from '../store/roiStore'
 import { normalizeRoiPolygon } from './roiPolygon'
@@ -29,7 +29,6 @@ export function graphToConfig(
   nodes: Node[],
   edges: Edge[],
   roiZones: Record<string, Zone[]>,
-  globalLogics: GlobalLogicEntry[] = [],
   globalSettings: GlobalSettingsData,
 ): { config: Record<string, unknown> } | null {
   // 一个视频流节点就是一个通道锚点。后面可以连接零或多个模型，并可选连接一个
@@ -51,6 +50,7 @@ export function graphToConfig(
   // C++ 用 cJSON 按键名取值，忽略这个多余的键。
   const layout: Record<string, Record<string, { x: number; y: number }>> = {}
   const rp = (n: Node) => ({ x: Math.round(n.position.x), y: Math.round(n.position.y) })
+  const channelIdByLogicNode = new Map<string, number>()
 
   let modelCoreIndex = 0
   anchors.forEach((streamNode, idx) => {
@@ -117,6 +117,7 @@ export function graphToConfig(
     const l = logicNode ? (logicNode.data as Record<string, unknown>) : {}
     const logic = isSop ? 'logic_path_sop' : String(l.logic ?? '').trim()
     const hasLogic = logic.length > 0
+    if (hasLogic && logicNode) channelIdByLogicNode.set(logicNode.id, chId)
 
     // ── Report ──
     const reportNodes = hasLogic && logicNode
@@ -150,7 +151,6 @@ export function graphToConfig(
     if (hasLogic) ch.logic = logic
 
     // 通用告警策略：每个通道保存独立投递列表和动态参数表。
-    const reportEnabled = reportNodes.length > 0
     const reportPolicies = reportData.map((data, reportIndex) => {
       const policy = data.report_policy && typeof data.report_policy === 'object'
         ? data.report_policy as Record<string, unknown> : {}
@@ -163,8 +163,9 @@ export function graphToConfig(
         contract_id: '',
         media: [],
       }
-      return { policy, delivery }
+      return { policy, delivery, enabled: policy.enabled !== false && delivery.enabled !== false }
     })
+    const reportEnabled = reportPolicies.some(item => item.enabled)
     const usedDeliveryIds = new Set<string>()
     const deliveries: Record<string, unknown>[] = reportPolicies.map((item, reportIndex) => {
       const configuredId = String(item.delivery.id ?? '')
@@ -174,7 +175,7 @@ export function graphToConfig(
       const normalized: Record<string, unknown> = {
         ...item.delivery,
         id,
-        enabled: item.delivery.enabled !== false,
+        enabled: item.enabled,
       }
       delete normalized.mapping
       delete normalized.request
@@ -182,17 +183,17 @@ export function graphToConfig(
       delete normalized.adapter
       return normalized
     })
-    const reportPolicy: Record<string, unknown> = reportEnabled
-      ? { ...(reportPolicies[0]?.policy ?? {}), enabled: true, deliveries }
+    const reportPolicy: Record<string, unknown> = reportNodes.length > 0
+      ? { ...(reportPolicies[0]?.policy ?? {}), enabled: reportEnabled, deliveries }
       : { enabled: false, deliveries: [] }
 
     // 视频录制参数取自视频上报节点；图片/视频叠加选项分别取对应媒体节点。
     const imagePolicy = reportPolicies.find(item =>
-      Array.isArray(item.delivery.media)
+      item.enabled && Array.isArray(item.delivery.media)
       && (item.delivery.media.includes('annotated_image') || item.delivery.media.includes('raw_image'))
     )?.policy
     const videoPolicy = reportPolicies.find(item =>
-      Array.isArray(item.delivery.media) && item.delivery.media.includes('video')
+      item.enabled && Array.isArray(item.delivery.media) && item.delivery.media.includes('video')
     )?.policy
     if (imagePolicy?.image_overlay != null) reportPolicy.image_overlay = imagePolicy.image_overlay
     if (videoPolicy) {
@@ -212,7 +213,7 @@ export function graphToConfig(
     })
     reportPolicy.parameters = [...parameterMap.values()]
     ch.report_policy = reportPolicy
-    ch.report_parameters = reportEnabled
+    ch.report_parameters = reportNodes.length > 0
       ? Object.assign({}, ...reportData.map(data =>
           data.report_parameters && typeof data.report_parameters === 'object' ? data.report_parameters : {}))
       : {}
@@ -249,6 +250,110 @@ export function graphToConfig(
 
     channels.push(ch)
   })
+
+  // ── Global logic ── 全局输入只来自画布上的 channel logic → global logic 连线。
+  const globalLayout: Record<string, { x: number; y: number }> = {}
+  const globalLogics: GlobalLogicEntry[] = nodes
+    .filter(node => node.type === 'globalLogic')
+    .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x)
+    .map((globalNode, globalIndex) => {
+      const data = globalNode.data as Record<string, unknown>
+      const channelsForGlobal = [...new Set(edges
+        .filter(edge => edge.target === globalNode.id && edge.targetHandle === 'global-in')
+        .map(edge => channelIdByLogicNode.get(edge.source))
+        .filter((channelId): channelId is number => channelId != null))]
+        .sort((a, b) => a - b)
+
+      const reportNodes = edges
+        .filter(edge => edge.source === globalNode.id && edge.sourceHandle === 'report-out')
+        .map(edge => nodes.find(node => node.id === edge.target))
+        .filter((node): node is Node => node?.type === 'report')
+      const reportData = reportNodes.map(node => node.data as Record<string, unknown>)
+      const reportPolicies = reportData.map((item, reportIndex) => {
+        const policy = item.report_policy && typeof item.report_policy === 'object'
+          ? item.report_policy as Record<string, unknown> : {}
+        const configured = Array.isArray(policy.deliveries)
+          ? policy.deliveries as Record<string, unknown>[] : []
+        const delivery = configured[0] ?? {
+          id: `delivery_${reportNodes[reportIndex].id}`,
+          enabled: true,
+          profile_id: '',
+          contract_id: '',
+          media: [],
+        }
+        return { policy, delivery, enabled: policy.enabled !== false && delivery.enabled !== false }
+      })
+      const reportEnabled = reportPolicies.some(item => item.enabled)
+      const usedDeliveryIds = new Set<string>()
+      const deliveries = reportPolicies.map((item, reportIndex) => {
+        const configuredId = String(item.delivery.id ?? '')
+        const id = configuredId && !usedDeliveryIds.has(configuredId)
+          ? configuredId : `delivery_${reportNodes[reportIndex].id}`
+        usedDeliveryIds.add(id)
+        const normalized: Record<string, unknown> = {
+          ...item.delivery,
+          id,
+          enabled: item.enabled,
+        }
+        delete normalized.mapping
+        delete normalized.request
+        delete normalized.success
+        delete normalized.adapter
+        return normalized
+      })
+      const reportPolicy: Record<string, unknown> = reportNodes.length > 0
+        ? { ...(reportPolicies[0]?.policy ?? {}), enabled: reportEnabled, deliveries }
+        : { enabled: false, deliveries: [] }
+      const imagePolicy = reportPolicies.find(item =>
+        item.enabled && Array.isArray(item.delivery.media)
+        && (item.delivery.media.includes('annotated_image') || item.delivery.media.includes('raw_image')))?.policy
+      const videoPolicy = reportPolicies.find(item =>
+        item.enabled && Array.isArray(item.delivery.media)
+        && item.delivery.media.includes('video'))?.policy
+      if (imagePolicy?.image_overlay != null) reportPolicy.image_overlay = imagePolicy.image_overlay
+      if (videoPolicy) {
+        for (const key of ['video_overlay', 'video_pre_sec', 'video_post_sec', 'video_fps', 'merge_window_sec']) {
+          if (videoPolicy[key] != null) reportPolicy[key] = videoPolicy[key]
+        }
+      }
+      const parameterMap = new Map<string, Record<string, unknown>>()
+      reportPolicies.forEach(({ policy }, reportIndex) => {
+        const definitions = Array.isArray(policy.parameters)
+          ? policy.parameters as Record<string, unknown>[] : []
+        definitions.forEach((definition, definitionIndex) => {
+          const id = String(definition.id ?? '')
+          parameterMap.set(id || `__anonymous_${reportIndex}_${definitionIndex}`, definition)
+        })
+      })
+      reportPolicy.parameters = [...parameterMap.values()]
+      const requestedMediaChannel = Number(reportData[0]?.media_source_channel_id ?? channelsForGlobal[0] ?? -1)
+      const mediaSourceChannel = channelsForGlobal.includes(requestedMediaChannel)
+        ? requestedMediaChannel : channelsForGlobal[0]
+
+      globalLayout[`logic_${globalIndex}`] = rp(globalNode)
+      reportNodes.forEach((reportNode, reportIndex) => {
+        globalLayout[`report_${globalIndex}_${reportIndex}`] = rp(reportNode)
+      })
+
+      return {
+        enable: data.enable !== false,
+        logic: String(data.logic ?? ''),
+        channels: channelsForGlobal,
+        channels_explicit: true,
+        poll_interval_ms: Number(data.poll_interval_ms ?? 200),
+        logic_parameters: data.logic_parameters && typeof data.logic_parameters === 'object'
+          && !Array.isArray(data.logic_parameters)
+          ? data.logic_parameters as Record<string, unknown> : {},
+        report_policy: reportPolicy,
+        report_parameters: reportNodes.length > 0
+          ? Object.assign({}, ...reportData.map(item =>
+              item.report_parameters && typeof item.report_parameters === 'object'
+                ? item.report_parameters : {}))
+          : {},
+        media_source_channel_id: mediaSourceChannel,
+      }
+    })
+  if (Object.keys(globalLayout).length > 0) layout.global = globalLayout
 
   // ── Global config ──
   const g = globalSettings

@@ -20,6 +20,7 @@
         "enable": true,
         "logic": "global_default",
         "channels": [],
+        "channels_explicit": false,
         "poll_interval_ms": 100,
         "logic_parameters": {}
       }
@@ -43,7 +44,10 @@
 ```
 
 `global_logics` 位于 `global` 对象内，不在顶层；每个实例的专有参数保存在自己的
-`logic_parameters` 对象中，由 `global_modules/<name>/logic.json` 校验。`stream.src_type`
+`logic_parameters` 对象中，由 `global_modules/<name>/logic.json` 校验。旧手写配置缺少
+`channels_explicit` 或设为 false 时，`channels: []` 表示所有启用通道；Web 画布保存 true 时，
+空数组表示没有输入。全局实例也可保存与通道相同语义的 `report_policy`、`report_parameters` 和
+默认 `media_source_channel_id`。`stream.src_type`
 必填，只支持 `rtsp`、`file`、`usb`；USB 优先取 `stream.device`，其他源取 `stream.url`。
 启用通道必须有有效 location。`channels[].logic` 是可选后处理模块名；省略或设为空字符串
 时不执行任何业务模块，视频仍显示，模型结果仍由框架绘制。

@@ -13,6 +13,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
 from routers import upload_config  # noqa: E402
+from services import data_dir as app_data_dir  # noqa: E402
 
 
 class ReportContractsTest(unittest.TestCase):
@@ -31,7 +32,10 @@ class ReportContractsTest(unittest.TestCase):
                 ],
             }), encoding="utf-8")
 
-            with patch.object(upload_config, "APPS_ROOT", Path(temporary)):
+            with (
+                patch.object(upload_config, "APPS_ROOT", Path(temporary)),
+                patch.object(app_data_dir, "APPS_ROOT", Path(temporary)),
+            ):
                 result = asyncio.run(upload_config.get_report_contracts("demo"))
 
             self.assertEqual(result["contracts"][0]["id"], "server_event")
@@ -44,6 +48,8 @@ class ReportContractsTest(unittest.TestCase):
             adapters = app / "services" / "upload" / "adapters"
             contracts.mkdir(parents=True)
             adapters.mkdir(parents=True)
+            persistent_contracts = Path(temporary) / ".data" / "demo" / "contracts"
+            persistent_contracts.mkdir(parents=True)
             (adapters / "catalog.json").write_text(json.dumps([{
                 "id": "http_json",
                 "supported_media": ["annotated_image", "raw_image", "video"],
@@ -67,7 +73,10 @@ class ReportContractsTest(unittest.TestCase):
                 "success": {"http_status": [200]},
             }
 
-            with patch.object(upload_config, "APPS_ROOT", Path(temporary)):
+            with (
+                patch.object(upload_config, "APPS_ROOT", Path(temporary)),
+                patch.object(app_data_dir, "APPS_ROOT", Path(temporary)),
+            ):
                 created = asyncio.run(upload_config.save_report_contract(
                     "demo", "periodic_snapshot_http", body,
                 ))
@@ -77,7 +86,7 @@ class ReportContractsTest(unittest.TestCase):
             self.assertEqual(created["contract"]["request"]["method"], "POST")
             self.assertEqual(listed["contracts"][0]["mapping"][1]["source"],
                              "fields.display_number")
-            saved = json.loads((contracts / "periodic_snapshot_http.json").read_text())
+            saved = json.loads((persistent_contracts / "periodic_snapshot_http.json").read_text())
             self.assertNotIn("source_file", saved)
 
     def test_contract_rejects_media_source_not_enabled(self):
@@ -104,7 +113,10 @@ class ReportContractsTest(unittest.TestCase):
                 }],
             }
 
-            with patch.object(upload_config, "APPS_ROOT", Path(temporary)):
+            with (
+                patch.object(upload_config, "APPS_ROOT", Path(temporary)),
+                patch.object(app_data_dir, "APPS_ROOT", Path(temporary)),
+            ):
                 with self.assertRaises(upload_config.HTTPException) as raised:
                     asyncio.run(upload_config.save_report_contract("demo", "bad", body))
 

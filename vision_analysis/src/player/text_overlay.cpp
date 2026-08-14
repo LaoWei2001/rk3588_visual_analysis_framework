@@ -7,24 +7,34 @@
  */
 #include "text_overlay.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <mutex>
 #include <opencv2/freetype.hpp>
 
 namespace
 {
 
-std::mutex g_ft_mtx;                    /* 保护 g_ft2 的加载与 putText(freetype face 非线程安全) */
-cv::Ptr<cv::freetype::FreeType2> g_ft2; /* 空 = 字体未加载成功 */
-bool g_ft_tried = false;
-
-/* 需在持有 g_ft_mtx 时调用。返回可用的 FreeType2(或空)。 */
-cv::Ptr<cv::freetype::FreeType2> ensure_ft2_locked()
+/* FreeType face 不能被多线程并发调用。原实现用一个全局 face + 全局锁，
+ * 四路显示的所有中英文都被强制串行；状态文字较多时每路只剩约 4~5 FPS。
+ * 改为每个渲染线程独立持有 face：同一 face 仍只在本线程调用，但不同通道
+ * 可以并行栅格化文字，无需跨通道互斥。 */
+struct ThreadFreeTypeState
 {
-    if (g_ft_tried)
-        return g_ft2;
-    g_ft_tried = true;
+    cv::Ptr<cv::freetype::FreeType2> ft2; /* 空 = 本线程字体未加载成功 */
+    bool tried = false;
+};
+
+thread_local ThreadFreeTypeState g_thread_ft;
+std::atomic<bool> g_font_loaded_logged{false};
+std::atomic<bool> g_font_error_logged{false};
+
+/* 返回本线程专用的 FreeType2(或空)。每个线程最多加载一次字体。 */
+cv::Ptr<cv::freetype::FreeType2> ensure_thread_ft2()
+{
+    if (g_thread_ft.tried)
+        return g_thread_ft.ft2;
+    g_thread_ft.tried = true;
 
     const char *env = std::getenv("RK_OVERLAY_FONT");
     const char *candidates[] = {
@@ -45,8 +55,9 @@ cv::Ptr<cv::freetype::FreeType2> ensure_ft2_locked()
         {
             cv::Ptr<cv::freetype::FreeType2> ft = cv::freetype::createFreeType2();
             ft->loadFontData(std::string(p), 0); /* TTC: 取第 0 个 face */
-            g_ft2 = ft;
-            fprintf(stderr, "[text_overlay] font loaded: %s\n", p);
+            g_thread_ft.ft2 = ft;
+            if (!g_font_loaded_logged.exchange(true, std::memory_order_relaxed))
+                fprintf(stderr, "[text_overlay] font loaded: %s (thread-local renderer)\n", p);
             break;
         }
         catch (...)
@@ -54,19 +65,42 @@ cv::Ptr<cv::freetype::FreeType2> ensure_ft2_locked()
             /* 加载失败, 尝试下一个候选 */
         }
     }
-    if (!g_ft2)
+    if (!g_thread_ft.ft2 && !g_font_error_logged.exchange(true, std::memory_order_relaxed))
         fprintf(stderr, "[text_overlay][ERROR] 未能加载任何字体! 画面文字将无法显示。\n"
                         "  请放置字体到 ./assets/fonts/overlay.ttf, 或设置环境变量 RK_OVERLAY_FONT=/path/to/font,\n"
                         "  或确认 /usr/share/fonts/truetype/wqy/wqy-zenhei.ttc 存在。\n");
-    return g_ft2;
+    return g_thread_ft.ft2;
 }
 
 } // namespace
 
 bool text_overlay_available()
 {
-    std::lock_guard<std::mutex> lk(g_ft_mtx);
-    return (bool)ensure_ft2_locked();
+    return (bool)ensure_thread_ft2();
+}
+
+bool measure_text_unicode(const std::string &utf8, int font_height_px, int thickness, cv::Size &size, int &baseline)
+{
+    size = cv::Size();
+    baseline = 0;
+    if (utf8.empty())
+        return false;
+    cv::Ptr<cv::freetype::FreeType2> ft = ensure_thread_ft2();
+    if (!ft)
+        return false;
+    if (font_height_px < 1)
+        font_height_px = 1;
+    try
+    {
+        size = ft->getTextSize(utf8, font_height_px, thickness, &baseline);
+    }
+    catch (...)
+    {
+        size = cv::Size();
+        baseline = 0;
+        return false;
+    }
+    return size.width > 0 && size.height > 0;
 }
 
 bool draw_text_unicode(cv::InputOutputArray img, const std::string &utf8, cv::Point org, int font_height_px,
@@ -74,8 +108,7 @@ bool draw_text_unicode(cv::InputOutputArray img, const std::string &utf8, cv::Po
 {
     if (utf8.empty() || img.empty())
         return false;
-    std::lock_guard<std::mutex> lk(g_ft_mtx);
-    cv::Ptr<cv::freetype::FreeType2> ft = ensure_ft2_locked();
+    cv::Ptr<cv::freetype::FreeType2> ft = ensure_thread_ft2();
     if (!ft)
         return false;
     if (font_height_px < 1)

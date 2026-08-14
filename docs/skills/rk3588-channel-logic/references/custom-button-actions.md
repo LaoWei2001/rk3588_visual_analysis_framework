@@ -68,6 +68,7 @@ vision_analysis/src/logic/modules/logic_course_07/
     "additionalProperties": false,
     "properties": {}
   },
+  "event_types": [],
   "report_fields": [],
   "actions": [
     {
@@ -232,7 +233,7 @@ App 启动
   C++ channel_control_init() 创建 Unix Socket 并启动控制线程
 
 用户打开“实时画面”
-  AppsPage.tsx
+  LiveViewPage.tsx
     → GET /api/apps/{app}/channel-actions
     → FastAPI 读取 run.config 指定的 assets/<配置文件>
     → 过滤 enable=false 的通道，并按 channel_id 排序
@@ -240,7 +241,7 @@ App 启动
     → React 为每个启用通道动态渲染按钮
 
 用户点击按钮
-  AppsPage.tsx
+  LiveViewPage.tsx
     → 可选 confirm 确认框
     → POST /api/apps/{app}/channels/{channel_id}/actions/{action.id}
        body = {"payload": action.payload || {}}
@@ -505,7 +506,7 @@ C++ 控制端单次 `recv` 的缓冲上限目前约为 64 KiB，且没有循环�
 
 普通新按钮不需要修改：
 
-- `AppsPage.tsx`；
+- `LiveViewPage.tsx`；
 - `api/client.ts`；
 - `web_console/backend/routers/channel_control.py`；
 - `channel_control.cpp`。
@@ -645,7 +646,7 @@ C++ 关键日志格式：
 | `web_console/backend/services/process_manager.py` | 启动 App 时设置 `RK_CHANNEL_CONTROL_SOCKET` |
 | `web_console/backend/routers/channel_control.py` | 动作清单 API、HTTP 到 Unix Socket 的桥接 |
 | `web_console/frontend/src/api/client.ts` | action TypeScript 类型与 API 封装 |
-| `web_console/frontend/src/pages/AppsPage.tsx` | 实时画面按钮渲染、确认、busy 状态和结果提示 |
+| `web_console/frontend/src/pages/LiveViewPage.tsx` | 实时画面按钮渲染、确认、busy 状态和结果提示 |
 | `vision_analysis/build.sh` | 校验并聚合 `src/logic/modules/*/logic.json`，生成 App 根目录 `logics.json` |
 
 相关文档：

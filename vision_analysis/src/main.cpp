@@ -17,7 +17,7 @@
 
 /**
  * @file main.cpp
- * @brief 多路 RTSP YOLO 推理主入口 — C/pthread 重构
+ * @brief 多路 RTSP YOLO 推理主入口
  *
  * === 线程一览 (全部清晰可见) ===
  *
@@ -28,7 +28,7 @@
  * 5. dispatch_worker[N]     — NPU 结果分发 + channel_logic (main 直接 pthread_create)
  * 6. infer_worker[N]        — NPU 推理 worker (algorithm_init 内部创建, 底层)
  * 7. global_logic[N]        — 跨通道全局逻辑轮询 (global_logic_start_all 内部创建)
- * 8. event_image_worker     — 事件图片与事件清单异步落盘 (首次报警时创建)
+ * 8. event_image_worker     — 事件图片异步渲染/编码并更新媒体状态 (首次图片事件时创建)
  * 9. event_video_worker     — 报警前后片段异步编码 (首次启用录像时创建)
  *
  * === 同步模型 ===

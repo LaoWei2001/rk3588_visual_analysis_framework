@@ -61,6 +61,7 @@ export default function SopNode({ id, data, selected }: NodeProps) {
 
         {/* 接「上报配置」(沿用既有上报节点) */}
         <Handle type="source" position={Position.Right} id="report-out" />
+        <Handle type="source" position={Position.Bottom} id="global-out" />
       </div>
 
       {open && createPortal(

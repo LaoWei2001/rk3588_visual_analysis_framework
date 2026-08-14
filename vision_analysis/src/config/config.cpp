@@ -232,6 +232,10 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 }
             }
 
+            cJSON *gl_channels_explicit = cJSON_GetObjectItemCaseSensitive(gl_item, "channels_explicit");
+            if (cJSON_IsBool(gl_channels_explicit))
+                gl_cfg.channels_explicit = cJSON_IsTrue(gl_channels_explicit);
+
             cJSON *gl_parameters = cJSON_GetObjectItemCaseSensitive(gl_item, "logic_parameters");
             if (gl_parameters)
             {
@@ -253,6 +257,51 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 gl_cfg.logic_parameters_json = parameters_text;
                 cJSON_free(parameters_text);
             }
+
+            cJSON *gl_report_policy = cJSON_GetObjectItemCaseSensitive(gl_item, "report_policy");
+            if (gl_report_policy)
+            {
+                if (!cJSON_IsObject(gl_report_policy))
+                {
+                    fprintf(stderr, "[Config] global_logic[%zu].report_policy must be an object\n",
+                            cfg.global_logics.size());
+                    cJSON_Delete(root);
+                    return false;
+                }
+                char *policy_text = cJSON_PrintUnformatted(gl_report_policy);
+                if (!policy_text)
+                {
+                    cJSON_Delete(root);
+                    return false;
+                }
+                gl_cfg.report_policy_json = policy_text;
+                cJSON_free(policy_text);
+                gl_cfg.event_video = event_video_from_report_policy(gl_report_policy);
+            }
+
+            cJSON *gl_report_parameters = cJSON_GetObjectItemCaseSensitive(gl_item, "report_parameters");
+            if (gl_report_parameters)
+            {
+                if (!cJSON_IsObject(gl_report_parameters))
+                {
+                    fprintf(stderr, "[Config] global_logic[%zu].report_parameters must be an object\n",
+                            cfg.global_logics.size());
+                    cJSON_Delete(root);
+                    return false;
+                }
+                char *parameters_text = cJSON_PrintUnformatted(gl_report_parameters);
+                if (!parameters_text)
+                {
+                    cJSON_Delete(root);
+                    return false;
+                }
+                gl_cfg.report_parameters_json = parameters_text;
+                cJSON_free(parameters_text);
+            }
+
+            cJSON *gl_media_channel = cJSON_GetObjectItemCaseSensitive(gl_item, "media_source_channel_id");
+            if (cJSON_IsNumber(gl_media_channel))
+                gl_cfg.media_source_channel_id = gl_media_channel->valueint;
 
             {
                 std::vector<LogicParameterError> parameter_errors;
@@ -614,6 +663,35 @@ bool load_config(const std::string &path, AppConfig &cfg)
 
     std::sort(cfg.channels.begin(), cfg.channels.end(),
               [](const ChannelConfig &a, const ChannelConfig &b) { return a.id < b.id; });
+
+    /* 全局逻辑复用事件录像器。只要某个全局上报节点需要视频，就为它的连入通道
+     * 开启同一套预录缓冲；默认媒体通道即使不在输入列表中也会被覆盖。 */
+    for (const GlobalLogicConfig &global_logic : cfg.global_logics)
+    {
+        if (!global_logic.enable || !global_logic.event_video.enable)
+            continue;
+        for (ChannelConfig &channel : cfg.channels)
+        {
+            const bool all_channels = global_logic.channels.empty() && !global_logic.channels_explicit;
+            const bool connected = std::find(global_logic.channels.begin(), global_logic.channels.end(), channel.id) !=
+                                   global_logic.channels.end();
+            const bool default_source = channel.id == global_logic.media_source_channel_id;
+            if (!all_channels && !connected && !default_source)
+                continue;
+            if (!channel.event_video.enable)
+            {
+                channel.event_video = global_logic.event_video;
+            }
+            else
+            {
+                channel.event_video.pre_sec = std::max(channel.event_video.pre_sec, global_logic.event_video.pre_sec);
+                channel.event_video.post_sec = std::max(channel.event_video.post_sec, global_logic.event_video.post_sec);
+                channel.event_video.fps = std::max(channel.event_video.fps, global_logic.event_video.fps);
+                if (global_logic.event_video.overlay == "custom" || global_logic.event_video.overlay == "all")
+                    channel.event_video.overlay = global_logic.event_video.overlay;
+            }
+        }
+    }
 
     if (cfg.channels.empty())
     {

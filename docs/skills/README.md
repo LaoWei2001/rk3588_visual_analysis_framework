@@ -2,12 +2,13 @@
 
 > 文档角色：专题知识库索引。项目级导航请先从 [docs 文档总入口](../README.md) 开始；本页负责把已经确定的任务继续路由到具体 Skill 或参考文档。
 
-这个文件夹是给**后续二次开发**用的参考资料，既可以**直接提供给大模型**当上下文，也可以**给人读**。里面有**三个 Skill**：都以 `SKILL.md` 为任务入口，通道逻辑和控制台 Skill 另带 `references/` 深档；还有一份**源码模块说明** `rk3588-src-modules/`，从其中的 `README.md` 看起。
+这个文件夹是给**后续二次开发**用的参考资料，既可以**直接提供给大模型**当上下文，也可以**给人读**。里面有**四个 Skill**：都以 `SKILL.md` 为任务入口；还有一份**源码模块说明** `rk3588-src-modules/`，从其中的 `README.md` 看起。
 
-**先分清三个 Skill 的边界：**
+**先分清四个 Skill 的边界：**
 
 | Skill                      | 管什么                        | 一句话                         |
 |:-------------------------- | -------------------------- | --------------------------- |
+| **`build-rk3588-vision-app`** | 从自然语言需求到实现和验收的总控流程 | 不确定要改哪一层，或要完整开发一个视觉应用时先用它 |
 | **`rk3588-channel-logic`** | 写 C++ 检测/报警逻辑(`logic_xxx`) | "当检测到 X 就做 Y" 这类**画面规则**都归它 |
 | **`rk3588-console-ops`**   | 部署、网页控制台(前后端)、后台服务、运维、调试   | Web、服务、部署和排障类任务归它           |
 | **`rk3588-global-logic`**  | 写**跨通道 / 周期性**的全局逻辑(`global_xxx`) | "通道 A 有人且通道 B 缺货就报警"这类跨路规则 |
@@ -17,6 +18,14 @@
 ---
 
 ## 我要做 XXX → 看哪里(路由表)
+
+### 从自然语言需求开始
+
+| 我要… | 去看 |
+|---|---|
+| 描述业务现象，让大模型完成需求拆解、实现、静态验证和交付检查 | `build-rk3588-vision-app/SKILL.md` |
+| 先把模型、标签、ROI、状态机、告警媒体和性能要求写成可核对契约 | `build-rk3588-vision-app/references/requirement-contract.md` |
+| 开发完成后做功能、媒体、性能和文档验收 | `build-rk3588-vision-app/references/acceptance-checklist.md` |
 
 ### 写检测 / 报警逻辑(channel logic)
 
@@ -30,7 +39,7 @@
 | 给逻辑加一个网页能改的参数(半径/秒数/阈值)    | `…/references/adding-config-parameter.md`（模块 Schema + `ctx->param_*()` + Web 热重载） |
 | 给实时画面增加自定义按钮、理解按钮到 C++ 的动作链路 | `…/references/custom-button-actions.md`（声明、队列、handler、payload、排错） |
 | 第一次跑通上报，或让 logic 提交标准事件并由画布选择 adapter/Profile | `…/references/upload-and-wiring.md`（最小闭环 + 开发契约） |
-| 搞懂运行时(8 类线程、时序、帧与框同帧、坐标系)  | `…/references/vision_analysis_系统说明文档.md` + `…_架构图.md`        |
+| 搞懂运行时(9 类主线程、额外后台线程、时序、帧与框同帧、坐标系)  | `…/references/vision_analysis_系统说明文档.md` + `…_架构图.md`        |
 
 ### 部署 / 网页控制台 / 后台服务 / 运维 / 调试
 
@@ -50,9 +59,9 @@
 |---|---|
 | 聚合多个通道的状态或做跨路联动 | `rk3588-global-logic/SKILL.md`（边界、快照、状态、注册和验证） |
 | 在独立线程中做周期巡检 | `rk3588-global-logic/SKILL.md`（`poll_interval_ms` 与 `GlobalContext`） |
-| 从全局规则触发图片或视频告警 | 先看 `rk3588-global-logic/SKILL.md` 的当前告警边界，不要伪造 `ChannelContext` |
+| 从全局规则触发图片或视频告警 | 看 `rk3588-global-logic/SKILL.md` 的统一 `report_event(gctx, request)` 与画布接线 |
 
-> 拿不准归哪个 Skill：单通道逐帧规则看 `rk3588-channel-logic`；多通道聚合或独立周期轮询看 `rk3588-global-logic`；其余 Web、服务、部署和排障问题先看 `rk3588-console-ops`。
+> 拿不准归哪个领域时先用 `build-rk3588-vision-app`；已经明确时，单通道逐业务帧规则看 `rk3588-channel-logic`，多通道聚合或独立周期轮询看 `rk3588-global-logic`，其余 Web、服务、部署和排障问题看 `rk3588-console-ops`。
 
 ---
 
@@ -61,6 +70,11 @@
 ```
 docs/skills/
 ├── README.md  ← 你在这
+│
+├── build-rk3588-vision-app/              自然语言需求→契约→实现→静态验证→验收
+│   ├── SKILL.md                          总控流程与领域路由
+│   ├── scripts/                          安全脚手架、模块校验和文档审计
+│   └── references/                       需求契约与交付验收清单
 │
 ├── rk3588-channel-logic/                 写检测/报警逻辑(通道 logic)
 │   ├── SKILL.md                          总览:需求拆解→骨架→接线三件套→验证→坑
@@ -75,7 +89,8 @@ docs/skills/
 │       └── examples/                     当前源码示例和明确标注的业务代码模式
 │
 ├── rk3588-global-logic/                  写跨通道 / 周期性全局逻辑(global_xxx)
-│   └── SKILL.md
+│   ├── SKILL.md
+│   └── references/two-channel-canvas-demo.md  类型化通道变量→双路聚合→统一告警
 │
 ├── rk3588-console-ops/                   部署 / 控制台 / 服务 / 运维 / 调试
 │   ├── SKILL.md                          总览:系统组成、部署、网页功能表、运维速查、文件地图
@@ -93,6 +108,6 @@ docs/skills/
 
 ## 怎么用
 
-- **给大模型**：先让它读取 [docs 文档总入口](../README.md) 的边界与权威顺序，再提供对应 Skill 的 `SKILL.md`；跨两个明确领域时再提供两份 Skill。
+- **给大模型**：完整需求优先提供 `build-rk3588-vision-app/SKILL.md`，让它按任务路由并完整读取对应领域 Skill；单一明确任务也可直接提供领域 Skill。
 - **给人**：新开发者先看总入口；已经明确任务后，从上面的路由表进入。`SKILL.md` 是流程和清单，`references/` 是需要深入时才读的专题。
 - **保持它长青**：新增一个正式 `logic_xxx` 后，照 `examples/` 的格式补一篇，并同步总入口的当前模块表；新踩的坑补进 `debugging-playbook.md`，前端/后端新约定补进对应 reference。

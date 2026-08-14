@@ -44,7 +44,9 @@ DecChannel/appsink
                                          -> 外部上传服务消费发件箱
 ```
 
-没有启用推理的通道仍会解码、显示并逐帧调用 logic，只是 `ctx->results` 为空。显示使用最新源帧并允许复用较旧推理结果；业务 logic、告警图片和快照使用与推理结果严格匹配的模型输入帧。
+没有启用推理的通道仍会解码、显示，并在 `max_fps` 节流命中的业务帧调用 logic，此时
+`ctx->results` 为空；它不会对每个解码帧都执行业务 logic。显示使用最新源帧并允许复用较旧
+推理结果；推理通道的业务 logic、告警图片和快照使用与结果严格匹配的模型输入帧。
 
 ## 全局约定
 
@@ -53,7 +55,9 @@ DecChannel/appsink
 - `ctx->timestamp_ms` 是单调时钟，只算间隔；`ctx->unix_ms` 是 Unix epoch 毫秒，用于日历时间和上报。
 - 颜色使用 OpenCV BGR：`cv::Scalar(B, G, R)`。
 - `DrawCommand::DISPLAY`、`IMAGE`、`VIDEO` 是绘制目标位；`MEDIA=IMAGE|VIDEO`，`ALL` 包含三者。当前告警“叠加画面”会复用实时层，因此图片按 `DISPLAY|IMAGE`、视频按 `DISPLAY|VIDEO` 取命令；纯原始媒体不绘制任何命令。
-- 配置由 `g_pCtrl->mtx`（pthread rwlock）保护，通道共享状态由 `chn_mtx[chnId]` 保护。跨通道业务代码优先使用 `get_channel_snapshot()`。
+- 配置由 `g_pCtrl->mtx`（pthread rwlock）保护，通道共享状态由 `chn_mtx[chnId]` 保护。全局 logic
+  默认读取本 tick 固定的轻量 `ChannelLogicSnapshot`；需要其他通道媒体时使用
+  `get_channel_frame_snapshot()`。
 
 ## 按任务选择文档
 

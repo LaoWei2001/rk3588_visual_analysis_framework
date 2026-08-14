@@ -1,5 +1,8 @@
 {
     "label": "默认全局逻辑",
+    "event_types": [],
+    "report_fields": [],
+    "business_fields": [],
     "parameters": {
         "type": "object",
         "additionalProperties": false,

@@ -12,7 +12,7 @@
 ```text
 channel logic
   └─ report_event(EventRequest)
-       └─ event_store/<event_id>/
+       └─ /opt/ai_apps/.data/<App>/event_store/<event_id>/
             ├─ event.json
             ├─ media_state.json
             ├─ delivery_state.json
@@ -50,10 +50,16 @@ services/upload/
 `EventOutboxForwarder` 只负责扫描、状态机和重试。协议构造及响应判定属于 adapter；
 新增协议不应在发件箱循环中增加业务分支。
 
+上图是程序包内的代码和首次默认值。Web 管理模式会把可变数据迁移到
+`/opt/ai_apps/.data/<App>/`：`upload_config.yaml`、`contracts/` 和 `event_store/`；同名 App
+覆盖、升级甚至只删除程序目录都不会自动删除这份持久数据。
+
 ### 2.2 事件发件箱
 
-默认目录为 App 根目录的 `event_store/`，C++、上传服务和 Web 后端都可用
-`EVENT_STORE_DIR` 覆盖，三者必须指向同一目录。
+Web 启动视觉程序和上传服务时会同时设置 `EVENT_STORE_DIR`，标准位置是
+`/opt/ai_apps/.data/<App>/event_store/`。源码裸跑未设置环境变量时，C++ 默认当前目录
+`./event_store`，上传服务默认其 App 根目录 `event_store/`；无论哪种方式，C++、上传服务和
+Web 后端必须指向同一目录。
 
 - `event.json`：标准 `event/source/data.fields` 和策略快照；
 - `media_state.json`：每种媒体的 `requested → generating → ready/failed` 状态；
@@ -72,6 +78,12 @@ pending → uploading → delivered
 
 只有全部 delivery 都成功时事件目录才会被删除；因此 Web 记录页展示的是本地待处理和失败事件，
 不是远端成功历史。
+
+网络异常、HTTP 408/425/429 和服务器 5xx 使用 10 秒起步、最长 5 分钟的指数退避持续重试，
+没有“12 次后永久失败”的新上限；旧版本留下的“达到 12 次上限”记录会自动恢复。因此断网一天后
+可以继续补报，前提是事件目录仍在、服务恢复运行、网络可达，并且这一天内没有触发发件箱容量
+回收。C++ 默认总容量为 1 GiB、最低保留磁盘空间为 512 MiB，超限时会从最旧的非生成/非上传
+事件开始回收；可用 `EVENT_STORE_MAX_BYTES`、`EVENT_STORE_MIN_FREE_BYTES` 调整。
 
 ### 2.3 Profile、接口模板与 adapter
 
@@ -94,7 +106,8 @@ profiles:
 ```
 
 delivery 写 `profile_id/contract_id/media`。地址、密钥和 Header 保存在 Profile；
-请求方式、媒体、mapping 和成功条件保存在 `services/upload/contracts/*.json`。Web 选择
+请求方式、媒体、mapping 和成功条件在仓库/程序包默认值中位于
+`services/upload/contracts/*.json`；Web 运行值位于 `.data/<App>/contracts/*.json`。Web 选择
 Profile 与接口模板，不要求使用者逐条拼装协议。
 
 映射示例：
@@ -102,7 +115,7 @@ Profile 与接口模板，不要求使用者逐条拼装协议。
 ```json
 {
   "profile_id": "plant_http",
-  "contract_id": "object_invade_det",
+  "contract_id": "jnu_alarm_upload",
   "media": ["annotated_image", "raw_image"]
 }
 ```
@@ -142,19 +155,26 @@ Web 的 report 节点支持：
 - 选择本地事件预览真实映射；
 - 选择本地事件执行测试发送。
 
-命令行也可直接验证：
+命令行也可直接验证。`delivery_tool.py` 没有 `preview/send` 子命令；默认只预览，增加 `--send`
+才真实发送。Web 管理模式必须显式传入持久配置、契约和事件目录：
+
+下面的 `server_22 + jnu_alarm_upload` 来自当前仓库默认配置；如果该 App 的 `.data` 运行配置已被
+修改，应换成其中真实存在且 adapter 匹配的 Profile/契约，并让 `media` 与契约完全一致。
 
 ```bash
 cd /opt/ai_apps/<App>/services/upload
-python3 delivery_tool.py preview \
-  --config config.yaml \
-  --event-dir ../../event_store/<event_id> \
-  --delivery-json delivery.json
+python3 delivery_tool.py \
+  --config /opt/ai_apps/.data/<App>/upload_config.yaml \
+  --contracts-dir /opt/ai_apps/.data/<App>/contracts \
+  --event-dir /opt/ai_apps/.data/<App>/event_store/<event_id> \
+  --delivery-json '{"id":"debug","profile_id":"server_22","contract_id":"jnu_alarm_upload","media":["annotated_image","raw_image"]}'
 
-python3 delivery_tool.py send \
-  --config config.yaml \
-  --event-dir ../../event_store/<event_id> \
-  --delivery-json delivery.json
+python3 delivery_tool.py \
+  --config /opt/ai_apps/.data/<App>/upload_config.yaml \
+  --contracts-dir /opt/ai_apps/.data/<App>/contracts \
+  --event-dir /opt/ai_apps/.data/<App>/event_store/<event_id> \
+  --delivery-json '{"id":"debug","profile_id":"server_22","contract_id":"jnu_alarm_upload","media":["annotated_image","raw_image"]}' \
+  --send
 ```
 
 常规排查顺序：
@@ -172,9 +192,8 @@ python3 delivery_tool.py send \
 目录：
 
 ```text
-/opt/ai_apps/<App>/services/model_update/
-├─ ota_agent.py
-└─ ota_config.json
+/opt/ai_apps/<App>/services/model_update/ota_agent.py
+/opt/ai_apps/.data/<App>/ota_config.json
 ```
 
 `ota_config.json`：
@@ -196,7 +215,9 @@ python3 delivery_tool.py send \
 - `CONFIG_FILE` 覆盖 `target_config`；
 - `PLATFORM_WS_HOST` 覆盖平台地址。
 
-网页「服务配置」弹窗通过 `ota_config.py` 保存文件。OTA 服务只在启动时读取配置，修改后要重启 `ota_agent`。
+网页「服务配置」通过 `ota_config.py` 保存持久文件。OTA 服务只在启动时读取配置，修改后要重启
+`ota_agent`。Web 绑定服务时还会把视觉程序实际启动的配置文件名写入 `CONFIG_FILE`，它优先于
+`ota_config.json.target_config`，确保 OTA 修改当前运行配置；裸跑时才按上述优先级自行解析。
 
 ### 3.2 更新流程
 
@@ -241,7 +262,8 @@ OTA 指令必须携带 `model_id`，与通道内稳定的 `models[].id` 完全�
 
 Web 后端 `routers/services.py` 只接受这两个白名单 key，不把用户输入直接拼进 `systemctl`。
 
-推理程序不属于这两个单元。Web 控制台通过 `process_manager` 直接管理 App 二进制；不要再同时启动指向同一 App 的 `vision_app.service`，否则可能双开。
+推理程序不属于这两个固定后台服务单元。Web 控制台通过 `process_manager` 创建按 App 命名的
+systemd transient unit 管理二进制；不要再同时启动旧的固定 `vision_app.service`，否则可能双开。
 
 ### 4.2 Web 的自动绑定与启动
 
@@ -258,6 +280,8 @@ POST /api/services/{key}/start
 → 校验该 App 的 services 子目录
 → 强制覆盖 /etc/systemd/system/<unit>
 → OTA unit 写入 ASSETS_DIR 和 CONFIG_FILE=<视觉程序实际配置>
+→ OTA unit 写入 OTA_CONFIG_FILE=.data/<App>/ota_config.json
+→ 上传 unit 写入 UPLOAD_DATA_DIR=.data/<App> 和 EVENT_STORE_DIR=.data/<App>/event_store
 → systemctl daemon-reload
 → systemctl disable <unit>
 → systemctl reset-failed <unit>
@@ -347,11 +371,16 @@ systemctl reset-failed ota_agent
 ```bash
 systemctl stop unified_upload
 cd /opt/ai_apps/<App>/services/upload
+UPLOAD_DATA_DIR=/opt/ai_apps/.data/<App> \
+EVENT_STORE_DIR=/opt/ai_apps/.data/<App>/event_store \
 python3 -u main.py
 
 systemctl stop ota_agent
 cd /opt/ai_apps/<App>/services/model_update
-ASSETS_DIR=/opt/ai_apps/<App>/assets python3 -u ota_agent.py
+ASSETS_DIR=/opt/ai_apps/<App>/assets \
+OTA_CONFIG_FILE=/opt/ai_apps/.data/<App>/ota_config.json \
+CONFIG_FILE=<实际运行的config.json> \
+python3 -u ota_agent.py
 ```
 
 ## 6. 新增第三个后台服务
@@ -373,6 +402,6 @@ ASSETS_DIR=/opt/ai_apps/<App>/assets python3 -u ota_agent.py
 | delivery 变 invalid | Profile 与接口契约是否存在、adapter 是否匹配、媒体快照是否过期、契约 source 是否有效 |
 | 配置已保存但服务仍用旧地址 | 重启对应 Python 服务；它不会热重载配置文件 |
 | 服务 CHDIR 失败 | systemd `WorkingDirectory` 已失效，在 Web 中重新绑定并启动 |
-| 重启设备后 Web 安装的服务没启动 | 当前 Web 安装默认执行 `disable`；需要自启时手动 enable |
+| 重启设备后 Web 管理的服务没启动 | 在 Web 勾选“开机自启”，并确认上次运行意图仍为启动；控制台按运行状态文件恢复，不要单独手动 enable unit |
 | OTA 修改配置但模型没有变化 | `target_config` 是否是运行配置；通道 id 是否匹配；是否使用了优先级更高的 `models[]` |
 | 裸跑时重复上传或重复连接平台 | systemd unit 未停止，存在两个服务实例 |

@@ -24,6 +24,7 @@ from typing import Dict, Iterator, Optional
 
 from services import runtime_state
 from services.data_dir import data_dir
+from services import storage_manager
 
 APPS_ROOT   = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 BINARY_NAME = os.environ.get("BINARY_NAME", "vision_analysis")
@@ -523,6 +524,7 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
         env["RK_CHANNEL_CONTROL_SOCKET"] = str(control_sock)
         env["ASSETS_DIR"] = str(assets_dir)
         env["EVENT_STORE_DIR"] = str(data_dir(app_name) / "event_store")
+        env.update(storage_manager.vision_environment())
         bundled_libs = str(app_dir / "libs")
         existing_ld_path = env.get("LD_LIBRARY_PATH", "")
         env["LD_LIBRARY_PATH"] = (

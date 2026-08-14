@@ -13,7 +13,11 @@
 
 ## 通道 logic 执行语义
 
-`channels[].logic` 是可选后处理步骤。配置了模块时，推理通道在新结果到达时执行，非推理通道在帧入口以空 results 逐帧执行；未配置时框架直接跳过业务调用，但仍保存当前帧和模型结果供通用画面绘制、快照及跨通道读取。动作在本帧 logic 前处理。每次调用使用栈上的 `ChannelContext`，跨帧数据存入 `*ctx->state`；框架在切换 logic 时清空旧状态、结果、绘制和 canvas。
+`channels[].logic` 是可选后处理步骤。配置了模块时，推理通道在新结果到达时执行；非推理通道在
+帧入口按该通道 `max_fps` 节流命中的业务帧、以空 results 同步执行，并不是每个解码帧都调用。
+未配置时框架直接跳过业务调用，但仍保存当前帧和模型结果供通用画面绘制、快照及跨通道读取。
+动作在本帧 logic 前处理。每次调用使用栈上的 `ChannelContext`，跨帧数据存入 `*ctx->state`；
+框架在切换 logic 时清空旧状态、结果、绘制和 canvas。
 
 最小实现：
 
@@ -38,13 +42,16 @@ REGISTER_LOGIC(logic_person);
 - `results`：可修改的本帧结果，含模型来源、tracker、pose/seg 等扩展字段。
 - `config`：当前通道只读配置；不要缓存其指针跨调用。
 - `logic_parameters`：当前模块类型化参数表；业务通过 `param_float/int/bool/string/json()` 读取。
-- `rois`/`roi`：模型坐标系的多 ROI 和首 ROI 兼容指针。
+- `rois`：模型坐标系的全部命名 ROI；单区访问使用 `roi_at()`、`roi_by_name()` 等接口，没有单数 `roi` 字段。
 - `draw_cmds`：本帧输出；调用 `draw_*` 追加命令。
 - `state`：框架持有的 `shared_ptr<void>` 槽，logic 自行转换为具体状态类型。
 - `timestamp_ms`：单调时间；`unix_ms`、`time_hms()`、`time_str()`、`datetime()`：墙钟时间。
 - `infer_enabled`：本次是否实际启用推理。
 
-`display_canvas()` 首次调用会克隆 `frame` 并只替换显示底图，不改变推理帧或告警原图。需要跨通道同帧数据时使用 `get_channel_snapshot()`。
+`display_canvas()` 首次调用会克隆 `frame` 并只替换显示底图，不改变推理帧或告警用的未叠加
+模型输入图。通道 logic 读取其他通道时使用 `get_channel_frame_snapshot()`，可保证该通道内部的
+frame/results/outputs 对齐；全局 logic 默认读取本 tick 固定的轻量 `ChannelLogicSnapshot`。
+不同通道之间仍需比较 `frame_steady_ms` 和新鲜度，不能假定采集时刻相同。
 
 ## ROI 与绘制
 
@@ -70,7 +77,7 @@ REGISTER_LOGIC(logic_person);
 
 ## 全局 logic
 
-每个启用的 `GlobalLogicConfig` 有独立线程、轮询间隔和 `state`。`GlobalContext` 提供受监控通道列表、tick、是否有新推理、最新推理通道以及安全快照。只看本通道且要求每帧响应时用 channel logic；跨通道汇总或周期巡检用 global logic。
+每个启用的 `GlobalLogicConfig` 有独立线程、轮询间隔和 `state`。`GlobalContext` 提供受监控通道列表、tick、是否有新推理、最新推理通道、安全快照、类型化通道 outputs/参数以及统一事件上报。只看本通道且要求每个业务帧响应时用 channel logic；跨通道汇总或周期巡检用 global logic。
 
 全局 logic 位于 `src/logic/global_modules/global_xxx/`，使用
 `REGISTER_GLOBAL_LOGIC(global_xxx)` 自注册；同目录 `logic.json` 是参数 Schema 和 Web
@@ -79,7 +86,8 @@ REGISTER_LOGIC(logic_person);
 
 ## 二次开发硬约束
 
-- logic 运行在实时处理路径，不做阻塞网络、长时间磁盘 IO 或无界循环。
+- logic 运行在实时处理路径，模块代码不直接做阻塞网络、长时间磁盘 IO 或无界循环；允许的统一
+  `report_event()` 会同步原子写入少量状态 JSON，媒体编码由后台 worker 执行。
 - 不在持有框架锁时执行复杂业务；通过 context/快照复制数据。
 - 所有可持久状态放入 `ctx->state`，不要用跨通道无锁全局变量。
 - 修改公共状态结构时同步检查热切 logic、断流恢复、动作处理和 alarm 快照语义。

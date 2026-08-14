@@ -1,12 +1,14 @@
 import { useEffect, useState, useRef } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom'
 import AppsPage    from './pages/AppsPage'
+import LiveViewPage from './pages/LiveViewPage'
 import EditorPage  from './pages/EditorPage'
 import LogsPage    from './pages/LogsPage'
 import RecordsPage from './pages/RecordsPage'
 import LoginPage   from './pages/LoginPage'
 import TerminalPage from './pages/TerminalPage'
 import ServicesPage from './pages/ServicesPage'
+import SystemSettingsPage from './pages/SystemSettingsPage'
 import { destroyAllTerminals } from './pages/terminalSession'
 import ErrorBoundary from './components/ErrorBoundary'
 import { useAuthStore } from './store/authStore'
@@ -76,8 +78,16 @@ function AppShell() {
           <span className="nav-icon">▣</span> 程序管理
         </NavLink>
 
+        <NavLink to="/live-view" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
+          <span className="nav-icon">▰</span> 实时画面
+        </NavLink>
+
         <NavLink to="/services" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
           <span className="nav-icon">⚙</span> 服务配置
+        </NavLink>
+
+        <NavLink to="/system-settings" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
+          <span className="nav-icon">◉</span> 系统设置
         </NavLink>
 
         <NavLink to="/terminal" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
@@ -95,11 +105,13 @@ function AppShell() {
         <ErrorBoundary>
           <Routes>
             <Route path="/"                  element={<AppsPage />} />
+            <Route path="/live-view"         element={<LiveViewPage />} />
             <Route path="/editor/:appName"   element={<EditorPage />} />
             <Route path="/logs/:appName"     element={<LogsPage />} />
             <Route path="/records/:appName"  element={<RecordsPage />} />
             <Route path="/terminal"        element={<TerminalPage />} />
             <Route path="/services"        element={<ServicesPage />} />
+            <Route path="/system-settings" element={<SystemSettingsPage />} />
           </Routes>
         </ErrorBoundary>
       </main>

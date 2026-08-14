@@ -471,7 +471,7 @@ if (!report.accepted())
 事件链路：
 
 ```text
-channel logic
+channel logic / global logic
   → event_store/<event_id>/event.json
   → media_state.json / delivery_state.json
   → annotated.jpg / raw.jpg / clip.mp4
@@ -479,6 +479,12 @@ channel logic
   → delivery 独立上传和重试
   → 全部成功后删除事件目录
 ```
+
+全局逻辑使用同一个 `EventRequest` 与 `report_event(gctx, request)`。全局事件图片会把连入该全局
+逻辑的全部通道按 `disp_width`、`disp_height`、`tile_rows`、`tile_cols` 拼接；图片叠加仍由
+`image_overlay` 决定。`request.source_channel_id` 只动态选择事件来源标识和单通道事件视频，省略时
+使用上报节点的默认通道。Web 画布以“通道逻辑 → 全局逻辑 → 上报配置”连线生成输入通道和统一
+上报策略。
 
 事件目录按写入者拆分：C++ 维护 `event.json` 和 `media_state.json`，上传服务独占
 `delivery_state.json`，避免两个进程并发覆盖同一份状态。

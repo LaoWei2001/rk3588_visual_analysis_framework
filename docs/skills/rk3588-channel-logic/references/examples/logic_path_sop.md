@@ -28,8 +28,10 @@
 | `round_total_seconds` | number | 本轮总耗时 |
 | `order_error` | boolean | 是否发生顺序错误 |
 | `completed` | boolean | 是否到达合规完成状态 |
+| `edge_verdict` | string | 边缘端初判结果：`normal` 或 `violation` |
+| `event_payload` | json | 可直接映射到远端的完整 SOP 业务 JSON |
 
-完整业务 JSON 的 `sop` 对象还会在正常和违规结果中固定输出两组循环数据：
+`event_payload` 的 `sop` 对象还会在正常和违规结果中固定输出两组循环数据：
 
 - `configured_loop_edges`：画布中参与有向环/自环的边，以及显式配置次数范围的边；每项包含起止步骤、区域和 `required_min_count` / `allowed_max_count`，两端均为 `0` 表示任意次数；
 - `actual_loop_counts`：本轮对应循环边的实际通过次数 `actual_count`，以及是否落在配置范围内的 `within_range`。
@@ -83,9 +85,10 @@ SOP 的唯一配置入口是 `channels[].logic_parameters.flow`：
 
 ## 上报方式
 
-SOP logic 不选择服务器或 Dify，也不拼装图片。画布连接的上报节点生成 `report_policy`；告警模块自动复用当前显示叠加生成 `annotated.jpg`，同时保留 `raw.jpg`，视频 delivery 则触发事件录像。
+SOP logic 不选择服务器或 Dify，也不拼装图片。画布连接的上报节点生成 `report_policy`；告警模块自动复用当前显示叠加生成 `annotated.jpg`，同时保留未叠加、模型输入尺寸的 `raw.jpg`，视频 delivery 则触发事件录像。
 
-相同通道、相同告警类型在 `merge_window_sec` 内可能合并为同一事件。SOP 自身还按步骤/轮次去重，避免同一违规每帧重复提交。
+当前 SOP 明确设置 `merge_mode=EventMergeMode::NEVER`，每次真正提交的违规都会创建独立事件，
+不使用 `merge_window_sec` 合并。SOP 自身按步骤/轮次去重，避免同一违规在条件持续成立时每帧重复提交。
 
 ## 动作
 

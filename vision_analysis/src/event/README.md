@@ -63,6 +63,10 @@ logic
 }
 ```
 
+`report_policy.enabled=false` 是整条事件链的总开关。关闭时 `report_event()` 在创建本地事件前
+直接返回 `DISABLED`，不会写入告警箱，也不会进入上传队列；`deliveries[]` 可以继续保留，供画布
+重新开启时恢复原配置。多个 delivery 可通过各自的 `enabled` 独立开关。
+
 - `profile_id`：上传服务 `config.yaml` 中的连接。
 - `contract_id`：上传服务 `contracts/*.json` 中的接口模板。
 - `media`：可选 `annotated_image`、`raw_image`、`video`；空数组表示仅事件数据。
@@ -88,5 +92,6 @@ requested -> generating -> ready
 - `EVENT_STORE_MAX_BYTES`
 - `EVENT_STORE_MIN_FREE_BYTES`
 
-实现入口是 `event_report.h/.cpp`，单元测试位于
-`tests/test_event_report/event_report_unit_test.cpp`。
+实现入口是 `event_report.h/.cpp`。当前仓库没有独立的 C++ 事件模块单元测试；
+上报队列、契约选择和重试行为由 `service/upload/tests/test_functional.py` 覆盖，
+改动本目录代码时仍需在设备侧补做事件生成、媒体落盘和断网恢复验证。

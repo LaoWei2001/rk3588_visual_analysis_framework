@@ -62,8 +62,8 @@ const EventReportResult report = report_event(ctx, event);
 {
   "id": "delivery_1",
   "enabled": true,
-  "profile_id": "factory",
-  "contract_id": "object_invade_det",
+  "profile_id": "server_22",
+  "contract_id": "jnu_alarm_upload",
   "media": ["annotated_image", "raw_image"],
   "when": {
     "event_types": ["person_intrusion"]
@@ -72,8 +72,8 @@ const EventReportResult report = report_event(ctx, event);
 ```
 
 `media` 是保存到 delivery 的必要快照，C++ 用它决定媒体任务。adapter、mapping、请求方式和
-成功条件都不复制到 delivery；Python 以 `service/upload/contracts/<contract_id>.json`
-为接口协议权威。
+成功条件都不复制到 delivery；仓库默认契约位于 `service/upload/contracts/`，Web 管理的运行契约
+位于 `/opt/ai_apps/.data/<App>/contracts/`，Python 以运行目录中的 `<contract_id>.json` 为协议权威。
 `when.event_types` 缺省或空数组表示匹配所有事件。
 
 事件类型不再由 Web 自由输入。每个 channel logic 的 `logic.json` 都必须声明：
@@ -91,12 +91,18 @@ const EventReportResult report = report_event(ctx, event);
 ## 接口模板
 
 接口模板是开发者和大模型维护服务器协议的地方。通常在 Web 上报节点中通过字段选择器创建
-或编辑；保存结果写入已安装 App 的 `services/upload/contracts/*.json`，仍可进入版本管理、
-复制到仓库源码 `service/upload/contracts/`，或由大模型直接审查修改：
+或编辑；保存结果写入 `/opt/ai_apps/.data/<App>/contracts/*.json`，同名 App 覆盖时保留。
+需要代码评审、版本管理或分发给新 App 时，再把确认后的模板同步到仓库
+`service/upload/contracts/`，也可由大模型直接审查修改：
+
+仓库当前 `service/upload/contracts/server.json` 的 ID 是 `jnu_alarm_upload`，需要
+`annotated_image + raw_image`；它的完整 mapping 以该文件为准。下面仅演示“新建另一份自定义
+契约”时的结构，必须使用新的 ID，不能拿示意内容覆盖同名默认契约：
 
 ```json
 {
-  "id": "object_invade_det",
+  "id": "custom_object_invade",
+  "label": "自定义入侵接口",
   "adapter": "http_json",
   "media": ["annotated_image", "raw_image"],
   "request": {"method": "POST"},
@@ -105,7 +111,7 @@ const EventReportResult report = report_event(ctx, event);
     {"source": "fields", "target": "detResult"},
     {"source": "media.annotated_image", "target": "base64Data", "transform": "base64"}
   ],
-  "success": {"http_status": [200], "json_path": "code", "equals": 200}
+  "success": {"http_status": [200]}
 }
 ```
 
@@ -134,7 +140,7 @@ logic.cpp EventRequest.fields             -> 事件触发时的真实数值
 | `source.parameters.<key>` | 通道 report_parameters |
 | `fields.<key>` | logic 的自定义字段 |
 | `media.annotated_image` | 带叠加图片文件 |
-| `media.raw_image` | 原始图片文件 |
+| `media.raw_image` | 未叠加图片文件；通道事件当前为模型输入尺寸，不是摄像头原分辨率 |
 | `media.video` | MP4 文件 |
 | `event/fields/source` | 整体对象 |
 | `constant` | 映射条目中的固定 `value` |
@@ -170,7 +176,7 @@ requested -> generating -> ready
 ## 排错顺序
 
 1. 检查 `EventReportResult.status/detail/event_id`；
-2. 查看 `event_store/<event_id>/event.json`；
+2. 查看 `event_store/<event_id>/event.json`（Web 管理模式为 `/opt/ai_apps/.data/<App>/event_store/`）；
 3. 查看 `media_state.json` 的 requested/generating/ready/failed；
 4. 查看 `delivery_state.json` 的适配器、Profile、attempts 和 last_error；
 5. 在 Web 上报节点预览最终请求；

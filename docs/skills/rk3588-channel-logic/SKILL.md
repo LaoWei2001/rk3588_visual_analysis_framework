@@ -54,7 +54,8 @@ description: >-
 - `ctx->frame`、检测框、ROI 和 `draw_*` 均使用模型输入坐标系，通常是 640×640；传统 CV 确需源分辨率时可按需调用 `ctx->source_frame()`，但源坐标不能与模型坐标直接混用；
 - 计时、闩锁、按 `track_id` 去重等跨帧状态放在 `ctx->state`，不能用可变 `static`；
 - `ctx->timestamp_ms` 是单调时间，只适合算间隔；日历时间使用 `ctx->unix_ms`、`time_hms()` 或 `time_str()`；
-- logic 运行在实时处理路径，不做 HTTP、Redis、阻塞磁盘 I/O 或视频编码。
+- logic 运行在实时处理路径，业务模块不得直接做 HTTP、Redis、阻塞磁盘 I/O 或视频编码；统一
+  `report_event()` 会在调用线程原子持久化少量事件状态 JSON，图片/视频编码再交给后台 worker。
 
 ## 事件上报模型
 
@@ -72,8 +73,9 @@ request.fields = {
 EventReportResult report = report_event(ctx, request);
 ```
 
-JSON 对象或数组使用 `event_json_field()`。`report.accepted()` 表示事件已创建或合并，
-`report.event_id` 是本地事件 ID；这不代表远端已经投递成功。失败时检查
+JSON 对象或数组使用 `event_json_field()`。`report.accepted()` 表示事件已进入本地发件箱：状态
+可能是 `CREATED`、`MERGED`，也可能是事件已保存但媒体立即失败的 `CREATED_MEDIA_FAILED`。
+`report.event_id` 是本地事件 ID；这不代表媒体成功或远端已经投递成功。失败时检查
 `event_report_status_name(report.status)` 和 `report.detail`。
 
 正确链路是：
@@ -86,7 +88,10 @@ logic -> report_event
       -> adapter -> 远端接口
 ```
 
-连接地址和密钥只保存在上传服务配置的 `profiles` 中：仓库源码是 `service/upload/config.yaml`，安装到 App 后是 `services/upload/config.yaml`。logic 不读取连接信息，也不选择 adapter；同一个事件可以由画布配置多个 delivery。
+连接地址和密钥只保存在上传服务配置的 `profiles` 中：仓库默认值是
+`service/upload/config.yaml`；Web 管理的运行值位于
+`/opt/ai_apps/.data/<App>/upload_config.yaml`，首次由程序包默认值迁移。logic 不读取连接信息，
+也不选择 adapter；同一个事件可以由画布配置多个 delivery。
 
 在当前模块的 `logic.json` 中声明所有允许接口契约引用的运行时字段：
 
@@ -187,7 +192,7 @@ python3 scripts/generate_logics_catalog.py --check
 ./vision_analysis --list-logics   # 已有当前架构二进制时
 ```
 
-2026-07-30 当前工作区中，适合作为开发参考的模块如下：
+2026-08-14 当前工作区中，适合作为开发参考的模块如下：
 
 | 需求 | 当前实现 | 文档 |
 |---|---|---|
@@ -197,9 +202,13 @@ python3 scripts/generate_logics_catalog.py --check
 | 周期截图、参数热重载、原始/叠加图片 | `modules/logic_periodic_snapshot_demo/logic.cpp` | `references/examples/logic_periodic_snapshot_demo.md` |
 | 同步传统 CV 取得原始帧并落盘 | `modules/logic_save_frame_pair/logic.cpp` | 直接阅读源码和 `references/channelcontext-api.md` |
 | 多区域 SOP、分支/循环、统一告警 | `modules/logic_path_sop/logic.cpp` | `references/examples/logic_path_sop.md` |
+| 跌倒、相机移动、安全装备和吊钩业务 | `modules/logic_fall_detection`、`logic_camera_move_detect`、`logic_helmet`、`logic_hook` | 直接同时阅读各自 `logic.cpp + logic.json`，不要只复制单文件 |
+| 向全局逻辑发布类型化变量 | `modules/logic_global_input_demo` | `../rk3588-global-logic/references/two-channel-canvas-demo.md` |
 | ROI 进入、闩锁和上报字段组合 | 新模块可采用的代码模式 | `references/examples/roi-alarm-pattern.md` |
 
-`logic_course_08` ～ `logic_course_10` 当前仍是课程开发中的半成品/任务骨架，不能作为已经完成的上报实现照搬。可用模块名称必须来自当前生成的 `logics.json`，不要根据历史文档猜测。
+`logic_course_08` 是可运行的最小定时事件课程示例，但没有完整业务状态机；
+`logic_course_09`、`logic_course_10` 仍是空入口/任务骨架。三者都不能当成生产实现照搬。
+可用模块名称必须来自当前生成的 `logics.json`，不要根据历史文档猜测。
 
 ## 接线与验证
 
@@ -208,7 +217,7 @@ python3 scripts/generate_logics_catalog.py --check
 3. 地址和密钥在 Web“服务配置”中管理，保存后重启 `unified_upload`；
 4. 修改 C++ 后执行 `cd vision_analysis && ./build.sh <名> && sudo ./install_app.sh <名>`，再重启对应 App；
 5. 修改 `config.json` 中普通字段、logic、ROI、模型、stream 或 global logic 时观察配置热重载日志；拓扑变化则重启；
-6. 上报验证先看 `event_store/<event_id>/event.json`、`media_state.json` 和 `delivery_state.json`，再看 `raw.jpg`、`annotated.jpg`、`clip.mp4` 和 `journalctl -u unified_upload`；Web“待上报记录”页也读取这份发件箱。所有 delivery 成功后事件目录会被移除，成功历史需从远端回执或服务日志确认。
+6. 上报验证先看 `event_store/<event_id>/event.json`、`media_state.json` 和 `delivery_state.json`，再看 `raw.jpg`、`annotated.jpg`、`clip.mp4` 和 `journalctl -u unified_upload`；Web 管理模式的实际目录是 `/opt/ai_apps/.data/<App>/event_store/`，页面也读取这里。所有 delivery 成功后事件目录会被移除，成功历史需从远端回执或服务日志确认。
 
 ## 常见错误
 

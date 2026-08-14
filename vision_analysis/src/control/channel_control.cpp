@@ -192,9 +192,7 @@ void server_loop()
 {
     while (g_running.load())
     {
-        struct pollfd pfd
-        {
-        };
+        struct pollfd pfd{};
         pfd.fd = g_server_fd;
         pfd.events = POLLIN;
         const int pr = poll(&pfd, 1, 200);
@@ -207,9 +205,7 @@ void server_loop()
         if (client_fd < 0)
             continue;
 
-        struct timeval tv
-        {
-        };
+        struct timeval tv{};
         tv.tv_sec = 2;
         tv.tv_usec = 0;
         setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
@@ -299,4 +295,30 @@ void channel_control_take(int channel_id, std::vector<ChannelAction> &out)
         out.push_back(std::move(queue.front()));
         queue.pop_front();
     }
+}
+
+void channel_control_set_infer_enable(int channel_id, bool enable)
+{
+    if (!app_ctrl_has_channel(channel_id))
+        return;
+
+    pthread_mutex_lock(&g_pCtrl->chn_mtx[channel_id]);
+    const int old_val = g_pCtrl->channels_state[channel_id].infer_runtime_enable;
+    g_pCtrl->channels_state[channel_id].infer_runtime_enable = enable ? 1 : 0;
+    const int new_val = g_pCtrl->channels_state[channel_id].infer_runtime_enable;
+    pthread_mutex_unlock(&g_pCtrl->chn_mtx[channel_id]);
+
+    if (old_val != new_val)
+        printf("[ChannelControl] ch%02d infer %s\n", channel_id, enable ? "ON" : "OFF");
+}
+
+int channel_control_get_infer_enable(int channel_id)
+{
+    if (!app_ctrl_has_channel(channel_id))
+        return 0;
+
+    pthread_mutex_lock(&g_pCtrl->chn_mtx[channel_id]);
+    const int val = g_pCtrl->channels_state[channel_id].infer_runtime_enable;
+    pthread_mutex_unlock(&g_pCtrl->chn_mtx[channel_id]);
+    return val;
 }

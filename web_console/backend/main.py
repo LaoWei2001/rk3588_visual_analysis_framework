@@ -3,6 +3,7 @@ import os
 import random
 import re
 from contextlib import asynccontextmanager
+from contextlib import suppress
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -10,8 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from routers import (apps, assets, auth, channel_control, config_io, logs, ota_config, process,
-                     records, services, snapshot, stream, terminal, upload_config)
+from routers import (apps, assets, auth, channel_control, config_io, logs, network_settings,
+                     ota_config, process, records, services, snapshot, storage_settings, stream,
+                     system_settings, terminal, upload_config)
 from services.auth_service import get_session
 from services import process_manager as process_manager
 from services import runtime_state
@@ -69,7 +71,13 @@ async def lifespan(app: FastAPI):
 
     # systemctl/Popen 都是阻塞调用，放入工作线程，避免卡住事件循环。
     await asyncio.to_thread(restore_runtime)
-    yield
+    storage_task = asyncio.create_task(storage_settings.maintenance_loop())
+    try:
+        yield
+    finally:
+        storage_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await storage_task
 
 
 app = FastAPI(title="RK3588 Web Console", lifespan=lifespan)
@@ -136,6 +144,9 @@ app.include_router(stream.router,    prefix="/api")
 app.include_router(upload_config.router, prefix="/api")
 app.include_router(ota_config.router,    prefix="/api")
 app.include_router(services.router,      prefix="/api")
+app.include_router(storage_settings.router, prefix="/api")
+app.include_router(network_settings.router, prefix="/api")
+app.include_router(system_settings.router, prefix="/api")
 app.include_router(logs.router)      # WebSocket has its own /ws prefix
 app.include_router(terminal.router)  # WebSocket terminal
 

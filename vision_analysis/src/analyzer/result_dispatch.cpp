@@ -44,7 +44,10 @@ extern "C" void *dispatch_worker_thread(void *arg)
         std::vector<AlgoResult> current_results;
         cv::Mat infer_frame;
         int64_t result_frame_id = 0;
-        const int has_new = algorithm_take_results(chnId, current_results, infer_frame, result_frame_id);
+        uint64_t result_frame_steady_ms = 0;
+        uint64_t result_frame_unix_ms = 0;
+        const int has_new = algorithm_take_results(chnId, current_results, infer_frame, result_frame_id,
+                                                   result_frame_steady_ms, result_frame_unix_ms);
         if (!has_new)
             continue;
 
@@ -55,6 +58,8 @@ extern "C" void *dispatch_worker_thread(void *arg)
             pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
             raw.width = g_pCtrl->channels_state[chnId].src_w_now;
             raw.height = g_pCtrl->channels_state[chnId].src_h_now;
+            raw.frame_steady_ms = result_frame_steady_ms;
+            raw.frame_unix_ms = result_frame_unix_ms;
             raw.model_input_mat = g_pCtrl->channels_state[chnId].last_frame;
             input_seq_now = g_pCtrl->channels_state[chnId].input_frame_seq;
             pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);

@@ -716,8 +716,6 @@ int app_ctrl_init(const char *cfgPath)
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
     {
         g_pCtrl->channels_state[i].last_fps_ts_ms = now_ms;
-        g_pCtrl->channels_state[i].last_infer_ts_ms = now_ms;
-        g_pCtrl->channels_state[i].last_result_ts_ms = now_ms;
         g_pCtrl->channels_state[i].last_logic_ts_ms = now_ms;
     }
 
@@ -882,7 +880,12 @@ std::vector<AlgoResult> app_ctrl_get_results_fresh(int chnId, int max_age_ms)
     pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
     auto &cs = g_pCtrl->channels_state[chnId];
     uint64_t now = steady_now_ms();
-    int64_t age_ms = (int64_t)(now - cs.last_result_ts_ms);
+    if (cs.published_steady_ms == 0)
+    {
+        pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
+        return {};
+    }
+    int64_t age_ms = now >= cs.published_steady_ms ? static_cast<int64_t>(now - cs.published_steady_ms) : 0;
     if (age_ms > max_age_ms)
     {
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
@@ -929,16 +932,6 @@ int app_ctrl_has_target(int chnId, const char *label, int max_age_ms)
     return 0;
 }
 
-uint64_t app_ctrl_get_last_infer_ts_ms(int chnId)
-{
-    if (!app_ctrl_has_channel(chnId))
-        return 0;
-    pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-    uint64_t v = g_pCtrl->channels_state[chnId].last_infer_ts_ms;
-    pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
-    return v;
-}
-
 std::string app_ctrl_get_logic_name(int chnId)
 {
     auto runtime = app_ctrl_get_runtime_snapshot();
@@ -946,28 +939,94 @@ std::string app_ctrl_get_logic_name(int chnId)
     return channel ? channel->logic : std::string();
 }
 
-int app_ctrl_get_channel_snapshot(int chnId, ChannelSnapshot *out)
+static void fill_channel_logic_snapshot_locked(int chnId, const ChannelState &state, ChannelLogicSnapshot *out,
+                                               std::shared_ptr<const AppRuntimeSnapshot> *published_runtime)
+{
+    out->has_publication = state.publication_seq != 0;
+    out->has_frame = !state.last_logic_frame.empty();
+    out->channel_id = chnId;
+    out->publication_seq = state.publication_seq;
+    out->published_steady_ms = state.published_steady_ms;
+    out->frame_steady_ms = state.frame_steady_ms;
+    out->frame_unix_ms = state.frame_unix_ms;
+    out->config_generation = state.published_config_generation;
+    if (state.published_steady_ms != 0)
+    {
+        const uint64_t now = steady_now_ms();
+        out->publication_age_ms = now >= state.published_steady_ms
+                                      ? static_cast<int64_t>(now - state.published_steady_ms)
+                                      : 0;
+    }
+    out->logic_frame_id = state.published_logic_frame_id;
+    out->frame_seq = state.published_frame_seq;
+    out->src_width = state.published_src_width;
+    out->src_height = state.published_src_height;
+    out->infer_enabled = state.published_infer_enabled != 0;
+    out->disp_fps = state.disp_fps;
+    out->online_state = state.online_state;
+    out->online_state_changed_steady_ms =
+        state.online_state == CH_ONLINE ? state.online_ts_ms : state.offline_ts_ms;
+    out->outputs = state.logic_outputs;
+    if (published_runtime)
+        *published_runtime = state.published_runtime;
+}
+
+static void fill_channel_publication_config(int chnId, const std::shared_ptr<const AppRuntimeSnapshot> &runtime,
+                                            ChannelLogicSnapshot *out)
+{
+    if (!out)
+        return;
+    const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, chnId);
+    const LogicParameterSet *parameters = app_ctrl_runtime_logic_parameters(runtime, chnId);
+    if (channel)
+    {
+        out->display_order = runtime->channel_config_index[chnId];
+        out->logic_name = channel->logic;
+    }
+    if (parameters)
+        out->parameters = *parameters;
+}
+
+int app_ctrl_get_channel_logic_snapshot(int chnId, ChannelLogicSnapshot *out)
 {
     if (!out || !app_ctrl_has_channel(chnId))
         return 0;
 
-    out->infer_fps = algorithm_get_infer_fps(chnId);
+    *out = ChannelLogicSnapshot();
+    const float infer_fps = algorithm_get_infer_fps(chnId);
+    std::shared_ptr<const AppRuntimeSnapshot> published_runtime;
+    pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
+    fill_channel_logic_snapshot_locked(chnId, g_pCtrl->channels_state[chnId], out, &published_runtime);
+    pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
+    fill_channel_publication_config(chnId, published_runtime, out);
+    out->infer_fps = infer_fps;
+    return 1;
+}
+
+int app_ctrl_get_channel_frame_snapshot(int chnId, ChannelFrameSnapshot *out)
+{
+    if (!out || !app_ctrl_has_channel(chnId))
+        return 0;
+
+    *out = ChannelFrameSnapshot();
+    const float infer_fps = algorithm_get_infer_fps(chnId);
 
     cv::Mat frame_shallow;
+    std::shared_ptr<const AppRuntimeSnapshot> published_runtime;
     {
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         const auto &cs = g_pCtrl->channels_state[chnId];
         frame_shallow = cs.last_logic_frame;
         out->results = cs.last_results;
-        out->logic_state = cs.logic_state;
-        out->disp_fps = cs.disp_fps;
-        out->logic_frame_id = cs.logic_frame_id;
-        out->frame_seq = cs.result_frame_seq; /* frame 与 results 同帧序号 */
-        out->has_results = !cs.last_results.empty();
-        out->result_age_ms = (int64_t)(steady_now_ms() - cs.last_result_ts_ms);
-        out->online_state = cs.online_state;
+        out->draw_cmds = cs.draw_cmds;
+        fill_channel_logic_snapshot_locked(chnId, cs, &out->logic, &published_runtime);
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
     }
     out->frame = frame_shallow.clone();
+    fill_channel_publication_config(chnId, published_runtime, &out->logic);
+    const std::vector<RoiZone> *rois = app_ctrl_runtime_channel_rois(published_runtime, chnId);
+    if (rois)
+        out->rois = *rois;
+    out->logic.infer_fps = infer_fps;
     return 1;
 }

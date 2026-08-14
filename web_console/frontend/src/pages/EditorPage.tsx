@@ -22,6 +22,7 @@ import ROINode     from '../nodes/ROINode'
 import LogicNode   from '../nodes/LogicNode'
 import SopNode     from '../nodes/SopNode'
 import ReportNode  from '../nodes/ReportNode'
+import GlobalLogicNode from '../nodes/GlobalLogicNode'
 
 import { useROIStore, type Zone } from '../store/roiStore'
 import { useConsoleStore } from '../store/consoleStore'
@@ -34,7 +35,6 @@ import {
   fetchConfig, saveConfig, saveConfigFile, deleteConfigFile,
   fetchConfigFiles, loadConfigFile,
 } from '../api/client'
-import GlobalLogicsPanel,  { GlobalLogicEntry }                    from '../components/GlobalLogicsPanel'
 import GlobalSettingsPanel, { GlobalSettingsData, DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
 import NodeConfigPanel from '../components/NodeConfigPanel'
 import ConfigPreviewPanel from '../components/ConfigPreviewPanel'
@@ -48,6 +48,7 @@ const nodeTypes = {
   logic:  LogicNode,
   sop:    SopNode,
   report: ReportNode,
+  globalLogic: GlobalLogicNode,
 }
 
 // ── Edge color by handle ──
@@ -56,6 +57,7 @@ const EDGE_COLORS: Record<string, string> = {
   'roi-out':    '#f97316',
   'logic-out':  '#a855f7',
   'report-out': '#ef4444',
+  'global-out': '#06b6d4',
 }
 
 // ── Palette chip definitions ──
@@ -66,6 +68,7 @@ const PALETTE_NODES = [
   { type: 'logic',  label: '逻辑函数', icon: '⚡', cls: 'logic'  },
   { type: 'sop',    label: 'SOP流程',  icon: '🧭', cls: 'sop'    },
   { type: 'report', label: '上报配置', icon: '📤', cls: 'report' },
+  { type: 'globalLogic', label: '全局逻辑', icon: '⬡', cls: 'global-logic' },
 ] as const
 
 // 切到 RTSP / 新建视频流节点时的默认地址
@@ -91,10 +94,42 @@ const NODE_DEFAULTS: Record<string, Record<string, unknown>> = {
     },
     report_parameters: {},
   },
+  globalLogic: {
+    enable: true,
+    logic: '',
+    poll_interval_ms: 200,
+    logic_parameters: {},
+  },
 }
 
 let _uid = 0
 const uid = (p: string) => `${p}-${++_uid}-${Date.now()}`
+
+const channelInputForLogic = (
+  logicNode: Node,
+  nodes: Node[],
+  edges: Edge[],
+): { channelId: number; logic: string } | null => {
+  const logicInput = edges.find(edge =>
+    edge.target === logicNode.id && edge.targetHandle === 'logic-in')
+  const upstream = logicInput ? nodes.find(node => node.id === logicInput.source) : null
+  const stream = upstream?.type === 'stream'
+    ? upstream
+    : upstream?.type === 'model'
+      ? (() => {
+          const streamEdge = edges.find(edge =>
+            edge.target === upstream.id && edge.targetHandle === 'stream-in')
+          return streamEdge ? nodes.find(node => node.id === streamEdge.source) : null
+        })()
+      : null
+  if (stream?.type !== 'stream') return null
+  return {
+    channelId: Number((stream.data as Record<string, unknown>).channel_id ?? 0),
+    logic: logicNode.type === 'sop'
+      ? 'logic_path_sop'
+      : String((logicNode.data as Record<string, unknown>).logic ?? ''),
+  }
+}
 
 // 'assets/config.json' → 'config.json'
 const cfgBase = (p: string): string => p.split('/').pop() ?? p
@@ -111,13 +146,12 @@ type HistorySnap = {
   edges: Edge[]
   roi: Record<string, Zone[]>
   gs: GlobalSettingsData
-  gl: GlobalLogicEntry[]
 }
 // 计算签名(只取实质内容, 忽略 selected/dragging 等, 避免选中节点也记历史)
 const histSig = (s: HistorySnap): string => JSON.stringify({
   n: s.nodes.map(n => ({ i: n.id, t: n.type, x: Math.round(n.position.x), y: Math.round(n.position.y), d: n.data })),
   e: s.edges.map(e => ({ i: e.id, s: e.source, t: e.target, sh: e.sourceHandle ?? null, th: e.targetHandle ?? null })),
-  r: s.roi, g: s.gs, l: s.gl,
+  r: s.roi, g: s.gs,
 })
 
 export default function EditorPage() {
@@ -159,14 +193,13 @@ export default function EditorPage() {
   // savedSigRef: 上次「保存/加载」时的画布基线签名；当前签名与它不同 = 有未保存改动。
   // 初值 = 空画布签名 → 加载完成前(含异步拉取配置期间)空画布不会被误判为「有改动」。
   const savedSigRef        = useRef<string>(
-    histSig({ nodes: [], edges: [], roi: {}, gs: DEFAULT_GLOBAL_SETTINGS, gl: [] })
+    histSig({ nodes: [], edges: [], roi: {}, gs: DEFAULT_GLOBAL_SETTINGS })
   )
   const dirtyRef           = useRef(false)
   const toastTimer         = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [saving,         setSaving]        = useState(false)
   const [toast,          setToast]         = useState<{ msg: string; ok: boolean } | null>(null)
-  const [globalLogics,   setGlobalLogics]  = useState<GlobalLogicEntry[]>([])
   const [globalSettings, setGlobalSettings] = useState<GlobalSettingsData>(DEFAULT_GLOBAL_SETTINGS)
   const [importFiles,    setImportFiles]   = useState<string[]>([])
   const [showImport,     setShowImport]    = useState(false)
@@ -183,9 +216,7 @@ export default function EditorPage() {
 
   // ── 撤销/恢复 历史栈 (Ctrl+Z / Ctrl+Y) ──
   const gsRef   = useRef(globalSettings)
-  const glRef   = useRef(globalLogics)
   useEffect(() => { gsRef.current = globalSettings }, [globalSettings])
-  useEffect(() => { glRef.current = globalLogics }, [globalLogics])
   const histRef = useRef<{ stack: HistorySnap[]; idx: number; restoring: boolean }>(
     { stack: [], idx: -1, restoring: false }
   )
@@ -195,12 +226,41 @@ export default function EditorPage() {
     () => nodes.find(n => n.selected) ?? null,
     [nodes]
   )
+  const channelIds = useMemo(() => nodes
+    .filter(node => node.type === 'stream')
+    .map(node => Number((node.data as Record<string, unknown>).channel_id ?? 0))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b), [nodes])
+  const selectedGlobalInputs = useMemo(() => {
+    if (selectedNode?.type !== 'globalLogic') return []
+    const inputs = edges
+      .filter(edge => edge.target === selectedNode.id && edge.targetHandle === 'global-in')
+      .map(edge => nodes.find(node => node.id === edge.source))
+      .filter((node): node is Node => node?.type === 'logic' || node?.type === 'sop')
+      .map(logicNode => channelInputForLogic(logicNode, nodes, edges))
+      .filter((input): input is { channelId: number; logic: string } => input != null)
+    return inputs.sort((a, b) => a.channelId - b.channelId)
+  }, [selectedNode, nodes, edges])
+  const selectedReportChannelIds = useMemo(() => {
+    if (selectedNode?.type !== 'report') return channelIds
+    const incoming = edges.find(edge =>
+      edge.target === selectedNode.id && edge.targetHandle === 'report-in')
+    const source = incoming ? nodes.find(node => node.id === incoming.source) : null
+    if (source?.type !== 'globalLogic') return channelIds
+    return [...new Set(edges
+      .filter(edge => edge.target === source.id && edge.targetHandle === 'global-in')
+      .map(edge => nodes.find(node => node.id === edge.source))
+      .filter((node): node is Node => node?.type === 'logic' || node?.type === 'sop')
+      .map(logicNode => channelInputForLogic(logicNode, nodes, edges)?.channelId)
+      .filter((channelId): channelId is number => channelId != null))]
+      .sort((a, b) => a - b)
+  }, [selectedNode, channelIds, nodes, edges])
 
   // 与“保存”共用同一个序列化函数：这里看到的就是将写入当前配置文件的 JSON。
   const previewJson = useMemo(() => {
-    const result = graphToConfig(nodes, edges, roiZones, globalLogics, globalSettings)
+    const result = graphToConfig(nodes, edges, roiZones, globalSettings)
     return result ? JSON.stringify(result.config, null, 2) : null
-  }, [nodes, edges, roiZones, globalLogics, globalSettings])
+  }, [nodes, edges, roiZones, globalSettings])
 
   // ── Update node data from config panel (outside ReactFlow context) ──
   const handleUpdateNodeData = useCallback((nodeId: string, patch: Record<string, unknown>) => {
@@ -208,8 +268,20 @@ export default function EditorPage() {
       edgesRef.current.filter(edge => edge.source === nodeId && edge.targetHandle === 'report-in')
         .map(edge => edge.target)
     )
+    const mediaSourceTargets = new Set<string>()
+    if (Object.prototype.hasOwnProperty.call(patch, 'media_source_channel_id')) {
+      const incoming = edgesRef.current.find(edge =>
+        edge.target === nodeId && edge.targetHandle === 'report-in')
+      const source = incoming ? nodesRef.current.find(node => node.id === incoming.source) : null
+      if (source?.type === 'globalLogic') {
+        edgesRef.current
+          .filter(edge => edge.source === source.id && edge.targetHandle === 'report-in')
+          .forEach(edge => mediaSourceTargets.add(edge.target))
+      }
+    }
     setNodes(prev => prev.map(n => {
-      if (n.id === nodeId) return { ...n, data: { ...(n.data as Record<string, unknown>), ...patch } }
+      if (n.id === nodeId || mediaSourceTargets.has(n.id))
+        return { ...n, data: { ...(n.data as Record<string, unknown>), ...patch } }
       if (reportTargets.has(n.id)) return {
         ...n,
         data: { ...(n.data as Record<string, unknown>), logic_name: String(patch.logic) },
@@ -280,13 +352,12 @@ export default function EditorPage() {
     cfg: Record<string, unknown>,
     markAsSaved = true,
   ) => {
-    const { nodes: n, edges: e, roiMapping, globalLogics: gl, globalSettings: gs } =
+    const { nodes: n, edges: e, roiMapping, globalSettings: gs } =
       configToGraph(cfg)
 
     setNodes(n)
     setEdges(e)
     setAllROI(roiMapping)
-    setGlobalLogics(gl)
     setGlobalSettings(gs)
     // 加载/导入新配置 → 重置撤销历史（每份配置各自独立的历史）
     histRef.current = { stack: [], idx: -1, restoring: false }
@@ -294,7 +365,7 @@ export default function EditorPage() {
     // 节点走 React state、ROI 走 Zustand store，二者可能分属不同 commit；若在中途采样基线，
     // 余下状态到位时就会被误判成「有改动」——这正是"什么都没动却提示未保存"的根因。
     if (markAsSaved) {
-      savedSigRef.current = histSig({ nodes: n, edges: e, roi: roiMapping, gs, gl })
+      savedSigRef.current = histSig({ nodes: n, edges: e, roi: roiMapping, gs })
       if (dirtyRef.current) { dirtyRef.current = false; setDirty(false) }
     } else {
       // 本地文件只进入浏览器内存，尚未写入板端；使用不可能等于画布 JSON 的基线强制标记未保存。
@@ -341,6 +412,52 @@ export default function EditorPage() {
 
   // ── Colored edges based on source handle ──
   const onConnect = useCallback((params: Connection) => {
+    if (params.sourceHandle === 'global-out' || params.targetHandle === 'global-in') {
+      const sourceNode = nodesRef.current.find(node => node.id === params.source)
+      const targetNode = nodesRef.current.find(node => node.id === params.target)
+      if (!['logic', 'sop'].includes(String(sourceNode?.type ?? '')) || targetNode?.type !== 'globalLogic') {
+        showToast('全局逻辑的输入只能来自单通道逻辑节点', false)
+        return
+      }
+      const duplicated = edgesRef.current.some(edge =>
+        edge.source === params.source && edge.target === params.target
+        && edge.sourceHandle === 'global-out' && edge.targetHandle === 'global-in')
+      if (duplicated) {
+        showToast('这一路通道已经连接到该全局逻辑', false)
+        return
+      }
+    }
+    if (params.targetHandle === 'logic-in') {
+      const source = nodesRef.current.find(node => node.id === params.source)
+      const target = nodesRef.current.find(node => node.id === params.target)
+      if (!['stream', 'model'].includes(String(source?.type ?? '')) ||
+          !['logic', 'sop'].includes(String(target?.type ?? ''))) {
+        showToast('单通道逻辑只能接收视频流或该视频流的模型结果', false)
+        return
+      }
+      const sourceStreamId = source?.type === 'stream'
+        ? source.id
+        : edgesRef.current.find(edge =>
+            edge.target === source?.id && edge.targetHandle === 'stream-in')?.source
+      if (!sourceStreamId) {
+        showToast('请先把模型节点连接到视频流，再连接单通道逻辑', false)
+        return
+      }
+      const existingStreamIds = edgesRef.current
+        .filter(edge => edge.target === params.target && edge.targetHandle === 'logic-in')
+        .map(edge => {
+          const input = nodesRef.current.find(node => node.id === edge.source)
+          return input?.type === 'stream'
+            ? input.id
+            : edgesRef.current.find(candidate =>
+                candidate.target === input?.id && candidate.targetHandle === 'stream-in')?.source
+        })
+        .filter((streamId): streamId is string => !!streamId)
+      if (sourceStreamId && existingStreamIds.some(streamId => streamId !== sourceStreamId)) {
+        showToast('一个单通道逻辑节点不能合并不同视频通道；跨通道聚合请使用全局逻辑节点', false)
+        return
+      }
+    }
     // ROI 与算法链路解耦：一个 ROI 节点只归属一个视频流，一个视频流也只接一个 ROI 节点。
     if (params.sourceHandle === 'roi-out' || params.targetHandle === 'roi-in') {
       const sourceNode = nodesRef.current.find(node => node.id === params.source)
@@ -410,7 +527,11 @@ export default function EditorPage() {
         : String((source?.data as Record<string, unknown> | undefined)?.logic ?? '')
       if (logicName) {
         setNodes(nodes => nodes.map(node => node.id === params.target
-          ? { ...node, data: { ...(node.data as Record<string, unknown>), logic_name: logicName } }
+          ? { ...node, data: {
+              ...(node.data as Record<string, unknown>),
+              logic_name: logicName,
+              logic_kind: source?.type === 'globalLogic' ? 'global' : 'channel',
+            } }
           : node))
       }
     }
@@ -555,7 +676,6 @@ export default function EditorPage() {
     edges: edgesRef.current.map(e => ({ ...e })),
     roi: JSON.parse(JSON.stringify(useROIStore.getState().zones)),
     gs: { ...gsRef.current },
-    gl: glRef.current.map(x => ({ ...x })),
   }), [])
 
   const restoreHistory = useCallback((s: HistorySnap) => {
@@ -564,7 +684,6 @@ export default function EditorPage() {
     setEdges(s.edges.map(e => ({ ...e })))
     useROIStore.getState().setAll(JSON.parse(JSON.stringify(s.roi)))
     setGlobalSettings({ ...s.gs })
-    setGlobalLogics(s.gl.map(x => ({ ...x })))
   }, [setNodes, setEdges])
 
   const undo = useCallback((): boolean => {
@@ -601,7 +720,7 @@ export default function EditorPage() {
       h.idx = h.stack.length - 1
     }, 400)
     return () => clearTimeout(timer)
-  }, [nodes, edges, roiZones, globalSettings, globalLogics, makeHistorySnap])
+  }, [nodes, edges, roiZones, globalSettings, makeHistorySnap])
 
   // ── 数字输入框：禁用方向键增减 + 滚轮改值，只能键盘直接输入 ──
   useEffect(() => {
@@ -827,7 +946,20 @@ export default function EditorPage() {
       }
     }
 
-    const result = graphToConfig(nodes, edges, roiZones, globalLogics, globalSettings)
+    for (const globalNode of nodes.filter(node => node.type === 'globalLogic')) {
+      const data = globalNode.data as Record<string, unknown>
+      if (!String(data.logic ?? '').trim()) {
+        showToast('存在尚未选择模块的全局逻辑节点', false)
+        return null
+      }
+      if (data.enable !== false && !edges.some(edge =>
+        edge.target === globalNode.id && edge.targetHandle === 'global-in')) {
+        showToast(`全局逻辑 ${String(data.logic)} 尚未连接任何单通道逻辑`, false)
+        return null
+      }
+    }
+
+    const result = graphToConfig(nodes, edges, roiZones, globalSettings)
     if (!result) { showToast('配置生成失败', false); return null }
     return result
   }
@@ -908,6 +1040,7 @@ export default function EditorPage() {
     if (n.type === 'roi')    return '#ea580c'
     if (n.type === 'logic')  return '#9333ea'
     if (n.type === 'sop')    return '#06b6d4'
+    if (n.type === 'globalLogic') return '#0891b2'
     return '#dc2626'
   }
 
@@ -1055,6 +1188,7 @@ export default function EditorPage() {
                   <strong style={{color:'#16a34a'}}> YOLO推理</strong>、
                   <strong style={{color:'#ea580c'}}> ROI区域</strong>、
                   <strong style={{color:'#9333ea'}}>逻辑函数</strong>和
+                  <strong style={{color:'#0891b2'}}>全局逻辑</strong>、
                   <strong style={{color:'#dc2626'}}>上报配置</strong>均按需连接。
                   <br />
                   <span style={{ opacity: 0.85 }}>
@@ -1067,15 +1201,17 @@ export default function EditorPage() {
         </div>
 
         {/* Right config sidebar */}
-        <NodeConfigPanel node={selectedNode} onUpdate={handleUpdateNodeData} />
+        <NodeConfigPanel
+          node={selectedNode}
+          onUpdate={handleUpdateNodeData}
+          channelIds={selectedReportChannelIds}
+          globalInputs={selectedGlobalInputs}
+        />
       </div>
 
-      {/* Bottom area: global settings on the left, generated config preview on the right */}
+      {/* Bottom area: merged global settings panel + generated config preview */}
       <div className="editor-bottom">
-        <div className="editor-bottom-settings">
-          <GlobalSettingsPanel settings={globalSettings} onChange={setGlobalSettings} />
-          <GlobalLogicsPanel   logics={globalLogics}     onChange={setGlobalLogics}   />
-        </div>
+        <GlobalSettingsPanel settings={globalSettings} onChange={setGlobalSettings} />
         <ConfigPreviewPanel fileName={cfgBase(currentFile)} json={previewJson} />
       </div>
     </div>

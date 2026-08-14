@@ -172,6 +172,8 @@ void analyzer_channel_offline(int chnId)
     /* 若告警录像仍在等待 post 窗口，断流/本地文件结束即以最后可用帧截断。 */
     event_video_recorder_channel_offline(chnId);
 
+    const auto runtime = app_ctrl_get_runtime_snapshot();
+    const ChannelConfig *channel_config = app_ctrl_runtime_channel_config(runtime, chnId);
     ChannelState &ch = g_pCtrl->channels_state[chnId];
     uint64_t ts = 0;
     {
@@ -185,9 +187,16 @@ void analyzer_channel_offline(int chnId)
         ch.last_results.clear();
         ch.draw_cmds.clear();
         ch.logic_state.reset();
+        ch.logic_outputs = LogicOutputSet();
+        ch.last_frame.release();
+        ch.last_logic_frame.release();
+        ch.logic_display_frame.release();
         ch.logic_frame_id = 0;
         ch.last_logic_ts_ms = ts;
-        ch.result_frame_seq = 0;
+        ch.published_frame_seq = 0;
+        const int effective_infer =
+            channel_config && config_utils::is_channel_infer_enabled(*channel_config) && ch.infer_runtime_enable;
+        ch.commit_publication(runtime, ts, 0, 0, effective_infer);
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
         pthread_mutex_unlock(&g_process_mtx[chnId]);
     }
@@ -203,6 +212,8 @@ void analyzer_channel_online(int chnId)
     if (!app_ctrl_has_channel(chnId))
         return;
 
+    const auto runtime = app_ctrl_get_runtime_snapshot();
+    const ChannelConfig *channel_config = app_ctrl_runtime_channel_config(runtime, chnId);
     ChannelState &ch = g_pCtrl->channels_state[chnId];
     uint64_t ts = 0;
     {
@@ -215,9 +226,16 @@ void analyzer_channel_online(int chnId)
         ch.last_results.clear();
         ch.draw_cmds.clear();
         ch.logic_state.reset();
+        ch.logic_outputs = LogicOutputSet();
+        ch.last_frame.release();
+        ch.last_logic_frame.release();
+        ch.logic_display_frame.release();
         ch.logic_frame_id = 0;
         ch.last_logic_ts_ms = ts;
-        ch.result_frame_seq = 0;
+        ch.published_frame_seq = 0;
+        const int effective_infer =
+            channel_config && config_utils::is_channel_infer_enabled(*channel_config) && ch.infer_runtime_enable;
+        ch.commit_publication(runtime, ts, 0, 0, effective_infer);
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
         pthread_mutex_unlock(&g_process_mtx[chnId]);
     }
@@ -242,10 +260,10 @@ ChannelHealth analyzer_get_channel_health(int chnId, int stale_ms, int dead_ms)
     if (!app_ctrl_has_channel(chnId))
         return CH_HEALTH_DEAD;
     pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-    const uint64_t last_ts = g_pCtrl->channels_state[chnId].last_infer_ts_ms;
+    const uint64_t last_ts = g_pCtrl->channels_state[chnId].last_input_frame_steady_ms;
     pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
     if (last_ts == 0)
-        return CH_HEALTH_DEAD; /* 从未推理过 */
+        return CH_HEALTH_DEAD; /* 从未收到输入帧 */
     const int64_t age_ms = (int64_t)(steady_now_ms() - last_ts);
     if (age_ms >= dead_ms)
         return CH_HEALTH_DEAD;

@@ -19,7 +19,7 @@
 | `ctx->results` | `std::vector<AlgoResult> *` | 本帧检测结果（模型坐标系）。可能为空 |
 | `ctx->config` | `const ChannelConfig *` | 本通道公共配置（只读），例如 stream、模型和上报策略；模块专有参数使用下面的 `param_*()` |
 | `ctx->logic_parameters` | `const LogicParameterSet *` | 框架内部的类型化参数表；logic 通常不直接操作，使用 `param_*()` |
-| `ctx->roi` | `const std::vector<cv::Point> *` | ROI 多边形顶点（**已缩放到模型坐标系**）；无 ROI 时为空 |
+| `ctx->outputs` | `LogicOutputSet *` | 本帧向全局逻辑公开的类型化业务变量；通常使用 `publish_*()` 写入 |
 | `ctx->rois` | `const std::vector<RoiZone> *` | 本通道全部命名 ROI；无 ROI 时指向空列表或为空，使用前应检查 |
 | `ctx->draw_cmds` | `std::vector<DrawCommand> *` | 绘制指令输出（用 `draw_*` 函数往里加，别直接操作） |
 | `ctx->canvas` / `ctx->show_canvas` | 框架内部画布指针 | 通常不要直接操作；需要改显示底图时调用 `display_canvas()` |
@@ -61,6 +61,31 @@ bool        exists  = ctx->has_param("dwell_sec");
 
 完整的 Schema、Web 和热重载流程见 [adding-config-parameter.md](adding-config-parameter.md)。视频源分辨率、FPS、stream URL 等公共信息不是模块参数，继续从 `ctx`/`ctx->config` 获取。
 
+## 向全局逻辑公开业务变量
+
+通道私有状态继续放在 `ctx->state`；需要让全局逻辑读取的值使用类型化输出，不要让另一个模块
+强转本模块私有的 `shared_ptr<void>`：
+
+```cpp
+ctx->publish_int("person_count", person_count);
+ctx->publish_bool("alarm_active", alarm_active);
+ctx->publish_number("risk_score", risk_score);
+ctx->publish_string("status", status);
+ctx->publish_json("summary", R"({"ready":true})");
+```
+
+同时在本模块 `logic.json` 声明输出契约，画布选中全局逻辑节点时会展示这些变量：
+
+```json
+"outputs": [
+  { "key": "person_count", "type": "integer", "label": "人数" },
+  { "key": "alarm_active", "type": "boolean", "label": "报警中" }
+]
+```
+
+输出集合每个业务帧重新创建，并与该帧 `frame/results` 一起原子发布。某一帧没有再次发布的 key
+不会沿用旧值，从而避免全局逻辑误读过期业务状态。
+
 ## 便捷查询（本通道；整帧查询是 ctx 方法，ROI 查询是自由函数）
 
 ```cpp
@@ -77,7 +102,9 @@ RenderParams ctx->render_params(int64_t age=0);     // 给 render_overlays 用�
 
 ## 多 ROI（一个通道画了多个命名区域时）
 
-一个通道可在网页 ROI 节点里画**多个**区域并各自命名（如 `entrance`/`exit`）。`ctx->roi` 仍指向"第一个区域"（兼容老逻辑）；要按序号/名字访问全部区域，用下面这组方法（定义在 `channel_logic.h` 的 `ChannelContext`，多边形均为模型坐标系）：
+一个通道可在网页 ROI 节点里画**多个**区域并各自命名（如 `entrance`/`exit`）。当前
+`ChannelContext` 不再提供单数 `roi` 指针；统一通过 `ctx->rois` 或下面的方法按序号/名字访问
+区域（定义在 `channel_logic.h`，多边形均为模型坐标系）：
 
 | 方法 | 含义 |
 |------|------|
@@ -120,14 +147,15 @@ roi_has_target(ctx, "person", ROI_ALL);
 ## 跨通道安全取数（需要别的通道画面/结果时）
 
 ```cpp
-ChannelSnapshot s = ctx->get_channel_snapshot(2);   // 原子取通道2的 frame+results+fps（深拷贝快照）
-if (!s.frame.empty() && s.result_age_ms < 500) {    // 新鲜度自检
+ChannelFrameSnapshot s;
+if (ctx->get_channel_frame_snapshot(2, &s) &&       // 原子取通道2的媒体深拷贝快照
+    s.logic.has_frame && s.logic.publication_age_ms < 500) {
     for (auto &r : s.results) { /* r.box / r.label / r.score ... */ }
 }
 std::string name = ctx->get_channel_logic_name(2);  // 通道2跑的是哪个 logic
 int yes = ctx->channel_has_logic(2, "logic_xxx");
 ```
-> 本通道当帧数据直接用 `ctx->frame` / `ctx->results` 即可（已保证同帧）。跨通道**必须**用 `get_channel_snapshot`，不要直接摸别的通道状态。
+> 本通道当帧数据直接用 `ctx->frame` / `ctx->results` 即可（已保证同帧）。读取其他通道媒体必须用 `get_channel_frame_snapshot()`，不要直接摸别的通道状态。
 
 ## AlgoResult（`ctx->results` 的元素）
 
@@ -140,11 +168,15 @@ int yes = ctx->channel_has_logic(2, "logic_xxx");
 | `r.class_id` | `int` 类别下标 |
 | `r.score` | `float` 置信度 |
 | `r.track_id` | `int` 跟踪 ID（跟踪器赋值，跨帧稳定；<0 表示未确认） |
+| `r.chn_id` / `r.frame_id` / `r.timestamp_ms` | 结果所属通道、业务帧序号和单调毫秒时间；日历时间不要从这里换算 |
 | `r.model_id` | `std::string` 来源模型 ID（对应 `ctx->config->models[].id`） |
 | `r.model_type` | `std::string` 来源模型类型 |
 | `r.model_index` | `int` 来源模型在本次有效模型列表中的序号 |
 | `r.box_color` | `cv::Scalar` 设它可改这个框的显示颜色（默认 -1,-1,-1） |
 | `r.keypoints` | `vector<Point2f>` 姿态点（pose 模型） |
+| `r.keypoint_scores` | `vector<float>` 与姿态点一一对应的可见度/置信度 |
+| `r.vx` / `r.vy` / `r.track_hits` | tracker 提供的模型坐标速度和连续命中数；未确认轨迹不能作为稳定速度依据 |
+| `r.text_result` | OCR 等模型的文本结果 |
 | `r.boxMask` | `cv::Mat` 分割掩码（seg 模型） |
 
 `model_id/model_type/model_index` 由多模型合并路径填写。业务若要枚举当前通道配置的全部模型（包括本帧没有产出结果的模型），应读取只读的 `ctx->config->models`。
@@ -173,7 +205,7 @@ void draw_poly_filled(ctx, const std::vector<cv::Point> &points, color=绿, alph
 - `DrawCommand::MEDIA` — `IMAGE | VIDEO`；
 - `DrawCommand::ALL` — `DISPLAY | IMAGE | VIDEO`（默认）。
 
-当前 Web 的“与实时播放窗口画面一致”会让告警图片取 `DISPLAY|IMAGE`，事件视频取 `DISPLAY|VIDEO`，因此 `DISPLAY` 层也会被这种媒体模式复用；选择原始图片/视频时不绘制任何层。例：只想额外写入告警媒体而不出现在实时画面，用 `DrawCommand::MEDIA`。
+当前 Web 的“与实时播放窗口画面一致”会让告警图片取 `DISPLAY|IMAGE`，事件视频取 `DISPLAY|VIDEO`，因此 `DISPLAY` 层也会被这种媒体模式复用；选择图片未叠加模式或视频原始模式时不绘制任何层。通道 `raw.jpg` 当前仍是模型输入尺寸，只有原始事件视频使用解码源帧。例：只想额外写入告警媒体而不出现在实时画面，用 `DrawCommand::MEDIA`。
 
 ### `ctx->draw_cmds` 的真实作用
 

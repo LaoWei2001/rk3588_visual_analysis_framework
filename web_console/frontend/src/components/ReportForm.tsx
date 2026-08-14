@@ -31,7 +31,11 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 const copy = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
-export default function ReportForm({ node, onUpdate }: { node: Node; onUpdate: Update }) {
+export default function ReportForm({ node, onUpdate, channelIds = [] }: {
+  node: Node
+  onUpdate: Update
+  channelIds?: number[]
+}) {
   const data = node.data as Record<string, unknown>
   const appName = useEditorStore(state => state.appName)
   const profiles = useEditorStore(state => state.uploadProfiles)
@@ -58,7 +62,10 @@ export default function ReportForm({ node, onUpdate }: { node: Node; onUpdate: U
     Promise.all([fetchReportContracts(appName), fetchAppLogics(appName)])
       .then(([availableContracts, logics]) => {
         setContracts(availableContracts)
-        setLogicDefs(logics.channel_logics.map(asLogicDef))
+        setLogicDefs([
+          ...logics.channel_logics.map(asLogicDef),
+          ...logics.global_logics.map(asLogicDef),
+        ])
       })
       .catch(() => {
         setContracts([])
@@ -94,6 +101,7 @@ export default function ReportForm({ node, onUpdate }: { node: Node; onUpdate: U
     contract_id: '',
     media: [],
   }
+  const reportEnabled = policy.enabled !== false && delivery.enabled !== false
   const selectedProfile = profiles[delivery.profile_id]
   const selectedContract = contracts.find(item => item.id === delivery.contract_id)
   const compatibleContracts = contracts.filter(item =>
@@ -101,11 +109,22 @@ export default function ReportForm({ node, onUpdate }: { node: Node; onUpdate: U
   const logic = logicDefs.find(item => item.name === String(data.logic_name ?? ''))
   const declaredFields = useMemo(() => logic?.report_fields ?? [], [logic])
   const declaredEventTypes = useMemo(() => logic?.event_types ?? [], [logic])
+  const configuredMediaChannel = Number(data.media_source_channel_id ?? channelIds[0] ?? -1)
+  const selectedMediaChannel = channelIds.includes(configuredMediaChannel)
+    ? configuredMediaChannel : channelIds[0]
+  const isGlobalReport = data.logic_kind === 'global'
+  const hasImageMedia = delivery.media.includes('annotated_image') || delivery.media.includes('raw_image')
+  const hasVideoMedia = delivery.media.includes('video')
 
   const setPolicy = (patch: Record<string, unknown>) =>
     onUpdate(node.id, { report_policy: { ...policy, ...patch } })
-  const patchDelivery = (patch: Partial<Delivery>) =>
-    setPolicy({ deliveries: [{ ...delivery, ...patch }] })
+  const patchDelivery = (patch: Partial<Delivery>) => {
+    const next = { ...delivery, ...patch }
+    setPolicy({
+      ...(patch.enabled === undefined ? {} : { enabled: next.enabled }),
+      deliveries: [next],
+    })
+  }
 
   const selectProfile = (profileId: string) => {
     const profile = profiles[profileId]
@@ -174,10 +193,38 @@ export default function ReportForm({ node, onUpdate }: { node: Node; onUpdate: U
   }
 
   return <div className="ncp-form">
+    <label className="node-toggle ncp-top-toggle">
+      <input type="checkbox" checked={reportEnabled}
+        onChange={event => patchDelivery({ enabled: event.target.checked })} />
+      上报开关（{reportEnabled ? '已开启' : '已关闭'}）
+    </label>
+    <div style={{ fontSize: 12, color: '#94a3b8', marginTop: -6, marginBottom: 6 }}>
+      关闭后等同于未连接上报节点：不创建告警箱记录，也不进入上传队列。
+    </div>
     <div className="ncp-hint">
       C++ 只提交 EventRequest 和算法 fields。服务器字段、固定值、媒体与成功条件来自接口模板。
     </div>
     <div className="report-delivery-card">
+      {isGlobalReport && hasImageMedia && <div className="report-mapping-help">
+        上报图片会包含此全局逻辑连入的全部通道（{channelIds.length
+          ? channelIds.map(channelId => `通道 ${channelId}`).join('、')
+          : '尚未连接通道'}），并按全局配置中的显示宽高、窗格行列顺序拼接。
+      </div>}
+      {isGlobalReport && hasVideoMedia && <Field label="事件视频来源通道">
+        <select
+          value={selectedMediaChannel == null ? '' : String(selectedMediaChannel)}
+          onChange={event => onUpdate(node.id, {
+            media_source_channel_id: event.target.value === '' ? undefined : Number(event.target.value),
+          })}>
+          <option value="">请选择事件视频来源通道</option>
+          {channelIds.map(channelId =>
+            <option key={channelId} value={channelId}>通道 {channelId}</option>)}
+        </select>
+        <div className="report-mapping-help">
+          视频仍来自一个通道；可在单次 EventRequest 中设置 source_channel_id 动态覆盖。
+          此选择不改变上报图片的多通道拼接范围。
+        </div>
+      </Field>}
       <Field label="发送连接">
         <select value={delivery.profile_id} onChange={event => selectProfile(event.target.value)}>
           <option value="">请选择连接 Profile</option>
@@ -343,8 +390,8 @@ export default function ReportForm({ node, onUpdate }: { node: Node; onUpdate: U
           预览请求
         </button>
         <button type="button" className="report-event-button"
-          disabled={busy || !templateReady || !eventId}
-          title={!eventId ? '请先选择一条真实本地事件' : ''}
+          disabled={busy || !templateReady || !eventId || !reportEnabled}
+          title={!reportEnabled ? '请先开启上报' : !eventId ? '请先选择一条真实本地事件' : ''}
           onClick={() => runPreview(true)}>测试发送</button>
       </div>
       {!templateReady && <div className="report-mapping-help">请先选择发送连接和接口模板。</div>}

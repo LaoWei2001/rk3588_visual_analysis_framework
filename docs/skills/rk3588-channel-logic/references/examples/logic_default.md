@@ -20,7 +20,14 @@ REGISTER_LOGIC(logic_default);
 
 ```json
 {
+  "name": "logic_default",
   "label": "空白逻辑示例",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
   "report_fields": [],
   "params": []
 }

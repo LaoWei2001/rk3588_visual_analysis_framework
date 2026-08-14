@@ -44,7 +44,7 @@ class DecChannel; /* 前置声明, 底层 C++ 类型 */
  *   重连成功（首帧到达）→ CH_ONLINE
  *
  * 写操作由 analyzer_channel_offline / analyzer_channel_online 持 chn_mtx 完成；
- * 读操作由 analyzer_is_channel_online / get_channel_snapshot 持同一把锁完成。
+ * 读操作由 analyzer_is_channel_online / 通道快照接口持同一把锁完成。
  */
 enum ChannelOnlineState
 {
@@ -60,6 +60,9 @@ struct ChannelRawFrame
 {
     int width = 0;
     int height = 0;
+    /* 同一业务帧进入 videoOutHandle 时采集的双时钟；异步 NPU 路径随任务原样透传。 */
+    uint64_t frame_steady_ms = 0;
+    uint64_t frame_unix_ms = 0;
     cv::Mat model_input_mat;
 
     /* 解码源帧的借用视图：仅在 videoOutHandle 当前回调及其同步调用链内有效。
@@ -102,20 +105,30 @@ struct ChannelState
     int fps_counter = 0;
     uint64_t last_fps_ts_ms = 0;
 
-    /* 推理时间戳由 videoOutHandle 更新，跨线程读写走 chn_mtx */
-    uint64_t last_infer_ts_ms = 0;
+    /* 最近一帧进入分析入口的时间；所有通道健康检查统一使用，不依赖是否启用 NPU。 */
+    uint64_t last_input_frame_steady_ms = 0;
 
     /* 由 chn_mtx[chnId] 保护 */
     ChannelOnlineState online_state = CH_ONLINE; /*!< 当前在线状态 */
     uint64_t offline_ts_ms = 0;                  /*!< 最近一次离线时刻 */
     uint64_t online_ts_ms = 0;                   /*!< 最近一次上线时刻 */
     std::vector<AlgoResult> last_results;
-    int64_t result_frame_seq = 0; /* last_results/last_logic_frame 对应的帧序号, 用于校验帧-结果匹配 */
-    uint64_t last_result_ts_ms = 0;
+    int64_t published_frame_seq = 0; /* last_results/last_logic_frame 对应的帧序号 */
+    uint64_t publication_seq = 0;    /* 每次对外发布可观察状态时递增，永不因断流/热更新重置 */
+    uint64_t published_steady_ms = 0;
+    uint64_t frame_steady_ms = 0;
+    uint64_t frame_unix_ms = 0;
+    uint64_t published_config_generation = 0;
+    std::shared_ptr<const AppRuntimeSnapshot> published_runtime;
+    int published_infer_enabled = 0;
+    int published_src_width = 0;
+    int published_src_height = 0;
+    int64_t published_logic_frame_id = 0;
     int src_w_now = 0; /* 当前解码源分辨率(frame_inlet 写，ChannelContext 元信息读取) */
     int src_h_now = 0;
     std::vector<DrawCommand> draw_cmds;
     std::shared_ptr<void> logic_state;
+    LogicOutputSet logic_outputs; /* 当前 logic 在最近业务帧公开的类型化变量 */
     cv::Mat last_frame;
     cv::Mat last_logic_frame;
     cv::Mat
@@ -128,23 +141,67 @@ struct ChannelState
     /* 推理运行时开关: 1=按 config 正常推理; 0=本通道强制跳过NPU推理(画面正常显示)。
      * 由系统级动作 infer_toggle 控制, channel_control 线程写, frame_inlet 线程读。 */
     int infer_runtime_enable = 1;
+
+    /** 调用方必须持有本通道 chn_mtx；用于统一提交对全局算法可见的新版本。 */
+    void commit_publication(const std::shared_ptr<const AppRuntimeSnapshot> &runtime, uint64_t commit_steady_ms,
+                            uint64_t source_steady_ms, uint64_t source_unix_ms, int infer_enabled)
+    {
+        ++publication_seq;
+        published_steady_ms = commit_steady_ms;
+        frame_steady_ms = source_steady_ms;
+        frame_unix_ms = source_unix_ms;
+        published_runtime = runtime;
+        published_config_generation = runtime ? runtime->generation : 0;
+        published_infer_enabled = infer_enabled ? 1 : 0;
+        published_src_width = src_w_now;
+        published_src_height = src_h_now;
+        published_logic_frame_id = logic_frame_id;
+    }
 };
 
 /*================================================================
- * 通道快照 — 一次持锁原子读出 frame + results + logic_state
+ * 通道业务快照 — 全局算法默认使用，不复制图像
  *================================================================*/
-struct ChannelSnapshot
+struct ChannelLogicSnapshot
 {
+    /* 版本与有效性：has_publication=false 表示通道尚未发布过任何业务状态。 */
+    bool has_publication = false;
+    bool has_frame = false;
+    int channel_id = -1;
+    int display_order = -1;
+    uint64_t publication_seq = 0;
+    uint64_t published_steady_ms = 0;
+
+    /* 产生当前 outputs/frame 的业务帧双时钟；状态清空版本没有帧，二者为 0。 */
+    uint64_t frame_steady_ms = 0;
+    uint64_t frame_unix_ms = 0;
+    /* 产生当前 outputs 的不可变运行配置代。 */
+    uint64_t config_generation = 0;
+    int64_t publication_age_ms = -1;
+    int64_t logic_frame_id = 0;
+    int64_t frame_seq = 0;
+    int src_width = 0;
+    int src_height = 0;
+    bool infer_enabled = false;
+    float infer_fps = 0.0f; /* 采样快照时的实时性能值，不参与 publication_seq 一致性 */
+    float disp_fps = 0.0f;  /* 同上 */
+    ChannelOnlineState online_state = CH_ONLINE; /*!< 快照时刻的在线状态 */
+    uint64_t online_state_changed_steady_ms = 0;
+    std::string logic_name;
+    LogicOutputSet outputs;
+    LogicParameterSet parameters; /* 产生 outputs 的同一配置代参数 */
+};
+
+/*================================================================
+ * 通道媒体快照 — 在轻量业务快照之外深拷贝同帧图像/结果/绘制指令
+ *================================================================*/
+struct ChannelFrameSnapshot
+{
+    ChannelLogicSnapshot logic;
     cv::Mat frame;
     std::vector<AlgoResult> results;
-    float infer_fps = 0.0f;
-    float disp_fps = 0.0f;
-    int64_t logic_frame_id = 0;
-    int64_t frame_seq = 0; /* frame 与 results 共同对应的帧序号 (二者保证来自同一帧) */
-    int64_t result_age_ms = -1;
-    bool has_results = false;
-    std::shared_ptr<void> logic_state;
-    ChannelOnlineState online_state = CH_ONLINE; /*!< 快照时刻的在线状态 */
+    std::vector<RoiZone> rois;
+    std::vector<DrawCommand> draw_cmds;
 };
 
 /*================================================================
@@ -234,10 +291,10 @@ extern "C"
 
     int app_ctrl_get_target_count(int chnId, const char *label, int max_age_ms);
     int app_ctrl_has_target(int chnId, const char *label, int max_age_ms);
-    uint64_t app_ctrl_get_last_infer_ts_ms(int chnId);
     std::string app_ctrl_get_logic_name(int chnId);
 
-    int app_ctrl_get_channel_snapshot(int chnId, ChannelSnapshot *out);
+    int app_ctrl_get_channel_logic_snapshot(int chnId, ChannelLogicSnapshot *out);
+    int app_ctrl_get_channel_frame_snapshot(int chnId, ChannelFrameSnapshot *out);
 
     /*======================== 不可变运行快照属性 ========================*/
     int app_ctrl_get_chn_nums(void);

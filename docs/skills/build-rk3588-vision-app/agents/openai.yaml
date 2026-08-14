@@ -1,0 +1,4 @@
+interface:
+  display_name: "RK3588 视觉应用开发"
+  short_description: "从自然语言需求开发并验证 RK3588 视觉算法模块"
+  default_prompt: "Use $build-rk3588-vision-app to turn my visual detection requirement into a validated engine logic module."

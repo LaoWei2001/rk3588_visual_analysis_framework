@@ -1,5 +1,5 @@
 #!/bin/bash
-# install_app.sh — 把 build.sh 产出的程序包文件夹复制进 Web 控制台目录 (/opt/ai_apps/)，
+# install_app.sh — 把 build.sh 产出的程序包文件夹复制进 Web 控制台的 APPS_ROOT，
 #                  让网页控制台识别到。重名时询问：覆盖(删旧存新) 或 改名。
 #
 # 用法: sudo ./install_app.sh <程序包文件夹名>
@@ -39,7 +39,7 @@ mkdir -p "$APPS_ROOT"
 # 目标名默认 = 程序包名；重名则询问 覆盖 / 改名
 DEST="$PKG"
 while [ -e "$APPS_ROOT/$DEST" ]; do
-    read -p "/opt/ai_apps/$DEST 已存在，覆盖它吗？(覆盖会先删除旧的) [y/N] " ans
+    read -p "$APPS_ROOT/$DEST 已存在，覆盖它吗？(覆盖会先删除旧的) [y/N] " ans
     if [[ "$ans" =~ ^[Yy]$ ]]; then
         rm -rf "$APPS_ROOT/$DEST" || { echo "[ERROR] 删除旧目录失败"; exit 1; }
         break

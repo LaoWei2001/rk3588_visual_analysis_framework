@@ -109,6 +109,7 @@ vision_analysis/src/logic/modules/logic_person_dwell/
       }
     }
   },
+  "event_types": [],
   "report_fields": []
 }
 ```
@@ -118,6 +119,7 @@ vision_analysis/src/logic/modules/logic_person_dwell/
 - `parameters.type` 必须是 `"object"`；
 - `additionalProperties` 必须是 `false`，防止拼错参数名后静默运行；
 - 每个参数必须有与类型匹配的 `default`；
+- `event_types` 是必填数组；完全不产生事件时也要显式写成 `[]`；
 - 源 `logic.json` 不写 `name`；`REGISTER_LOGIC(logic_person_dwell)` 会把函数名自动生成为外部 logic ID；
 - 一个模块必须且只能注册一次自己的通道 logic。
 
@@ -393,6 +395,7 @@ const int usb_height = stream.usb_height;
 - [ ] 新建 `src/logic/modules/logic_xxx/`；
 - [ ] `REGISTER_LOGIC(logic_xxx)` 只传入入口函数，源 `logic.json` 不包含 `name`；
 - [ ] `parameters` 是禁止额外键的 object Schema；
+- [ ] `event_types` 已声明；不产生事件时仍填写空数组 `[]`；
 - [ ] 每个属性都有正确类型的默认值；
 - [ ] 为每个参数选择合理的热重载策略；
 - [ ] C++ 使用与 Schema 类型匹配的 `ctx->param_*()`；

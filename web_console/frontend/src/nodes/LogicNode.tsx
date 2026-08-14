@@ -35,6 +35,7 @@ export default function LogicNode({ id, data, selected }: NodeProps) {
       </div>
 
       <Handle type="source" position={Position.Right} id="report-out" />
+      <Handle type="source" position={Position.Bottom} id="global-out" />
     </div>
   )
 }

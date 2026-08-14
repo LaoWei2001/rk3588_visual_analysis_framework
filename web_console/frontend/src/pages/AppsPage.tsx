@@ -1,9 +1,8 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
-import { fetchApps, fetchLogTail, fetchStreamHealth, startApp, stopApp, setAppAutostart, streamUrl, uploadApp, deleteApp, fetchConfig, loadConfigFile, fetchChannelControls, sendChannelAction, AppInfo, ChannelControlsResponse, LogicActionDef } from '../api/client'
+import { fetchApps, fetchLogTail, startApp, stopApp, setAppAutostart, uploadApp, deleteApp, AppInfo } from '../api/client'
 import { loadLastConfig } from '../utils/lastConfig'
-import { useAuthStore } from '../store/authStore'
 import './AppsPage.css'
 
 function errMsg(e: unknown): string {
@@ -35,129 +34,10 @@ export default function AppsPage() {
   const [autostartBusy, setAutostartBusy] = useState<Record<string, boolean>>({})
   const [toast, setToast]     = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
   const [crashInfo, setCrashInfo] = useState<{ name: string; lines: string[] } | null>(null)
-  const [viewApp, setViewApp]       = useState<string | null>(null)   // 正在查看实时画面的程序
-  const [streamErr, setStreamErr]   = useState(false)
-  const [streamLoading, setStreamLoading] = useState(true)           // 视频首帧到达前显示加载动画
-  const [streamLogs, setStreamLogs] = useState<string[]>([])          // 实时画面弹窗右侧的滚动日志
-  const [viewNonce, setViewNonce]   = useState(0)                     // 强制刷新视频地址，避免残留上一条流
-  const streamRetryRef   = useRef(0)                                  // 视频流尚未就绪时的自动重试次数
-  const streamRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const streamRetryPendingRef = useRef(false)
-  const streamLoadingRef = useRef(true)                               // 供卡流看门狗读取最新加载状态
-  const logWsRef  = useRef<WebSocket | null>(null)
-  const logBoxRef = useRef<HTMLDivElement>(null)
-  const pendingStreamLogsRef = useRef<string[]>([])
-  // 日志距底部 40px 内自动跟随；向上滚动时冻结当前列表，新日志先进入缓冲区。
-  const logAutoScrollRef = useRef(true)
-  const resumeStreamLogScroll = () => {
-    logAutoScrollRef.current = true
-    const pending = pendingStreamLogsRef.current
-    pendingStreamLogsRef.current = []
-    if (pending.length > 0) {
-      setStreamLogs(prev => [...prev, ...pending].slice(-1000))
-    }
-    setTimeout(() => {
-      const el = logBoxRef.current
-      if (el && logAutoScrollRef.current) el.scrollTop = el.scrollHeight
-    }, 0)
-  }
-  const onStreamLogScroll = () => {
-    const el = logBoxRef.current
-    if (!el) return
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-    if (nearBottom) {
-      if (!logAutoScrollRef.current || pendingStreamLogsRef.current.length > 0) {
-        resumeStreamLogScroll()
-      }
-    } else {
-      logAutoScrollRef.current = false
-    }
-  }
   const fileRef   = useRef<HTMLInputElement>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [uploading, setUploading] = useState<{ name: string; pct: number } | null>(null)
-  const [viewControls, setViewControls] = useState<ChannelControlsResponse | null>(null)
-  const [channelActionBusy, setChannelActionBusy] = useState<Record<string, boolean>>({})
   const navigate = useNavigate()
-
-  // 打开实时画面前检查 RTSP 配置，避免用户进入后只看到黑屏。
-  const openView = async (app: AppInfo) => {
-    try {
-      const running = app.config && app.config !== 'config.json' ? `assets/${app.config}` : null
-      const cfg = running ? await loadConfigFile(app.name, running) : await fetchConfig(app.name)
-      const g = (cfg && ((cfg as Record<string, unknown>).global ?? cfg)) as Record<string, unknown> | null
-      // 仅在配置明确关闭 RTSP 时拦截；读取失败时仍允许打开。
-      if (g && !Number(g.enable_rtsp ?? 0)) {
-        showToast(`${app.name} 的配置未启用 RTSP 推流`, 'err')
-        return
-      }
-    } catch { /* 配置读取失败时不拦截，继续使用弹窗内的错误提示。 */ }
-    let controls: ChannelControlsResponse | null = null
-    try {
-      controls = await fetchChannelControls(app.name)
-    } catch {
-      controls = null
-    }
-    setViewControls(controls)
-    setChannelActionBusy({})
-    setStreamErr(false); setStreamLoading(true); streamRetryRef.current = 0
-    pendingStreamLogsRef.current = []
-    logAutoScrollRef.current = true
-    setStreamLogs([]); setViewNonce(Date.now()); setViewApp(app.name)
-  }
-
-  // 程序刚启动时 RTSP 服务可能尚未出首帧，通过更新 nonce 自动重连。
-  const STREAM_MAX_RETRY = 25
-  const STREAM_STALL_MS  = 4000   // 4 秒未出首帧且未报错时，视为连接卡住。
-
-  // onError 和卡流看门狗共用此重试入口，超过上限后显示错误提示。
-  const closeView = () => {
-    setViewApp(null)
-    setViewControls(null)
-    setChannelActionBusy({})
-  }
-
-  const handleChannelAction = async (channelId: number, action: LogicActionDef) => {
-    if (!viewApp) return
-    if (action.confirm && !window.confirm(action.confirm)) return
-    const key = `${channelId}:${action.id}`
-    setChannelActionBusy(prev => ({ ...prev, [key]: true }))
-    try {
-      const resp = await sendChannelAction(viewApp, channelId, action.id, action.payload ?? {})
-      showToast(resp?.message ? `通道 ${channelId}：${resp.message}` : `通道 ${channelId} 的操作已进入队列`)
-    } catch (e) {
-      showToast(`通道 ${channelId} 操作失败：${errMsg(e)}`, 'err')
-    } finally {
-      setChannelActionBusy(prev => ({ ...prev, [key]: false }))
-    }
-  }
-
-  const scheduleStreamRetry = (delay: number) => {
-    if (streamRetryPendingRef.current) return
-    if (streamRetryTimer.current) clearTimeout(streamRetryTimer.current)
-    if (streamRetryRef.current >= STREAM_MAX_RETRY) { setStreamLoading(false); setStreamErr(true); return }
-    streamRetryRef.current += 1
-    streamRetryPendingRef.current = true
-    setStreamLoading(true)
-    streamRetryTimer.current = setTimeout(() => {
-      streamRetryPendingRef.current = false
-      streamRetryTimer.current = null
-      setViewNonce(Date.now())
-    }, delay)
-  }
-  const onStreamLoad  = () => {
-    if (streamRetryTimer.current) clearTimeout(streamRetryTimer.current)
-    streamRetryTimer.current = null
-    streamRetryPendingRef.current = false
-    streamRetryRef.current = 0
-    setStreamLoading(false)
-  }
-  const onStreamError = () => scheduleStreamRetry(1500)
-  // 用户点击“重试”时重置计数并重新拉流。
-  const retryStream = () => {
-    streamRetryRef.current = 0
-    setStreamErr(false); setStreamLoading(true); setViewNonce(Date.now())
-  }
 
   // Refs for stale-closure-safe access inside setInterval
   const prevRunningRef  = useRef<Set<string>>(new Set())
@@ -166,8 +46,6 @@ export default function AppsPage() {
 
   // Keep busyRef in sync with busy state
   useEffect(() => { busyRef.current = busy }, [busy])
-  // Keep streamLoadingRef in sync so the stall watchdog reads the live value
-  useEffect(() => { streamLoadingRef.current = streamLoading }, [streamLoading])
 
   const load = async () => {
     try {
@@ -209,82 +87,6 @@ export default function AppsPage() {
     const interval = setInterval(load, 5000)
     return () => clearInterval(interval)
   }, []) // eslint-disable-line
-
-  // 实时画面弹窗打开时，通过 WebSocket 在右侧持续显示日志。
-  useEffect(() => {
-    if (!viewApp) return
-    const app = viewApp
-    logAutoScrollRef.current = true   // 每次打开弹窗时默认跟随到底部
-    pendingStreamLogsRef.current = []
-    // 用户查看历史日志时暂停自动滚动。
-    const stick = () => { const el = logBoxRef.current; if (el && logAutoScrollRef.current) el.scrollTop = el.scrollHeight }
-
-    fetchLogTail(app, 200)
-      .then(d => { setStreamLogs(Array.isArray(d.lines) ? d.lines : []); setTimeout(stick, 50) })
-      .catch(() => {})
-
-    const token = useAuthStore.getState().token ?? ''
-    const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/logs/${encodeURIComponent(app)}?token=${encodeURIComponent(token)}`
-    const ws = new WebSocket(wsUrl)
-    logWsRef.current = ws
-    ws.onmessage = (e) => {
-      const text = String(e.data)
-      if (!text) return                                   // 蹇冭烦绌哄抚
-      const add = text.split('\n').filter(l => l !== '')
-      if (add.length) {
-        if (logAutoScrollRef.current) {
-          setStreamLogs(prev => [...prev, ...add].slice(-1000))
-          setTimeout(stick, 10)
-        } else {
-          // 回看期间不修改当前 DOM，彻底避免头部截断造成的滚动位置跳动。
-          // 缓冲区只保存最新 5000 行；回到底部时一次性并入并恢复自动跟随。
-          pendingStreamLogsRef.current =
-            [...pendingStreamLogsRef.current, ...add].slice(-5000)
-        }
-      }
-    }
-    return () => {
-      ws.close()
-      logWsRef.current = null
-      pendingStreamLogsRef.current = []
-    }
-  }, [viewApp])
-
-  // 关闭弹窗或切换程序时清理重试定时器。
-  useEffect(() => () => {
-    if (streamRetryTimer.current) { clearTimeout(streamRetryTimer.current); streamRetryTimer.current = null }
-    streamRetryPendingRef.current = false
-  }, [viewApp])
-
-  // RTSP 已连接但迟迟没有首帧时，img 不一定触发 onLoad/onError。
-  // 看门狗会在 STREAM_STALL_MS 后更换连接重新拉流。
-  useEffect(() => {
-    if (!viewApp || streamErr) return
-    const t = setTimeout(() => {
-      if (streamLoadingRef.current) scheduleStreamRetry(0)
-    }, STREAM_STALL_MS)
-    return () => clearTimeout(t)
-  }, [viewApp, viewNonce, streamErr]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // 首帧成功后继续监控后端是否有新视频数据。MJPEG 长连接中途断开时，
-  // 浏览器不保证触发 img.onError，必须通过服务端帧心跳识别永久黑屏。
-  useEffect(() => {
-    if (!viewApp || streamErr) return
-    let cancelled = false
-    const app = viewApp
-    const check = async () => {
-      try {
-        const health = await fetchStreamHealth(app)
-        if (cancelled || streamLoadingRef.current) return
-        const stalled = !health.active || health.last_data_age_ms == null || health.last_data_age_ms > 10000
-        if (stalled) scheduleStreamRetry(0)
-      } catch {
-        // 单次健康检查失败不打断当前画面，下一轮继续确认。
-      }
-    }
-    const timer = setInterval(check, 2500)
-    return () => { cancelled = true; clearInterval(timer) }
-  }, [viewApp, streamErr]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const dismissToast = () => {
     if (toastTimer.current) { clearTimeout(toastTimer.current); toastTimer.current = null }
@@ -350,7 +152,7 @@ export default function AppsPage() {
   }
 
   const handleDelete = async (name: string) => {
-    if (!window.confirm(`确定删除程序 ${name}？\n此操作会永久删除 /opt/ai_apps/${name}。`)) return
+    if (!window.confirm(`确定删除程序 ${name}？\n此操作会永久删除该程序目录。`)) return
     setBusy(b => ({ ...b, [name]: true }))
     try {
       await deleteApp(name)
@@ -438,101 +240,6 @@ export default function AppsPage() {
               <button className="crash-close-btn" onClick={() => setCrashInfo(null)}>
                 关闭
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Live stream dialog */}
-      {viewApp && (
-        <div className="stream-overlay">
-          <div className="stream-dialog">
-            <div className="stream-header">
-              <span>{viewApp} — 实时画面</span>
-              <button onClick={closeView}>×</button>
-            </div>
-            <div className="stream-body">
-              <div className="stream-video-column">
-              <div className="stream-video">
-                {!streamErr ? (
-                  <>
-                    <img
-                      className="stream-img"
-                      style={streamLoading ? { visibility: 'hidden' } : undefined}
-                      src={`${streamUrl(viewApp)}&t=${viewNonce}`}
-                      alt="实时画面"
-                      onLoad={onStreamLoad}
-                      onError={onStreamError}
-                    />
-                    {streamLoading && (
-                      <div className="stream-loading">
-                        <div className="stream-spinner" />
-                        <span>正在加载视频……</span>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="stream-hint">
-                    实时视频暂不可用。<br />
-                    1. 请确认程序正在运行。<br />
-                    2. 请在全局配置中启用 <b>RTSP 推流</b>，然后重启程序。
-                    <br />
-                    <button className="stream-retry-btn" onClick={retryStream}>重试</button>
-                  </div>
-                )}
-              </div>
-              <div className="stream-channel-controls">
-                <div className="stream-channel-controls-head">
-                  <span>通道控制</span>
-                  {!viewControls?.socket_ready && <span className="stream-control-badge">未连接</span>}
-                </div>
-                {!viewControls ? (
-                  <div className="stream-channel-empty">暂时无法获取通道控制信息。</div>
-                ) : viewControls.channels.length === 0 ? (
-                  <div className="stream-channel-empty">当前配置中没有通道。</div>
-                ) : (
-                  <div className="stream-channel-grid">
-                    {viewControls.channels.map(channel => (
-                      <div key={channel.channel_id} className="stream-channel-card">
-                        <div className="stream-channel-title">
-                          <span>{`通道 ${channel.channel_id}`}</span>
-                          <span className="stream-channel-logic">{channel.logic_label}</span>
-                        </div>
-                        <div className="stream-channel-actions">
-                          {channel.actions.map(action => {
-                            const key = `${channel.channel_id}:${action.id}`
-                            const disabled = !viewControls.socket_ready || !channel.enabled || !!channelActionBusy[key]
-                            return (
-                              <button
-                                key={key}
-                                className={`stream-action-btn ${action.style ?? 'default'}`}
-                                disabled={disabled}
-                                title={action.help ?? action.id}
-                                onClick={() => handleChannelAction(channel.channel_id, action)}
-                              >
-                                {channelActionBusy[key] ? '...' : (action.label ?? action.id)}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              </div>
-              <div className="stream-logs" ref={logBoxRef} onScroll={onStreamLogScroll}>
-                {streamLogs.length === 0
-                  ? <div className="stream-logs-empty">暂无日志。</div>
-                  : streamLogs.map((line, i) => (
-                      <div key={i} className={`stream-log-line${/ERROR|error|\[进程已停止\]/.test(line) ? ' err' : /WARN/.test(line) ? ' warn' : ''}`}>
-                        {line}
-                      </div>
-                    ))}
-              </div>
-            </div>
-            <div className="stream-footer">
-              <span className="stream-tip">按钮操作按通道进入队列，并在下一帧 C++ 通道逻辑执行前处理。</span>
             </div>
           </div>
         </div>
@@ -639,13 +346,6 @@ export default function AppsPage() {
                       {busy[app.name] ? '...' : '停止'}
                     </button>
                   )}
-
-                  <button
-                    className="action-btn view"
-                    disabled={app.status !== 'running'}
-                    title={app.status === 'running' ? '查看实时画面' : '仅在程序运行时可用'}
-                    onClick={() => openView(app)}
-                  >实时画面</button>
 
                   <button
                     className="action-btn edit"

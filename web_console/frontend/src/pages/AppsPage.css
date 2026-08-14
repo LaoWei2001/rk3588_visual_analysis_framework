@@ -65,15 +65,14 @@
 }
 
 .app-grid {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
 }
 
 .app-card {
-  /* flex 基准 360px, 可随空间增长; min-width 保持默认 auto(=内容宽),
-     使按钮一行放不下时卡片自动变宽而不是换行/挤压 */
-  flex: 1 1 360px;
+  width: 100%;
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;

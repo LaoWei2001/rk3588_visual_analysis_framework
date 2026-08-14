@@ -6,6 +6,7 @@
 #include <type_traits>
 
 struct ChannelContext;
+struct GlobalContext;
 
 class EventValue
 {
@@ -147,6 +148,10 @@ struct EventRequest
     std::string message;
     EventFields fields;
     EventMergeMode merge_mode = EventMergeMode::NEVER;
+    /* 全局 logic 可为本次事件选择来源标识及事件视频通道；-1 使用节点配置的默认通道。
+     * 全局事件图片始终拼接该全局实例的全部输入通道，不受此字段影响。
+     * 通道 logic 调用时无需设置，仍使用 ctx->chnId。 */
+    int source_channel_id = -1;
 };
 
 enum class EventReportStatus
@@ -191,6 +196,7 @@ const char *event_report_status_name(EventReportStatus status);
  * accepted() 表示事件已进入本地发件箱，不表示远端已经接收。
  */
 EventReportResult report_event(ChannelContext *ctx, const EventRequest &request);
+EventReportResult report_event(GlobalContext *ctx, const EventRequest &request);
 
 /* 录像模块完成 MP4 后调用。 */
 void event_report_video_ready(const std::string &event_id, const std::string &video_path);

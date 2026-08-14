@@ -26,6 +26,9 @@ REGISTER_GLOBAL_LOGIC_RE = re.compile(
 PARAM_ACCESS_RE = re.compile(
     r'\bparam_(float|int|bool|string|json)\s*\(\s*"([^"]+)"'
 )
+OUTPUT_PUBLISH_RE = re.compile(
+    r'\bpublish_(string|number|int|bool|json)\s*\(\s*"([^"]+)"'
+)
 REPORT_EVENT_CALL_RE = re.compile(r"\breport_event\s*\(")
 EVENT_TYPE_LITERAL_RE = re.compile(r'\.event_type\s*=\s*"([^"]+)"')
 CPP_CODE_SUFFIXES = {".cpp", ".cc", ".cxx", ".h", ".hpp"}
@@ -41,6 +44,7 @@ class DuplicateJsonKeyError(ValueError):
 
 
 SCHEMA_TYPES = {"string", "number", "integer", "boolean", "array", "object"}
+LOGIC_OUTPUT_TYPES = {"string", "number", "integer", "boolean", "json"}
 RELOAD_POLICIES = {"preserve_state", "reset_state", "restart_required"}
 JSON_SAFE_INTEGER_MAX = (1 << 53) - 1
 
@@ -294,6 +298,55 @@ def validate_event_types(
         )
 
 
+def validate_logic_outputs(manifest_path: Path, outputs: Any) -> None:
+    if outputs is None:
+        return
+    require_unique_strings(manifest_path, outputs, "outputs", "key")
+    for index, item in enumerate(outputs):
+        output_type = item.get("type")
+        if output_type not in LOGIC_OUTPUT_TYPES:
+            raise ManifestError(
+                f"{manifest_path}: outputs[{index}].type must be one of "
+                f"{', '.join(sorted(LOGIC_OUTPUT_TYPES))}"
+            )
+        for field in ("label", "help"):
+            if field in item and not isinstance(item[field], str):
+                raise ManifestError(
+                    f"{manifest_path}: outputs[{index}].{field} must be a string"
+                )
+
+
+def validate_output_publications(
+    manifest_path: Path, module_dir: Path, outputs: Any
+) -> None:
+    declarations = {
+        item["key"]: item["type"] for item in (outputs or []) if isinstance(item, dict)
+    }
+    expected_types = {
+        "string": "string",
+        "number": "number",
+        "int": "integer",
+        "bool": "boolean",
+        "json": "json",
+    }
+    for source in module_cpp_code_files(module_dir):
+        try:
+            text = source.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ManifestError(f"{source}: cannot read source: {exc}") from exc
+        for accessor, key in OUTPUT_PUBLISH_RE.findall(text):
+            declared = declarations.get(key)
+            if declared is None:
+                raise ManifestError(
+                    f'{source}: publish_{accessor}("{key}") has no matching outputs entry'
+                )
+            if declared != expected_types[accessor]:
+                raise ManifestError(
+                    f'{source}: publish_{accessor}("{key}") does not match output type '
+                    f"'{declared}'"
+                )
+
+
 def module_cpp_source_files(module_dir: Path) -> List[Path]:
     return sorted(
         path
@@ -422,6 +475,8 @@ def load_channel_manifests(logic_root: Path) -> List[Dict[str, Any]]:
         validate_parameter_accesses(manifest_path, module_dir, parameter_schema)
         manifest["params"] = web_params_from_schema(parameter_schema)
         validate_event_types(manifest_path, module_dir, manifest.get("event_types"))
+        validate_logic_outputs(manifest_path, manifest.get("outputs"))
+        validate_output_publications(manifest_path, module_dir, manifest.get("outputs"))
         require_unique_strings(manifest_path, manifest.get("actions"), "actions", "id")
         require_unique_strings(
             manifest_path, manifest.get("report_fields"), "report_fields", "key"
@@ -475,6 +530,13 @@ def load_global_manifests(logic_root: Path) -> List[Dict[str, Any]]:
             )
         validate_parameter_accesses(manifest_path, module_dir, parameter_schema)
         manifest["params"] = web_params_from_schema(parameter_schema)
+        validate_event_types(manifest_path, module_dir, manifest.get("event_types"))
+        require_unique_strings(
+            manifest_path, manifest.get("report_fields"), "report_fields", "key"
+        )
+        require_unique_strings(
+            manifest_path, manifest.get("business_fields"), "business_fields", "path"
+        )
         result.append({"name": name, **manifest})
 
     return result

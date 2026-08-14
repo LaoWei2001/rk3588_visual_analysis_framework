@@ -30,6 +30,8 @@ const DEFAULT_USB_DEVICE = '/dev/video81'
 interface Props {
   node: Node | null
   onUpdate: (nodeId: string, patch: Record<string, unknown>) => void
+  channelIds?: number[]
+  globalInputs?: { channelId: number; logic: string }[]
 }
 
 // ── Header label per type ────────────────────────────────────────────────────
@@ -40,6 +42,7 @@ const NODE_TITLES: Record<string, [string, string]> = {
   logic:  ['⚡', '逻辑函数节点'],
   sop:    ['🧭', 'SOP流程节点'],
   report: ['📡', '上报配置节点'],
+  globalLogic: ['⬡', '全局逻辑节点'],
 }
 
 const HEADER_CLASS: Record<string, string> = {
@@ -49,9 +52,12 @@ const HEADER_CLASS: Record<string, string> = {
   logic:  'header-logic',
   sop:    'header-sop',
   report: 'header-report',
+  globalLogic: 'header-global-logic',
 }
 
-export default function NodeConfigPanel({ node, onUpdate }: Props) {
+export default function NodeConfigPanel({
+  node, onUpdate, channelIds = [], globalInputs = [],
+}: Props) {
   if (!node) {
     return (
       <div className="ncp ncp-empty">
@@ -77,11 +83,102 @@ export default function NodeConfigPanel({ node, onUpdate }: Props) {
         {node.type === 'model'  && <ModelForm   node={node} onUpdate={onUpdate} />}
         {node.type === 'logic'  && <LogicForm   node={node} onUpdate={onUpdate} />}
         {node.type === 'sop'    && <SopInfo     node={node} onUpdate={onUpdate} />}
-        {node.type === 'report' && <ReportForm  node={node} onUpdate={onUpdate} />}
+        {node.type === 'globalLogic' &&
+          <GlobalLogicForm node={node} onUpdate={onUpdate} inputs={globalInputs} />}
+        {node.type === 'report' && <ReportForm  node={node} onUpdate={onUpdate} channelIds={channelIds} />}
         {node.type === 'roi'    && <ROIInfo     node={node} />}
       </div>
     </div>
   )
+}
+
+function GlobalLogicForm({ node, onUpdate, inputs }: {
+  node: Node
+  onUpdate: Props['onUpdate']
+  inputs: { channelId: number; logic: string }[]
+}) {
+  const appName = useEditorStore(state => state.appName)
+  const [definitions, setDefinitions] = useState<LogicDef[]>([])
+  const [channelDefinitions, setChannelDefinitions] = useState<LogicDef[]>([])
+  const [catalogError, setCatalogError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setDefinitions([])
+    setChannelDefinitions([])
+    setCatalogError('')
+    if (!appName) return () => { cancelled = true }
+    fetchAppLogics(appName)
+      .then(result => {
+        if (!cancelled) {
+          setDefinitions(result.global_logics.map(asLogicDef))
+          setChannelDefinitions(result.channel_logics.map(asLogicDef))
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setCatalogError('无法读取当前应用的全局逻辑清单')
+      })
+    return () => { cancelled = true }
+  }, [appName])
+
+  const data = node.data as Record<string, unknown>
+  const logic = String(data.logic ?? '')
+  const definition = definitions.find(item => item.name === logic)
+  const selectLogic = (name: string) => {
+    const selected = definitions.find(item => item.name === name)
+    const parameters: Record<string, unknown> = {}
+    ;(selected?.params ?? []).forEach(param => {
+      if (param.default !== undefined) parameters[param.key] = param.default
+    })
+    onUpdate(node.id, { logic: name, logic_parameters: parameters })
+  }
+
+  return <div className="ncp-form">
+    <label className="node-toggle">
+      <input type="checkbox" checked={data.enable !== false}
+        onChange={event => onUpdate(node.id, { enable: event.target.checked })} />
+      启用此全局逻辑
+    </label>
+    <F label="全局逻辑（从当前应用动态读取）">
+      <select value={logic} disabled={definitions.length === 0}
+        onChange={event => selectLogic(event.target.value)}>
+        <option value="">（未选择全局逻辑）</option>
+        {definitions.map(item => <option key={item.name} value={item.name}>
+          {item.label ? `${item.label}（${item.name}）` : item.name}
+        </option>)}
+        {logic && !definitions.some(item => item.name === logic) &&
+          <option value={logic}>{logic}（⚠ 不在当前应用清单）</option>}
+      </select>
+    </F>
+    {catalogError && <div className="ncp-hint">⚠ {catalogError}</div>}
+    <F label="轮询间隔（毫秒）">
+      <NumberField min={10} def={200} value={data.poll_interval_ms}
+        onChange={value => onUpdate(node.id, { poll_interval_ms: value ?? 200 })} />
+    </F>
+    <div className="ncp-hint">
+      从单通道逻辑节点连入的数据决定可读取通道；未连线时不会隐式读取全部通道。
+      C++ 全局逻辑通过本 tick 的 ChannelLogicSnapshot 读取变量和同代参数；仅需要媒体时调用
+      get_channel_frame_snapshot()。
+    </div>
+    <div className="ncp-section-label">已连接的通道数据契约</div>
+    {inputs.length === 0
+      ? <div className="ncp-hint">尚未连接单通道逻辑。</div>
+      : inputs.map(input => {
+          const source = channelDefinitions.find(item => item.name === input.logic)
+          const outputs = source?.outputs ?? []
+          const parameters = source?.params ?? []
+          return <div key={`${input.channelId}:${input.logic}`} className="ncp-global-input">
+            <strong>通道 {input.channelId} · {source?.label || input.logic}</strong>
+            <small>公开变量：{outputs.length
+              ? outputs.map(output => `${output.label || output.key} (${output.type})`).join('、')
+              : '未声明 outputs（仍可读取 frame/results）'}</small>
+            <small>逻辑参数：{parameters.length
+              ? parameters.map(param => param.label || param.key).join('、')
+              : '无'}</small>
+          </div>
+        })}
+    <LogicParameterFields node={node} params={definition?.params ?? []} onUpdate={onUpdate} />
+  </div>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

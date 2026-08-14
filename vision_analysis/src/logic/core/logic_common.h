@@ -4,7 +4,7 @@
  *
  * 每个 logic 模块只需 #include "logic/core/logic_common.h" 即可拿到:
  *   - ChannelContext / param_* / draw_* / RoiZone / RenderParams / REGISTER_LOGIC (channel_logic.h)
- *   - AlgoResult / render_overlays / ChannelSnapshot 等 (经 algoProcess.h / app_ctrl.h)
+ *   - AlgoResult / render_overlays / ChannelFrameSnapshot 等 (经 algoProcess.h / app_ctrl.h)
  *   - 通用事件上报接口 (event_report)
  *   - 中英文文字渲染 (draw_text_unicode)
  */

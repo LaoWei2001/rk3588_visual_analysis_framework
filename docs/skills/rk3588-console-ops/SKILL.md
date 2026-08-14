@@ -27,19 +27,23 @@ description: >-
 ├── _console/                     Web 控制台本体（FastAPI 后端 + React 前端）
 │      └ systemd: rk3588-console.service（User=root，:8080）
 ├── <App1>/  <App2>/ ...          每个"程序包"(build.sh 产物 install 进来的)
-│   ├── vision_analysis           C++ 推理二进制 ← 控制台 process_manager 用 subprocess 启停
+│   ├── vision_analysis           C++ 推理二进制 ← process_manager 通过 systemd-run transient unit 启停
 │   ├── assets/  (config.json, *.rknn, labels/videos 等)
-│   ├── event_store/<event_id>/      统一告警事件发件箱（三份 JSON 状态 + 图片/视频）
-│   └── services/                 两个 Python 微服务（随包带）
+│   └── services/                 两个 Python 微服务代码与初始配置（随包带）
 │       ├── model_update/ ota_agent.py + ota_config.json   ← systemd: ota_agent.service
-│       └── upload/       main.py + config.yaml             ← systemd: unified_upload.service
-└── 上报服务扫描所绑定 App 的 event_store/，当前不使用 Redis
+│       └── upload/       main.py + config.yaml + contracts/ ← systemd: unified_upload.service
+├── .data/<App1>/                 Web 管理的可变数据（覆盖/重装同名 App 时保留）
+│   ├── event_store/<event_id>/   三份 JSON 状态 + 图片/视频
+│   ├── upload_config.yaml
+│   ├── contracts/
+│   └── ota_config.json
+└── 上报服务扫描所绑定 App 的 .data/<App>/event_store/，当前不使用 Redis
 ```
 
 **三种进程、三套托管方式**（容易混，记牢）：
 | 进程 | 谁托管 | 怎么启停 |
 |------|--------|---------|
-| C++ 推理二进制 (vision_app) | 控制台 `process_manager`（subprocess） | 网页「程序管理」▶启动/■停止 |
+| C++ 推理二进制 | 控制台 `process_manager`（`systemd-run` transient unit） | 网页「程序管理」▶启动/■停止 |
 | Web 控制台自身 | systemd `rk3588-console.service` | `systemctl` / `web_console/install.sh` / `stop.sh` |
 | 两个 Python 微服务 | systemd `ota_agent` / `unified_upload` | 网页「后台服务」面板 或 命令行 `systemctl`（同一套单元） |
 
@@ -70,18 +74,20 @@ cd ../web_console && bash install.sh
 **改了东西后怎么重新生效**（高频）：
 - 改了 **C++**（逻辑/上报/ROI 等源码）→ 必须 `./build.sh dist && sudo ./install_app.sh dist`，再在网页重启该程序。
 - 改了 **控制台代码**（后端路由/前端）→ `cd web_console && bash install.sh` 重部署（会重 build 前端 + 重启 rk3588-console）。
-- 改了 **某 App 的 config.json/服务配置** → 网页保存即可；config.json 由 C++ 热重载，内嵌的 ROI 也会重建；服务配置由 Python 服务启动时读取，要重启对应后台服务。
+- 改了 **某 App 的 config.json/服务配置** → 网页保存即可；config.json 由 C++ 热重载，内嵌的 ROI 也会重建；服务配置写入 `.data/<App>/`，Python 服务只在启动时读取，要重启对应后台服务。
 
 ## 三、网页控制台能干什么（功能 → 后端路由 → 落盘位置）
 
 | 网页功能 | 后端路由 | 落到哪 |
 |---------|---------|--------|
-| 程序列表/启停/监看 | `apps.py` / `process.py`(process_manager) / `stream.py`(MJPEG) | 进程；`run.pid` |
+| 程序列表/启停 | `apps.py` / `process.py`(process_manager) | systemd transient unit；App 根目录 `run.pid` / `run.config` |
+| 实时画面/抓拍 | `stream.py` / `snapshot.py` | MJPEG/图片响应，不额外落盘 |
 | **上传/删除程序包** | `apps.py`(`POST /apps/upload`,`DELETE /apps/{name}`) | `/opt/ai_apps/<App>/` |
 | 配置编辑器（画布）保存 | `config_io.py` | `<App>/assets/config.json` |
 | ROI 绘制 | `config_io.py` 配置保存 | 当前配置文件中的 `channels[].roi_zones[]` |
-| 「服务配置」弹窗 | `upload_config.py` / `ota_config.py` | `<App>/services/upload/config.yaml` / `…/model_update/ota_config.json` |
+| 「服务配置」页面 | `upload_config.py` / `ota_config.py` | `.data/<App>/upload_config.yaml`、`contracts/`、`ota_config.json` |
 | 「后台服务」面板（装/启停/健康/日志） | `services.py` | systemd 单元 + `systemctl`/`journalctl` |
+| 「系统设置」页面 | `storage_settings.py` / `network_settings.py` / `system_settings.py` | 系统网络、存储和设备设置（以各路由校验及服务实现为准） |
 | 登录（SSH 账号） | `auth.py`(PAM) | — |
 
 ## 四、常见运维问题（速查：现象 → 原因 → 修）
@@ -94,7 +100,7 @@ cd ../web_console && bash install.sh
 - **OTA 升级后模型没换上 / 推理还是旧模型**：`target_config=active` 时先核对 App 根目录 `run.config`；显式文件名模式则必须等于 C++ 实际运行配置。指令中的通道 `id` 和 `model_id` 必须分别匹配 `channels[].id` 与对应的 `models[].id`。
 - **`apt update` 报 `bullseye-backports ... 404`**：失效的第三方源。`install_deps.sh` 已用 `|| true` 容错不致命；要根治就注释掉 `/etc/apt/sources.list` 里那行。
 - **国内装 Node 失败/超时**：`install_deps.sh` 已优先用 npmmirror 预编译 tarball；手动可 `npm config set registry https://registry.npmmirror.com`。
-- **网页改了配置但服务/程序行为没变**：分清谁热重载——config.json 的普通字段及内嵌 ROI 由 C++ 热重载；服务配置（config.yaml/ota_config.json）要重启对应后台服务。
+- **网页改了配置但服务/程序行为没变**：分清谁热重载——config.json 的普通字段及内嵌 ROI 由 C++ 热重载；`.data/<App>/upload_config.yaml`、`contracts/`、`ota_config.json` 要重启对应后台服务。
 - **网页打不开**：`systemctl status rk3588-console`；`journalctl -u rk3588-console -n 50`。aarch64 上 `uvicorn[standard]` 偶发要编译，失败可退精简 `uvicorn fastapi`。
 
 ## 五、关键文件 / 脚本地图

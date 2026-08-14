@@ -21,6 +21,7 @@
 
 #include "analyzer/algoProcess.h"
 #include "config/config.h"
+#include "logic_outputs.h"
 #include <cstdint>
 #include <memory>
 #include <opencv2/opencv.hpp>
@@ -28,7 +29,7 @@
 #include <vector>
 
 /* 前置声明 */
-struct ChannelSnapshot;
+struct ChannelFrameSnapshot;
 
 /*======================== Web/外部通道动作 ========================*/
 /**
@@ -113,6 +114,7 @@ struct RenderParams
     float disp_fps = 0.0f;
     float infer_fps = 0.0f;
     int64_t result_age_ms = 0;
+    int64_t result_frame_id = 0; /* 分割叠加缓存版本；同一推理结果可跨多个显示帧复用 */
     int show_fps = 1;
     uint8_t target_mask = DrawCommand::DISPLAY;
     bool show_system_overlays = true; /* ROI、检测框、姿态、分割 */
@@ -177,7 +179,7 @@ struct ChannelContext
     int64_t frame_id;
     /* 近似系统开机后运行的毫秒数 */
     uint64_t timestamp_ms;
-    /* Unix epoch 毫秒(UTC 基准, 即本帧墙钟; 三源统一): 除以1000 可得到秒; 配 time_hms()/time_str() */
+    /* Unix epoch 毫秒(UTC 基准, 即本业务帧进入分析管线时的墙钟): 配 time_hms()/time_str() */
     uint64_t unix_ms = 0;
     // 当前一帧与上一帧的间隔(毫秒)
     float dt_ms;
@@ -195,6 +197,16 @@ struct ChannelContext
     bool param_bool(const char *key) const;
     std::string param_string(const char *key) const;
     std::string param_json(const char *key) const;
+
+    /* ---- 向全局 logic 发布同帧业务变量 ----
+     * outputs 每帧重新创建并与 frame/results 一起原子发布。
+     * 请在 logic.json 的 outputs[] 中声明相同的 key/type，便于画布展示数据契约。 */
+    LogicOutputSet *outputs = nullptr;
+    void publish_string(const char *key, const std::string &value) const;
+    void publish_number(const char *key, double value) const;
+    void publish_int(const char *key, int64_t value) const;
+    void publish_bool(const char *key, bool value) const;
+    void publish_json(const char *key, const std::string &json) const;
 
     /* ---- ROI (已缩放到模型输入坐标系) ----
      * rois 是本通道全部 ROI 区域；单个区域用 roi_polygon_at()/roi_by_name() 获取。 */
@@ -272,18 +284,17 @@ struct ChannelContext
 
     /* ===== 跨通道安全取数 (本通道 或 任意其它通道) =====
      *
-     * get_channel_snapshot(ch) 是获取【任意通道】数据的唯一推荐入口:
-     * 它在一把 chn_mtx 锁内原子读出该通道的 frame + results + logic_state + fps + age + frame_seq,
-     * 因此 snapshot.frame 与 snapshot.results 必定来自【同一帧】(snapshot.frame_seq 即该帧序号),
-     * 绝不会出现"帧是旧的、框是另一时刻"的错位。返回值是深拷贝快照, 持有期间随便用, 无需再加锁。
+     * get_channel_frame_snapshot(ch, out) 在一把 chn_mtx 锁内原子读出该通道的
+     * frame + results + outputs + 绘制指令和发布元信息。frame 与 results 必定来自同一帧，
+     * 返回后不持锁。失败会明确返回 false，不用空对象猜测通道是否存在。
      *
      * 典型用法 (在 channel logic 或 global logic 中):
-     *   ChannelSnapshot s = ctx->get_channel_snapshot(2);   // 取通道 2
-     *   if (!s.frame.empty() && s.result_age_ms < 500) {    // 新鲜度自检
-     *       for (auto &r : s.results) { ... r.box, r.score, r.label ... }  // frame 与 results 同帧
+     *   ChannelFrameSnapshot s;
+     *   if (ctx->get_channel_frame_snapshot(2, &s) && s.logic.publication_age_ms < 500) {
+     *       for (auto &r : s.results) { ... r.box, r.score, r.label ... }
      *   }
      * 本通道的当帧数据直接用 ctx->frame / ctx->results / ctx->frame_id 即可 (同样保证同帧)。 */
-    ChannelSnapshot get_channel_snapshot(int configuredId) const;
+    bool get_channel_frame_snapshot(int configuredId, ChannelFrameSnapshot *out) const;
     std::string get_channel_logic_name(int configuredId) const;
     int channel_has_logic(int configuredId, const char *logicName) const;
 };

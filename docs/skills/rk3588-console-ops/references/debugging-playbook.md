@@ -13,7 +13,7 @@
 | C++ 逻辑/上报/源码                      | `cd vision_analysis && ./build.sh <名> && sudo ./install_app.sh <名>` → 网页重启该程序 | 监看画面行为变化;overlay                                                 |
 | `config.json` 普通字段                | 网页保存即可(C++ 热重载)                                                           | 下一帧生效                                                            |
 | **ROI**（`channels[].roi_zones[]`） | 网页保存即可；配置监控会复制字段并重建运行时 ROI | 下一批逻辑帧和显示叠加使用新区域 |
-| 服务配置(config.yaml/ota_config.json) | 把对应后台服务**停止再启动**                                                          | `journalctl -u <svc>`                                            |
+| `.data/<App>/` 服务配置/接口契约 | 把对应后台服务**停止再启动** | `systemctl show <svc> -p Environment` + `journalctl -u <svc>` |
 | 开发机改了文件                           | **先 `scp` 到板子**再 install(板子跑的是 `/opt/ai_apps/_console`,不是你的开发副本)          | —                                                                |
 
 > 经验法则:现象**一模一样、像素级没变**,99% 是没生效,而不是你的修法错了。先证明新代码在跑,再谈对错。

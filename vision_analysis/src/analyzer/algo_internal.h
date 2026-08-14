@@ -38,6 +38,8 @@ struct AlgoTask
     cv::Mat img;
     std::chrono::steady_clock::time_point enqueue_tp;
     int64_t frame_seq;
+    uint64_t frame_steady_ms;
+    uint64_t frame_unix_ms;
     std::shared_ptr<RgaImportedBuffer> src_buf;
     int srcW, srcH, srcFmt, srcStrH, srcStrV;
 };
@@ -46,6 +48,8 @@ struct ChannelResult
 {
     std::vector<AlgoResult> data;
     cv::Mat data_frame;
+    uint64_t frame_steady_ms{0};
+    uint64_t frame_unix_ms{0};
     pthread_mutex_t mtx;
     int64_t latest_seq{0};
     int has_new{0};

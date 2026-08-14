@@ -5,6 +5,7 @@
 #include "../core/process_signals.h"
 #include "system.h"
 #include "text_overlay.h"
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -77,7 +78,115 @@ static bool pose_keypoint_visible(const AlgoResult &res, size_t index)
     return res.keypoint_scores.size() != res.keypoints.size() || res.keypoint_scores[index] >= 0.25f;
 }
 
-static void draw_segmentation_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult> &results)
+namespace
+{
+
+struct SegmentationColorLuts
+{
+    cv::Mat b;
+    cv::Mat g;
+    cv::Mat r;
+
+    SegmentationColorLuts()
+    {
+        static const unsigned char class_colors[][3] = {
+            {255, 56, 56},  {255, 157, 151}, {255, 112, 31},  {255, 178, 29}, {207, 210, 49},
+            {72, 249, 10},  {146, 204, 23}, {61, 219, 134},  {26, 147, 52},  {0, 212, 187},
+            {44, 153, 168}, {0, 194, 255},  {52, 69, 147},  {100, 115, 255}, {0, 24, 236},
+            {132, 56, 255}, {82, 0, 133},   {203, 56, 255}, {255, 149, 200}, {255, 55, 199}};
+
+        b = cv::Mat::zeros(1, 256, CV_8UC1);
+        g = cv::Mat::zeros(1, 256, CV_8UC1);
+        r = cv::Mat::zeros(1, 256, CV_8UC1);
+        for (int class_id_plus_1 = 1; class_id_plus_1 < 256; ++class_id_plus_1)
+        {
+            const int color_idx = (class_id_plus_1 - 1) % 20;
+            /* class_colors 是 RGB；显示渲染阶段统一使用 BGR。 */
+            b.at<unsigned char>(0, class_id_plus_1) = class_colors[color_idx][2];
+            g.at<unsigned char>(0, class_id_plus_1) = class_colors[color_idx][1];
+            r.at<unsigned char>(0, class_id_plus_1) = class_colors[color_idx][0];
+        }
+    }
+};
+
+static const SegmentationColorLuts &segmentation_color_luts()
+{
+    static const SegmentationColorLuts luts;
+    return luts;
+}
+
+struct SegmentationOverlayCache
+{
+    int64_t result_frame_id = -1;
+    const unsigned char *source_data = nullptr;
+    int source_rows = 0;
+    int source_cols = 0;
+    int source_type = -1;
+    cv::Size output_size;
+    cv::Rect active_rect;
+    cv::Mat active_mask;
+    cv::Mat active_color_bgr;
+    cv::Mat blend_scratch;
+    bool prepared = false;
+
+    bool matches(const cv::Mat &source, const cv::Size &size, int64_t frame_id) const
+    {
+        /* frame_id<=0 的调用方没有稳定的结果版本号，宁可重建也不能误用旧掩码。 */
+        return frame_id > 0 && prepared && result_frame_id == frame_id && source_data == source.data &&
+               source_rows == source.rows && source_cols == source.cols && source_type == source.type() &&
+               output_size == size;
+    }
+
+    void prepare(const cv::Mat &source, const cv::Size &size, int64_t frame_id)
+    {
+        result_frame_id = frame_id;
+        source_data = source.data;
+        source_rows = source.rows;
+        source_cols = source.cols;
+        source_type = source.type();
+        output_size = size;
+        active_rect = cv::Rect();
+        active_mask.release();
+        active_color_bgr.release();
+        prepared = true;
+
+        if (source.empty() || source.type() != CV_8UC1 || size.width <= 0 || size.height <= 0)
+            return;
+
+        cv::Mat resized_mask;
+        cv::resize(source, resized_mask, size, 0, 0, cv::INTER_NEAREST);
+
+        cv::Mat foreground_mask;
+        cv::compare(resized_mask, 0, foreground_mask, cv::CMP_NE);
+        active_rect = cv::boundingRect(foreground_mask);
+        if (active_rect.empty())
+            return;
+
+        active_mask = foreground_mask(active_rect).clone();
+        const cv::Mat class_ids = resized_mask(active_rect);
+        const SegmentationColorLuts &luts = segmentation_color_luts();
+        std::array<cv::Mat, 3> bgr_channels;
+        cv::LUT(class_ids, luts.b, bgr_channels[0]);
+        cv::LUT(class_ids, luts.g, bgr_channels[1]);
+        cv::LUT(class_ids, luts.r, bgr_channels[2]);
+        cv::merge(bgr_channels.data(), static_cast<int>(bgr_channels.size()), active_color_bgr);
+    }
+};
+
+/* 每个显示/录像工作线程独享缓存，无跨通道锁。实时显示是一通道一线程，
+ * 因而同一推理结果被多个解码帧复用时不会重复 resize、着色和扫描掩码。 */
+thread_local std::array<SegmentationOverlayCache, MAX_CHANNEL_NUM> g_segmentation_caches;
+thread_local SegmentationOverlayCache g_fallback_segmentation_cache;
+
+static SegmentationOverlayCache &segmentation_cache_for(int channel_id)
+{
+    if (channel_id >= 0 && channel_id < MAX_CHANNEL_NUM)
+        return g_segmentation_caches[static_cast<size_t>(channel_id)];
+    return g_fallback_segmentation_cache;
+}
+
+static void draw_segmentation_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult> &results, int channel_id,
+                                      int64_t result_frame_id)
 {
     const cv::Mat *seg_mask = nullptr;
     for (const auto &res : results)
@@ -91,39 +200,50 @@ static void draw_segmentation_overlay(cv::Mat &screen_roi, const std::vector<Alg
     if (!seg_mask || seg_mask->empty())
         return;
 
-    static const unsigned char class_colors[][3] = {{255, 56, 56},  {255, 157, 151}, {255, 112, 31},  {255, 178, 29},
-                                                    {207, 210, 49}, {72, 249, 10},   {146, 204, 23},  {61, 219, 134},
-                                                    {26, 147, 52},  {0, 212, 187},   {44, 153, 168},  {0, 194, 255},
-                                                    {52, 69, 147},  {100, 115, 255}, {0, 24, 236},    {132, 56, 255},
-                                                    {82, 0, 133},   {203, 56, 255},  {255, 149, 200}, {255, 55, 199}};
-    const float alpha = 0.5f;
-
-    cv::Mat resized_mask;
-    cv::resize(*seg_mask, resized_mask, screen_roi.size(), 0, 0, cv::INTER_NEAREST);
-    if (resized_mask.type() != CV_8UC1)
+    SegmentationOverlayCache &cache = segmentation_cache_for(channel_id);
+    if (!cache.matches(*seg_mask, screen_roi.size(), result_frame_id))
+        cache.prepare(*seg_mask, screen_roi.size(), result_frame_id);
+    if (cache.active_rect.empty())
         return;
 
-    for (int y = 0; y < screen_roi.rows; ++y)
-    {
-        const uint8_t *mask_ptr = resized_mask.ptr<uint8_t>(y);
-        cv::Vec3b *dst_ptr = screen_roi.ptr<cv::Vec3b>(y);
-        for (int x = 0; x < screen_roi.cols; ++x)
-        {
-            uint8_t cls_id_plus_1 = mask_ptr[x];
-            if (cls_id_plus_1 == 0)
-                continue;
-            const int color_idx = (cls_id_plus_1 - 1) % 20;
-            // class_colors 定义为 RGB 顺序；screen_roi 统一使用 BGR，ch0=B ch1=G ch2=R
-            const float r = class_colors[color_idx][0];
-            const float g = class_colors[color_idx][1];
-            const float b = class_colors[color_idx][2];
-
-            dst_ptr[x][0] = cv::saturate_cast<uchar>(dst_ptr[x][0] * (1.0f - alpha) + b * alpha); // B
-            dst_ptr[x][1] = cv::saturate_cast<uchar>(dst_ptr[x][1] * (1.0f - alpha) + g * alpha); // G
-            dst_ptr[x][2] = cv::saturate_cast<uchar>(dst_ptr[x][2] * (1.0f - alpha) + r * alpha); // R
-        }
-    }
+    cv::Mat dst = screen_roi(cache.active_rect);
+    cache.blend_scratch.create(cache.active_rect.size(), screen_roi.type());
+    cv::addWeighted(dst, 0.5, cache.active_color_bgr, 0.5, 0.0, cache.blend_scratch);
+    cache.blend_scratch.copyTo(dst, cache.active_mask);
 }
+
+static cv::Rect clipped_draw_bounds(const cv::Mat &image, int64_t left, int64_t top, int64_t right, int64_t bottom)
+{
+    left = std::max<int64_t>(0, std::min<int64_t>(image.cols, left));
+    top = std::max<int64_t>(0, std::min<int64_t>(image.rows, top));
+    right = std::max<int64_t>(0, std::min<int64_t>(image.cols, right));
+    bottom = std::max<int64_t>(0, std::min<int64_t>(image.rows, bottom));
+    if (right <= left || bottom <= top)
+        return cv::Rect();
+    return cv::Rect(static_cast<int>(left), static_cast<int>(top), static_cast<int>(right - left),
+                    static_cast<int>(bottom - top));
+}
+
+template <typename DrawFn>
+static void draw_alpha_region(cv::Mat &image, const cv::Rect &bounds, double alpha, DrawFn draw)
+{
+    const double a = std::max(0.0, std::min(1.0, alpha));
+    if (a <= 0.0 || bounds.empty())
+        return;
+
+    cv::Mat dst = image(bounds);
+    cv::Mat overlay = dst.clone();
+    draw(overlay, bounds.tl());
+    cv::addWeighted(overlay, a, dst, 1.0 - a, 0.0, dst);
+}
+
+static int draw_padding(int thickness, bool antialiased)
+{
+    const int stroke_padding = thickness > 0 ? (thickness + 1) / 2 : 0;
+    return stroke_padding + (antialiased ? 2 : 1);
+}
+
+} // namespace
 
 static void draw_pose_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult> &results, float scale_x, float scale_y)
 {
@@ -191,7 +311,7 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
 
     // Segmentation mask
     if (p.show_system_overlays && p.results && !p.results->empty())
-        draw_segmentation_overlay(screen_roi, *p.results);
+        draw_segmentation_overlay(screen_roi, *p.results, p.chnId, p.result_frame_id);
 
     // Detections
     if (p.show_system_overlays && p.results && !p.results->empty())
@@ -279,10 +399,16 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
                 {
                     if (cmd.alpha < 0.999)
                     {
-                        const double a = std::max(0.0, std::min(1.0, cmd.alpha));
-                        cv::Mat overlay = screen_roi.clone();
-                        cv::rectangle(overlay, r, cmd.color, thk(cmd.thickness));
-                        cv::addWeighted(overlay, a, screen_roi, 1.0 - a, 0.0, screen_roi);
+                        const int thickness = thk(cmd.thickness);
+                        const int pad = draw_padding(thickness, false);
+                        const cv::Rect bounds = clipped_draw_bounds(
+                            screen_roi, static_cast<int64_t>(r.x) - pad, static_cast<int64_t>(r.y) - pad,
+                            static_cast<int64_t>(r.x) + r.width + pad, static_cast<int64_t>(r.y) + r.height + pad);
+                        draw_alpha_region(screen_roi, bounds, cmd.alpha,
+                                          [&](cv::Mat &overlay, const cv::Point &origin) {
+                                              cv::rectangle(overlay, cv::Rect(r.tl() - origin, r.size()), cmd.color,
+                                                            thickness);
+                                          });
                     }
                     else
                         cv::rectangle(screen_roi, r, cmd.color, thk(cmd.thickness));
@@ -295,12 +421,21 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
                  * 均匀缩放时退化为正圆，行为与原来完全一致。 */
                 const cv::Point ec(static_cast<int>(cmd.center.x * scale_x), static_cast<int>(cmd.center.y * scale_y));
                 const cv::Size es(static_cast<int>(cmd.radius * scale_x), static_cast<int>(cmd.radius * scale_y));
+                if (es.width < 0 || es.height < 0)
+                    break;
                 if (cmd.alpha < 0.999)
                 {
-                    const double a = std::max(0.0, std::min(1.0, cmd.alpha));
-                    cv::Mat overlay = screen_roi.clone();
-                    cv::ellipse(overlay, ec, es, 0, 0, 360, cmd.color, thk(cmd.thickness));
-                    cv::addWeighted(overlay, a, screen_roi, 1.0 - a, 0.0, screen_roi);
+                    const int thickness = thk(cmd.thickness);
+                    const int pad = draw_padding(thickness, true);
+                    const cv::Rect bounds = clipped_draw_bounds(
+                        screen_roi, static_cast<int64_t>(ec.x) - es.width - pad,
+                        static_cast<int64_t>(ec.y) - es.height - pad,
+                        static_cast<int64_t>(ec.x) + es.width + pad + 1,
+                        static_cast<int64_t>(ec.y) + es.height + pad + 1);
+                    draw_alpha_region(screen_roi, bounds, cmd.alpha,
+                                      [&](cv::Mat &overlay, const cv::Point &origin) {
+                                          cv::ellipse(overlay, ec - origin, es, 0, 0, 360, cmd.color, thickness);
+                                      });
                 }
                 else
                     cv::ellipse(screen_roi, ec, es, 0, 0, 360, cmd.color, thk(cmd.thickness));
@@ -322,11 +457,23 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
                 if (cmd.alpha < 0.999)
                 {
                     /* 半透明：折线画到副本再整体融合；自交叠处只画一次，不会越叠越暗。
-                     * 效果上轨迹"沉到"画面/检测框/手 之下，看着更清楚。 */
-                    const double a = std::max(0.0, std::min(1.0, cmd.alpha));
-                    cv::Mat overlay = screen_roi.clone();
-                    cv::polylines(overlay, pts, cmd.closed, cmd.color, thk(cmd.thickness), cv::LINE_AA);
-                    cv::addWeighted(overlay, a, screen_roi, 1.0 - a, 0.0, screen_roi);
+                     * 只复制轨迹包围区域，避免每条轨迹都 clone + blend 整张 tile。 */
+                    const int thickness = thk(cmd.thickness);
+                    const int pad = draw_padding(thickness, true);
+                    const cv::Rect point_bounds = cv::boundingRect(pts);
+                    const cv::Rect bounds = clipped_draw_bounds(
+                        screen_roi, static_cast<int64_t>(point_bounds.x) - pad,
+                        static_cast<int64_t>(point_bounds.y) - pad,
+                        static_cast<int64_t>(point_bounds.x) + point_bounds.width + pad,
+                        static_cast<int64_t>(point_bounds.y) + point_bounds.height + pad);
+                    draw_alpha_region(screen_roi, bounds, cmd.alpha,
+                                      [&](cv::Mat &overlay, const cv::Point &origin) {
+                                          std::vector<cv::Point> local_pts;
+                                          local_pts.reserve(pts.size());
+                                          for (const cv::Point &point : pts)
+                                              local_pts.push_back(point - origin);
+                                          cv::polylines(overlay, local_pts, cmd.closed, cmd.color, thickness, cv::LINE_AA);
+                                      });
                 }
                 else
                 {
@@ -343,10 +490,18 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
                     pts.emplace_back(static_cast<int>(q.x * scale_x), static_cast<int>(q.y * scale_y));
                 if (cmd.alpha < 0.999)
                 {
-                    const double a = std::max(0.0, std::min(1.0, cmd.alpha));
-                    cv::Mat overlay = screen_roi.clone();
-                    cv::fillPoly(overlay, std::vector<std::vector<cv::Point>>{pts}, cmd.color, cv::LINE_AA);
-                    cv::addWeighted(overlay, a, screen_roi, 1.0 - a, 0.0, screen_roi);
+                    const int pad = draw_padding(/*filled*/ -1, true);
+                    const cv::Rect point_bounds = cv::boundingRect(pts);
+                    const cv::Rect bounds = clipped_draw_bounds(
+                        screen_roi, static_cast<int64_t>(point_bounds.x) - pad,
+                        static_cast<int64_t>(point_bounds.y) - pad,
+                        static_cast<int64_t>(point_bounds.x) + point_bounds.width + pad,
+                        static_cast<int64_t>(point_bounds.y) + point_bounds.height + pad);
+                    draw_alpha_region(screen_roi, bounds, cmd.alpha,
+                                      [&](cv::Mat &overlay, const cv::Point &origin) {
+                                          cv::fillPoly(overlay, std::vector<std::vector<cv::Point>>{pts}, cmd.color,
+                                                       cv::LINE_AA, 0, cv::Point(-origin.x, -origin.y));
+                                      });
                 }
                 else
                     cv::fillPoly(screen_roi, std::vector<std::vector<cv::Point>>{pts}, cmd.color, cv::LINE_AA);
@@ -372,7 +527,20 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
     {
         char fps_text[80];
         snprintf(fps_text, sizeof(fps_text), "Ch%d disp %.1f / inf %.1f FPS", p.chnId, p.disp_fps, p.infer_fps);
-        put_text_auto(screen_roi, fps_text, cv::Point(10, 15), 0.5, cv::Scalar(255, 0, 0), 1);
+        constexpr double font_scale = 0.58;
+        constexpr int margin = 10;
+        const int font_height = std::max(12, static_cast<int>(std::lround(font_scale * 30.0)));
+        cv::Size text_size;
+        int baseline = 0;
+        cv::Point text_org(std::max(margin, screen_roi.cols - margin - 240), screen_roi.rows - margin);
+        if (measure_text_unicode(fps_text, font_height, /*filled*/ -1, text_size, baseline))
+        {
+            /* FreeType 的 org 是文字基线点；基线下方仍有 baseline 像素。
+             * 同时扣除 baseline 才能保证文字最底部与 tile 下边保持 margin。 */
+            text_org.x = std::max(margin, screen_roi.cols - margin - text_size.width);
+            text_org.y = std::max(text_size.height + margin, screen_roi.rows - margin - baseline);
+        }
+        put_text_auto(screen_roi, fps_text, text_org, font_scale, cv::Scalar(255, 0, 0), 1);
     }
 }
 
@@ -389,6 +557,7 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms)
     std::vector<DrawCommand> commands;
     cv::Mat logic_frame;
     float disp_fps = 0.0f;
+    int64_t result_frame_id = 0;
     uint64_t result_ts_ms = 0;
     uint64_t logic_ts_ms = 0;
 
@@ -398,7 +567,8 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms)
     commands = state.draw_cmds;
     logic_frame = state.logic_display_frame;
     disp_fps = state.disp_fps;
-    result_ts_ms = state.last_result_ts_ms;
+    result_frame_id = state.published_frame_seq;
+    result_ts_ms = state.published_steady_ms;
     logic_ts_ms = state.logic_display_ts_ms;
     pthread_mutex_unlock(&g_pCtrl->chn_mtx[chn_id]);
 
@@ -419,6 +589,7 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms)
         return;
     params.disp_fps = disp_fps;
     params.infer_fps = algorithm_get_infer_fps(chn_id);
+    params.result_frame_id = result_frame_id;
     params.result_age_ms = result_ts_ms != 0 && current_ms >= result_ts_ms
                                ? static_cast<int64_t>(std::min<uint64_t>(current_ms - result_ts_ms, 200))
                                : 0;

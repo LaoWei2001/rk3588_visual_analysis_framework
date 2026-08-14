@@ -130,6 +130,10 @@ CMake 编译（包括 `build.sh --debug`）会生成并编译嵌入式能力清�
 `global_logics`，不维护全局 logic 硬编码列表。全局配置发生变化时，框架停止并重建全局
 logic 线程，因此每个实例的 `state` 也会重新初始化。
 
+画布配置两路视频、发布通道变量、在全局节点聚合并复用统一上报链路的完整示例，见
+`modules/logic_global_input_demo/`、`global_modules/global_two_channel_demo/` 和
+`../../../docs/skills/rk3588-global-logic/references/two-channel-canvas-demo.md`。
+
 ## 框架与业务边界
 
 - `core/` 只存放所有逻辑共享的生命周期、上下文、注册和绘制接口。

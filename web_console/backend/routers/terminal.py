@@ -11,6 +11,7 @@ import logging
 from fastapi import APIRouter, WebSocket
 
 from services.auth_service import get_session
+from services.data_dir import APPS_ROOT
 
 router = APIRouter()
 log = logging.getLogger("terminal")
@@ -42,7 +43,7 @@ async def websocket_terminal(websocket: WebSocket):
             f"{color_ls};{existing_prompt_command}" if existing_prompt_command else color_ls
         )
         try:
-            os.chdir("/opt/ai_apps")
+            os.chdir(APPS_ROOT)
         except Exception:
             pass
         shell_path = shutil.which("bash") or "/bin/sh"

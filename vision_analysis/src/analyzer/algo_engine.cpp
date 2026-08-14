@@ -468,7 +468,7 @@ void *worker_thread_func(void *arg)
                 filtered.resize(MAX_DET_PER_FRAME);
             auto filter_end = std::chrono::steady_clock::now();
 
-            uint64_t ts_ms = algo_steady_now_ms();
+            const uint64_t ts_ms = task.frame_steady_ms != 0 ? task.frame_steady_ms : algo_steady_now_ms();
             int64_t seq = task.frame_seq;
             for (auto &r : filtered)
             {
@@ -485,6 +485,8 @@ void *worker_thread_func(void *arg)
                 {
                     g_algo.channel_results[task.chnId].data = std::move(filtered);
                     g_algo.channel_results[task.chnId].data_frame = task.img;
+                    g_algo.channel_results[task.chnId].frame_steady_ms = ts_ms;
+                    g_algo.channel_results[task.chnId].frame_unix_ms = task.frame_unix_ms;
                     g_algo.channel_results[task.chnId].latest_seq = seq;
                     g_algo.channel_results[task.chnId].has_new = 1;
                     wrote_new = 1;

@@ -43,6 +43,7 @@ REGISTER_LOGIC(logic_xxx);
 
 - `label`；
 - `parameters` 参数 Schema；
+- `event_types` 事件类型声明（无事件也必须写 `[]`）；
 - `actions`；
 - `report_fields` / `business_fields`；
 - 其他该模块 Web 所需元数据。
@@ -103,6 +104,7 @@ App 根目录 logics.json
 - 模块若注册 action handler，`REGISTER_LOGIC_ACTION(logic_func, handler)` 的第一参数引用同一个 logic 函数且不重复；
 - 不同模块的 logic 函数名不重复；
 - 参数 Schema 合法；
+- `event_types` 存在，且 C++ 使用的事件类型均已声明；
 - 字符串字面量形式的 `ctx->param_*()` 键存在且类型匹配。
 
 可以不编译 C++，单独执行：
@@ -120,7 +122,7 @@ python3 scripts/generate_logics_catalog.py --check
 2. 新建 `logic.cpp`，包含 `logic/core/logic_common.h`；
 3. 实现 `logic_xxx(ChannelContext*)`；
 4. 用 `REGISTER_LOGIC(logic_xxx)` 注册；
-5. 新建同目录 `logic.json`，只声明 `label`、参数、动作和上报字段，不写 `name`；
+5. 新建同目录 `logic.json`，声明 `label`、参数、`event_types`、动作和上报字段，不写 `name`；不产生事件也必须写 `"event_types": []`；
 6. 在 `parameters` 中声明该模块专有参数；
 7. 运行生成器检查并重新构建；
 8. Web 场景部署新二进制和同次打包生成的 `logics.json`；

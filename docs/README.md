@@ -2,12 +2,13 @@
 
 > 文档角色：本文件是 `docs/` 的唯一导航入口。新开发者、维护者和大模型都先从这里判断任务类型，再进入课程、专题指南或源码参考。
 >
-> 基线状态：已按本仓库当前源码核对，日期为 2026-07-30。入口唯一不等于本文覆盖所有技术事实；系统行为始终以现行源码、模块清单、前端序列化和后端路由为准。
+> 基线状态：已按本仓库当前源码核对，日期为 2026-08-14。入口唯一不等于本文覆盖所有技术事实；系统行为始终以现行源码、模块清单、前端序列化和后端路由为准。
 
 ## 一、按任务选择入口
 
 | 现在要做什么 | 第一入口 | 用途 |
 |---|---|---|
+| 把自然语言需求直接开发成视觉应用 | [RK3588 视觉应用开发 Skill](skills/build-rk3588-vision-app/SKILL.md) | 需求契约、分层路由、模块脚手架、静态验证和交付验收 |
 | 从零系统学习二次开发 | [二次开发课程大纲](二次开发课程大纲.md) | 学习顺序、练习、产物和验收标准 |
 | 新增或修改单通道检测/报警规则 | [通道逻辑开发](skills/rk3588-channel-logic/SKILL.md) | `logic_xxx`、参数、绘制、动作和统一告警 |
 | 第一次开发完整报警与上报功能 | [报警事件与上报开发指南](报警事件与上报开发指南.md) | 报警判断、C++事件、按钮、媒体、HTTP/Dify、Web契约和提示词 |
@@ -29,7 +30,7 @@
 1. 先读本页，确认任务边界和资料权威顺序；
 2. 按 [二次开发课程大纲](二次开发课程大纲.md) 的基础章节建立运行链路、配置和身份模型；
 3. 开发报警或事件投递时完整阅读 [报警事件与上报开发指南](报警事件与上报开发指南.md)；
-4. 只选择与任务相符的一份 `SKILL.md`，不要一开始通读全部专题；
+4. 直接交付自然语言需求时先用 `build-rk3588-vision-app`，由它选择并完整读取相符的领域 Skill；明确领域的开发者也可直接进入对应 `SKILL.md`；
 5. 从 [源码模块索引](skills/rk3588-src-modules/README.md) 进入相关模块，并以真实头文件、调用点和配置链路确认接口；
 6. 选择当前源码中最接近的实现作为参考，完成静态检查、构建和针对性验收。
 
@@ -37,7 +38,7 @@
 
 ```text
 系统学习：docs/README.md -> 二次开发课程大纲 -> 对应 SKILL -> 源码模块 -> 练习与验收
-需求开发：docs/README.md -> 对应 SKILL -> 最接近的当前示例 -> 真实源码 -> 分层验证
+需求开发：docs/README.md -> build-rk3588-vision-app -> 对应领域 Skill -> 当前示例/真实源码 -> 分层验证
 ```
 
 ## 三、当前架构基线
@@ -50,6 +51,11 @@
 | `web_console/` | Web 编辑器、配置序列化、应用进程管理、实时画面和后台服务控制 |
 | `service/upload/` | 消费 `event_store`，按连接 Profile 与接口契约调用 adapter 投递 |
 | `service/model_update/` | 模型更新与 OTA 服务 |
+
+Web 管理模式把可变运行数据放在 `/opt/ai_apps/.data/<App>/`：`event_store/`、
+`upload_config.yaml`、`contracts/` 和 `ota_config.json` 不随同名程序包覆盖而丢失；程序包内
+`services/` 中的同名文件只在该 App 首次迁移时提供初始值。直接裸跑源码或使用独立部署脚本时，
+实际位置仍以进程环境变量和对应脚本为准。
 
 当前统一事件链路是：
 
@@ -87,9 +93,12 @@ python3 scripts/generate_logics_catalog.py --check
 | 周期截图与参数热更新 | [logic_periodic_snapshot_demo](skills/rk3588-channel-logic/references/examples/logic_periodic_snapshot_demo.md) |
 | 同步传统 CV 原始帧 | `logic_save_frame_pair` |
 | SOP 路径业务 | [logic_path_sop](skills/rk3588-channel-logic/references/examples/logic_path_sop.md) |
+| 跌倒、相机移动、反光衣/安全帽和吊钩业务 | `logic_fall_detection`、`logic_camera_move_detect`、`logic_helmet`、`logic_hook`（以各自源码和 `logic.json` 为准） |
+| 向全局逻辑发布类型化变量 | `logic_global_input_demo`；配套 `global_two_channel_demo` 见 [双通道示例](skills/rk3588-global-logic/references/two-channel-canvas-demo.md) |
 | 自定义 ROI 进入报警 | [ROI 告警代码模式](skills/rk3588-channel-logic/references/examples/roi-alarm-pattern.md)（不是内置同名模块） |
 
-`logic_course_08` ～ `logic_course_10` 当前仍是课程任务骨架，不应被大模型当成已完成的生产示例。
+`logic_course_08` 是可运行的最小定时事件课程示例，但没有完整业务状态机；
+`logic_course_09`、`logic_course_10` 仍是空入口/任务骨架，不应当成完成答案或生产示例。
 全局 logic 位于 `src/logic/global_modules/<module_dir>/`，通过
 `REGISTER_GLOBAL_LOGIC(global_xxx)` 自注册；通道和全局模块的 `logic.json` 都由构建器聚合。
 `src/logic/catalog.json` 只保存模型类型等非模块共享能力。
@@ -138,7 +147,13 @@ cd vision_analysis
 # 检查 manifest、函数注册、参数 Schema 和访问器
 python3 scripts/generate_logics_catalog.py --check
 
+# 从仓库根目录检查领域模块和 docs 静态一致性
+cd ..
+python3 docs/skills/build-rk3588-vision-app/scripts/validate_logic.py logic_xxx
+python3 docs/skills/build-rk3588-vision-app/scripts/audit_docs.py
+
 # 编译后核对二进制中的真实注册名
+cd vision_analysis
 ./vision_analysis --list-logics
 ```
 

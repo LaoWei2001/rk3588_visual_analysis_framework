@@ -71,6 +71,8 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
 
     const int ch = imgDesc.chnId;
     const int fmt_int = rgaFmt(imgDesc.fmt);
+    const uint64_t frame_steady_ms = steady_now_ms();
+    const uint64_t frame_unix_ms = system_now_ms();
     const auto runtime = app_ctrl_get_runtime_snapshot();
     const ChannelConfig *channel_config = app_ctrl_runtime_channel_config(runtime, ch);
     if (!channel_config)
@@ -154,12 +156,6 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
             break;
         }
 
-        if (will_process && infer_enabled)
-        {
-            pthread_mutex_lock(&g_pCtrl->chn_mtx[ch]);
-            g_pCtrl->channels_state[ch].last_infer_ts_ms = steady_now_ms();
-            pthread_mutex_unlock(&g_pCtrl->chn_mtx[ch]);
-        }
     }
 
     /* ---- RGA 转换：NV12 → BGR 640×640 ----
@@ -183,9 +179,9 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
     {
         pthread_mutex_lock(&g_pCtrl->chn_mtx[ch]);
         current_frame_seq = ++g_pCtrl->channels_state[ch].input_frame_seq;
-        /* 记录真实解码源分辨率：推理通道的 ROI 缩放(result_dispatch → process_channel_results)
-         * 靠它把旧像素格式 ROI 从源像素缩到模型 640 坐标系；否则 src_w 停在 0、roi_zones 不缩放，
-         * 判定永远落在框外(画面只见显示用黄框、判定却 CLEAR)。(归一化 ROI 加载即是模型坐标, 不受此影响)*/
+        g_pCtrl->channels_state[ch].last_input_frame_steady_ms = frame_steady_ms;
+        /* 记录真实解码源分辨率，供 ChannelContext 元信息、结果分发兜底和源图/模型坐标换算使用。
+         * 当前 roi_zones 配置统一为归一化坐标，并在运行快照发布时直接换算到模型坐标系。 */
         g_pCtrl->channels_state[ch].src_w_now = imgDesc.width;
         g_pCtrl->channels_state[ch].src_h_now = imgDesc.height;
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[ch]);
@@ -195,6 +191,8 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
     ChannelRawFrame raw_frame;
     raw_frame.width = imgDesc.width;
     raw_frame.height = imgDesc.height;
+    raw_frame.frame_steady_ms = frame_steady_ms;
+    raw_frame.frame_unix_ms = frame_unix_ms;
     raw_frame.source_data = imgData;
     raw_frame.source_format = fmt_int;
     raw_frame.source_hstride = imgDesc.horStride;
@@ -269,7 +267,8 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
             g_feed[ch].conv_us += conv_us;
             const int enq_ret =
                 algorithm_process_mat(ch, std::move(yolo_input), imgDesc.fd, imgDesc.width, imgDesc.height, fmt_int,
-                                      imgDesc.horStride, imgDesc.verStride, current_frame_seq);
+                                      imgDesc.horStride, imgDesc.verStride, current_frame_seq,
+                                      raw_frame.frame_steady_ms, raw_frame.frame_unix_ms);
             if (enq_ret > 0)
                 g_feed[ch].enq++;
             else

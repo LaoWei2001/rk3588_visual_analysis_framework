@@ -51,12 +51,40 @@ std::string ChannelContext::param_json(const char *key) const
     return logic_parameters ? logic_parameters->get_json(key) : std::string();
 }
 
-/*======================== ChannelContext 跨通道方法实现 ========================*/
-ChannelSnapshot ChannelContext::get_channel_snapshot(int configuredId) const
+void ChannelContext::publish_string(const char *key, const std::string &value) const
 {
-    ChannelSnapshot out;
-    app_ctrl_get_channel_snapshot(configuredId, &out);
-    return out;
+    if (outputs)
+        outputs->set_string(key, value);
+}
+
+void ChannelContext::publish_number(const char *key, double value) const
+{
+    if (outputs)
+        outputs->set_number(key, value);
+}
+
+void ChannelContext::publish_int(const char *key, int64_t value) const
+{
+    if (outputs)
+        outputs->set_int(key, value);
+}
+
+void ChannelContext::publish_bool(const char *key, bool value) const
+{
+    if (outputs)
+        outputs->set_bool(key, value);
+}
+
+void ChannelContext::publish_json(const char *key, const std::string &json) const
+{
+    if (outputs)
+        outputs->set_json(key, json);
+}
+
+/*======================== ChannelContext 跨通道方法实现 ========================*/
+bool ChannelContext::get_channel_frame_snapshot(int configuredId, ChannelFrameSnapshot *out) const
+{
+    return out && app_ctrl_get_channel_frame_snapshot(configuredId, out) != 0;
 }
 
 std::string ChannelContext::get_channel_logic_name(int configuredId) const
@@ -313,6 +341,7 @@ RenderParams ChannelContext::render_params(int64_t result_age_ms) const
     p.disp_fps = disp_fps;
     p.infer_fps = infer_fps;
     p.result_age_ms = result_age_ms;
+    p.result_frame_id = frame_id;
     p.roi_zones = rois;
     p.results = results;
     p.draw_cmds = draw_cmds;
