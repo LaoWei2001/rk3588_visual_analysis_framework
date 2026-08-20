@@ -34,6 +34,7 @@ export interface GlobalSettingsData {
   disp_height: number
   tile_rows: number
   tile_cols: number
+  preview_fps: number
   max_fps: number
   queue_size: number
   channel_threads: number
@@ -51,12 +52,13 @@ export const DEFAULT_GLOBAL_SETTINGS: GlobalSettingsData = {
   enable_display: 0,
   disp_width: 640, disp_height: 640,
   tile_rows: 1, tile_cols: 1,
+  preview_fps: 15,
   max_fps: 25, queue_size: 1,
   channel_threads: 3,
   tracker_enable: 1, tracker_iou_thresh: 0.3,
   tracker_max_miss: 30, tracker_min_hits: 3,
   performance_display: 0, enable_pause_key: 0,
-  enable_rtsp: 1,
+  enable_rtsp: 1, rtsp_fps: 15, rtsp_codec: 'h264',
 }
 
 interface Props {
@@ -84,6 +86,7 @@ export default function GlobalSettingsPanel({ settings: s, onChange }: Props) {
             <NumField label="显示高度"     value={s.disp_height}     def={640} onChange={v => set('disp_height', v)} />
             <NumField label="显示窗口行数" value={s.tile_rows}       def={1}   onChange={v => set('tile_rows', v)} />
             <NumField label="显示窗口列数" value={s.tile_cols}       def={1}   onChange={v => set('tile_cols', v)} />
+            <NumField label="预览 FPS"     value={s.preview_fps}     def={15} min="1" max="60" onChange={v => set('preview_fps', v)} />
             <NumField label="最大 FPS"     value={s.max_fps}         def={25}  onChange={v => set('max_fps', v)} />
             <NumField label="队列深度"     value={s.queue_size}      def={1}    onChange={v => set('queue_size', v)} />
             <NumField label="通道线程"     value={s.channel_threads} def={3}    onChange={v => set('channel_threads', v)} />

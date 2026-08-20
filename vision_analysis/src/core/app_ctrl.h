@@ -336,6 +336,7 @@ extern "C"
     int app_ctrl_get_chn_nums(void);
     int app_ctrl_get_enable_disp(void);
     int app_ctrl_get_enable_rtsp(void);
+    int app_ctrl_get_preview_fps(void);
     int app_ctrl_get_disp_width(void);
     int app_ctrl_get_disp_height(void);
     int app_ctrl_get_tile_cols(void);

@@ -24,6 +24,7 @@
 
 #include "../core/pause_ctrl.h"
 #include "../recorder/event_video_recorder.h"
+#include "../player/rtsp_streamer.h"
 #include "algoProcess.h"
 #include "analyzer.h"
 #include "analyzer_internal.h"
@@ -43,6 +44,7 @@ struct FeedStats
     uint64_t throttle = 0;  /* FPS 节流跳过的帧数 */
     uint64_t log_last_ms = 0;
     uint64_t next_due_us = 0; /* FPS 节流：下次允许推理的时刻（微秒） */
+    uint64_t next_preview_due_us = 0; /* 下次允许合成预览的时刻 */
 };
 
 static FeedStats g_feed[MAX_CHANNEL_NUM];
@@ -57,6 +59,7 @@ void feed_stats_reset(int chnId)
         return;
     pthread_mutex_lock(&g_feed_mtx);
     g_feed[chnId].next_due_us = 0; /* 下次帧到达时重新计算 phase-offset */
+    g_feed[chnId].next_preview_due_us = 0;
     pthread_mutex_unlock(&g_feed_mtx);
 }
 
@@ -217,10 +220,27 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
     }
 
     /* ---- 推入显示队列（单槽覆盖，始终展示最新解码帧）----
-     * 开启 RTSP 推流时即使没接显示器(enable_display=false)也要合成，
-     * 因为 RTSP 取流自同一张 g_disp 拼接大图。 */
-    if ((app_ctrl_get_enable_disp() || app_ctrl_get_enable_rtsp()) && g_pCtrl->pDispBuffer && *g_pCtrl->pDispBuffer &&
-        imgData)
+     * HDMI 常开；纯 RTSP 模式只在存在实际客户端时合成，空闲期间不做整帧复制、缩放和叠加绘制。 */
+    const bool preview_consumer_active =
+        app_ctrl_get_enable_disp() || (app_ctrl_get_enable_rtsp() && rtsp_streamer_has_active_client());
+    bool preview_due = false;
+    if (preview_consumer_active)
+    {
+        const uint64_t now_us = steady_now_us();
+        const uint64_t period_us = 1000000ULL / static_cast<uint64_t>(std::max(1, app_ctrl_get_preview_fps()));
+        if (g_feed[ch].next_preview_due_us == 0 || now_us >= g_feed[ch].next_preview_due_us)
+        {
+            preview_due = true;
+            g_feed[ch].next_preview_due_us = now_us + period_us;
+        }
+    }
+    else
+    {
+        /* 下次出现消费者时立即交付首帧，不继承旧节流时间。 */
+        g_feed[ch].next_preview_due_us = 0;
+    }
+
+    if (preview_due && g_pCtrl->pDispBuffer && *g_pCtrl->pDispBuffer && imgData)
     {
         size_t data_size = 0;
         if (fmt_int == RK_FORMAT_YCbCr_420_SP || fmt_int == RK_FORMAT_YCrCb_420_SP)

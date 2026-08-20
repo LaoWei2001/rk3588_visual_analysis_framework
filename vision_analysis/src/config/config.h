@@ -148,6 +148,7 @@ struct AppConfig
     int disp_height = 1080;
     int tile_cols = 2;
     int tile_rows = 2;
+    int preview_fps = 15;              /* 本地/RTSP 拼接预览帧率；独立于解码与推理帧率 */
     bool performance_display = true; /* 性能统计显示开关 */
     bool debug_display = false;      /* 调试信息打印开关 (JSON: debug_display: 1) */
     bool enable_pause_key = false;   /* 暂停键开关: true=按空格可暂停 (需同时开启 enable_display) */
@@ -156,7 +157,7 @@ struct AppConfig
     bool enable_rtsp = false;          /* 是否启用内置 RTSP 服务 */
     int rtsp_port = 8554;              /* RTSP 端口, 地址 rtsp://<板IP>:<port><rtsp_path> */
     std::string rtsp_path = "/live";   /* RTSP 挂载点 (须以 '/' 开头) */
-    int rtsp_fps = 25;                 /* 推流帧率 */
+    int rtsp_fps = 15;                 /* 推流帧率；默认与预览合成帧率一致，避免重复编码相同画面 */
     int rtsp_bitrate = 4096;           /* 软件编码码率(kbps); 硬件编码用默认码率 */
     std::string rtsp_codec = "h264";   /* "h264" 或 "h265" */
     std::string rtsp_encoder = "auto"; /* "auto"=有硬件就硬编否则软编; "hw"=强制硬编 */

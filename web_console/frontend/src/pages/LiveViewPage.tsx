@@ -5,7 +5,6 @@ import {
   fetchChannelControls,
   fetchConfig,
   fetchLogTail,
-  fetchStreamHealth,
   loadConfigFile,
   sendChannelAction,
   streamUrl,
@@ -19,7 +18,91 @@ import './LiveViewPage.css'
 type RtspState = 'idle' | 'checking' | 'enabled' | 'disabled' | 'error'
 
 const STREAM_MAX_RETRY = 25
-const STREAM_STALL_MS = 4000
+const STREAM_STALL_MS = 15000
+const STREAM_INIT_LIMIT = 4 * 1024 * 1024
+
+class FatalStreamError extends Error {}
+
+function concatBytes(parts: Uint8Array[], total: number): Uint8Array {
+  const merged = new Uint8Array(total)
+  let offset = 0
+  for (const part of parts) {
+    merged.set(part, offset)
+    offset += part.byteLength
+  }
+  return merged
+}
+
+/** SourceBuffer 不接受 SharedArrayBuffer；普通 fetch 数据保持零复制，仅截取有效视图范围。 */
+function sourceBufferBytes(bytes: Uint8Array<ArrayBufferLike>): ArrayBuffer {
+  if (bytes.buffer instanceof ArrayBuffer) {
+    if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) return bytes.buffer
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+  }
+  const owned = new Uint8Array(bytes.byteLength)
+  owned.set(bytes)
+  return owned.buffer
+}
+
+/** 从 MP4 初始化段的 avcC box 读取真实 H264 profile/compatibility/level。 */
+function findAvcCodec(data: Uint8Array): string | null {
+  for (let i = 4; i + 8 <= data.byteLength; i += 1) {
+    if (data[i] !== 0x61 || data[i + 1] !== 0x76 || data[i + 2] !== 0x63 || data[i + 3] !== 0x43) continue
+    const hex = (value: number) => value.toString(16).padStart(2, '0').toUpperCase()
+    return `avc1.${hex(data[i + 5])}${hex(data[i + 6])}${hex(data[i + 7])}`
+  }
+  return null
+}
+
+function waitForSourceOpen(mediaSource: MediaSource): Promise<void> {
+  if (mediaSource.readyState === 'open') return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const onOpen = () => { cleanup(); resolve() }
+    const onClose = () => { cleanup(); reject(new Error('MediaSource 在初始化前关闭')) }
+    const cleanup = () => {
+      mediaSource.removeEventListener('sourceopen', onOpen)
+      mediaSource.removeEventListener('sourceclose', onClose)
+    }
+    mediaSource.addEventListener('sourceopen', onOpen)
+    mediaSource.addEventListener('sourceclose', onClose)
+  })
+}
+
+function sourceBufferOperation(sourceBuffer: SourceBuffer, operation: () => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onDone = () => { cleanup(); resolve() }
+    const onError = () => { cleanup(); reject(new Error('浏览器视频缓冲区写入失败')) }
+    const cleanup = () => {
+      sourceBuffer.removeEventListener('updateend', onDone)
+      sourceBuffer.removeEventListener('error', onError)
+    }
+    sourceBuffer.addEventListener('updateend', onDone)
+    sourceBuffer.addEventListener('error', onError)
+    try {
+      operation()
+    } catch (error) {
+      cleanup()
+      reject(error)
+    }
+  })
+}
+
+async function readStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('视频数据接收超时')), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
 
 function errMsg(error: unknown): string {
   if (axios.isAxiosError(error)) {
@@ -52,7 +135,7 @@ export default function LiveViewPage() {
   const streamRetryRef = useRef(0)
   const streamRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const streamRetryPendingRef = useRef(false)
-  const streamLoadingRef = useRef(true)
+  const videoRef = useRef<HTMLVideoElement>(null)
   const videoFrameRef = useRef<HTMLDivElement>(null)
   const logWsRef = useRef<WebSocket | null>(null)
   const logBoxRef = useRef<HTMLDivElement>(null)
@@ -323,11 +406,8 @@ export default function LiveViewPage() {
     streamRetryRef.current = 0
     setStreamErr(false)
     setStreamLoading(true)
-    if (appName && rtspEnabled) setStreamNonce(Date.now())
     return clearStreamRetry
   }, [appName, rtspEnabled])
-
-  useEffect(() => { streamLoadingRef.current = streamLoading }, [streamLoading])
 
   useEffect(() => {
     const syncFullscreenState = () => {
@@ -337,35 +417,163 @@ export default function LiveViewPage() {
     return () => document.removeEventListener('fullscreenchange', syncFullscreenState)
   }, [])
 
-  // MJPEG 连接没有触发 onLoad/onError 时，以首帧看门狗主动重连。
+  // H264 fMP4 通过 MSE 直接交给浏览器硬解。此处只维护增量缓冲和实时点，
+  // 不在前端解析视频帧，也不保留 MJPEG/图片播放回退。
   useEffect(() => {
     if (!appName || !rtspEnabled || streamErr) return
-    const timer = setTimeout(() => {
-      if (streamLoadingRef.current) scheduleStreamRetry(0)
-    }, STREAM_STALL_MS)
-    return () => clearTimeout(timer)
-  }, [appName, rtspEnabled, streamNonce, streamErr]) // eslint-disable-line react-hooks/exhaustive-deps
+    const video = videoRef.current
+    if (!video) return
+    if (!('MediaSource' in window)) {
+      setStreamLoading(false)
+      setStreamErr(true)
+      showToast('当前浏览器不支持 Media Source Extensions，无法进行 H264 零转码播放', 'err')
+      return
+    }
 
-  // 首帧后继续复用后端帧心跳，避免 MJPEG 长连接中途卡死却不触发 img.onError。
-  useEffect(() => {
-    if (!appName || !rtspEnabled || streamErr) return
     let disposed = false
-    const checkHealth = async () => {
-      try {
-        const health = await fetchStreamHealth(appName)
-        if (disposed || streamLoadingRef.current) return
-        const stalled = !health.active || health.last_data_age_ms == null || health.last_data_age_ms > 10000
-        if (stalled) scheduleStreamRetry(0)
-      } catch {
-        // 单次健康检查失败不打断当前画面，下一轮继续确认。
+    const abortController = new AbortController()
+    const mediaSource = new MediaSource()
+    const objectUrl = URL.createObjectURL(mediaSource)
+    let sourceBuffer: SourceBuffer | null = null
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+
+    video.src = objectUrl
+    video.muted = true
+    let playbackStarted = false
+
+    const append = async (bytes: Uint8Array) => {
+      if (!sourceBuffer || mediaSource.readyState !== 'open' || disposed) return
+
+      // 只保留实时点附近的数据，避免长时间打开页面后触发 MSE QuotaExceededError。
+      if (sourceBuffer.buffered.length > 0) {
+        const bufferedStart = sourceBuffer.buffered.start(0)
+        const keepFrom = video.currentTime - 5
+        if (video.currentTime - bufferedStart > 8 && keepFrom > bufferedStart) {
+          await sourceBufferOperation(sourceBuffer, () => sourceBuffer!.remove(bufferedStart, keepFrom))
+        }
+      }
+      await sourceBufferOperation(sourceBuffer, () => sourceBuffer!.appendBuffer(sourceBufferBytes(bytes)))
+
+      if (sourceBuffer.buffered.length > 0) {
+        const liveEdge = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1)
+        if (!Number.isFinite(video.currentTime) || liveEdge - video.currentTime > 1.2) {
+          video.currentTime = Math.max(0, liveEdge - 0.15)
+        }
+      }
+      if (video.paused) void video.play().catch(() => {})
+    }
+
+    const start = async () => {
+      await waitForSourceOpen(mediaSource)
+      const token = useAuthStore.getState().token ?? ''
+      const response = await fetch(`${streamUrl(appName)}?t=${streamNonce}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        cache: 'no-store',
+        signal: abortController.signal,
+      })
+      if (!response.ok) {
+        let detail = `视频服务返回 HTTP ${response.status}`
+        try {
+          const body = await response.json() as { detail?: string }
+          if (body.detail) detail = body.detail
+        } catch { /* 非 JSON 错误响应 */ }
+        if (response.status === 409) throw new FatalStreamError(detail)
+        throw new Error(detail)
+      }
+      if (!response.body) throw new Error('浏览器没有收到视频响应体')
+      reader = response.body.getReader()
+
+      // SourceBuffer 必须使用视频真实的 AVC codec string；从初始化段 avcC 中读取，
+      // 避免把摄像头的 Main/High Profile 错报成固定 Baseline。
+      const initialParts: Uint8Array[] = []
+      let initialSize = 0
+      let codec: string | null = null
+      let initialBytes: Uint8Array | null = null
+      while (!codec) {
+        const result = await readStreamChunk(reader, STREAM_STALL_MS)
+        if (result.done || !result.value) throw new Error('视频流在初始化完成前中断')
+        initialParts.push(result.value)
+        initialSize += result.value.byteLength
+        if (initialSize > STREAM_INIT_LIMIT) throw new Error('视频初始化段异常：未找到 H264 avcC')
+        initialBytes = concatBytes(initialParts, initialSize)
+        codec = findAvcCodec(initialBytes)
+      }
+
+      const mime = `video/mp4; codecs="${codec}"`
+      if (!MediaSource.isTypeSupported(mime)) {
+        throw new FatalStreamError(`当前浏览器不支持该 H264 格式：${codec}`)
+      }
+      sourceBuffer = mediaSource.addSourceBuffer(mime)
+      sourceBuffer.mode = 'segments'
+      await append(initialBytes!)
+
+      while (!disposed) {
+        const result = await readStreamChunk(reader, STREAM_STALL_MS)
+        if (result.done) throw new Error('视频流已中断')
+        if (result.value?.byteLength) await append(result.value)
       }
     }
-    const timer = setInterval(checkHealth, 2500)
+
+    start().catch(error => {
+      if (disposed || abortController.signal.aborted) return
+      setStreamLoading(false)
+      if (error instanceof FatalStreamError) {
+        setStreamErr(true)
+        showToast(error.message, 'err')
+      } else {
+        scheduleStreamRetry(500)
+      }
+    })
+
+    const onVideoError = () => {
+      if (!disposed) {
+        scheduleStreamRetry(500)
+        abortController.abort()
+      }
+    }
+    const onVideoPlaying = () => { playbackStarted = true }
+    video.addEventListener('error', onVideoError)
+    video.addEventListener('playing', onVideoPlaying)
+    const startupTimer = setTimeout(() => {
+      if (!disposed && !playbackStarted) {
+        scheduleStreamRetry(500)
+        abortController.abort()
+      }
+    }, STREAM_STALL_MS)
+    let lastPlaybackTime = 0
+    let lastPlaybackAdvanceAt = Date.now()
+    const playbackWatchdog = setInterval(() => {
+      if (disposed || document.hidden || !playbackStarted) {
+        lastPlaybackAdvanceAt = Date.now()
+        lastPlaybackTime = video.currentTime
+        return
+      }
+      if (video.currentTime > lastPlaybackTime + 0.05) {
+        lastPlaybackTime = video.currentTime
+        lastPlaybackAdvanceAt = Date.now()
+      } else if (Date.now() - lastPlaybackAdvanceAt > STREAM_STALL_MS) {
+        scheduleStreamRetry(500)
+        abortController.abort()
+      }
+    }, 2500)
+
     return () => {
       disposed = true
-      clearInterval(timer)
+      clearTimeout(startupTimer)
+      clearInterval(playbackWatchdog)
+      abortController.abort()
+      reader?.cancel().catch(() => {})
+      video.removeEventListener('error', onVideoError)
+      video.removeEventListener('playing', onVideoPlaying)
+      try {
+        if (mediaSource.readyState === 'open') mediaSource.endOfStream()
+      } catch { /* 流已关闭 */ }
+      video.pause()
+      video.removeAttribute('src')
+      video.load()
+      URL.revokeObjectURL(objectUrl)
     }
-  }, [appName, rtspEnabled, streamErr]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [appName, rtspEnabled, streamNonce, streamErr]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => () => {
     clearStreamRetry()
@@ -437,14 +645,15 @@ export default function LiveViewPage() {
               {rtspEnabled ? (
                 !streamErr ? (
                   <>
-                    <img
+                    <video
+                      ref={videoRef}
                       key={`${appName}-${streamNonce}`}
-                      className="live-view-image"
+                      className="live-view-video"
                       style={streamLoading ? { visibility: 'hidden' } : undefined}
-                      src={`${streamUrl(appName)}&t=${streamNonce}`}
-                      alt={`${appName} 实时画面`}
-                      onLoad={handleStreamLoad}
-                      onError={() => scheduleStreamRetry(1500)}
+                      muted
+                      autoPlay
+                      playsInline
+                      onPlaying={handleStreamLoad}
                     />
                     {streamLoading && (
                       <div className="live-view-loading">

@@ -153,6 +153,33 @@ static void file_pad_added(GstElement *src, GstPad *new_pad, GstChannel_t *data)
     gst_caps_unref(caps);
 }
 
+/* decodebin 的实际选择不能只靠注释推断。启动时提高板载 MPP 解码器优先级，
+ * 并把最终创建的视频解码器写入日志，便于发现插件缺失或意外软解。 */
+static void prefer_mpp_video_decoder()
+{
+    GstPluginFeature *feature =
+        gst_registry_find_feature(gst_registry_get(), "mppvideodec", GST_TYPE_ELEMENT_FACTORY);
+    if (!feature)
+        return;
+    gst_plugin_feature_set_rank(feature, GST_RANK_PRIMARY + 100);
+    gst_object_unref(feature);
+}
+
+static void file_decodebin_element_added(GstBin *bin, GstElement *element, gpointer user_data)
+{
+    (void)bin;
+    GstChannel_t *data = static_cast<GstChannel_t *>(user_data);
+    GstElementFactory *factory = gst_element_get_factory(element);
+    if (!factory)
+        return;
+    const gchar *klass = gst_element_factory_get_metadata(factory, GST_ELEMENT_METADATA_KLASS);
+    if (!klass || !g_strrstr(klass, "Decoder") || !g_strrstr(klass, "Video"))
+        return;
+    const int channel_id = data && !data->chnIds.empty() ? data->chnIds.front() : -1;
+    g_print("[DecChannel ch%d] file video decoder selected: %s (%s)\n", channel_id,
+            gst_plugin_feature_get_name(GST_PLUGIN_FEATURE(factory)), klass);
+}
+
 /* appsink new-sample 回调：送帧到分析管线 */
 static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
 {
@@ -780,6 +807,7 @@ int DecChannel::createVideoDecChannel(bool start_thread)
 
 int DecChannel::createFileDecChannel(bool start_thread)
 {
+    prefer_mpp_video_decoder();
     mGstChn.pipeline = gst_pipeline_new("file-pipeline");
     mGstChn.source = gst_element_factory_make("filesrc", "source");
     mGstChn.decoder = gst_element_factory_make("decodebin", "decoder");
@@ -806,6 +834,7 @@ int DecChannel::createFileDecChannel(bool start_thread)
      * 其 src pad 解码后输出 video/x-raw (NV12)，通过 pad-added 回调连接到 appsink。
      */
     g_signal_connect(mGstChn.decoder, "pad-added", G_CALLBACK(file_pad_added), &mGstChn);
+    g_signal_connect(mGstChn.decoder, "element-added", G_CALLBACK(file_decodebin_element_added), &mGstChn);
 
     gst_bin_add_many(GST_BIN(mGstChn.pipeline), mGstChn.source, mGstChn.decoder, mGstChn.vSink, NULL);
 

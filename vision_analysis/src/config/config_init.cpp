@@ -15,6 +15,7 @@ void init_config_fields(AppConfig &cfg)
     REG_G("disp_height", INT, disp_height);
     REG_G("tile_cols", INT, tile_cols);
     REG_G("tile_rows", INT, tile_rows);
+    REG_G("preview_fps", INT, preview_fps);
     REG_G("performance_display", BOOL, performance_display);
     REG_G("debug_display", BOOL, debug_display);
     REG_G("enable_pause_key", BOOL, enable_pause_key);

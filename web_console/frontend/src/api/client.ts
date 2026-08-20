@@ -334,22 +334,9 @@ export const fetchOtaConfig = (name: string) =>
 export const saveOtaConfig = (name: string, cfg: OtaConfig) =>
   api.post(`/apps/${name}/ota-config`, cfg).then(r => r.data)
 
-// ── Live MJPEG stream URL (用于 <img src>) ─────────────────────────────────
-// <img> 无法携带 Authorization 头，token 走查询参数 (后端 auth_middleware 已放行)。
-// 默认 15 FPS；需要对比时可改成 20。传入 0 表示不主动限帧。
-export const streamUrl = (name: string, fps = 25): string => {
-  const token = useAuthStore.getState().token ?? ''
-  return `/api/apps/${encodeURIComponent(name)}/stream?fps=${Math.max(0, Math.floor(fps))}&token=${encodeURIComponent(token)}`
-}
-
-export interface StreamHealth {
-  active: boolean
-  last_data_age_ms: number | null
-  restart_count: number
-}
-
-export const fetchStreamHealth = (name: string) =>
-  api.get<StreamHealth>(`/apps/${name}/stream-health`).then(r => r.data)
+// ── Live H264 fMP4 stream URL (由 MSE fetch，Authorization 走请求头) ──────────
+export const streamUrl = (name: string): string =>
+  `/api/apps/${encodeURIComponent(name)}/stream`
 
 // ── 设备系统设置 ────────────────────────────────────────────────────────────
 export interface DailyRebootSettings {

@@ -366,6 +366,7 @@ export function graphToConfig(
     disp_height:        g.disp_height        ?? 640,
     tile_rows:          g.tile_rows          ?? 1,
     tile_cols:          g.tile_cols          ?? 1,
+    preview_fps:        g.preview_fps        ?? 15,
     max_fps:            g.max_fps            ?? 25,
     queue_size:         g.queue_size         ?? 1,
     channel_threads:    g.channel_threads    ?? 3,
@@ -376,9 +377,11 @@ export function graphToConfig(
     performance_display: g.performance_display ?? 0,
     enable_pause_key:   g.enable_pause_key   ?? 0,
     enable_rtsp:        g.enable_rtsp        ?? 1,
+    rtsp_fps:           g.rtsp_fps           ?? g.preview_fps ?? 15,
+    rtsp_codec:         'h264',
   }
-  // 透传 RTSP 高级字段(端口/路径/编码等)，让手改 config.json 的值在网页保存后不丢失
-  for (const k of ['rtsp_port', 'rtsp_path', 'rtsp_fps', 'rtsp_bitrate', 'rtsp_codec', 'rtsp_encoder'] as const) {
+  // 透传 RTSP 端口/路径/码率/编码器；Web 预览统一使用可零转码播放的 H264。
+  for (const k of ['rtsp_port', 'rtsp_path', 'rtsp_fps', 'rtsp_bitrate', 'rtsp_encoder'] as const) {
     if (g[k] !== undefined && g[k] !== null) globalCfg[k] = g[k]
   }
   if (globalLogics.length > 0) globalCfg.global_logics = globalLogics

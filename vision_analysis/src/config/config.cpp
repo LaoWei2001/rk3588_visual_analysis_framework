@@ -156,6 +156,8 @@ bool load_config(const std::string &path, AppConfig &cfg)
     cfg.disp_height = 1080;
     cfg.tile_cols = 2;
     cfg.tile_rows = 2;
+    cfg.preview_fps = 15;
+    cfg.rtsp_fps = 15;
     cfg.channel_threads = 1;
     cfg.max_fps = 30;
     cfg.local_default_fps = 25;

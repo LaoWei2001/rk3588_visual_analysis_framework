@@ -20,7 +20,7 @@
  * 接入 (main.cpp):
  *   1. 分配 g_disp 缓冲的条件需含 enable_rtsp:
  *        if (app_ctrl_get_enable_disp() || app_ctrl_get_enable_rtsp()) { ... dispBufferMap ... }
- *   2. videoOutHandle 推显示队列的条件需含 enable_rtsp (frame_inlet.cpp)。
+ *   2. videoOutHandle 在 enable_display 或存在 RTSP 客户端时推显示队列 (frame_inlet.cpp)。
  *   3. 线程创建区调用 rtsp_streamer_init();
  *   4. 退出序列调用 rtsp_streamer_deinit();
  */
@@ -39,6 +39,9 @@ extern "C"
      * @return 0 = 成功或未启用; -1 = 启动失败 (调用方可忽略, 继续无 RTSP 运行)。
      */
     int rtsp_streamer_init(void);
+
+    /** @brief 当前是否有客户端实际消费拼接画面。 */
+    int rtsp_streamer_has_active_client(void);
 
     /** @brief 停止 RTSP 服务与推流线程 (幂等; 未启用时为空操作)。 */
     void rtsp_streamer_deinit(void);

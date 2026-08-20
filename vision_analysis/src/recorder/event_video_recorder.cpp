@@ -306,7 +306,7 @@ static bool encoder_available(const char *name)
     return true;
 }
 
-static bool write_h264_mp4(VideoEvent &event, const char *encoder)
+static bool write_h264_mp4(VideoEvent &event, const char *encoder, const char *jpeg_decoder)
 {
     if (event.frames.empty() || event.request.output_path.empty())
         return false;
@@ -349,12 +349,15 @@ static bool write_h264_mp4(VideoEvent &event, const char *encoder)
     snprintf(launch, sizeof(launch),
              "appsrc name=video_source is-live=false block=true format=time "
              "! queue max-size-buffers=8 "
-             "! videoconvert ! video/x-raw,format=%s "
+             "! jpegparse ! %s "
+             "! videorate "
+             "! videoconvert ! videoscale "
+             "! video/x-raw,format=%s,width=%d,height=%d,framerate=%d/1 "
              "! %s ! h264parse "
              "! video/x-h264,stream-format=avc,alignment=au "
              "! mp4mux faststart=true "
              "! filesink location=\"%s\"",
-             raw_format, encoder, event.request.output_path.c_str());
+             jpeg_decoder, raw_format, size.width, size.height, fps, encoder, event.request.output_path.c_str());
 
     GError *parse_error = nullptr;
     GstElement *pipeline = gst_parse_launch(launch, &parse_error);
@@ -376,54 +379,39 @@ static bool write_h264_mp4(VideoEvent &event, const char *encoder)
         return false;
     }
     GstCaps *caps =
-        gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, "BGR", "width", G_TYPE_INT, size.width, "height",
-                            G_TYPE_INT, size.height, "framerate", GST_TYPE_FRACTION, fps, 1, nullptr);
+        gst_caps_new_simple("image/jpeg", "width", G_TYPE_INT, size.width, "height", G_TYPE_INT, size.height,
+                            "framerate", GST_TYPE_FRACTION, fps, 1, nullptr);
     g_object_set(G_OBJECT(source), "caps", caps, nullptr);
     gst_caps_unref(caps);
 
     bool ok = gst_element_set_state(pipeline, GST_STATE_PLAYING) != GST_STATE_CHANGE_FAILURE;
     const GstClockTime frame_duration = gst_util_uint64_scale_int(GST_SECOND, 1, fps);
-    uint64_t frame_index = 0;
-    size_t source_index = 0;
-    size_t decoded_index = static_cast<size_t>(-1);
-    cv::Mat decoded_frame;
-    for (uint64_t output_index = 0; output_index < output_frame_count; ++output_index)
+    size_t pushed_frames = 0;
+    for (size_t source_index = 0; source_index < event.frames.size(); ++source_index)
     {
         if (!ok)
             break;
-        const uint64_t target_ms =
-            first_ms +
-            static_cast<uint64_t>(std::llround(static_cast<double>(output_index) * 1000.0 / static_cast<double>(fps)));
-        while (source_index + 1 < event.frames.size() && event.frames[source_index + 1].timestamp_ms <= target_ms)
-            ++source_index;
-
-        if (decoded_index != source_index)
-        {
-            if (!event.frames[source_index].jpeg)
-                continue;
-            decoded_frame = cv::imdecode(*event.frames[source_index].jpeg, cv::IMREAD_COLOR);
-            if (decoded_frame.empty())
-                continue;
-            if (decoded_frame.size() != size)
-                cv::resize(decoded_frame, decoded_frame, size);
-            if (!decoded_frame.isContinuous())
-                decoded_frame = decoded_frame.clone();
-            decoded_index = source_index;
-        }
-
-        const size_t bytes = decoded_frame.total() * decoded_frame.elemSize();
+        if (!event.frames[source_index].jpeg || event.frames[source_index].jpeg->empty())
+            continue;
+        const size_t bytes = event.frames[source_index].jpeg->size();
         GstBuffer *buffer = gst_buffer_new_allocate(nullptr, bytes, nullptr);
-        if (!buffer || gst_buffer_fill(buffer, 0, decoded_frame.data, bytes) != bytes)
+        if (!buffer || gst_buffer_fill(buffer, 0, event.frames[source_index].jpeg->data(), bytes) != bytes)
         {
             if (buffer)
                 gst_buffer_unref(buffer);
             ok = false;
             break;
         }
-        GST_BUFFER_PTS(buffer) = frame_index * frame_duration;
+        GST_BUFFER_PTS(buffer) = (event.frames[source_index].timestamp_ms - first_ms) * GST_MSECOND;
         GST_BUFFER_DTS(buffer) = GST_CLOCK_TIME_NONE;
-        GST_BUFFER_DURATION(buffer) = frame_duration;
-        ++frame_index;
+        if (source_index + 1 < event.frames.size())
+            GST_BUFFER_DURATION(buffer) = std::max<uint64_t>(
+                                              1, event.frames[source_index + 1].timestamp_ms -
+                                                     event.frames[source_index].timestamp_ms) *
+                                          GST_MSECOND;
+        else
+            GST_BUFFER_DURATION(buffer) = frame_duration;
+        ++pushed_frames;
 
         GstFlowReturn flow = GST_FLOW_OK;
         g_signal_emit_by_name(source, "push-buffer", buffer, &flow);
@@ -467,8 +455,8 @@ static bool write_h264_mp4(VideoEvent &event, const char *encoder)
     gst_element_set_state(pipeline, GST_STATE_NULL);
     gst_object_unref(source);
     gst_object_unref(pipeline);
-    event.encoded_frames = static_cast<size_t>(frame_index);
-    return ok && frame_index > 0;
+    event.encoded_frames = ok ? static_cast<size_t>(output_frame_count) : 0;
+    return ok && pushed_frames > 0;
 }
 
 static bool write_video(VideoEvent &event)
@@ -487,17 +475,27 @@ static bool write_video(VideoEvent &event)
     }
 
     static const char *encoders[] = {"mpph264enc", "x264enc", "openh264enc"};
+    static const char *jpeg_decoders[] = {"mppjpegdec", "jpegdec"};
     const char *used_encoder = nullptr;
+    const char *used_decoder = nullptr;
     for (const char *encoder : encoders)
     {
         if (!encoder_available(encoder))
             continue;
-        ::remove(event.request.output_path.c_str());
-        if (write_h264_mp4(event, encoder))
+        for (const char *decoder : jpeg_decoders)
         {
-            used_encoder = encoder;
-            break;
+            if (!encoder_available(decoder))
+                continue;
+            ::remove(event.request.output_path.c_str());
+            if (write_h264_mp4(event, encoder, decoder))
+            {
+                used_encoder = encoder;
+                used_decoder = decoder;
+                break;
+            }
         }
+        if (used_encoder)
+            break;
     }
     if (!used_encoder)
     {
@@ -514,6 +512,7 @@ static bool write_video(VideoEvent &event)
            event.request.event_id.c_str(), event.frames.size(), event.encoded_frames, event.encoded_duration_sec,
            event.available_pre_sec, event.request.pre_sec, event.available_post_sec, event.request.post_sec,
            event.frames.front().width, event.frames.front().height, used_encoder);
+    printf("[event_video] codec pipeline: jpeg_decoder=%s h264_encoder=%s\n", used_decoder, used_encoder);
     return true;
 }
 

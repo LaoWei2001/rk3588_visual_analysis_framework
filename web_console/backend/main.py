@@ -108,8 +108,7 @@ async def auth_middleware(request: Request, call_next):
     ):
         return await call_next(request)
 
-    # 优先取 Authorization 头; 对于无法带头的 <img>/<video> 流(如 /stream),
-    # 退而取 ?token= 查询参数。
+    # 优先取 Authorization 头；无法自定义请求头的原生 <img>/<video> 资源使用 ?token=。
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]

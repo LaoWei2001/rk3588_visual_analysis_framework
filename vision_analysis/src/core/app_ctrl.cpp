@@ -835,6 +835,12 @@ int app_ctrl_get_enable_rtsp(void)
     return snapshot ? (snapshot->config.enable_rtsp ? 1 : 0) : 0;
 }
 
+int app_ctrl_get_preview_fps(void)
+{
+    auto snapshot = app_ctrl_get_runtime_snapshot();
+    return snapshot ? snapshot->config.preview_fps : 15;
+}
+
 int app_ctrl_get_disp_width(void)
 {
     auto snapshot = app_ctrl_get_runtime_snapshot();
