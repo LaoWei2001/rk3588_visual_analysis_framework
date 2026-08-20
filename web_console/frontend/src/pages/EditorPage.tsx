@@ -38,6 +38,7 @@ import {
 import GlobalSettingsPanel, { GlobalSettingsData, DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
 import NodeConfigPanel from '../components/NodeConfigPanel'
 import ConfigPreviewPanel from '../components/ConfigPreviewPanel'
+import AppIntegrationModal from '../components/AppIntegrationModal'
 import './EditorPage.css'
 
 // ── Node types (defined outside component → stable reference) ──
@@ -86,8 +87,8 @@ const NODE_DEFAULTS: Record<string, Record<string, unknown>> = {
     report_policy: {
       enabled: true,
       deliveries: [{
-        id: 'delivery_default', enabled: true, profile_id: '',
-        contract_id: '', media: [],
+        id: 'delivery_default', enabled: true, connection_id: '',
+        contract_id: '', contract_revision: '', media: [],
       }],
       parameters: [], image_overlay: 'custom', video_overlay: 'custom',
       video_pre_sec: 3, video_post_sec: 3, video_fps: 15, merge_window_sec: 5,
@@ -161,7 +162,7 @@ export default function EditorPage() {
   const navigate       = useNavigate()
   const setAppName     = useEditorStore(s => s.setAppName)
   const loadAssets     = useEditorStore(s => s.loadAssets)
-  const loadUploadProfiles = useEditorStore(s => s.loadUploadProfiles)
+  const loadDeliveryConnections = useEditorStore(s => s.loadDeliveryConnections)
   const setGlobalMaxFps = useEditorStore(s => s.setGlobalMaxFps)
   const dirty          = useEditorStore(s => s.dirty)       // 有未保存改动（也供侧边栏导航拦截）
   const setDirty       = useEditorStore(s => s.setDirty)
@@ -204,6 +205,7 @@ export default function EditorPage() {
   const [importFiles,    setImportFiles]   = useState<string[]>([])
   const [showImport,     setShowImport]    = useState(false)
   const [leavePrompt,    setLeavePrompt]    = useState(false)   // 未保存退出时的「是否保存配置」弹窗
+  const [showIntegrations, setShowIntegrations] = useState(false)
   // 当前正在编辑/将保存到的配置文件（相对 app 目录）。导入/另存为后会切到对应文件，
   // 之后「保存」写到这里 —— 这样可以在副本上改而不动 config.json。
   const [currentFile,    setCurrentFile]   = useState('assets/config.json')
@@ -295,9 +297,9 @@ export default function EditorPage() {
     if (appName) {
       setAppName(appName)
       loadAssets(appName)
-      loadUploadProfiles(appName)
+      loadDeliveryConnections(appName)
     }
-  }, [appName, setAppName, loadAssets, loadUploadProfiles])
+  }, [appName, setAppName, loadAssets, loadDeliveryConnections])
 
   // 全局最大FPS → editorStore：ROINode 抓 USB 帧时按它推算采集分辨率(与 C++ 一致)，避免 ROI 错位
   useEffect(() => {
@@ -397,12 +399,12 @@ export default function EditorPage() {
     setToast(null)
   }
 
-  const showToast = (msg: string, ok = true) => {
+  const showToast = useCallback((msg: string, ok = true) => {
     if (toastTimer.current) { clearTimeout(toastTimer.current); toastTimer.current = null }
     setToast({ msg, ok })
     // 成功提示 3s 自动消失；失败提示常驻，直到用户点 ✕ 关闭，避免错过「保存失败」等原因
     if (ok) toastTimer.current = setTimeout(() => { setToast(null); toastTimer.current = null }, 3000)
-  }
+  }, [])
 
   // 把当前画布标记为「已保存」（保存 / 另存成功后调用；此时画布未变，refs 即当前值）
   const markClean = () => {
@@ -579,14 +581,16 @@ export default function EditorPage() {
           deliveries: [{
             id: `delivery_${id}`,
             enabled: true,
-            profile_id: '',
-            contract_id: '',
+            connection_id: '',
+            contract_id: '', contract_revision: '',
             media: [],
           }],
           parameters: [],
         }
         data.report_parameters = {}
       }
+      if (nodeType === 'globalLogic')
+        data.instance_id = `global_${id}`
       return [...ns, { id, type: nodeType, position, data } as Node]
     })
   }, [rfInstance, setNodes])
@@ -643,6 +647,7 @@ export default function EditorPage() {
       if (n.type === 'stream') data.channel_id = nextFreeCh()
       // 粘贴出的 YOLO 节点视为新节点，同样继续 0/1/2 轮询分配。
       if (n.type === 'model') data.npu_core = (nextModelCore++) % 3
+      if (n.type === 'globalLogic') data.instance_id = `global_${newId}`
       return { ...n, id: newId, selected: true,
                position: { x: n.position.x + OFFSET, y: n.position.y + OFFSET }, data } as Node
     })
@@ -952,10 +957,32 @@ export default function EditorPage() {
         showToast('存在尚未选择模块的全局逻辑节点', false)
         return null
       }
-      if (data.enable !== false && !edges.some(edge =>
-        edge.target === globalNode.id && edge.targetHandle === 'global-in')) {
-        showToast(`全局逻辑 ${String(data.logic)} 尚未连接任何单通道逻辑`, false)
+      if (!String(data.instance_id ?? '').trim()) {
+        showToast(`全局逻辑 ${String(data.logic)} 缺少稳定实例 ID`, false)
         return null
+      }
+    }
+
+    for (const reportNode of nodes.filter(node => node.type === 'report')) {
+      const data = reportNode.data as Record<string, unknown>
+      const policy = data.report_policy && typeof data.report_policy === 'object'
+        ? data.report_policy as Record<string, unknown> : {}
+      const delivery = Array.isArray(policy.deliveries)
+        ? policy.deliveries[0] as Record<string, unknown> | undefined : undefined
+      if (policy.enabled === false || delivery?.enabled === false) continue
+      if (!delivery || !String(delivery.connection_id ?? '').trim()
+          || !String(delivery.contract_id ?? '').trim()
+          || !String(delivery.contract_revision ?? '').trim()) {
+        showToast('存在已开启但未完整选择“接口契约 + 投递连接”的上报节点', false)
+        return null
+      }
+      const media = Array.isArray(delivery.media) ? delivery.media : []
+      if (data.logic_kind === 'global' && media.includes('video')) {
+        const videoChannelId = Number(data.media_source_channel_id ?? -1)
+        if (!channelIds.includes(videoChannelId)) {
+          showToast('存在已开启事件视频但未选择有效“事件视频来源通道”的全局上报节点', false)
+          return null
+        }
       }
     }
 
@@ -1117,6 +1144,7 @@ export default function EditorPage() {
           {dirty && <span className="tb-dirty" title="有未保存的改动">● 未保存</span>}
         </span>
         <div className="tb-actions">
+          <button className="tb-btn" onClick={() => setShowIntegrations(true)}>🔌 应用集成</button>
           <button className="tb-btn" onClick={handleNewFile} disabled={saving}>➕ 新建</button>
           <button className="tb-btn import" onClick={handleImportClick}>📂 配置文件</button>
           <button className="tb-btn import" onClick={() => localConfigInputRef.current?.click()} disabled={saving}>
@@ -1205,9 +1233,13 @@ export default function EditorPage() {
           node={selectedNode}
           onUpdate={handleUpdateNodeData}
           channelIds={selectedReportChannelIds}
+          allChannelIds={channelIds}
           globalInputs={selectedGlobalInputs}
         />
       </div>
+
+      {showIntegrations && appName && <AppIntegrationModal appName={appName}
+        onClose={() => setShowIntegrations(false)} onToast={showToast} />}
 
       {/* Bottom area: merged global settings panel + generated config preview */}
       <div className="editor-bottom">

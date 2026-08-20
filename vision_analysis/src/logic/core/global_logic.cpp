@@ -2,8 +2,8 @@
  * @file global_logic.cpp
  * @brief 全局逻辑模块 — C/pthread 风格
  *
- * 每个 GlobalLogicConfig 实例对应一个独立 pthread.
- * 线程由 global_logic_start_all (初始/热重载) 创建和管理.
+ * 每个 GlobalLogicConfig 实例对应一个独立 pthread。启动阶段统一创建；热重载按稳定
+ * instance_id 只替换发生变化的实例，避免一个节点改参数导致其它全局状态被清空。
  */
 
 #include "global_logic.h"
@@ -144,10 +144,10 @@ void *global_logic_thread_func(void *arg)
     if (!t)
         return nullptr;
 
-    printf("[GlobalLogic] Thread started: logic=%s poll=%dms channels=", t->config.logic.c_str(),
-           t->config.poll_interval_ms);
+    printf("[GlobalLogic] Thread started: id=%s logic=%s poll=%dms connected=",
+           t->config.instance_id.c_str(), t->config.logic.c_str(), t->config.poll_interval_ms);
     if (t->config.channels.empty())
-        printf("%s\n", t->config.channels_explicit ? "NONE" : "ALL");
+        printf("NONE\n");
     else
     {
         for (size_t i = 0; i < t->config.channels.size(); ++i)
@@ -156,24 +156,12 @@ void *global_logic_thread_func(void *arg)
 
     APP_CTRL *ctrl = g_pCtrl;
     t->channel_ids.clear();
-    if (t->config.channels.empty() && !t->config.channels_explicit && ctrl)
+    if (ctrl)
     {
         auto runtime = app_ctrl_get_runtime_snapshot();
         if (runtime)
             for (const auto &channel : runtime->config.channels)
                 t->channel_ids.push_back(channel.id);
-    }
-    else
-    {
-        for (int channel_id : t->config.channels)
-        {
-            if (!app_ctrl_has_channel(channel_id))
-            {
-                fprintf(stderr, "[GlobalLogic] ignore unknown channel_id=%d\n", channel_id);
-                continue;
-            }
-            t->channel_ids.push_back(channel_id);
-        }
     }
 
     int ch_count = (int)t->channel_ids.size();
@@ -183,30 +171,10 @@ void *global_logic_thread_func(void *arg)
     t->updated_channels.reserve(ch_count);
 
     int poll_ms = std::max(10, t->config.poll_interval_ms);
-    if (ctrl && !t->channel_ids.empty())
-    {
-        int max_infer_fps = 1;
-        auto runtime = app_ctrl_get_runtime_snapshot();
-        for (int channel_id : t->channel_ids)
-        {
-            const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, channel_id);
-            if (!channel)
-                continue;
-            max_infer_fps = std::max(max_infer_fps, std::max(1, channel->max_fps));
-        }
-
-        int realtime_poll_ms = std::max(10, 500 / max_infer_fps);
-        if (poll_ms > realtime_poll_ms)
-        {
-            printf("[GlobalLogic] poll interval auto-adjust: cfg=%dms -> %dms (max_infer_fps=%d)\n", poll_ms,
-                   realtime_poll_ms, max_infer_fps);
-            poll_ms = realtime_poll_ms;
-        }
-    }
 
     while (t->running.load())
     {
-        pause_ctrl::wait_if_paused();
+        pause_ctrl::wait_if_paused(&t->running);
         if (!t->running.load())
             break;
 
@@ -260,6 +228,7 @@ void *global_logic_thread_func(void *arg)
         t->gctx.effective_poll_interval_ms = poll_ms;
         t->gctx.runtime_generation = runtime ? runtime->generation : 0;
         t->gctx.channel_snapshots = &t->channel_snapshots;
+        t->gctx.connected_channel_ids = &t->config.channels;
         t->gctx.updated_channels = &t->updated_channels;
 
         if (t->func)
@@ -281,65 +250,158 @@ void *global_logic_thread_func(void *arg)
         }
     }
 
-    printf("[GlobalLogic] Thread exited: logic=%s\n", t->config.logic.c_str());
+    printf("[GlobalLogic] Thread exited: id=%s logic=%s\n", t->config.instance_id.c_str(),
+           t->config.logic.c_str());
     return nullptr;
 }
 
 /*======================== 公开接口 ========================*/
+static GlobalLogicThread *start_one(const GlobalLogicConfig &cfg, const std::shared_ptr<void> &preserved_state = {})
+{
+    GlobalLogicFunc fn = global_logic_get(cfg.logic.c_str());
+    if (!fn)
+    {
+        fprintf(stderr, "[GlobalLogic][%s] logic '%s' not found\n", cfg.instance_id.c_str(), cfg.logic.c_str());
+        return nullptr;
+    }
+
+    GlobalLogicThread *t = new GlobalLogicThread();
+    t->config = cfg;
+    t->state = preserved_state;
+    t->running.store(true);
+    t->stop_requested.store(false);
+    t->func = fn;
+    t->tick_id = 0;
+    t->last_tick_steady_ms = 0;
+    std::vector<LogicParameterError> parameter_errors;
+    if (!logic_parameters_resolve(cfg.logic, cfg.logic_parameters_json, nullptr, &t->logic_parameters,
+                                  &parameter_errors))
+    {
+        fprintf(stderr, "[GlobalLogic][%s] parameters for '%s' are invalid:\n", cfg.instance_id.c_str(),
+                cfg.logic.c_str());
+        for (const auto &error : parameter_errors)
+            fprintf(stderr, "  - %s: %s\n", error.field.c_str(), error.message.c_str());
+        delete t;
+        return nullptr;
+    }
+
+    int ret = pthread_create(&t->tid, nullptr, global_logic_thread_func, t);
+    if (ret != 0)
+    {
+        fprintf(stderr, "[GlobalLogic][%s] pthread_create failed for %s: %s\n", cfg.instance_id.c_str(),
+                cfg.logic.c_str(), strerror(ret));
+        delete t;
+        return nullptr;
+    }
+    return t;
+}
+
+static void stop_one(GlobalLogicThread *t)
+{
+    if (!t)
+        return;
+    t->stop_requested.store(true);
+    t->running.store(false);
+    pause_ctrl::notify_waiters();
+    pthread_join(t->tid, nullptr);
+}
+
+static const GlobalLogicConfig *find_config(const std::vector<GlobalLogicConfig> &cfgs,
+                                            const std::string &instance_id)
+{
+    for (const auto &cfg : cfgs)
+        if (cfg.instance_id == instance_id)
+            return &cfg;
+    return nullptr;
+}
+
 int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs)
 {
     global_logic_stop_all();
 
     pthread_mutex_lock(&g_threads_mtx);
-
     int started = 0;
-    for (size_t i = 0; i < cfgs.size(); ++i)
+    for (const auto &cfg : cfgs)
     {
-        const GlobalLogicConfig &cfg = cfgs[i];
         if (!cfg.enable)
             continue;
-
-        GlobalLogicFunc fn = global_logic_get(cfg.logic.c_str());
-        if (!fn)
+        GlobalLogicThread *t = start_one(cfg);
+        if (t)
         {
-            printf("[GlobalLogic][%zu] WARNING: logic '%s' not found, skipping\n", i, cfg.logic.c_str());
-            continue;
+            g_threads.push_back(t);
+            ++started;
         }
-
-        GlobalLogicThread *t = new GlobalLogicThread();
-        t->config = cfg;
-        t->running.store(true);
-        t->stop_requested.store(false);
-        t->func = fn;
-        t->tick_id = 0;
-        t->last_tick_steady_ms = 0;
-        std::vector<LogicParameterError> parameter_errors;
-        if (!logic_parameters_resolve(cfg.logic, cfg.logic_parameters_json, nullptr, &t->logic_parameters,
-                                      &parameter_errors))
-        {
-            fprintf(stderr, "[GlobalLogic][%zu] parameters for '%s' are invalid:\n", i, cfg.logic.c_str());
-            for (const auto &error : parameter_errors)
-                fprintf(stderr, "  - %s: %s\n", error.field.c_str(), error.message.c_str());
-            delete t;
-            continue;
-        }
-
-        int ret = pthread_create(&t->tid, nullptr, global_logic_thread_func, t);
-        if (ret != 0)
-        {
-            fprintf(stderr, "[GlobalLogic] pthread_create failed for %s: %s\n", cfg.logic.c_str(), strerror(ret));
-            delete t;
-            continue;
-        }
-
-        g_threads.push_back(t);
-        started++;
     }
-
     pthread_mutex_unlock(&g_threads_mtx);
 
     printf("[GlobalLogic] Started %d/%zu instance(s)\n", started, cfgs.size());
     return started;
+}
+
+int global_logic_reload_all(const std::vector<GlobalLogicConfig> &cfgs)
+{
+    pthread_mutex_lock(&g_threads_mtx);
+
+    for (auto it = g_threads.begin(); it != g_threads.end();)
+    {
+        GlobalLogicThread *current = *it;
+        const GlobalLogicConfig *next = find_config(cfgs, current->config.instance_id);
+        if (next && next->enable && current->config == *next)
+        {
+            ++it;
+            continue;
+        }
+
+        stop_one(current);
+        std::shared_ptr<void> preserved_state;
+        bool preserve_state = false;
+        if (next && next->enable && current->config.logic == next->logic &&
+            current->config.channels == next->channels)
+        {
+            const LogicReloadImpact impact = logic_parameters_reload_impact(
+                next->logic, current->config.logic_parameters_json, next->logic_parameters_json);
+            if (impact == LogicReloadImpact::NONE || impact == LogicReloadImpact::PRESERVE_STATE)
+            {
+                preserve_state = true;
+                preserved_state = current->state;
+            }
+        }
+
+        const std::string instance_id = current->config.instance_id;
+        delete current;
+        it = g_threads.erase(it);
+
+        if (next && next->enable)
+        {
+            GlobalLogicThread *replacement = start_one(*next, preserved_state);
+            if (replacement)
+            {
+                it = g_threads.insert(it, replacement);
+                ++it;
+                printf("[GlobalLogic] Reloaded instance %s (%s)\n", instance_id.c_str(),
+                       preserve_state ? "state preserved" : "state reset");
+            }
+        }
+    }
+
+    for (const auto &cfg : cfgs)
+    {
+        if (!cfg.enable)
+            continue;
+        const bool exists = std::any_of(g_threads.begin(), g_threads.end(), [&](const GlobalLogicThread *thread) {
+            return thread && thread->config.instance_id == cfg.instance_id;
+        });
+        if (!exists)
+        {
+            GlobalLogicThread *t = start_one(cfg);
+            if (t)
+                g_threads.push_back(t);
+        }
+    }
+
+    const int running = static_cast<int>(g_threads.size());
+    pthread_mutex_unlock(&g_threads_mtx);
+    return running;
 }
 
 void global_logic_stop_all(void)
@@ -350,11 +412,7 @@ void global_logic_stop_all(void)
     {
         if (!t)
             continue;
-        if (!t->running.load())
-            continue;
-        t->stop_requested.store(true);
-        t->running.store(false);
-        pthread_join(t->tid, nullptr);
+        stop_one(t);
         delete t;
     }
     g_threads.clear();

@@ -1,0 +1,30 @@
+{
+  "received_at": "2026-08-19 15:42:04",
+  "seq": 1,
+  "endpoint": "/v1/files/upload",
+  "headers": {
+    "Host": "127.0.0.1:9201",
+    "User-Agent": "python-requests/2.32.5",
+    "Accept-Encoding": "gzip, deflate",
+    "Accept": "*/*",
+    "Connection": "keep-alive",
+    "Authorization": "Bearer test-key-123",
+    "Content-Length": "247885",
+    "Content-Type": "multipart/form-data; boundary=4c2c4cef9ea0fb495395601f6ccfc6ef"
+  },
+  "form_fields": {
+    "user": "rk3588-quick-test"
+  },
+  "files": [
+    {
+      "field_name": "file",
+      "original_filename": "test.png",
+      "saved_as": "seq0001_file_test.png",
+      "size_bytes": 247614
+    }
+  ],
+  "response": {
+    "id": "test-file-e59996e17cb7"
+  },
+  "response_status": 201
+}

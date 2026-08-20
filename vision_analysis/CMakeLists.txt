@@ -118,6 +118,7 @@ set(custom_libs
     ${OpenCV_LIBS}
     ${GTK3_LIBRARIES}
     Threads::Threads
+    gpiod
 )
 
 # 仅在找到时才链接，避免板端未安装时报错
@@ -134,6 +135,7 @@ aux_source_directory(${PROJECT_SOURCE_DIR}/src/core                     dir_srcs
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/capturer                 dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/analyzer                 dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/control                  dir_srcs)
+aux_source_directory(${PROJECT_SOURCE_DIR}/src/gpio                     dir_srcs)
 # 通道逻辑位于 src/logic/modules/<logic_name>/，全局逻辑位于
 # src/logic/global_modules/<logic_name>/，框架位于 src/logic/core/。
 # 递归收集让新增/删除逻辑模块无需再修改 CMakeLists.txt；重新运行 cmake 即可刷新列表。

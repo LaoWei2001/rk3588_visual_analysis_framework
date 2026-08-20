@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from services import process_manager as pm
 from services import runtime_state
-from services.data_dir import data_dir, migrate_app_data
+from services.data_dir import data_dir, initialize_app_data
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 SYSTEMD_DIR = Path("/etc/systemd/system")
@@ -219,8 +219,8 @@ def _write_and_start_unlocked(key: str, context: Dict[str, Any]) -> Dict[str, An
     app_dir = Path(context["app_dir"]).resolve()
     config_name = str(context.get("config") or "config.json")
 
-    # 确保持久数据目录存在并已迁移初始文件
-    migrate_app_data(app_name, app_dir)
+    # 确保当前 App 的持久数据目录存在。
+    initialize_app_data(app_name, app_dir)
     try:
         app_dir.relative_to(APPS_ROOT.resolve())
     except ValueError:

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""接口模板目录 API 测试。"""
+"""Application-scoped connection and contract API tests."""
 
 import asyncio
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -10,118 +11,70 @@ from pathlib import Path
 from unittest.mock import patch
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+REPO_ROOT = BACKEND_DIR.parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
-from routers import upload_config  # noqa: E402
-from services import data_dir as app_data_dir  # noqa: E402
+from routers import delivery_config
+from services import data_dir as app_data_dir
 
 
-class ReportContractsTest(unittest.TestCase):
-    def test_contract_catalog_is_exposed(self):
+class DeliveryConfigurationTest(unittest.TestCase):
+    def fixture(self, root: Path) -> Path:
+        app = root / "demo"
+        upload = app / "services" / "upload"
+        adapters = upload / "adapters"
+        adapters.mkdir(parents=True)
+        shutil.copy2(REPO_ROOT / "service/upload/contracts.py", upload / "contracts.py")
+        shutil.copy2(REPO_ROOT / "service/upload/adapters/catalog.json", adapters / "catalog.json")
+        (app / "report_templates").mkdir()
+        (app / "logics.json").write_text(json.dumps({
+            "channel_logics": [{
+                "name": "logic_demo",
+                "event_types": [{"id": "demo"}],
+                "report_fields": [{"key": "score", "type": "number"}],
+            }],
+            "global_logics": [],
+        }), encoding="utf-8")
+        return app
+
+    def test_connections_are_scoped_to_selected_application(self):
         with tempfile.TemporaryDirectory() as temporary:
-            app = Path(temporary) / "demo"
-            contracts = app / "services" / "upload" / "contracts"
-            contracts.mkdir(parents=True)
-            (contracts / "server.json").write_text(json.dumps({
-                "id": "server_event",
-                "label": "服务器事件",
-                "adapter": "http_json",
-                "media": ["annotated_image"],
-                "mapping": [
-                    {"source": "constant", "target": "source", "value": "JNU"},
-                ],
-            }), encoding="utf-8")
-
+            root = Path(temporary)
+            self.fixture(root)
             with (
-                patch.object(upload_config, "APPS_ROOT", Path(temporary)),
-                patch.object(app_data_dir, "APPS_ROOT", Path(temporary)),
+                patch.object(delivery_config, "APPS_ROOT", root),
+                patch.object(app_data_dir, "APPS_ROOT", root),
             ):
-                result = asyncio.run(upload_config.get_report_contracts("demo"))
+                asyncio.run(delivery_config.save_connections("demo", {
+                    "connections": {"server": {"adapter": "http", "base_url": "http://x"}},
+                }))
+                result = asyncio.run(delivery_config.get_connections("demo"))
+            self.assertEqual(result["connections"]["server"]["adapter"], "http")
 
-            self.assertEqual(result["contracts"][0]["id"], "server_event")
-            self.assertEqual(result["contracts"][0]["source_file"], "server.json")
-
-    def test_contract_can_be_created_and_updated(self):
+    def test_custom_contract_is_validated_against_logic_schema(self):
         with tempfile.TemporaryDirectory() as temporary:
-            app = Path(temporary) / "demo"
-            contracts = app / "services" / "upload" / "contracts"
-            adapters = app / "services" / "upload" / "adapters"
-            contracts.mkdir(parents=True)
-            adapters.mkdir(parents=True)
-            persistent_contracts = Path(temporary) / ".data" / "demo" / "contracts"
-            persistent_contracts.mkdir(parents=True)
-            (adapters / "catalog.json").write_text(json.dumps([{
-                "id": "http_json",
-                "supported_media": ["annotated_image", "raw_image", "video"],
-                "transforms": ["", "base64", "json_string", "file"],
-            }]), encoding="utf-8")
+            root = Path(temporary)
+            self.fixture(root)
             body = {
-                "id": "periodic_snapshot_http",
-                "label": "周期截图接口",
-                "adapter": "http_json",
-                "media": ["annotated_image"],
-                "request": {"method": "post"},
-                "mapping": [
-                    {"source": "constant", "target": "source", "value": "JNU"},
-                    {"source": "fields.display_number", "target": "number", "type": "number"},
-                    {
-                        "source": "media.annotated_image",
-                        "target": "image",
-                        "transform": "base64",
-                    },
-                ],
-                "success": {"http_status": [200]},
-            }
-
-            with (
-                patch.object(upload_config, "APPS_ROOT", Path(temporary)),
-                patch.object(app_data_dir, "APPS_ROOT", Path(temporary)),
-            ):
-                created = asyncio.run(upload_config.save_report_contract(
-                    "demo", "periodic_snapshot_http", body,
-                ))
-                listed = asyncio.run(upload_config.get_report_contracts("demo"))
-
-            self.assertTrue(created["ok"])
-            self.assertEqual(created["contract"]["request"]["method"], "POST")
-            self.assertEqual(listed["contracts"][0]["mapping"][1]["source"],
-                             "fields.display_number")
-            saved = json.loads((persistent_contracts / "periodic_snapshot_http.json").read_text())
-            self.assertNotIn("source_file", saved)
-
-    def test_contract_rejects_media_source_not_enabled(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            app = Path(temporary) / "demo"
-            contracts = app / "services" / "upload" / "contracts"
-            adapters = app / "services" / "upload" / "adapters"
-            contracts.mkdir(parents=True)
-            adapters.mkdir(parents=True)
-            (adapters / "catalog.json").write_text(json.dumps([{
-                "id": "http_json",
-                "supported_media": ["annotated_image"],
-                "transforms": ["", "base64"],
-            }]), encoding="utf-8")
-            body = {
-                "id": "bad",
-                "label": "错误模板",
-                "adapter": "http_json",
-                "media": [],
+                "id": "logic_demo.http", "version": 1, "label": "demo",
+                "owner_logic": "logic_demo", "event_types": ["demo"],
+                "adapter": "http", "media": [],
+                "request": {"method": "POST", "path": "/events", "encoding": "json"},
                 "mapping": [{
-                    "source": "media.annotated_image",
-                    "target": "image",
-                    "transform": "base64",
+                    "source": "fields.score", "target": "score", "location": "body",
+                    "type": "number", "required": True,
                 }],
+                "revision": "",
             }
-
             with (
-                patch.object(upload_config, "APPS_ROOT", Path(temporary)),
-                patch.object(app_data_dir, "APPS_ROOT", Path(temporary)),
+                patch.object(delivery_config, "APPS_ROOT", root),
+                patch.object(app_data_dir, "APPS_ROOT", root),
             ):
-                with self.assertRaises(upload_config.HTTPException) as raised:
-                    asyncio.run(upload_config.save_report_contract("demo", "bad", body))
-
-            self.assertEqual(raised.exception.status_code, 400)
-            self.assertIn("未在模板 media 中启用", raised.exception.detail)
+                saved = asyncio.run(delivery_config.save_report_contract("demo", body["id"], body))
+                listed = asyncio.run(delivery_config.get_report_contracts("demo"))
+            self.assertEqual(saved["contract"]["origin"], "custom")
+            self.assertTrue(saved["contract"]["revision"])
+            self.assertEqual(listed["contracts"][0]["owner_logic"], "logic_demo")
 
 
 if __name__ == "__main__":

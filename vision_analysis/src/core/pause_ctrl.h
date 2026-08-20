@@ -54,7 +54,10 @@ void toggle();
  *
  * 调用位置: videoOutHandle() 入口处（解码回调线程）
  */
-void wait_if_paused();
+void wait_if_paused(const std::atomic<bool> *keep_running = nullptr);
+
+/** 唤醒等待者重新检查自己的停止条件，不改变全局暂停状态。 */
+void notify_waiters();
 
 /**
  * @brief 强制解除所有阻塞线程

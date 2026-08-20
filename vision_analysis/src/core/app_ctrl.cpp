@@ -269,7 +269,32 @@ extern "C" void *config_monitor_thread_func(void *arg)
                 fprintf(stderr, "\n");
             }
         }
-        if (logic_parameter_restart_required)
+
+        bool global_parameter_restart_required = false;
+        for (const auto &next_global : new_cfg.global_logics)
+        {
+            const auto previous = std::find_if(old_cfg.global_logics.begin(), old_cfg.global_logics.end(),
+                                               [&](const GlobalLogicConfig &item) {
+                                                   return item.instance_id == next_global.instance_id;
+                                               });
+            if (previous == old_cfg.global_logics.end() || !previous->enable || !next_global.enable ||
+                previous->logic != next_global.logic)
+                continue;
+            std::vector<std::string> changed_keys;
+            const LogicReloadImpact impact = logic_parameters_reload_impact(
+                next_global.logic, previous->logic_parameters_json, next_global.logic_parameters_json, &changed_keys);
+            if (impact == LogicReloadImpact::RESTART_REQUIRED)
+            {
+                global_parameter_restart_required = true;
+                fprintf(stderr, "[ConfigMonitor] global instance %s logic %s parameter change requires restart",
+                        next_global.instance_id.c_str(), next_global.logic.c_str());
+                for (const auto &key : changed_keys)
+                    fprintf(stderr, " %s", key.c_str());
+                fprintf(stderr, "\n");
+            }
+        }
+
+        if (logic_parameter_restart_required || global_parameter_restart_required)
         {
             fprintf(stderr, "[ConfigMonitor] Hot reload rejected: module parameter marked restart_required\n");
             ctrl->configLastMtime = mtime;
@@ -313,9 +338,13 @@ extern "C" void *config_monitor_thread_func(void *arg)
         bool global_logics_changed = (old_cfg.global_logics.size() != new_cfg.global_logics.size());
         if (!global_logics_changed)
         {
-            for (size_t i = 0; i < new_cfg.global_logics.size(); ++i)
+            for (const auto &next_global : new_cfg.global_logics)
             {
-                if (old_cfg.global_logics[i] != new_cfg.global_logics[i])
+                const auto previous = std::find_if(old_cfg.global_logics.begin(), old_cfg.global_logics.end(),
+                                                   [&](const GlobalLogicConfig &item) {
+                                                       return item.instance_id == next_global.instance_id;
+                                                   });
+                if (previous == old_cfg.global_logics.end() || *previous != next_global)
                 {
                     global_logics_changed = true;
                     break;
@@ -360,7 +389,7 @@ extern "C" void *config_monitor_thread_func(void *arg)
             if (global_logics_changed)
             {
                 printf("[ConfigMonitor] global_logics changed (%zu -> %zu instance(s)), "
-                       "will restart global logic threads\n",
+                       "will reconcile changed instances\n",
                        ctrl->config.global_logics.size(), new_cfg.global_logics.size());
                 ctrl->config.global_logics = new_cfg.global_logics;
             }
@@ -429,8 +458,8 @@ extern "C" void *config_monitor_thread_func(void *arg)
 
         if (global_logics_changed)
         {
-            global_logic_start_all(base_applied_cfg.global_logics);
-            printf("[ConfigMonitor] global_logic threads restarted (%zu instance(s) configured)\n",
+            const int running = global_logic_reload_all(base_applied_cfg.global_logics);
+            printf("[ConfigMonitor] global_logic instances reconciled (%d running, %zu configured)\n", running,
                    base_applied_cfg.global_logics.size());
         }
 
@@ -977,14 +1006,11 @@ static void fill_channel_publication_config(int chnId, const std::shared_ptr<con
     if (!out)
         return;
     const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, chnId);
-    const LogicParameterSet *parameters = app_ctrl_runtime_logic_parameters(runtime, chnId);
     if (channel)
     {
         out->display_order = runtime->channel_config_index[chnId];
         out->logic_name = channel->logic;
     }
-    if (parameters)
-        out->parameters = *parameters;
 }
 
 int app_ctrl_get_channel_logic_snapshot(int chnId, ChannelLogicSnapshot *out)

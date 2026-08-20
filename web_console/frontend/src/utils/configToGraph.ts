@@ -62,10 +62,10 @@ export function configToGraph(
   // Global logics
   const rawGL = (global.global_logics as Record<string, unknown>[]) ?? []
   const globalLogics: GlobalLogicEntry[] = rawGL.map(gl => ({
+    instance_id:      String(gl.instance_id ?? ''),
     enable:           (gl.enable          as boolean) ?? true,
     logic:            (gl.logic           as string)  ?? 'global_default',
     channels:         (gl.channels        as number[]) ?? [],
-    channels_explicit: (gl.channels_explicit as boolean) ?? false,
     poll_interval_ms: (gl.poll_interval_ms as number) ?? 200,
     logic_parameters: gl.logic_parameters && typeof gl.logic_parameters === 'object' &&
       !Array.isArray(gl.logic_parameters)
@@ -214,8 +214,9 @@ export function configToGraph(
       const nodeDeliveries = configuredDeliveries.length > 0 ? configuredDeliveries : [{
         id: `delivery_ch${origId}`,
         enabled: true,
-        profile_id: '',
+        connection_id: '',
         contract_id: '',
+        contract_revision: '',
         media: [],
       }]
       nodeDeliveries.forEach((delivery, reportIndex) => {
@@ -247,14 +248,12 @@ export function configToGraph(
     }
   })
 
-  // ── Global logic nodes ── 输入通道由画布连线表达；旧配置中的 channels: [] 会
-  // 自动连接所有已有的单通道逻辑节点，保存后转成明确的通道 ID 列表。
+  // ── Global logic nodes ── channels 只表示 Web 画布连线；全局 C++ 仍可按 ID
+  // 读取或遍历应用全部通道，因此空数组就是“没有画布输入”，不会隐式展开。
   const globalLayout = layout.global ?? {}
   globalLogics.forEach((entry, globalIndex) => {
     const globalId = uid('global-logic')
-    const inputChannels = entry.channels.length > 0 || entry.channels_explicit
-      ? entry.channels
-      : [...channelLogicNodes.keys()]
+    const inputChannels = entry.channels
     const fallbackY = channels.length > 0
       ? ((channels.length - 1) * ROW_H) / 2 + 60
       : 80 + globalIndex * 180
@@ -263,6 +262,7 @@ export function configToGraph(
       type: 'globalLogic',
       position: globalLayout[`logic_${globalIndex}`] ?? { x: 1220, y: fallbackY + globalIndex * 120 },
       data: {
+        instance_id: entry.instance_id,
         enable: entry.enable,
         logic: entry.logic,
         poll_interval_ms: entry.poll_interval_ms,
@@ -282,8 +282,9 @@ export function configToGraph(
       const reportDeliveries = deliveries.length > 0 ? deliveries : [{
         id: `delivery_global_${globalIndex}`,
         enabled: true,
-        profile_id: '',
+        connection_id: '',
         contract_id: '',
+        contract_revision: '',
         media: [],
       }]
       reportDeliveries.forEach((delivery, reportIndex) => {
@@ -297,7 +298,7 @@ export function configToGraph(
           data: {
             logic_name: entry.logic,
             logic_kind: 'global',
-            media_source_channel_id: entry.media_source_channel_id ?? inputChannels[0],
+            media_source_channel_id: entry.media_source_channel_id,
             report_policy: {
               ...policy,
               enabled: deliveryEnabled,

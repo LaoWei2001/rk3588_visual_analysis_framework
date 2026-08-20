@@ -127,12 +127,11 @@ CMake 编译（包括 `build.sh --debug`）会生成并编译嵌入式能力清�
    `logic_parameters` 对象中。
 
 全局模块清单和参数表会与通道模块一起聚合进 `logics.json`。Web 直接读取当前 App 的
-`global_logics`，不维护全局 logic 硬编码列表。全局配置发生变化时，框架停止并重建全局
-logic 线程，因此每个实例的 `state` 也会重新初始化。
+`global_logics`，不维护全局 logic 硬编码列表。每个全局实例使用稳定 `instance_id`；参数
+热更新遵守 Schema 的 `preserve_state`、`reset_state`、`restart_required`，只影响发生变化的实例。
 
 画布配置两路视频、发布通道变量、在全局节点聚合并复用统一上报链路的完整示例，见
-`modules/logic_global_input_demo/`、`global_modules/global_two_channel_demo/` 和
-`../../../docs/skills/rk3588-global-logic/references/two-channel-canvas-demo.md`。
+`modules/logic_global_input_demo/` 和 `global_modules/global_channel_aggregate_demo/`。
 
 ## 框架与业务边界
 

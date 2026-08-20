@@ -777,16 +777,12 @@ int event_video_recorder_trigger(const EventVideoRequest &input)
     return 1;
 }
 
-void event_video_recorder_extend(int channel_id, const std::string &event_type)
+void event_video_recorder_extend(const std::string &event_id)
 {
     pthread_mutex_lock(&g_mtx);
-    auto latest = g_latest_by_key.find(key_for(channel_id, event_type));
-    if (latest != g_latest_by_key.end())
-    {
-        auto found = g_active.find(latest->second);
-        if (found != g_active.end())
-            found->second.end_ms = now_ms() + static_cast<uint64_t>(found->second.request.post_sec * 1000.0f);
-    }
+    auto found = g_active.find(event_id);
+    if (found != g_active.end())
+        found->second.end_ms = now_ms() + static_cast<uint64_t>(found->second.request.post_sec * 1000.0f);
     pthread_cond_signal(&g_cv);
     pthread_mutex_unlock(&g_mtx);
 }

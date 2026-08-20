@@ -59,7 +59,7 @@ void toggle()
     }
 }
 
-void wait_if_paused()
+void wait_if_paused(const std::atomic<bool> *keep_running)
 {
     /* 快速路径: 功能未启用，或当前不在暂停状态 — 直接返回，零开销 */
     if (!g_enabled.load(std::memory_order_relaxed))
@@ -71,8 +71,15 @@ void wait_if_paused()
 
     /* 进入阻塞等待 */
     std::unique_lock<std::mutex> lk(g_mtx);
-    g_cv.wait(
-        lk, [] { return !g_paused.load(std::memory_order_relaxed) || g_force_resume.load(std::memory_order_relaxed); });
+    g_cv.wait(lk, [keep_running] {
+        return !g_paused.load(std::memory_order_relaxed) || g_force_resume.load(std::memory_order_relaxed) ||
+               (keep_running && !keep_running->load(std::memory_order_relaxed));
+    });
+}
+
+void notify_waiters()
+{
+    g_cv.notify_all();
 }
 
 void resume_all()

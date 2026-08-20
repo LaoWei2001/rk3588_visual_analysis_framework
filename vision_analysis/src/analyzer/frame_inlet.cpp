@@ -155,7 +155,6 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
             will_process = 1;
             break;
         }
-
     }
 
     /* ---- RGA 转换：NV12 → BGR 640×640 ----
@@ -265,10 +264,9 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
         {
             g_feed[ch].conv_ok++;
             g_feed[ch].conv_us += conv_us;
-            const int enq_ret =
-                algorithm_process_mat(ch, std::move(yolo_input), imgDesc.fd, imgDesc.width, imgDesc.height, fmt_int,
-                                      imgDesc.horStride, imgDesc.verStride, current_frame_seq,
-                                      raw_frame.frame_steady_ms, raw_frame.frame_unix_ms);
+            const int enq_ret = algorithm_process_mat(
+                ch, std::move(yolo_input), imgDesc.fd, imgDesc.width, imgDesc.height, fmt_int, imgDesc.horStride,
+                imgDesc.verStride, current_frame_seq, raw_frame.frame_steady_ms, raw_frame.frame_unix_ms);
             if (enq_ret > 0)
                 g_feed[ch].enq++;
             else

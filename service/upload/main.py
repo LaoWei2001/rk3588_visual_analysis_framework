@@ -1,38 +1,21 @@
 #!/usr/bin/env python3
-"""通用视觉事件上传服务入口。"""
+"""Application-scoped visual event delivery service."""
 
 import os
 import signal
 import threading
 from pathlib import Path
 
-import yaml
-
-from contracts import load_contracts
 from event_outbox import EventOutboxForwarder
 
 
 def main() -> None:
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    data_dir = os.environ.get("UPLOAD_DATA_DIR")
-    if data_dir:
-        config_path = os.path.join(data_dir, "upload_config.yaml")
-        contracts_dir = Path(data_dir) / "contracts"
-    else:
-        config_path = os.path.join(script_dir, "config.yaml")
-        contracts_dir = None
-
-    if not os.path.isfile(config_path):
-        raise FileNotFoundError(f"upload config not found: {config_path}")
-
-    with open(config_path, "r", encoding="utf-8") as stream:
-        config = yaml.safe_load(stream) or {}
-
-    store_dir = os.environ.get("EVENT_STORE_DIR") or os.path.abspath(
-        os.path.join(script_dir, "..", "..", "event_store")
-    )
-    os.makedirs(store_dir, exist_ok=True)
-    contracts_dir.mkdir(parents=True, exist_ok=True) if contracts_dir else None
+    script_dir = Path(__file__).resolve().parent
+    app_dir = script_dir.parent.parent
+    data_dir = Path(os.environ.get("UPLOAD_DATA_DIR", str(app_dir / ".runtime")))
+    store_dir = Path(os.environ.get("EVENT_STORE_DIR", str(data_dir / "event_store")))
+    data_dir.mkdir(parents=True, exist_ok=True)
+    store_dir.mkdir(parents=True, exist_ok=True)
 
     shutdown = threading.Event()
 
@@ -44,8 +27,12 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop)
 
     forwarder = EventOutboxForwarder(
-        config, store_dir,
-        contracts=load_contracts(contracts_dir) if contracts_dir else None,
+        str(store_dir),
+        data_dir / "connections.yaml",
+        app_dir / "report_templates",
+        data_dir / "report_contracts",
+        data_dir / "contract_revisions",
+        data_dir / "delivery_history",
     )
     worker = threading.Thread(
         target=forwarder.run,

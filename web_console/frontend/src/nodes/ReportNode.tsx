@@ -10,7 +10,7 @@ export default function ReportNode({ data, selected }: NodeProps) {
   const enabled = policy.enabled !== false && delivery?.enabled !== false
   const media = delivery && Array.isArray(delivery.media) ? delivery.media as string[] : []
   const targetConfig = delivery
-    ? `${delivery.contract_id || '未选接口模板'} · ${media.length ? media.join(', ') : '仅事件数据'}${delivery.profile_id ? ` (${delivery.profile_id})` : ''}`
+    ? `${delivery.contract_id || '未选接口模板'} · ${media.length ? media.join(', ') : '仅事件数据'}${delivery.connection_id ? ` (${delivery.connection_id})` : ''}`
     : '未配置投递任务'
   const target = enabled ? targetConfig : `已关闭 · ${targetConfig}`
   const color = enabled ? '#ef4444' : '#94a3b8'

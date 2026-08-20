@@ -377,11 +377,13 @@ static DeliveryRequirements delivery_requirements(cJSON *policy, const std::stri
     cJSON_ArrayForEach(delivery, deliveries)
     {
         const cJSON *enabled = cJSON_GetObjectItemCaseSensitive(delivery, "enabled");
-        const cJSON *profile_id = cJSON_GetObjectItemCaseSensitive(delivery, "profile_id");
+        const cJSON *connection_id = cJSON_GetObjectItemCaseSensitive(delivery, "connection_id");
         const cJSON *contract_id = cJSON_GetObjectItemCaseSensitive(delivery, "contract_id");
+        const cJSON *contract_revision = cJSON_GetObjectItemCaseSensitive(delivery, "contract_revision");
         const cJSON *media = cJSON_GetObjectItemCaseSensitive(delivery, "media");
-        if (cJSON_IsFalse(enabled) || !cJSON_IsString(profile_id) || !profile_id->valuestring[0] ||
-            !cJSON_IsString(contract_id) || !contract_id->valuestring[0] || !cJSON_IsArray(media) ||
+        if (cJSON_IsFalse(enabled) || !cJSON_IsString(connection_id) || !connection_id->valuestring[0] ||
+            !cJSON_IsString(contract_id) || !contract_id->valuestring[0] || !cJSON_IsString(contract_revision) ||
+            !contract_revision->valuestring[0] || !cJSON_IsArray(media) ||
             !delivery_matches_event(delivery, event_type))
             continue;
 
@@ -419,11 +421,13 @@ static void add_delivery_statuses(cJSON *policy, const std::string &event_type, 
         cJSON_ArrayForEach(item, arr)
         {
             cJSON *enabled = cJSON_GetObjectItemCaseSensitive(item, "enabled");
-            cJSON *profile_id = cJSON_GetObjectItemCaseSensitive(item, "profile_id");
+            cJSON *connection_id = cJSON_GetObjectItemCaseSensitive(item, "connection_id");
             cJSON *contract_id = cJSON_GetObjectItemCaseSensitive(item, "contract_id");
+            cJSON *contract_revision = cJSON_GetObjectItemCaseSensitive(item, "contract_revision");
             cJSON *media = cJSON_GetObjectItemCaseSensitive(item, "media");
-            if (cJSON_IsFalse(enabled) || !cJSON_IsString(profile_id) || !profile_id->valuestring[0] ||
-                !cJSON_IsString(contract_id) || !contract_id->valuestring[0] || !cJSON_IsArray(media) ||
+            if (cJSON_IsFalse(enabled) || !cJSON_IsString(connection_id) || !connection_id->valuestring[0] ||
+                !cJSON_IsString(contract_id) || !contract_id->valuestring[0] || !cJSON_IsString(contract_revision) ||
+                !contract_revision->valuestring[0] || !cJSON_IsArray(media) ||
                 !delivery_matches_event(item, event_type))
             {
                 ++index;
@@ -784,7 +788,8 @@ const char *event_report_status_name(EventReportStatus status)
 }
 
 static EventReportResult report_event_impl(ChannelContext *ctx, const EventRequest &input,
-                                           const CompositeImage *composite_image)
+                                           const CompositeImage *composite_image,
+                                           int video_source_channel_id = -1)
 {
     auto result = [](EventReportStatus status, const std::string &event_id, const std::string &detail) {
         EventReportResult value;
@@ -818,6 +823,13 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
         return result(EventReportStatus::NO_DELIVERY, "", "no enabled delivery matches this event type");
     }
     const uint32_t media_flags = requirements.media_flags;
+    const int resolved_video_source_channel_id =
+        video_source_channel_id >= 0 ? video_source_channel_id : ctx->chnId;
+    if ((media_flags & EVENT_MEDIA_VIDEO) && !app_ctrl_has_channel(resolved_video_source_channel_id))
+    {
+        cJSON_Delete(policy);
+        return result(EventReportStatus::INVALID_REQUEST, "", "event video source channel is not available");
+    }
 
     float merge_sec = (float)policy_number(policy, "merge_window_sec", 5.0);
     merge_sec = std::max(0.0f, std::min(60.0f, merge_sec));
@@ -840,7 +852,7 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
         if (record_merged_trigger(existing, ctx->unix_ms, ctx->time_str(), input.fields))
         {
             if (media_flags & EVENT_MEDIA_VIDEO)
-                event_video_recorder_extend(ctx->chnId, input.event_type);
+                event_video_recorder_extend(existing);
             cJSON_Delete(policy);
             return result(EventReportStatus::MERGED, existing, "merged into active event");
         }
@@ -900,6 +912,8 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
 
     cJSON *source = cJSON_CreateObject();
     cJSON_AddNumberToObject(source, "channel_id", ctx->chnId);
+    if (media_flags & EVENT_MEDIA_VIDEO)
+        cJSON_AddNumberToObject(source, "video_channel_id", resolved_video_source_channel_id);
     cJSON_AddItemToObject(source, "parameters", parse_object_or_empty(cfg.report_parameters_json));
     cJSON_AddItemToObject(root, "source", source);
 
@@ -937,7 +951,7 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
     cJSON_AddItemToObject(media_root, "media", media_entries);
 
     cJSON *delivery_root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(delivery_root, "schema_version", 2);
+    cJSON_AddNumberToObject(delivery_root, "schema_version", 3);
     add_delivery_statuses(policy, input.event_type, delivery_root);
     cJSON_AddItemToObject(root, "policy_snapshot", policy); /* ownership transferred */
 
@@ -957,11 +971,10 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
     std::vector<std::string> media_errors;
     if (media_flags & EVENT_MEDIA_IMAGE)
     {
-        const bool has_composite_frame = composite_image &&
-                                         std::any_of(composite_image->panes.begin(), composite_image->panes.end(),
-                                                     [](const ImageJob::Pane &pane) { return !pane.frame.empty(); });
-        if ((!composite_image && (!ctx->frame || ctx->frame->empty())) ||
-            (composite_image && !has_composite_frame))
+        const bool has_composite_frame =
+            composite_image && std::any_of(composite_image->panes.begin(), composite_image->panes.end(),
+                                           [](const ImageJob::Pane &pane) { return !pane.frame.empty(); });
+        if ((!composite_image && (!ctx->frame || ctx->frame->empty())) || (composite_image && !has_composite_frame))
         {
             const char *reason = composite_image ? "all selected channel frames are empty" : "current frame is empty";
             update_media_state(dir, "image", "failed", reason);
@@ -1020,7 +1033,7 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
     {
         EventVideoRequest vr;
         vr.event_id = event_id;
-        vr.channel_id = ctx->chnId;
+        vr.channel_id = resolved_video_source_channel_id;
         vr.event_type = input.event_type;
         vr.pre_sec = video_pre_sec;
         vr.post_sec = video_post_sec;
@@ -1055,75 +1068,81 @@ EventReportResult report_event(ChannelContext *ctx, const EventRequest &request)
 
 EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
 {
+    auto invalid = [](const std::string &detail) {
+        EventReportResult value;
+        value.status = EventReportStatus::INVALID_REQUEST;
+        value.detail = detail;
+        return value;
+    };
+
     if (!gctx || !gctx->config)
-    {
-        EventReportResult invalid;
-        invalid.status = EventReportStatus::INVALID_REQUEST;
-        invalid.detail = "global ctx/config is null";
-        return invalid;
-    }
+        return invalid("global ctx/config is null");
 
     int source_channel_id = request.source_channel_id;
     if (source_channel_id < 0)
         source_channel_id = gctx->config->media_source_channel_id;
+    if (source_channel_id < 0 && gctx->connected_channel_count() > 0)
+    {
+        const ChannelLogicSnapshot *first_connected = gctx->connected_channel_at(0);
+        if (first_connected)
+            source_channel_id = first_connected->channel_id;
+    }
     if (source_channel_id < 0 && gctx->channel_count() > 0)
         source_channel_id = gctx->channel_at(0)->channel_id;
 
-    if (source_channel_id >= 0 && !gctx->contains_channel(source_channel_id))
-    {
-        EventReportResult invalid;
-        invalid.status = EventReportStatus::INVALID_REQUEST;
-        invalid.detail = "global event source channel is not connected to this global logic";
-        return invalid;
-    }
-
-    if (source_channel_id < 0 || gctx->channel_count() == 0)
-    {
-        EventReportResult invalid;
-        invalid.status = EventReportStatus::INVALID_REQUEST;
-        invalid.detail = "global event has no connected channel";
-        return invalid;
-    }
+    const ChannelLogicSnapshot *source_logic = gctx->channel(source_channel_id);
+    if (source_channel_id < 0 || !source_logic)
+        return invalid("global event source channel is not available in this application");
 
     auto runtime = app_ctrl_get_runtime_snapshot();
     const ChannelConfig *source_config = app_ctrl_runtime_channel_config(runtime, source_channel_id);
     if (!runtime || !source_config)
-    {
-        EventReportResult invalid;
-        invalid.status = EventReportStatus::INVALID_REQUEST;
-        invalid.detail = "global event media source channel is not configured";
-        return invalid;
-    }
+        return invalid("global event media source channel is not configured");
 
-    /* 全局图片严格使用画布连入该全局逻辑的通道，按全局显示窗格顺序从左到右、
-     * 从上到下拼接。每个 Pane 都持有同帧的 frame/results/draw_cmds 副本，异步图片
-     * 线程渲染时不会读到下一帧的数据。 */
+    cJSON *policy = parse_object_or_empty(gctx->config->report_policy_json);
+    const DeliveryRequirements requirements = delivery_requirements(policy, request.event_type);
+    cJSON_Delete(policy);
+    const bool need_image = (requirements.media_flags & EVENT_MEDIA_IMAGE) != 0;
+
     CompositeImage composite;
-    composite.width = runtime->config.disp_width & ~3;
-    composite.height = runtime->config.disp_height & ~1;
-    composite.cols = std::max(1, runtime->config.tile_cols);
-    composite.rows = std::max(1, runtime->config.tile_rows);
-    composite.rows = std::max(composite.rows,
-                              (static_cast<int>(gctx->channel_count()) + composite.cols - 1) / composite.cols);
-    composite.panes.reserve(gctx->channel_count());
+    ChannelFrameSnapshot source_frame;
+    bool source_frame_loaded = false;
 
-    ImageJob::Pane *source_pane = nullptr;
-    int64_t source_frame_id = 0;
-    uint64_t source_frame_steady_ms = gctx->steady_ms;
-    uint64_t source_frame_unix_ms = gctx->unix_ms;
-    for (const ChannelLogicSnapshot &logic_snapshot : *gctx->channel_snapshots)
+    auto capture_exact = [&](int channel_id, ChannelFrameSnapshot *out) -> bool {
+        const ChannelLogicSnapshot *expected = gctx->channel(channel_id);
+        if (!expected || !app_ctrl_get_channel_frame_snapshot(channel_id, out))
+            return false;
+        return out->logic.publication_seq == expected->publication_seq;
+    };
+
+    if (need_image)
     {
-        const int channel_id = logic_snapshot.channel_id;
-        ImageJob::Pane pane;
-        pane.channel_id = channel_id;
+        std::vector<int> image_channel_ids;
+        if (gctx->connected_channel_ids && !gctx->connected_channel_ids->empty())
+            image_channel_ids = *gctx->connected_channel_ids;
+        else
+            image_channel_ids.push_back(source_channel_id);
 
-        ChannelFrameSnapshot snapshot;
-        if (app_ctrl_get_channel_frame_snapshot(channel_id, &snapshot))
+        composite.width = runtime->config.disp_width & ~3;
+        composite.height = runtime->config.disp_height & ~1;
+        composite.cols = std::max(1, std::min(runtime->config.tile_cols,
+                                              static_cast<int>(image_channel_ids.size())));
+        composite.rows = std::max(1, (static_cast<int>(image_channel_ids.size()) + composite.cols - 1) /
+                                         composite.cols);
+        composite.panes.reserve(image_channel_ids.size());
+
+        for (int channel_id : image_channel_ids)
         {
-            pane.frame = std::move(snapshot.frame);
-            pane.results = std::move(snapshot.results);
-            pane.rois = std::move(snapshot.rois);
-            pane.commands = std::move(snapshot.draw_cmds);
+            ChannelFrameSnapshot snapshot;
+            if (!capture_exact(channel_id, &snapshot))
+                return invalid("global event channel changed before its image snapshot was captured");
+
+            ImageJob::Pane pane;
+            pane.channel_id = channel_id;
+            pane.frame = snapshot.frame;
+            pane.results = snapshot.results;
+            pane.rois = snapshot.rois;
+            pane.commands = snapshot.draw_cmds;
             pane.render_params.chnId = channel_id;
             pane.render_params.inputW = pane.frame.cols;
             pane.render_params.inputH = pane.frame.rows;
@@ -1137,28 +1156,21 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
             pane.render_params.show_custom_overlays = true;
             if (channel_id == source_channel_id)
             {
-                source_frame_id = snapshot.logic.frame_seq;
-                if (snapshot.logic.frame_steady_ms != 0)
-                    source_frame_steady_ms = snapshot.logic.frame_steady_ms;
-                if (snapshot.logic.frame_unix_ms != 0)
-                    source_frame_unix_ms = snapshot.logic.frame_unix_ms;
+                source_frame = snapshot;
+                source_frame_loaded = true;
             }
+            composite.panes.push_back(std::move(pane));
         }
-        composite.panes.push_back(std::move(pane));
-        if (channel_id == source_channel_id)
-            source_pane = &composite.panes.back();
+
+        if (!source_frame_loaded)
+        {
+            if (!capture_exact(source_channel_id, &source_frame))
+                return invalid("global event source channel changed before its image snapshot was captured");
+            source_frame_loaded = true;
+        }
     }
 
-    if (!source_pane || composite.width <= 0 || composite.height <= 0)
-    {
-        EventReportResult invalid;
-        invalid.status = EventReportStatus::INVALID_REQUEST;
-        invalid.detail = "global event image layout or source channel is unavailable";
-        return invalid;
-    }
-
-    /* 事件来源标识和视频仍使用 source_channel_id；图片则使用上面的多通道拼接。
-     * report_policy/report_parameters 来自全局节点自己的上报连线。 */
+    /* report_policy/report_parameters 来自全局节点；来源通道可以由 C++、参数或画布决定。 */
     ChannelConfig report_config = *source_config;
     report_config.report_policy_json = gctx->config->report_policy_json;
     report_config.report_parameters_json = gctx->config->report_parameters_json;
@@ -1166,17 +1178,23 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
 
     ChannelContext ctx{};
     ctx.chnId = source_channel_id;
-    ctx.frame = &source_pane->frame;
-    ctx.frame_id = source_frame_id;
-    ctx.timestamp_ms = source_frame_steady_ms;
-    ctx.unix_ms = source_frame_unix_ms;
-    ctx.results = &source_pane->results;
+    ctx.frame = source_frame_loaded ? &source_frame.frame : nullptr;
+    ctx.frame_id = source_frame_loaded ? source_frame.logic.frame_seq : source_logic->frame_seq;
+    ctx.timestamp_ms = source_frame_loaded && source_frame.logic.frame_steady_ms != 0
+                           ? source_frame.logic.frame_steady_ms
+                           : (source_logic->frame_steady_ms != 0 ? source_logic->frame_steady_ms : gctx->steady_ms);
+    ctx.unix_ms = source_frame_loaded && source_frame.logic.frame_unix_ms != 0
+                      ? source_frame.logic.frame_unix_ms
+                      : (source_logic->frame_unix_ms != 0 ? source_logic->frame_unix_ms : gctx->unix_ms);
+    ctx.results = source_frame_loaded ? &source_frame.results : nullptr;
     ctx.config = &report_config;
-    ctx.rois = &source_pane->rois;
-    ctx.draw_cmds = &source_pane->commands;
-    ctx.infer_fps = source_pane->render_params.infer_fps;
-    ctx.disp_fps = source_pane->render_params.disp_fps;
-    return report_event_impl(&ctx, request, &composite);
+    ctx.rois = source_frame_loaded ? &source_frame.rois : nullptr;
+    ctx.draw_cmds = source_frame_loaded ? &source_frame.draw_cmds : nullptr;
+    ctx.infer_fps = source_frame_loaded ? source_frame.logic.infer_fps : source_logic->infer_fps;
+    ctx.disp_fps = source_frame_loaded ? source_frame.logic.disp_fps : source_logic->disp_fps;
+    return report_event_impl(&ctx, request,
+                             need_image && gctx->connected_channel_count() > 0 ? &composite : nullptr,
+                             gctx->config->media_source_channel_id);
 }
 
 void event_report_video_ready(const std::string &event_id, const std::string &video_path)

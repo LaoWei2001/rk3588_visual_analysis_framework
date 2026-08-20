@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -158,3 +159,10 @@ class LogicOutputSet
 
     std::unordered_map<std::string, LogicOutputValue> values_;
 };
+
+/** 所有“尚无公开变量”的发布版本共享同一个不可变空集合。 */
+inline std::shared_ptr<const LogicOutputSet> empty_logic_output_snapshot()
+{
+    static const std::shared_ptr<const LogicOutputSet> empty = std::make_shared<const LogicOutputSet>();
+    return empty;
+}

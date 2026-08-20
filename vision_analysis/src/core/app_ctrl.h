@@ -128,7 +128,8 @@ struct ChannelState
     int src_h_now = 0;
     std::vector<DrawCommand> draw_cmds;
     std::shared_ptr<void> logic_state;
-    LogicOutputSet logic_outputs; /* 当前 logic 在最近业务帧公开的类型化变量 */
+    /* 每个业务帧只生成一份不可变变量表；所有全局 Logic 共享读取，不再逐实例复制。 */
+    std::shared_ptr<const LogicOutputSet> logic_outputs = empty_logic_output_snapshot();
     cv::Mat last_frame;
     cv::Mat last_logic_frame;
     cv::Mat
@@ -188,8 +189,43 @@ struct ChannelLogicSnapshot
     ChannelOnlineState online_state = CH_ONLINE; /*!< 快照时刻的在线状态 */
     uint64_t online_state_changed_steady_ms = 0;
     std::string logic_name;
-    LogicOutputSet outputs;
-    LogicParameterSet parameters; /* 产生 outputs 的同一配置代参数 */
+    std::shared_ptr<const LogicOutputSet> outputs;
+
+    /**
+     * 全局 Logic 的便捷读取入口。读取失败统一返回 false：包括通道离线、尚未发布、
+     * 字段不存在、类型不匹配，以及设置了 max_age_ms 后数据已过期。
+     * 合法的 0、false 和空字符串仍返回 true。
+     */
+    bool readable(int64_t max_age_ms = -1) const
+    {
+        return has_publication && online_state == CH_ONLINE && publication_age_ms >= 0 &&
+               (max_age_ms < 0 || publication_age_ms <= max_age_ms);
+    }
+
+    bool read_string(const char *key, std::string *out, int64_t max_age_ms = -1) const
+    {
+        return readable(max_age_ms) && outputs && outputs->try_get_string(key, out);
+    }
+
+    bool read_number(const char *key, double *out, int64_t max_age_ms = -1) const
+    {
+        return readable(max_age_ms) && outputs && outputs->try_get_number(key, out);
+    }
+
+    bool read_int(const char *key, int64_t *out, int64_t max_age_ms = -1) const
+    {
+        return readable(max_age_ms) && outputs && outputs->try_get_int(key, out);
+    }
+
+    bool read_bool(const char *key, bool *out, int64_t max_age_ms = -1) const
+    {
+        return readable(max_age_ms) && outputs && outputs->try_get_bool(key, out);
+    }
+
+    bool read_json(const char *key, std::string *out, int64_t max_age_ms = -1) const
+    {
+        return readable(max_age_ms) && outputs && outputs->try_get_json(key, out);
+    }
 };
 
 /*================================================================

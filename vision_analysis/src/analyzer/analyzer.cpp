@@ -187,7 +187,7 @@ void analyzer_channel_offline(int chnId)
         ch.last_results.clear();
         ch.draw_cmds.clear();
         ch.logic_state.reset();
-        ch.logic_outputs = LogicOutputSet();
+        ch.logic_outputs = empty_logic_output_snapshot();
         ch.last_frame.release();
         ch.last_logic_frame.release();
         ch.logic_display_frame.release();
@@ -226,7 +226,7 @@ void analyzer_channel_online(int chnId)
         ch.last_results.clear();
         ch.draw_cmds.clear();
         ch.logic_state.reset();
-        ch.logic_outputs = LogicOutputSet();
+        ch.logic_outputs = empty_logic_output_snapshot();
         ch.last_frame.release();
         ch.last_logic_frame.release();
         ch.logic_display_frame.release();

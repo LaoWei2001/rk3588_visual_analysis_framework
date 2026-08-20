@@ -54,8 +54,9 @@ logic
 {
   "id": "factory_http",
   "enabled": true,
-  "profile_id": "factory",
-  "contract_id": "object_invade_det",
+  "connection_id": "factory",
+  "contract_id": "logic_example.object_invade_det",
+  "contract_revision": "sha256-content-revision",
   "media": ["annotated_image", "raw_image"],
   "when": {
     "event_types": ["person_intrusion"]
@@ -67,8 +68,9 @@ logic
 直接返回 `DISABLED`，不会写入告警箱，也不会进入上传队列；`deliveries[]` 可以继续保留，供画布
 重新开启时恢复原配置。多个 delivery 可通过各自的 `enabled` 独立开关。
 
-- `profile_id`：上传服务 `config.yaml` 中的连接。
-- `contract_id`：上传服务 `contracts/*.json` 中的接口模板。
+- `connection_id`：当前程序 `.data/<app>/connections.yaml` 中的投递连接。
+- `contract_id`：包内模板或当前程序自定义契约 ID。
+- `contract_revision`：契约内容 revision，保证积压事件始终按创建时的请求格式投递。
 - `media`：可选 `annotated_image`、`raw_image`、`video`；空数组表示仅事件数据。
 - `when.event_types`：可选事件类型过滤；空或缺省表示匹配全部事件。
 

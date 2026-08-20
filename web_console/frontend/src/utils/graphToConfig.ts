@@ -159,8 +159,9 @@ export function graphToConfig(
       const delivery = configured[0] ?? {
         id: `delivery_${reportNodes[reportIndex].id}`,
         enabled: true,
-        profile_id: '',
+        connection_id: '',
         contract_id: '',
+        contract_revision: '',
         media: [],
       }
       return { policy, delivery, enabled: policy.enabled !== false && delivery.enabled !== false }
@@ -277,8 +278,9 @@ export function graphToConfig(
         const delivery = configured[0] ?? {
           id: `delivery_${reportNodes[reportIndex].id}`,
           enabled: true,
-          profile_id: '',
+          connection_id: '',
           contract_id: '',
+          contract_revision: '',
           media: [],
         }
         return { policy, delivery, enabled: policy.enabled !== false && delivery.enabled !== false }
@@ -326,9 +328,10 @@ export function graphToConfig(
         })
       })
       reportPolicy.parameters = [...parameterMap.values()]
-      const requestedMediaChannel = Number(reportData[0]?.media_source_channel_id ?? channelsForGlobal[0] ?? -1)
-      const mediaSourceChannel = channelsForGlobal.includes(requestedMediaChannel)
-        ? requestedMediaChannel : channelsForGlobal[0]
+      const applicationChannelIds = channels.map(channel => Number(channel.id))
+      const requestedMediaChannel = Number(reportData[0]?.media_source_channel_id ?? -1)
+      const mediaSourceChannel = applicationChannelIds.includes(requestedMediaChannel)
+        ? requestedMediaChannel : undefined
 
       globalLayout[`logic_${globalIndex}`] = rp(globalNode)
       reportNodes.forEach((reportNode, reportIndex) => {
@@ -336,10 +339,10 @@ export function graphToConfig(
       })
 
       return {
+        instance_id: String(data.instance_id ?? ''),
         enable: data.enable !== false,
         logic: String(data.logic ?? ''),
         channels: channelsForGlobal,
-        channels_explicit: true,
         poll_interval_ms: Number(data.poll_interval_ms ?? 200),
         logic_parameters: data.logic_parameters && typeof data.logic_parameters === 'object'
           && !Array.isArray(data.logic_parameters)

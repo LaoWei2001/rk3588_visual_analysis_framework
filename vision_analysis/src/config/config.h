@@ -110,25 +110,25 @@ struct ChannelConfig
 /*======================== 全局逻辑配置 (支持多个并行实例) ========================*/
 struct GlobalLogicConfig
 {
-    bool enable = false;                  /* 是否启用 */
-    std::string logic = "global_default"; /* 逻辑名称 */
-    std::vector<int> channels;            /* 监控的通道列表，空 = 全部 */
-    bool channels_explicit = false;       /* true 时空数组=无输入；画布节点使用，旧配置保持空=全部 */
-    int poll_interval_ms = 100;           /* 轮询间隔 (毫秒) */
+    std::string instance_id;                 /* Web/配置持久化的稳定实例 ID，用于实例级热更新 */
+    bool enable = false;                     /* 是否启用 */
+    std::string logic = "global_default";    /* 逻辑名称 */
+    std::vector<int> channels;               /* Web 画布连入的通道列表；空表示没有画布输入 */
+    int poll_interval_ms = 100;              /* 轮询间隔 (毫秒) */
     /* 全局逻辑模块专有参数：由 global_modules/<name>/logic.json 统一定义和校验。 */
     std::string logic_parameters_json = "{}";
     /* 与 ChannelConfig 完全相同的统一事件上报配置，由画布上的上报节点生成。 */
     std::string report_policy_json = "{}";
     std::string report_parameters_json = "{}";
-    int media_source_channel_id = -1; /* 全局事件来源/视频通道；-1 = EventRequest 未指定时使用首个输入通道 */
+    /* 默认事件/单通道图片来源；启用事件视频时也是唯一预录来源且必须明确设置。 */
+    int media_source_channel_id = -1;
     EventVideoRuntimeConfig event_video;
 };
 
 /* 用于热重载时检测 global_logics 数组是否变化, 任一字段不同即视为变化 */
 inline bool operator==(const GlobalLogicConfig &a, const GlobalLogicConfig &b)
 {
-    return a.enable == b.enable && a.logic == b.logic && a.channels == b.channels &&
-           a.channels_explicit == b.channels_explicit &&
+    return a.instance_id == b.instance_id && a.enable == b.enable && a.logic == b.logic && a.channels == b.channels &&
            a.poll_interval_ms == b.poll_interval_ms &&
            a.logic_parameters_json == b.logic_parameters_json && a.report_policy_json == b.report_policy_json &&
            a.report_parameters_json == b.report_parameters_json &&

@@ -1,0 +1,58 @@
+{
+  "id": "global_channel_aggregate_demo.http_alarm",
+  "version": 1,
+  "label": "HTTP 多通道聚合告警",
+  "description": "全局教学示例随附模板：上传聚合画面和计算结果",
+  "owner_logic": "global_channel_aggregate_demo",
+  "event_types": [
+    "channel_aggregate_alarm"
+  ],
+  "adapter": "http",
+  "media": [
+    "annotated_image"
+  ],
+  "request": {
+    "method": "POST",
+    "path": "/api/global-alarms",
+    "encoding": "multipart"
+  },
+  "mapping": [
+    {
+      "source": "event.snap_time",
+      "target": "captureTime",
+      "location": "form",
+      "required": true
+    },
+    {
+      "source": "fields.valid_channel_count",
+      "target": "validChannelCount",
+      "location": "form",
+      "type": "number",
+      "required": true
+    },
+    {
+      "source": "fields.alarm_channel_count",
+      "target": "alarmChannelCount",
+      "location": "form",
+      "type": "number",
+      "required": true
+    },
+    {
+      "source": "fields.total_count",
+      "target": "totalCount",
+      "location": "form",
+      "type": "number",
+      "required": true
+    },
+    {
+      "source": "media.annotated_image",
+      "target": "image",
+      "location": "file",
+      "transform": "file",
+      "required": true
+    }
+  ],
+  "success": {
+    "http_status": [200, 201, 202]
+  }
+}

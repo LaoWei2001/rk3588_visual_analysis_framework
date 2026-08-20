@@ -29,7 +29,7 @@ void event_video_recorder_push_source_frame(int channel_id, const void *data, in
                                             EventVideoOverlayMode overlay_mode);
 
 int event_video_recorder_trigger(const EventVideoRequest &request);
-void event_video_recorder_extend(int channel_id, const std::string &event_type);
+void event_video_recorder_extend(const std::string &event_id);
 /* 视频源结束/断流：以当前时刻截断该通道尚未结束的 post 窗口；已进入队列的帧会先处理完。 */
 void event_video_recorder_channel_offline(int channel_id);
 void event_video_recorder_deinit(void);

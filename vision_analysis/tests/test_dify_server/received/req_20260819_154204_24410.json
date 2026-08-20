@@ -1,0 +1,38 @@
+{
+  "received_at": "2026-08-19 15:42:04",
+  "seq": 2,
+  "endpoint": "/v1/workflows/run",
+  "headers": {
+    "Host": "127.0.0.1:9201",
+    "User-Agent": "python-requests/2.32.5",
+    "Accept-Encoding": "gzip, deflate",
+    "Accept": "*/*",
+    "Connection": "keep-alive",
+    "Authorization": "Bearer test-key-123",
+    "Content-Type": "application/json",
+    "Content-Length": "219"
+  },
+  "body": {
+    "inputs": {
+      "prompt": "请分析图片",
+      "image": {
+        "type": "image",
+        "transfer_method": "local_file",
+        "upload_file_id": "test-file-e59996e17cb7"
+      }
+    },
+    "response_mode": "blocking",
+    "user": "rk3588-quick-test"
+  },
+  "response": {
+    "data": {
+      "id": "test-run-92701695292d",
+      "workflow_run_id": "unknown",
+      "status": "succeeded",
+      "outputs": {
+        "result": "mock success"
+      }
+    }
+  },
+  "response_status": 200
+}

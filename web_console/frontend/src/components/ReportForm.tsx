@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Node } from '@xyflow/react'
 import {
-  asLogicDef, fetchAppLogics, fetchRecords, fetchReportContracts, previewDelivery,
+  apiErrorMessage, asLogicDef, fetchAppLogics, fetchRecords, fetchReportContracts, previewDelivery,
   type EventRecord, type LogicDef, type ReportContract,
 } from '../api/client'
 import { useEditorStore } from '../store/editorStore'
@@ -13,8 +13,9 @@ type MediaKind = 'annotated_image' | 'raw_image' | 'video'
 type Delivery = {
   id: string
   enabled: boolean
-  profile_id: string
+  connection_id: string
   contract_id: string
+  contract_revision: string
   media: MediaKind[]
   when?: { event_types?: string[] }
 }
@@ -31,14 +32,15 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 const copy = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
-export default function ReportForm({ node, onUpdate, channelIds = [] }: {
+export default function ReportForm({ node, onUpdate, channelIds = [], allChannelIds = [] }: {
   node: Node
   onUpdate: Update
   channelIds?: number[]
+  allChannelIds?: number[]
 }) {
   const data = node.data as Record<string, unknown>
   const appName = useEditorStore(state => state.appName)
-  const profiles = useEditorStore(state => state.uploadProfiles)
+  const connections = useEditorStore(state => state.deliveryConnections)
   const [contracts, setContracts] = useState<ReportContract[]>([])
   const [logicDefs, setLogicDefs] = useState<LogicDef[]>([])
   const [preview, setPreview] = useState<Record<string, unknown> | null>(null)
@@ -93,25 +95,34 @@ export default function ReportForm({ node, onUpdate, channelIds = [] }: {
   const policy = (data.report_policy && typeof data.report_policy === 'object'
     ? data.report_policy : {}) as Record<string, unknown>
   const stored = Array.isArray(policy.deliveries) ? policy.deliveries as Delivery[] : []
-  const firstProfile = Object.entries(profiles)[0]
   const delivery: Delivery = stored[0] ?? {
     id: `delivery_${node.id}`,
     enabled: true,
-    profile_id: firstProfile?.[0] ?? '',
+    connection_id: '',
     contract_id: '',
+    contract_revision: '',
     media: [],
   }
   const reportEnabled = policy.enabled !== false && delivery.enabled !== false
-  const selectedProfile = profiles[delivery.profile_id]
   const selectedContract = contracts.find(item => item.id === delivery.contract_id)
-  const compatibleContracts = contracts.filter(item =>
-    selectedProfile && item.adapter === selectedProfile.adapter)
   const logic = logicDefs.find(item => item.name === String(data.logic_name ?? ''))
   const declaredFields = useMemo(() => logic?.report_fields ?? [], [logic])
   const declaredEventTypes = useMemo(() => logic?.event_types ?? [], [logic])
-  const configuredMediaChannel = Number(data.media_source_channel_id ?? channelIds[0] ?? -1)
-  const selectedMediaChannel = channelIds.includes(configuredMediaChannel)
-    ? configuredMediaChannel : channelIds[0]
+  const declaredEventTypeIds = new Set(declaredEventTypes.map(item => item.id))
+  const compatibleContracts = contracts.filter(contract =>
+    (!contract.owner_logic || contract.owner_logic === logic?.name)
+    && (contract.event_types.length === 0
+      || contract.event_types.some(eventType => declaredEventTypeIds.has(eventType))))
+  const selectedConnection = connections[delivery.connection_id]
+  const contractUpdateAvailable = Boolean(
+    selectedContract && delivery.contract_revision
+    && selectedContract.revision !== delivery.contract_revision,
+  )
+  const compatibleConnections = Object.entries(connections).filter(([, connection]) =>
+    selectedContract && connection.adapter === selectedContract.adapter)
+  const configuredMediaChannel = Number(data.media_source_channel_id ?? -1)
+  const selectedMediaChannel = allChannelIds.includes(configuredMediaChannel)
+    ? configuredMediaChannel : undefined
   const isGlobalReport = data.logic_kind === 'global'
   const hasImageMedia = delivery.media.includes('annotated_image') || delivery.media.includes('raw_image')
   const hasVideoMedia = delivery.media.includes('video')
@@ -126,24 +137,19 @@ export default function ReportForm({ node, onUpdate, channelIds = [] }: {
     })
   }
 
-  const selectProfile = (profileId: string) => {
-    const profile = profiles[profileId]
-    const keepContract = selectedContract?.adapter === profile?.adapter
-    patchDelivery({
-      profile_id: profileId,
-      contract_id: keepContract ? delivery.contract_id : '',
-      media: keepContract ? delivery.media : [],
-    })
-  }
+  const selectConnection = (connectionId: string) => patchDelivery({ connection_id: connectionId })
 
   const applySelectedContract = (contractId: string) => {
     const contract = contracts.find(item => item.id === contractId)
     if (!contract) {
-      patchDelivery({ contract_id: '', media: [] })
+      patchDelivery({ contract_id: '', contract_revision: '', connection_id: '', media: [] })
       return
     }
+    const keepConnection = connections[delivery.connection_id]?.adapter === contract.adapter
     patchDelivery({
       contract_id: contract.id,
+      contract_revision: contract.revision,
+      connection_id: keepConnection ? delivery.connection_id : '',
       media: copy(contract.media),
     })
     setPreview(null)
@@ -160,14 +166,13 @@ export default function ReportForm({ node, onUpdate, channelIds = [] }: {
       setTestResult(result.test ?? null)
       refreshEvents()
     } catch (error) {
-      setTestResult({ ok: false, detail: error instanceof Error ? error.message : String(error) })
+      setTestResult({ ok: false, detail: apiErrorMessage(error) })
     } finally {
       setBusy(false)
     }
   }
 
   const eventTypes = delivery.when?.event_types ?? []
-  const declaredEventTypeIds = new Set(declaredEventTypes.map(item => item.id))
   const invalidEventTypes = eventTypes.filter(item => !declaredEventTypeIds.has(item))
   const selectedEventTypes = eventTypes.filter(item => declaredEventTypeIds.has(item))
   const setEventTypes = (next: string[]) => patchDelivery({
@@ -179,7 +184,7 @@ export default function ReportForm({ node, onUpdate, channelIds = [] }: {
       : selectedEventTypes.filter(item => item !== eventType)
     setEventTypes(next)
   }
-  const templateReady = Boolean(selectedProfile && selectedContract)
+  const templateReady = Boolean(selectedConnection && selectedContract && delivery.contract_revision)
   const contractSaved = (saved: ReportContract) => {
     setContracts(current => {
       const exists = current.some(item => item.id === saved.id)
@@ -187,9 +192,15 @@ export default function ReportForm({ node, onUpdate, channelIds = [] }: {
         ? current.map(item => item.id === saved.id ? saved : item)
         : [...current, saved].sort((left, right) => left.id.localeCompare(right.id))
     })
-    patchDelivery({ contract_id: saved.id, media: copy(saved.media) })
+    patchDelivery({
+      contract_id: saved.id,
+      contract_revision: saved.revision,
+      connection_id: connections[delivery.connection_id]?.adapter === saved.adapter
+        ? delivery.connection_id : '',
+      media: copy(saved.media),
+    })
     setPreview(null)
-    setTestResult({ ok: true, detail: '接口模板已保存；请重启事件投递服务后用于正式投递。' })
+    setTestResult({ ok: true, detail: '应用自定义契约已保存，并已绑定到当前上报节点的新 revision。' })
   }
 
   return <div className="ncp-form">
@@ -206,9 +217,9 @@ export default function ReportForm({ node, onUpdate, channelIds = [] }: {
     </div>
     <div className="report-delivery-card">
       {isGlobalReport && hasImageMedia && <div className="report-mapping-help">
-        上报图片会包含此全局逻辑连入的全部通道（{channelIds.length
-          ? channelIds.map(channelId => `通道 ${channelId}`).join('、')
-          : '尚未连接通道'}），并按全局配置中的显示宽高、窗格行列顺序拼接。
+        {channelIds.length
+          ? `上报图片会拼接画布连入的全部通道（${channelIds.map(channelId => `通道 ${channelId}`).join('、')}）。`
+          : '当前没有画布输入；上报图片使用 EventRequest.source_channel_id 选择的通道。'}
       </div>}
       {isGlobalReport && hasVideoMedia && <Field label="事件视频来源通道">
         <select
@@ -217,57 +228,64 @@ export default function ReportForm({ node, onUpdate, channelIds = [] }: {
             media_source_channel_id: event.target.value === '' ? undefined : Number(event.target.value),
           })}>
           <option value="">请选择事件视频来源通道</option>
-          {channelIds.map(channelId =>
+          {allChannelIds.map(channelId =>
             <option key={channelId} value={channelId}>通道 {channelId}</option>)}
         </select>
         <div className="report-mapping-help">
-          视频仍来自一个通道；可在单次 EventRequest 中设置 source_channel_id 动态覆盖。
-          此选择不改变上报图片的多通道拼接范围。
+          只有该通道会长期保留事件视频预录。EventRequest.source_channel_id 仍可动态选择
+          事件和图片来源，但不会改变视频通道，也不会扩大预录范围。
         </div>
       </Field>}
-      <Field label="发送连接">
-        <select value={delivery.profile_id} onChange={event => selectProfile(event.target.value)}>
-          <option value="">请选择连接 Profile</option>
-          {Object.entries(profiles).map(([id, profile]) =>
-            <option key={id} value={id}>{id} · {profile.adapter}</option>)}
+      <Field label="接口模板">
+        <select value={delivery.contract_id} onChange={event => applySelectedContract(event.target.value)}>
+          <option value="">请选择接口模板</option>
+          {compatibleContracts.map(contract =>
+            <option key={contract.id} value={contract.id}>
+              {contract.label} · {contract.origin === 'custom' ? '应用自定义' : '程序包'} · v{contract.version}
+            </option>)}
         </select>
       </Field>
 
-      <Field label="接口模板">
-        <select value={delivery.contract_id} disabled={!selectedProfile}
-          onChange={event => applySelectedContract(event.target.value)}>
-          <option value="">请选择接口模板</option>
-          {compatibleContracts.map(contract =>
-            <option key={contract.id} value={contract.id}>{contract.label}</option>)}
+      <Field label="投递连接">
+        <select value={delivery.connection_id} disabled={!selectedContract}
+          onChange={event => selectConnection(event.target.value)}>
+          <option value="">请选择与契约兼容的连接</option>
+          {compatibleConnections.map(([id, connection]) =>
+            <option key={id} value={id}>{id} · {connection.adapter}</option>)}
         </select>
       </Field>
 
       {selectedContract && <div className="report-mapping-help">
         {selectedContract.description || selectedContract.label}
-        {selectedContract.source_file && <> · 配置文件：contracts/{selectedContract.source_file}</>}
+        {' '}· 当前模板 revision {selectedContract.revision.slice(0, 12)}
+      </div>}
+      {contractUpdateAvailable && selectedContract && <div className="report-contract-error">
+        此节点固定使用旧 revision {delivery.contract_revision.slice(0, 12)}；当前模板已有新 revision。
+        <button type="button" onClick={() => applySelectedContract(selectedContract.id)}>升级到当前模板</button>
       </div>}
       <div className="report-event-actions">
-        <button type="button" className="report-event-button" disabled={!selectedProfile}
-          title={!selectedProfile ? '请先选择发送连接，以确定适配器' : ''}
+        <button type="button" className="report-event-button" disabled={Object.keys(connections).length === 0}
+          title={Object.keys(connections).length === 0 ? '请先在当前程序的应用集成中创建投递连接' : ''}
           onClick={() => setContractEditor(null)}>＋新建接口模板</button>
         <button type="button" className="report-event-button" disabled={!selectedContract}
           onClick={() => setContractEditor(selectedContract ?? null)}>编辑当前模板</button>
       </div>
 
-      {contractEditor !== undefined && selectedProfile &&
+      {contractEditor !== undefined && Object.keys(connections).length > 0 &&
         <div className="report-contract-overlay">
           <div className="report-contract-modal">
             <button type="button" className="report-contract-close" onClick={closeEditor}
               title="关闭">×</button>
             <ReportContractEditor
               appName={appName}
-              adapter={selectedProfile.adapter}
+              adapter={selectedContract?.adapter ?? Object.values(connections)[0]?.adapter ?? 'http'}
               contract={contractEditor}
+              logicName={logic?.name ?? ''}
               logicLabel={logic?.label || logic?.name || String(data.logic_name ?? '')}
+              eventTypes={declaredEventTypes.map(item => item.id)}
               reportFields={declaredFields}
               existingContractIds={contracts.map(item => item.id)}
               onSaved={contractSaved}
-              onCancel={closeEditor}
               onDirtyChange={setEditorDirty}
             />
           </div>
@@ -322,7 +340,8 @@ export default function ReportForm({ node, onUpdate, channelIds = [] }: {
         <details className="report-extra-inputs">
           <summary>查看当前模板字段对接</summary>
           <div className="report-mapping-help">
-            修改接口请点击上方“编辑当前模板”；一次修改会作用于所有引用该 contract_id 的投递。
+            投递绑定固定使用当前 revision。编辑自定义契约或基于程序包模板创建新契约后，
+            请重新选择它，明确把该上报节点升级到新 revision。
           </div>
           {selectedContract.mapping.map((item, index) =>
             <div key={`${item.target}-${index}`} className="report-map-preview">

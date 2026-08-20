@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  deleteAllRecords, deleteRecord, fetchRecordJson, fetchRecords, recordImageUrl, recordVideoUrl, retryRecord,
-  type EventRecord, type RecordJsonResponse,
+  deleteAllRecords, deleteRecord, fetchDeliveryHistory, fetchRecordJson, fetchRecords,
+  recordImageUrl, recordVideoUrl, retryRecord,
+  type DeliveryHistoryRecord, type EventRecord, type RecordJsonResponse,
 } from '../api/client'
 import './RecordsPage.css'
 
@@ -30,6 +31,8 @@ export default function RecordsPage() {
   const { appName } = useParams()
   const navigate = useNavigate()
   const [records, setRecords] = useState<EventRecord[]>([])
+  const [history, setHistory] = useState<DeliveryHistoryRecord[]>([])
+  const [view, setView] = useState<'outbox' | 'history'>('outbox')
   const [stats, setStats] = useState({ count: 0, total: 0, cap: 0 })
   const [filter, setFilter] = useState<'all' | 'data' | 'image' | 'video'>('all')
   const [loading, setLoading] = useState(true)
@@ -43,8 +46,11 @@ export default function RecordsPage() {
   const load = useCallback(async () => {
     if (!appName) return
     try {
-      const result = await fetchRecords(appName)
+      const [result, historyResult] = await Promise.all([
+        fetchRecords(appName), fetchDeliveryHistory(appName),
+      ])
       setRecords(result.records)
+      setHistory(historyResult.records)
       setStats({ count: result.count, total: result.total_bytes, cap: result.cap_bytes })
       setError('')
     } catch {
@@ -95,7 +101,7 @@ export default function RecordsPage() {
   return <div className="records-page">
     <div className="records-header">
       <button className="rec-btn" onClick={() => navigate('/')}>← 返回</button>
-      <span className="records-title">{appName} — 本地事件发件箱</span>
+      <span className="records-title">{appName} — 事件投递</span>
       <span className="records-stat">
         {stats.count} 条 · {fmtBytes(stats.total)}{stats.cap ? ` / ${fmtBytes(stats.cap)}` : ''}
       </span>
@@ -114,7 +120,11 @@ export default function RecordsPage() {
     </div>
     <div className="records-toolbar">
       <div className="records-filters">
-        {(['all', 'data', 'image', 'video'] as const).map(item =>
+        <button className={`rec-btn ${view === 'outbox' ? 'active' : ''}`}
+          onClick={() => setView('outbox')}>待投递发件箱</button>
+        <button className={`rec-btn ${view === 'history' ? 'active' : ''}`}
+          onClick={() => setView('history')}>远端回复历史（{history.length}）</button>
+        {view === 'outbox' && (['all', 'data', 'image', 'video'] as const).map(item =>
           <button key={item} className={`rec-btn ${filter === item ? 'active' : ''}`}
             onClick={() => setFilter(item)}>
             {{ all: '全部', data: '仅事件数据', image: '图片', video: '视频' }[item]}
@@ -122,7 +132,28 @@ export default function RecordsPage() {
       </div>
     </div>
 
-    {loading ? <div className="records-empty">加载中…</div>
+    {view === 'history' ? (
+      history.length === 0 ? <div className="records-empty">还没有远端投递回复。</div>
+        : <div className="records-grid">{history.map((item, index) =>
+          <article className="rec-card" key={`${item.event_id}-${item.connection_id}-${index}`}>
+            <div className="rec-info">
+              <div className="rec-card-heading">
+                <div className="rec-card-message">{item.event_type || item.event_id}</div>
+                <span className={`rec-delivery-status status-${item.status}`}>{deliveryStatusText[item.status] || item.status}</span>
+              </div>
+              <div className="rec-meta-row"><span>通道 {item.channel_id ?? '?'}</span>
+                <span>{item.connection_id}</span><span>{item.contract_id}</span>
+                <span>{new Date(item.updated_unix_ms).toLocaleString()}</span></div>
+              <div className="rec-meta-row"><span>HTTP {item.http_status || '—'}</span>
+                <span>revision {item.contract_revision.slice(0, 12)}</span><span>{item.attempts} 次</span></div>
+              {item.detail && <div className="rec-delivery-error">{item.detail}</div>}
+              <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 11,
+                background: '#0f1117', padding: 10, borderRadius: 6, maxHeight: 260, overflow: 'auto' }}>
+                {JSON.stringify(item.response, null, 2)}
+              </pre>
+            </div>
+          </article>)}</div>
+    ) : loading ? <div className="records-empty">加载中…</div>
       : error ? <div className="records-empty err">{error}</div>
         : shown.length === 0 ? <div className="records-empty">当前没有待投递事件。</div>
           : <div className="records-grid">{shown.map(record => {
@@ -173,8 +204,8 @@ export default function RecordsPage() {
                     return <div className="rec-delivery" key={delivery.id ?? index}>
                       <div className="rec-delivery-head">
                         <span className="rec-delivery-name"
-                          title={`${delivery.contract_id || '未选择接口契约'} / ${delivery.profile_id || '未选择连接'}`}>
-                          {delivery.contract_id || '未选择接口契约'} / {delivery.profile_id || '未选择连接'}
+                          title={`${delivery.contract_id || '未选择接口契约'} / ${delivery.connection_id || '未选择连接'}`}>
+                          {delivery.contract_id || '未选择接口契约'} / {delivery.connection_id || '未选择连接'}
                         </span>
                         <span className={`rec-delivery-status status-${status}`}>
                           {deliveryStatusText[status] || status} · {delivery.attempts ?? 0}次

@@ -2,10 +2,14 @@
 
 import json
 import os
+import re
 import shutil
 import time
+from pathlib import Path
 from threading import Event
 from typing import Any, Dict
+
+import yaml
 
 from adapters import create_adapter
 from contracts import apply_contract, load_contracts
@@ -28,15 +32,38 @@ class EventOutboxForwarder:
 
     def __init__(
         self,
-        config: Dict[str, Any],
         store_dir: str,
-        contracts: Dict[str, Dict[str, Any]] = None,
+        connections_path: Path,
+        templates_dir: Path,
+        custom_contracts_dir: Path,
+        revisions_dir: Path,
+        history_dir: Path,
     ):
         self.store_dir = store_dir
-        profiles = config.get("profiles", {})
-        self.profiles = profiles if isinstance(profiles, dict) else {}
-        self.contracts = contracts if contracts is not None else load_contracts()
+        self.connections_path = connections_path
+        self.templates_dir = templates_dir
+        self.custom_contracts_dir = custom_contracts_dir
+        self.revisions_dir = revisions_dir
+        self.history_dir = history_dir
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+        self.connections: Dict[str, Dict[str, Any]] = {}
+        self.contract_revisions: Dict[str, Dict[str, Any]] = {}
         self._media_pending = False
+
+    def _reload_configuration(self) -> None:
+        if self.connections_path.is_file():
+            with self.connections_path.open("r", encoding="utf-8") as stream:
+                document = yaml.safe_load(stream) or {}
+        else:
+            document = {}
+        connections = document.get("connections", {})
+        if not isinstance(connections, dict):
+            raise ValueError("connections.yaml connections must be an object")
+        _active, revisions = load_contracts(
+            self.templates_dir, self.custom_contracts_dir, self.revisions_dir,
+        )
+        self.connections = connections
+        self.contract_revisions = revisions
 
     def _event_dirs(self):
         try:
@@ -98,7 +125,7 @@ class EventOutboxForwarder:
         final = os.path.join(path, "delivery_state.json")
         temporary = final + ".upload.tmp"
         document = {
-            "schema_version": 2,
+            "schema_version": 3,
             "deliveries": meta.get("deliveries", []),
         }
         with open(temporary, "w", encoding="utf-8") as stream:
@@ -108,17 +135,65 @@ class EventOutboxForwarder:
             os.fsync(stream.fileno())
         os.replace(temporary, final)
 
-    def _profile(self, delivery: Dict[str, Any]) -> Dict[str, Any]:
-        profile_id = str(delivery.get("profile_id", "")).strip()
+    def _write_history(
+        self, meta: Dict[str, Any], delivery: Dict[str, Any], response: Any = None,
+    ) -> None:
+        event = meta.get("event", {})
+        source = meta.get("source", {})
+        event_id = str(event.get("id", "unknown"))
+        delivery_id = str(delivery.get("id", "delivery"))
+        updated_unix_ms = int(time.time() * 1000)
+        document = {
+            "event_id": event_id,
+            "event_type": event.get("type", ""),
+            "snap_time": event.get("snap_time", ""),
+            "channel_id": source.get("channel_id"),
+            "connection_id": delivery.get("connection_id", ""),
+            "contract_id": delivery.get("contract_id", ""),
+            "contract_revision": delivery.get("contract_revision", ""),
+            "status": delivery.get("status", ""),
+            "attempts": delivery.get("attempts", 0),
+            "http_status": delivery.get("last_http_status", 0),
+            "detail": delivery.get("last_error", ""),
+            "response": response,
+            "updated_unix_ms": updated_unix_ms,
+        }
+        safe_event_id = re.sub(r"[^A-Za-z0-9._-]", "_", event_id)
+        safe_delivery_id = re.sub(r"[^A-Za-z0-9._-]", "_", delivery_id)
+        attempt = max(0, int(delivery.get("attempts", 0)))
+        destination = self.history_dir / (
+            f"{safe_event_id}.{safe_delivery_id}.{attempt}.{time.time_ns()}.json"
+        )
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        with temporary.open("w", encoding="utf-8") as stream:
+            json.dump(document, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+        limit = max(1, int(os.environ.get("DELIVERY_HISTORY_MAX_RECORDS", "1000")))
+        files = sorted(
+            self.history_dir.glob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for expired in files[limit:]:
+            try:
+                expired.unlink()
+            except FileNotFoundError:
+                pass
+
+    def _connection(self, delivery: Dict[str, Any]) -> Dict[str, Any]:
+        connection_id = str(delivery.get("connection_id", "")).strip()
         adapter_id = str(delivery.get("adapter", "")).strip()
-        if not profile_id:
-            raise ValueError("delivery profile_id is empty")
-        profile = self.profiles.get(profile_id)
-        if not isinstance(profile, dict):
-            raise ValueError(f"profile {profile_id} not found")
-        if str(profile.get("adapter", "")).strip() != adapter_id:
-            raise ValueError(f"profile {profile_id} does not use adapter {adapter_id}")
-        return profile
+        if not connection_id:
+            raise ValueError("delivery connection_id is empty")
+        connection = self.connections.get(connection_id)
+        if not isinstance(connection, dict):
+            raise ValueError(f"connection {connection_id} not found")
+        if str(connection.get("adapter", "")).strip() != adapter_id:
+            raise ValueError(f"connection {connection_id} does not use adapter {adapter_id}")
+        return connection
 
     @staticmethod
     def _media_ready(meta: Dict[str, Any], delivery: Dict[str, Any]) -> bool:
@@ -171,14 +246,6 @@ class EventOutboxForwarder:
         exponent = min(max(int(retry_streak) - 1, 0), 20)
         return min(cls.MAX_RETRY_WAIT, cls.RETRY_WAIT * (2 ** exponent))
 
-    @staticmethod
-    def _legacy_retry_exhausted(delivery: Dict[str, Any]) -> bool:
-        """Recognize retryable failures written by versions capped at 12 attempts."""
-        error = str(delivery.get("last_error", ""))
-        return delivery.get("status") == "failed" and (
-            error.startswith("max retries (") and " exceeded:" in error
-        )
-
     @classmethod
     def _schedule_retry(
         cls,
@@ -198,6 +265,7 @@ class EventOutboxForwarder:
         )
 
     def _process(self, event_dir: str) -> bool:
+        self._reload_configuration()
         meta = self._read(event_dir)
         self._reset_requested_retries(event_dir, meta)
 
@@ -213,25 +281,16 @@ class EventOutboxForwarder:
         for delivery in deliveries:
             if not isinstance(delivery, dict):
                 continue
-            if self._legacy_retry_exhausted(delivery):
-                delivery["status"] = "pending"
-                delivery["retry_streak"] = 0
-                delivery.pop("next_retry_unix_ms", None)
-                self._write(event_dir, meta)
-                print(
-                    "[EventOutbox] resumed legacy retry "
-                    f"{event.get('id', os.path.basename(event_dir))}/"
-                    f"{delivery.get('id', 'unknown')}"
-                )
             if delivery.get("status") in ("delivered", "invalid", "failed"):
                 continue
             try:
-                effective_delivery = apply_contract(delivery, self.contracts)
+                effective_delivery = apply_contract(delivery, self.contract_revisions)
             except ValueError as exc:
                 delivery["status"] = "invalid"
                 delivery["last_error"] = str(exc)
                 delivery.pop("next_retry_unix_ms", None)
                 self._write(event_dir, meta)
+                self._write_history(meta, delivery)
                 continue
             now_ms = time.time() * 1000.0
             if delivery.get("status") == "retry" and now_ms < float(
@@ -253,6 +312,7 @@ class EventOutboxForwarder:
                 delivery["last_error"] = str(exc)
                 delivery.pop("next_retry_unix_ms", None)
                 self._write(event_dir, meta)
+                self._write_history(meta, delivery)
                 continue
 
             attempts = int(delivery.get("attempts", 0)) + 1
@@ -261,7 +321,7 @@ class EventOutboxForwarder:
             self._write(event_dir, meta)
             try:
                 adapter_id = str(effective_delivery.get("adapter", "")).strip()
-                adapter = create_adapter(adapter_id, self._profile(effective_delivery))
+                adapter = create_adapter(adapter_id, self._connection(effective_delivery))
                 result = adapter.send(event_dir, meta, effective_delivery)
                 if not result.ok and getattr(result, "terminal", False):
                     delivery["status"] = "failed"
@@ -279,6 +339,7 @@ class EventOutboxForwarder:
                     self._schedule_retry(
                         delivery, now_ms, result.detail, result.status_code,
                     )
+                self._write_history(meta, delivery, result.response)
             except MediaNotReadyError as exc:
                 delivery["status"] = "retry"
                 delivery["last_error"] = str(exc)
@@ -288,8 +349,10 @@ class EventOutboxForwarder:
                 delivery["status"] = "invalid"
                 delivery["last_error"] = str(exc)
                 delivery.pop("next_retry_unix_ms", None)
+                self._write_history(meta, delivery)
             except Exception as exc:
                 self._schedule_retry(delivery, now_ms, str(exc))
+                self._write_history(meta, delivery)
             self._write(event_dir, meta)
 
         if all(
@@ -303,7 +366,7 @@ class EventOutboxForwarder:
         return False
 
     def run(self, shutdown: Event):
-        print(f"[EventOutbox] started, store={self.store_dir}")
+        print(f"[EventOutbox] started, store={self.store_dir}, templates={self.templates_dir}")
         while not shutdown.is_set():
             self._media_pending = False
             paths = self._event_dirs()

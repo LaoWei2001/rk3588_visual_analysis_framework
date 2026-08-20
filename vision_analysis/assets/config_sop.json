@@ -17,33 +17,35 @@
     "enable_rtsp": 1,
     "global_logics": [
       {
+        "instance_id": "global_channel_aggregate_main",
         "enable": true,
-        "logic": "global_two_channel_demo",
+        "logic": "global_channel_aggregate_demo",
         "channels": [
           0,
           1
         ],
-        "channels_explicit": true,
         "poll_interval_ms": 200,
         "logic_parameters": {
           "total_count_threshold": 3,
-          "require_both_local_alarms": false
+          "require_local_alarm": false,
+          "max_data_age_ms": 2000
         },
         "report_policy": {
-          "enabled": true,
+          "enabled": false,
           "deliveries": [
             {
               "id": "delivery_report-9-1786414948539",
-              "enabled": true,
-              "profile_id": "server_22",
-              "contract_id": "jnu_alarm_upload",
+              "enabled": false,
+              "connection_id": "",
+              "contract_id": "",
+              "contract_revision": "",
               "media": [
                 "annotated_image",
                 "raw_image"
               ],
               "when": {
                 "event_types": [
-                  "two_channel_combined_alarm"
+                  "channel_aggregate_alarm"
                 ]
               }
             }

@@ -1,0 +1,31 @@
+{
+    "label": "课程:GPIO引脚控制(检测到目标驱动继电器/指示灯)",
+    "event_types": [],
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "out_pin": {
+                "type": "string",
+                "title": "输出引脚名",
+                "description": "GPIOx_Yz 格式, 如 GPIO6_A2",
+                "default": "GPIO6_A2"
+            },
+            "target_label": {
+                "type": "string",
+                "title": "触发类别",
+                "description": "画面中检测到该类别目标时输出有效电平, 如 person",
+                "default": "person"
+            },
+            "active_level": {
+                "type": "integer",
+                "title": "有效电平",
+                "description": "检测到目标时输出的电平: 1=高电平触发, 0=低电平触发(部分继电器模块为低电平触发)",
+                "default": 1,
+                "minimum": 0,
+                "maximum": 1
+            }
+        }
+    },
+    "report_fields": []
+}

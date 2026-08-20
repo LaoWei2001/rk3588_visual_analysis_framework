@@ -1,129 +1,76 @@
-# 通用事件投递服务
+# 应用级事件投递服务
 
-本服务消费 `event_store/<event_id>/`，负责投递状态、失败重试和适配器分派。它不参与视觉
-推理，也不包含 SOP 等业务判断。
+投递服务消费当前程序的 `event_store`，使用画布已经绑定的连接与版本化契约发送图片、视频和
+业务字段。视觉 Logic 不访问网络，Adapter 不包含业务字段名。
 
-## 目录
+## 能力分层
 
 ```text
-service/upload/
-├── main.py
-├── event_outbox.py
-├── delivery_tool.py
-├── contracts.py
-├── contracts/
-│   ├── object_invade_det.json
-│   └── dify_*.json
-├── config.yaml
-└── adapters/
-    ├── catalog.json
-    ├── registry.py
-    ├── mapping.py
-    ├── http_json.py
-    └── dify_workflow.py
+Logic                         产生事件、fields 和媒体需求
+Report contract template      远端字段、请求格式、成功条件
+Delivery connection           地址、认证、超时
+Canvas delivery binding       connection_id + contract_id + contract_revision
+Adapter                       HTTP / Dify 协议实现
 ```
 
-- `event_outbox.py`：只维护 pending/uploading/retry/delivered/invalid/failed 状态。
-- `registry.py`：`adapter ID -> Python 类` 的唯一分发表。
-- `catalog.json`：Web 使用的适配器能力和 Profile 字段清单。
-- `mapping.py`：稳定事件路径、类型转换、嵌套 target 和媒体转换。
-- `contracts/*.json`：接口字段、固定值、媒体、请求方式和成功条件的唯一权威。
-- `delivery_tool.py`：请求预览和测试发送，不修改发件箱状态。
+## 模板来源
 
-网络异常、HTTP 408/425/429 和服务器 5xx 会按 10 秒起步、最长 5 分钟的指数退避持续
-重试，网络恢复后自动补报；明确不可恢复的 HTTP 4xx、契约错误或媒体生成失败才进入
-`failed/invalid` 终态。升级时，旧版本因达到 12 次上限写成的 `failed` 会自动恢复重试。
+- `src/logic/modules/<logic>/report_templates/`：Logic 随附模板；必须在同目录 `logic.json` 的
+  `report_templates` 中声明。
+- `vision_analysis/report_templates/`：当前程序包或客户项目专用模板。
 
-## Profile
+系统不提供公共默认模板。新增上报功能时，Logic 专用契约放在对应 Logic 目录；跨 Logic 但只属于
+当前应用的客户接口放在 `vision_analysis/report_templates/`。Adapter 只实现协议，不携带默认业务契约。
 
-连接地址和密钥集中在 `config.yaml`：
+打包时 `scripts/generate_report_templates.py` 校验模板归属、事件类型、算法字段、媒体和 Adapter
+能力，并把结果聚合到程序包只读目录 `report_templates/`。
 
-```yaml
-profiles:
-  factory:
-    adapter: http_json
-    url: http://server.example.com/api/events
-    timeout: 15
-    headers:
-      Authorization: Bearer replace-me
+设备上通过 Web 创建或修改的契约保存在：
 
-  inspection:
-    adapter: dify_workflow
-    api_url: http://dify.example.com
-    api_key: app-replace-me
-    timeout: 120
+```text
+/opt/ai_apps/.data/<app>/report_contracts/
 ```
 
-接口契约的 `adapter` 必须与所选 Profile 的 `adapter` 一致。不存在隐式默认连接。
+Logic/应用模板和应用自定义契约在读取时合并；自定义契约可覆盖同 ID 包模板。不存在复制包内 contracts
+到 `.data` 的步骤，所以程序升级能立即带来新增模板，又不会覆盖应用自定义契约。
 
-## 接口模板
+## 连接
 
-字段 mapping 集中保存在 `contracts/*.json`，而不是复制进每个通道 delivery。Web 上报节点
-提供接口模板编辑器：它读取当前 logic 的 `report_fields`，并让开发者从系统事件、算法变量、
-媒体或固定值中选择 source，再填写远端 target。保存后生成或更新模板文件。
-`object_invade_det.json` 已完整声明 `source=JNU`、`eventType=4005`、两张图片和成功条件。
-正常运行时 Web 只选择 Profile 与接口模板。delivery 保存：
+连接保存在当前应用的数据目录：
+
+```text
+/opt/ai_apps/.data/<app>/connections.yaml
+```
+
+HTTP 连接只保存 `base_url`、认证 Header 和超时；接口 path、编码和字段位置属于契约。Dify 连接
+保存 API 基础地址、工作流 App API Key 和超时。连接不进入程序包。
+
+## 契约 revision
+
+契约内容使用 SHA-256 形成 revision。画布 delivery 必须保存：
 
 ```json
 {
-  "profile_id": "factory",
-  "contract_id": "object_invade_det",
-  "media": ["annotated_image", "raw_image"]
+  "connection_id": "production",
+  "contract_id": "logic_periodic_snapshot.http",
+  "contract_revision": "...",
+  "media": ["annotated_image"]
 }
 ```
 
-adapter、mapping、请求方式和成功条件都不复制到 delivery；`media` 是供 C++ 建立媒体任务的
-必要快照。
-Python 每次投递都会按 `contract_id` 重新加载权威模板，因此普通字段或成功条件变化只修改一份模板并重启
-投递服务。若模板改变了所需媒体，需在 Web 重新选择该模板并保存配置，使 C++ 获得新的媒体快照。
+投递服务把每个使用过的契约归档到 `.data/<app>/contract_revisions/`。契约被修改后，已经进入
+发件箱的事件继续使用原 revision；新画布绑定使用新 revision。
 
-Web 修改的是已安装 App 的 `services/upload/contracts/`。希望下次重新打包仍保留该模板时，
-应把确认后的 JSON 同步回仓库 `service/upload/contracts/`；应用包重装会以包内文件为准。
+## HTTP 请求模型
 
-## 模板字段来源
+HTTP 契约的 `request` 声明 `method`、`path` 和 `encoding=json|form|multipart`。每条 mapping
+通过 `location=body|query|form|header|file` 声明目标位置。`file` 位置必须使用 `transform=file`；
+Multipart 同时携带 JSON body 时，由契约的 `request.json_part` 明确 JSON Part 名称，Adapter
+不写死服务器字段。
 
-标准 source：
+## 结果记录
 
-- `event.id/type/message/trigger_unix_ms/...`
-- `source.channel_id`
-- `source.parameters.<key>`
-- `fields.<logic自定义字段>`
-- `media.annotated_image/raw_image/video`
-- `event`、`source`、`fields` 整体对象
-- `constant` 配合映射的 `value`
+每次远端请求结果写入 `.data/<app>/delivery_history/`，包括连接、契约 revision、HTTP 状态、
+重试次数和远端响应。Web“事件记录 → 远端回复历史”可以查看普通服务器响应或 Dify Outputs。
 
-通用转换：
-
-- `string/number/boolean/json`：`type`
-- `json_string`：对象序列化为 JSON 字符串
-- `base64`、`data_url`：媒体转入 HTTP JSON
-- `file`：HTTP multipart 文件或 Dify 文件上传
-
-HTTP 成功条件由模板定义，既可只判断状态码，也可判断响应 JSON 路径。Dify 适配器会先上传 `file`
-映射，再将文件 ID 和其他工作流输入一起提交。
-
-## 增加接口或平台
-
-同一种 HTTP/Dify 协议增加接口时，只新增一个 `contracts/<name>.json`，不修改 adapter。
-
-只有出现新的交互协议或签名算法时：
-
-1. 新建 `adapters/<name>.py`，实现 `preview()` 和 `send()`；
-2. 在 `registry.py` 注册 ID；
-3. 在 `catalog.json` 声明连接字段；
-4. 新增接口模板和单元测试。
-
-不需要修改 C++、logic、事件 schema、发件箱循环或 Web 表单组件。
-
-## 验证
-
-```bash
-python3 -m unittest discover -s service/upload/tests -p 'test_event_store.py' -v
-
-# 真实 Dify 视频联调
-python3 service/upload/tests/dify_video_test.py \
-  --video /path/to/clip.mp4 \
-  --prompt "请分析视频"
-```
-
-运行时默认目录为 App 根目录的 `event_store/`，可用 `EVENT_STORE_DIR` 覆盖。
+连接和契约在每次处理事件前重新加载；原子保存失败时不会生成半份运行配置。

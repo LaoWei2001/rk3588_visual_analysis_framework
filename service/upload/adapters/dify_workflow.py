@@ -5,7 +5,7 @@ from typing import Any, Dict
 import requests
 
 from .base import DeliveryAdapter, DeliveryResult, is_retryable_http_status
-from .mapping import mapped_values, set_path
+from .mapping import mapped_parts, set_path
 
 
 class DifyWorkflowAdapter(DeliveryAdapter):
@@ -20,11 +20,11 @@ class DifyWorkflowAdapter(DeliveryAdapter):
         return value
 
     def _connection(self):
-        api_url = str(self.profile.get("api_url", "")).strip()
-        api_key = str(self.profile.get("api_key", "")).strip()
+        api_url = str(self.connection.get("api_url", "")).strip()
+        api_key = str(self.connection.get("api_key", "")).strip()
         if not api_url or not api_key:
             raise ValueError("Dify api_url/api_key is empty")
-        return self._base_url(api_url), api_key, float(self.profile.get("timeout", 120))
+        return self._base_url(api_url), api_key, float(self.connection.get("timeout", 120))
 
     @staticmethod
     def _file_type(path: str) -> str:
@@ -36,7 +36,10 @@ class DifyWorkflowAdapter(DeliveryAdapter):
         return "custom"
 
     def _mapped_inputs(self, event: Dict[str, Any], delivery: Dict[str, Any], preview: bool):
-        inputs, files = mapped_values(event, delivery.get("mapping", []), preview=preview)
+        parts = mapped_parts(event, delivery.get("mapping", []), preview=preview)
+        if any(parts[name] for name in ("query", "form", "header")):
+            raise ValueError("Dify mappings only support body and file locations")
+        inputs, files = parts["body"], parts["file"]
         if preview:
             for target, path in files.items():
                 set_path(inputs, target, {"file": os.path.basename(path)})
@@ -95,11 +98,8 @@ class DifyWorkflowAdapter(DeliveryAdapter):
             )
             set_path(inputs, target, [value] if mode == "list" else value)
 
-        event_id = event.get("event", {}).get("id", "unknown")
-        delivery_id = delivery.get("id", "unknown")
         payload = {
             "inputs": inputs, "response_mode": "blocking", "user": user,
-            "workflow_run_id": f"{event_id}:{delivery_id}",
         }
         response = requests.post(
             f"{base_url}/v1/workflows/run",

@@ -1,0 +1,52 @@
+{
+  "received_at": "2026-08-20 13:44:37",
+  "seq": 4,
+  "endpoint": "/v1/workflows/run",
+  "headers": {
+    "Host": "127.0.0.1:9201",
+    "User-Agent": "python-requests/2.32.5",
+    "Accept-Encoding": "gzip, deflate",
+    "Accept": "*/*",
+    "Connection": "keep-alive",
+    "Authorization": "Bearer test-key-123",
+    "Content-Type": "application/json",
+    "Content-Length": "1294"
+  },
+  "body": {
+    "inputs": {
+      "prompt": "请分析这张监控图片，描述画面中的目标、行为和可能存在的风险。",
+      "channel_id": 0,
+      "capture_time": "2026-08-20 13:43:47",
+      "scene_name": "RK3588 监控通道",
+      "custom_text": "",
+      "report_interval_sec": 30,
+      "report_sequence": 1,
+      "object_count": 4,
+      "has_objects": true,
+      "detections_truncated": false,
+      "detections_json": "[{\"label\":\"toilet\",\"score\":0.344801664352417,\"class_id\":61,\"track_id\":-1,\"box\":{\"x\":187,\"y\":331,\"width\":241,\"height\":308}},{\"label\":\"refrigerator\",\"score\":0.6934775114059448,\"class_id\":72,\"track_id\":-1,\"box\":{\"x\":508,\"y\":57,\"width\":98,\"height\":162}},{\"label\":\"chair\",\"score\":0.4067884683609009,\"class_id\":56,\"track_id\":-1,\"box\":{\"x\":23,\"y\":232,\"width\":196,\"height\":407}},{\"label\":\"person\",\"score\":0.4881461560726166,\"class_id\":0,\"track_id\":-1,\"box\":{\"x\":556,\"y\":0,\"width\":83,\"height\":404}}]",
+      "custom_payload_json": "{}",
+      "image": [
+        {
+          "type": "image",
+          "transfer_method": "local_file",
+          "upload_file_id": "test-file-53be48aef2b7"
+        }
+      ]
+    },
+    "response_mode": "blocking",
+    "user": "rk3588-ch0",
+    "workflow_run_id": "ch0_20260820_134348_010_1:test_dify_image"
+  },
+  "response": {
+    "data": {
+      "id": "test-run-69b55fcb7614",
+      "workflow_run_id": "ch0_20260820_134348_010_1:test_dify_image",
+      "status": "succeeded",
+      "outputs": {
+        "result": "mock success"
+      }
+    }
+  },
+  "response_status": 200
+}

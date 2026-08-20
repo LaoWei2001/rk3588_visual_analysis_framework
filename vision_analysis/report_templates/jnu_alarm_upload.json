@@ -1,0 +1,21 @@
+{
+  "id": "app.jnu_alarm_upload",
+  "version": 1,
+  "label": "JNU 报警上报",
+  "description": "当前程序包的 JNU 服务器接口，使用 JSON Base64 图片",
+  "event_types": [],
+  "adapter": "http",
+  "media": ["annotated_image", "raw_image"],
+  "request": {"method": "POST", "path": "/api/objectInvadeDet", "encoding": "json"},
+  "mapping": [
+    {"source": "constant", "target": "source", "location": "body", "value": "JNU", "type": "string"},
+    {"source": "event.type", "target": "eventType", "location": "body", "required": false},
+    {"source": "event.snap_time", "target": "snapTime", "location": "body", "required": true},
+    {"source": "event.end_time", "target": "endTime", "location": "body", "required": true},
+    {"source": "media.annotated_image", "target": "base64Data", "location": "body", "transform": "base64", "required": true},
+    {"source": "media.raw_image", "target": "base64DataRaw", "location": "body", "transform": "base64", "required": false},
+    {"source": "constant", "target": "invadeFlag", "location": "body", "value": 1, "type": "number"},
+    {"source": "constant", "target": "detResult", "location": "body", "value": {}, "type": "json"}
+  ],
+  "success": {"http_status": [200]}
+}

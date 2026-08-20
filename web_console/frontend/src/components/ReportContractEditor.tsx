@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  fetchDeliveryAdapters, saveReportContract,
+  apiErrorMessage, fetchDeliveryAdapters, saveReportContract,
   type DeliveryAdapterDef, type ReportContract, type ReportField,
 } from '../api/client'
 
@@ -11,11 +11,12 @@ interface Props {
   appName: string
   adapter: string
   contract: ReportContract | null
+  logicName: string
   logicLabel: string
+  eventTypes: string[]
   reportFields: ReportField[]
   existingContractIds: string[]
   onSaved: (contract: ReportContract) => void
-  onCancel: () => void
   onDirtyChange?: (dirty: boolean) => void
 }
 
@@ -41,6 +42,7 @@ const SYSTEM_SOURCES: SourceOption[] = [
   { value: 'event.trigger_unix_ms', label: '触发时间戳', group: '系统事件', type: 'number' },
   { value: 'event.trigger_count', label: '事件触发次数', group: '系统事件', type: 'number' },
   { value: 'source.channel_id', label: '通道 ID', group: '系统事件', type: 'number' },
+  { value: 'source.video_channel_id', label: '事件视频通道 ID', group: '系统事件', type: 'number' },
   { value: 'event', label: '完整事件对象', group: '系统事件', type: 'json' },
   { value: 'source', label: '完整来源对象', group: '系统事件', type: 'json' },
   { value: 'fields', label: '全部算法字段', group: '系统事件', type: 'json' },
@@ -56,15 +58,19 @@ const CONSTANT_SOURCE: SourceOption = {
   value: 'constant', label: '固定值', group: '固定值', type: 'string',
 }
 
-const emptyContract = (adapter: string): ReportContract => ({
+const emptyContract = (adapter: string, logicName: string, eventTypes: string[]): ReportContract => ({
   id: '',
+  version: 1,
   label: '',
   description: '',
+  owner_logic: logicName,
+  event_types: eventTypes,
   adapter,
   media: [],
   mapping: [],
-  ...(adapter === 'http_json'
-    ? { request: { method: 'POST' }, success: { http_status: [200] } }
+  revision: '',
+  ...(adapter === 'http'
+    ? { request: { method: 'POST', path: '/api/events', encoding: 'json' }, success: { http_status: [200] } }
     : {}),
 })
 
@@ -103,12 +109,12 @@ function successStatuses(contract: ReportContract): string {
 }
 
 export default function ReportContractEditor({
-  appName, adapter, contract, logicLabel, reportFields, existingContractIds, onSaved, onCancel,
+  appName, adapter, contract, logicName, logicLabel, eventTypes, reportFields, existingContractIds, onSaved,
   onDirtyChange,
 }: Props) {
-  const editing = Boolean(contract)
+  const editing = contract?.origin === 'custom'
   const [draft, setDraft] = useState<ReportContract>(() =>
-    clone(contract ?? emptyContract(adapter)))
+    clone(contract ?? emptyContract(adapter, logicName, eventTypes)))
   const [adapters, setAdapters] = useState<DeliveryAdapterDef[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -117,10 +123,10 @@ export default function ReportContractEditor({
   const clearDirty = () => { if (dirty) { setDirty(false); onDirtyChange?.(false) } }
 
   useEffect(() => {
-    setDraft(clone(contract ?? emptyContract(adapter)))
+    setDraft(clone(contract ?? emptyContract(adapter, logicName, eventTypes)))
     setError('')
     clearDirty()
-  }, [adapter, contract])
+  }, [adapter, contract, logicName, eventTypes.join('|')])
 
   useEffect(() => {
     fetchDeliveryAdapters(appName).then(setAdapters).catch(() => setAdapters([]))
@@ -168,7 +174,7 @@ export default function ReportContractEditor({
   }
   const changeAdapter = (nextAdapter: string) => {
     markDirty()
-    const next = emptyContract(nextAdapter)
+    const next = emptyContract(nextAdapter, logicName, eventTypes)
     setDraft(current => ({
       ...current,
       adapter: nextAdapter,
@@ -197,6 +203,7 @@ export default function ReportContractEditor({
       mapping: [...current.mapping, {
         source: reportFields.length ? `fields.${reportFields[0].key}` : 'event.type',
         target: '',
+        location: 'body',
         required: true,
       }],
     }))
@@ -221,6 +228,7 @@ export default function ReportContractEditor({
       patchValue.value = ''
       patchValue.type = 'string'
       patchValue.transform = ''
+      patchValue.location = 'body'
     } else {
       delete patchValue.value
       patchValue.type = ''
@@ -230,7 +238,8 @@ export default function ReportContractEditor({
           setDraft(current => ({ ...current, media: [...current.media, kind] }))
         }
         patchValue.transform = draft.adapter === 'dify_workflow' ? 'file' : 'base64'
-        if (draft.adapter === 'dify_workflow') patchValue.file_mode = 'single'
+        patchValue.location = draft.adapter === 'dify_workflow' ? 'file' : 'body'
+        if (draft.adapter === 'dify_workflow') patchValue.file_mode = 'list'
       } else if (option?.type === 'json') {
         patchValue.transform = draft.adapter === 'dify_workflow' ? 'json_string' : ''
       } else {
@@ -270,11 +279,14 @@ export default function ReportContractEditor({
       const normalized: ReportContract = {
         ...draft,
         id,
+        version: editing ? draft.version + 1 : 1,
+        owner_logic: logicName,
+        event_types: eventTypes,
         label: draft.label.trim(),
         description: draft.description?.trim() ?? '',
         mapping,
       }
-      if (draft.adapter === 'http_json') {
+      if (draft.adapter === 'http') {
         const statuses = successStatuses(draft)
           .split(',').map(item => Number(item.trim())).filter(Number.isFinite)
         if (statuses.length === 0) throw new Error('至少填写一个 HTTP 成功状态码')
@@ -284,7 +296,7 @@ export default function ReportContractEditor({
       clearDirty()
       onSaved(saved)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
+      setError(apiErrorMessage(reason))
     } finally {
       setSaving(false)
     }
@@ -296,12 +308,13 @@ export default function ReportContractEditor({
 
   return <div className="report-contract-editor">
     <div className="report-section-title">
-      {editing ? `编辑接口模板：${contract?.label}` : '新建接口模板'}
+      {editing ? `编辑应用自定义契约：${contract?.label}`
+        : contract ? `基于程序包模板新建：${contract.label}` : '新建接口契约'}
     </div>
     <div className="report-mapping-help">
       当前算法：{logicLabel || '未选择'}。算法变量来自该模块的 logic.json.report_fields；
-      实际数值由 C++ EventRequest.fields 在事件触发时提供。保存后可用下方“预览请求”检查最终
-      JSON；运行中的投递服务需重启后才会加载新模板。
+      实际数值由 C++ EventRequest.fields 在事件触发时提供。程序包模板是只读能力；修改程序包模板时
+      需要填写新的 ID，将其保存为当前应用的自定义契约。
     </div>
 
     <div className="report-contract-grid">
@@ -349,7 +362,7 @@ export default function ReportContractEditor({
         </label>)}
     </div>
 
-    {draft.adapter === 'http_json' && <div className="report-contract-http">
+    {draft.adapter === 'http' && <div className="report-contract-http">
       <label className="node-field"><span>HTTP 方法</span>
         <select value={String(draft.request?.method ?? 'POST')}
           onChange={event => patch({ request: { ...draft.request, method: event.target.value } })}>
@@ -358,6 +371,25 @@ export default function ReportContractEditor({
           <option value="PATCH">PATCH</option>
         </select>
       </label>
+      <label className="node-field"><span>接口路径</span>
+        <input value={String(draft.request?.path ?? '')} placeholder="/api/events"
+          onChange={event => patch({ request: { ...draft.request, path: event.target.value } })} />
+      </label>
+      <label className="node-field"><span>请求编码</span>
+        <select value={String(draft.request?.encoding ?? 'json')}
+          onChange={event => patch({ request: { ...draft.request, encoding: event.target.value } })}>
+          <option value="json">JSON</option>
+          <option value="form">Form</option>
+          <option value="multipart">Multipart</option>
+        </select>
+      </label>
+      {draft.request?.encoding === 'multipart' &&
+        <label className="node-field"><span>JSON Part 名称（存在 body 字段时必填）</span>
+          <input value={String(draft.request?.json_part ?? '')} placeholder="payload"
+            onChange={event => patch({
+              request: { ...draft.request, json_part: event.target.value },
+            })} />
+        </label>}
       <label className="node-field"><span>成功状态码（逗号分隔）</span>
         <input value={successStatuses(draft)}
           onChange={event => patch({
@@ -435,6 +467,19 @@ export default function ReportContractEditor({
         </div>}
 
         <div className="report-map-advanced-body">
+          <label className="node-field"><span>请求位置</span>
+            <select value={item.location ?? 'body'}
+              onChange={event => patchMapping(index, {
+                location: event.target.value as Mapping['location'],
+                ...(event.target.value === 'file' ? { transform: 'file', file_mode: 'list' as const } : {}),
+              })}>
+              <option value="body">JSON / Dify input</option>
+              {draft.adapter === 'http' && <option value="query">Query</option>}
+              {draft.adapter === 'http' && <option value="form">Form</option>}
+              {draft.adapter === 'http' && <option value="header">Header</option>}
+              <option value="file">文件</option>
+            </select>
+          </label>
           {item.source !== 'constant' && <label className="node-field"><span>类型转换</span>
             <select value={item.type ?? ''}
               onChange={event => patchMapping(index, { type: event.target.value })}>
@@ -449,7 +494,9 @@ export default function ReportContractEditor({
             <select value={item.transform ?? ''}
               onChange={event => patchMapping(index, {
                 transform: event.target.value,
-                ...(event.target.value === 'file' ? { file_mode: 'single' as const } : {}),
+                ...(event.target.value === 'file'
+                  ? { file_mode: 'list' as const, location: 'file' as const }
+                  : item.location === 'file' ? { location: 'body' as const } : {}),
               })}>
               {transforms.map(transform => <option key={transform || 'none'} value={transform}>
                 {transform || '无'}
@@ -464,7 +511,7 @@ export default function ReportContractEditor({
         </div>
         <div className="report-map-preview">
           {item.source === 'constant' ? `常量 ${JSON.stringify(item.value ?? '')}` : item.source}
-          {' → '}{item.target || '（请填写远端字段）'}
+          {' → '}{item.location ?? 'body'}:{item.target || '（请填写远端字段）'}
         </div>
       </div>
     })}

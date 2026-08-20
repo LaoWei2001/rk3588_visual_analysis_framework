@@ -198,6 +198,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
     cJSON *gl_array = cJSON_GetObjectItemCaseSensitive(global, "global_logics");
     if (cJSON_IsArray(gl_array))
     {
+        std::vector<std::string> global_instance_ids;
         cJSON *gl_item = nullptr;
         cJSON_ArrayForEach(gl_item, gl_array)
         {
@@ -208,6 +209,24 @@ bool load_config(const std::string &path, AppConfig &cfg)
             gl_cfg.enable = false;
             gl_cfg.logic = "global_default";
             gl_cfg.poll_interval_ms = 100;
+
+            cJSON *gl_instance_id = cJSON_GetObjectItemCaseSensitive(gl_item, "instance_id");
+            if (!cJSON_IsString(gl_instance_id) || !gl_instance_id->valuestring || !gl_instance_id->valuestring[0])
+            {
+                fprintf(stderr, "[Config] global_logic[%zu].instance_id must be a non-empty string\n",
+                        cfg.global_logics.size());
+                cJSON_Delete(root);
+                return false;
+            }
+            gl_cfg.instance_id = gl_instance_id->valuestring;
+            if (std::find(global_instance_ids.begin(), global_instance_ids.end(), gl_cfg.instance_id) !=
+                global_instance_ids.end())
+            {
+                fprintf(stderr, "[Config] duplicate global logic instance_id: %s\n", gl_cfg.instance_id.c_str());
+                cJSON_Delete(root);
+                return false;
+            }
+            global_instance_ids.push_back(gl_cfg.instance_id);
 
             cJSON *gl_enable = cJSON_GetObjectItemCaseSensitive(gl_item, "enable");
             if (cJSON_IsBool(gl_enable))
@@ -231,10 +250,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                         gl_cfg.channels.push_back(ch_item->valueint);
                 }
             }
-
-            cJSON *gl_channels_explicit = cJSON_GetObjectItemCaseSensitive(gl_item, "channels_explicit");
-            if (cJSON_IsBool(gl_channels_explicit))
-                gl_cfg.channels_explicit = cJSON_IsTrue(gl_channels_explicit);
 
             cJSON *gl_parameters = cJSON_GetObjectItemCaseSensitive(gl_item, "logic_parameters");
             if (gl_parameters)
@@ -323,9 +338,9 @@ bool load_config(const std::string &path, AppConfig &cfg)
 
             if (gl_cfg.enable)
             {
-                printf("[Config] global_logic[%zu] enabled: logic=%s poll=%dms channels=%zu\n",
-                       cfg.global_logics.size() - 1, gl_cfg.logic.c_str(), gl_cfg.poll_interval_ms,
-                       gl_cfg.channels.size());
+                printf("[Config] global_logic[%zu] enabled: id=%s logic=%s poll=%dms connected=%zu\n",
+                       cfg.global_logics.size() - 1, gl_cfg.instance_id.c_str(), gl_cfg.logic.c_str(),
+                       gl_cfg.poll_interval_ms, gl_cfg.channels.size());
             }
         }
     }
@@ -664,19 +679,63 @@ bool load_config(const std::string &path, AppConfig &cfg)
     std::sort(cfg.channels.begin(), cfg.channels.end(),
               [](const ChannelConfig &a, const ChannelConfig &b) { return a.id < b.id; });
 
-    /* 全局逻辑复用事件录像器。只要某个全局上报节点需要视频，就为它的连入通道
-     * 开启同一套预录缓冲；默认媒体通道即使不在输入列表中也会被覆盖。 */
+    /* channels 只表示画布提供的可选输入子集，但其中每个 ID 仍必须是本应用的有效通道。
+     * C++ 按 ID 自选通道不经过这里，直接从 GlobalContext 的应用通道集合中读取。 */
+    for (const GlobalLogicConfig &global_logic : cfg.global_logics)
+    {
+        std::set<int> connected_ids;
+        for (int channel_id : global_logic.channels)
+        {
+            const bool exists = std::any_of(cfg.channels.begin(), cfg.channels.end(), [&](const ChannelConfig &channel) {
+                return channel.id == channel_id;
+            });
+            if (!exists)
+            {
+                fprintf(stderr, "[Config] global instance %s references unknown connected channel %d\n",
+                        global_logic.instance_id.c_str(), channel_id);
+                cJSON_Delete(root);
+                return false;
+            }
+            if (!connected_ids.insert(channel_id).second)
+            {
+                fprintf(stderr, "[Config] global instance %s has duplicate connected channel %d\n",
+                        global_logic.instance_id.c_str(), channel_id);
+                cJSON_Delete(root);
+                return false;
+            }
+        }
+        if (global_logic.media_source_channel_id >= 0)
+        {
+            const bool exists =
+                std::any_of(cfg.channels.begin(), cfg.channels.end(), [&](const ChannelConfig &channel) {
+                    return channel.id == global_logic.media_source_channel_id;
+                });
+            if (!exists)
+            {
+                fprintf(stderr, "[Config] global instance %s references unknown media source channel %d\n",
+                        global_logic.instance_id.c_str(), global_logic.media_source_channel_id);
+                cJSON_Delete(root);
+                return false;
+            }
+        }
+        if (global_logic.enable && global_logic.event_video.enable && global_logic.media_source_channel_id < 0)
+        {
+            fprintf(stderr, "[Config] global instance %s enables event video but has no media source channel\n",
+                    global_logic.instance_id.c_str());
+            cJSON_Delete(root);
+            return false;
+        }
+    }
+
+    /* 全局逻辑复用事件录像器。预录只作用于明确选择的媒体来源通道，绝不因为
+     * 没有画布连线而隐式扩展到应用全部通道。 */
     for (const GlobalLogicConfig &global_logic : cfg.global_logics)
     {
         if (!global_logic.enable || !global_logic.event_video.enable)
             continue;
         for (ChannelConfig &channel : cfg.channels)
         {
-            const bool all_channels = global_logic.channels.empty() && !global_logic.channels_explicit;
-            const bool connected = std::find(global_logic.channels.begin(), global_logic.channels.end(), channel.id) !=
-                                   global_logic.channels.end();
-            const bool default_source = channel.id == global_logic.media_source_channel_id;
-            if (!all_channels && !connected && !default_source)
+            if (channel.id != global_logic.media_source_channel_id)
                 continue;
             if (!channel.event_video.enable)
             {

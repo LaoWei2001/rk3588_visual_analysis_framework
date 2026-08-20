@@ -45,7 +45,7 @@ class RecordsSplitEventTest(unittest.TestCase):
                 },
             }), encoding="utf-8")
             (event_dir / "delivery_state.json").write_text(json.dumps({
-                "schema_version": 2,
+                "schema_version": 3,
                 "deliveries": [],
             }), encoding="utf-8")
 
@@ -81,11 +81,12 @@ class RecordsSplitEventTest(unittest.TestCase):
                 "media": {},
             }), encoding="utf-8")
             (event_dir / "delivery_state.json").write_text(json.dumps({
-                "schema_version": 2,
+                "schema_version": 3,
                 "deliveries": [{
                     "id": "event-data",
-                    "profile_id": "factory",
+                    "connection_id": "factory",
                     "contract_id": "server_event",
+                    "contract_revision": "revision",
                     "media": [],
                     "status": "retry",
                 }],

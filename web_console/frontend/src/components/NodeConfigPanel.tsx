@@ -31,6 +31,7 @@ interface Props {
   node: Node | null
   onUpdate: (nodeId: string, patch: Record<string, unknown>) => void
   channelIds?: number[]
+  allChannelIds?: number[]
   globalInputs?: { channelId: number; logic: string }[]
 }
 
@@ -56,7 +57,7 @@ const HEADER_CLASS: Record<string, string> = {
 }
 
 export default function NodeConfigPanel({
-  node, onUpdate, channelIds = [], globalInputs = [],
+  node, onUpdate, channelIds = [], allChannelIds = [], globalInputs = [],
 }: Props) {
   if (!node) {
     return (
@@ -85,7 +86,8 @@ export default function NodeConfigPanel({
         {node.type === 'sop'    && <SopInfo     node={node} onUpdate={onUpdate} />}
         {node.type === 'globalLogic' &&
           <GlobalLogicForm node={node} onUpdate={onUpdate} inputs={globalInputs} />}
-        {node.type === 'report' && <ReportForm  node={node} onUpdate={onUpdate} channelIds={channelIds} />}
+        {node.type === 'report' && <ReportForm node={node} onUpdate={onUpdate}
+          channelIds={channelIds} allChannelIds={allChannelIds} />}
         {node.type === 'roi'    && <ROIInfo     node={node} />}
       </div>
     </div>
@@ -156,13 +158,12 @@ function GlobalLogicForm({ node, onUpdate, inputs }: {
         onChange={value => onUpdate(node.id, { poll_interval_ms: value ?? 200 })} />
     </F>
     <div className="ncp-hint">
-      从单通道逻辑节点连入的数据决定可读取通道；未连线时不会隐式读取全部通道。
-      C++ 全局逻辑通过本 tick 的 ChannelLogicSnapshot 读取变量和同代参数；仅需要媒体时调用
-      get_channel_frame_snapshot()。
+      连线提供 connected_channels 这一组可选输入；C++ 也可以按通道号读取或遍历应用全部通道。
+      所有方式都使用本 tick 的线程安全 ChannelLogicSnapshot，不需要业务代码加锁。
     </div>
     <div className="ncp-section-label">已连接的通道数据契约</div>
     {inputs.length === 0
-      ? <div className="ncp-hint">尚未连接单通道逻辑。</div>
+      ? <div className="ncp-hint">尚未连接单通道逻辑；该节点仍可由 C++ 或参数自行选择通道。</div>
       : inputs.map(input => {
           const source = channelDefinitions.find(item => item.name === input.logic)
           const outputs = source?.outputs ?? []
@@ -171,7 +172,7 @@ function GlobalLogicForm({ node, onUpdate, inputs }: {
             <strong>通道 {input.channelId} · {source?.label || input.logic}</strong>
             <small>公开变量：{outputs.length
               ? outputs.map(output => `${output.label || output.key} (${output.type})`).join('、')
-              : '未声明 outputs（仍可读取 frame/results）'}</small>
+              : '未声明 outputs'}</small>
             <small>逻辑参数：{parameters.length
               ? parameters.map(param => param.label || param.key).join('、')
               : '无'}</small>

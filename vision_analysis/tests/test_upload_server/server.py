@@ -21,7 +21,7 @@
 
 === Profile 配置 ===
   Web 控制台 → 服务配置 → 新建 Profile：
-    适配器: http_json
+    适配器: http
     URL:    http://127.0.0.1:9200/api/objectInvadeDet
     超时:   15
 """

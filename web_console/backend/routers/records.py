@@ -27,6 +27,10 @@ def _store_dir(name: str) -> Path:
     return data_dir(name) / "event_store"
 
 
+def _history_dir(name: str) -> Path:
+    return data_dir(name) / "delivery_history"
+
+
 def _read_event_dir(event_dir: Path) -> dict:
     event_doc = json.loads((event_dir / "event.json").read_text(encoding="utf-8"))
     media_doc = json.loads((event_dir / "media_state.json").read_text(encoding="utf-8"))
@@ -121,6 +125,22 @@ async def list_records(name: str, limit: int = 500):
         "total_bytes": total,
         "cap_bytes": CAP_BYTES,
     }
+
+
+@router.get("/apps/{name}/delivery-history")
+async def list_delivery_history(name: str, limit: int = 500):
+    directory = _history_dir(name)
+    records = []
+    if directory.is_dir():
+        for path in directory.glob("*.json"):
+            try:
+                item = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(item, dict):
+                records.append(item)
+    records.sort(key=lambda item: int(item.get("updated_unix_ms", 0)), reverse=True)
+    return {"records": records[:max(0, limit)], "count": len(records)}
 
 
 @router.get("/apps/{name}/records/{event_id}/json")

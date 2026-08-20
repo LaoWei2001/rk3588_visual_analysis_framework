@@ -37,7 +37,6 @@ static void logic_course_08(ChannelContext *ctx)
         if (report.accepted())
             printf("事件已创建: %s\n", report.event_id.c_str());
     }
-    
 }
 
 REGISTER_LOGIC(logic_course_08);

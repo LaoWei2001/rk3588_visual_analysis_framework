@@ -1,0 +1,39 @@
+{
+    "label": "继电器控制(按钮开/关)",
+    "event_types": [],
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "relay_pin": {
+                "type": "string",
+                "title": "继电器控制引脚",
+                "description": "GPIOx_Yz 格式, 如 GPIO6_A2",
+                "default": "GPIO6_A2"
+            },
+            "on_level": {
+                "type": "integer",
+                "title": "开启所需电平",
+                "description": "继电器开启(吸合)时引脚输出的电平: 1=高电平触发, 0=低电平触发",
+                "default": 1,
+                "minimum": 0,
+                "maximum": 1
+            },
+            "start_state": {
+                "type": "boolean",
+                "title": "上电默认开启",
+                "description": "true=程序启动时继电器为开启状态; false=启动时为关闭状态",
+                "default": false
+            }
+        }
+    },
+    "report_fields": [],
+    "actions": [
+        {
+            "id": "toggle",
+            "label": "开/关继电器",
+            "style": "primary",
+            "help": "点击切换继电器开启与关闭"
+        }
+    ]
+}

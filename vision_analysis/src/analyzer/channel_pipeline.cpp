@@ -152,7 +152,7 @@ bool analyzer_publish_runtime_snapshot(const AppConfig &config, uint64_t generat
             pthread_mutex_lock(&g_pCtrl->chn_mtx[channel_id]);
             ChannelState &state = g_pCtrl->channels_state[channel_id];
             state.logic_state.reset();
-            state.logic_outputs = LogicOutputSet();
+            state.logic_outputs = empty_logic_output_snapshot();
             state.last_results.clear();
             state.draw_cmds.clear();
             state.last_frame.release();
@@ -250,7 +250,7 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         ch_state.last_logic_frame = frame_for_logic;
         ch_state.logic_state.reset();
-        ch_state.logic_outputs = LogicOutputSet();
+        ch_state.logic_outputs = empty_logic_output_snapshot();
         ch_state.last_results = current_results;
         ch_state.published_frame_seq = frame_id;
         ch_state.draw_cmds.clear();
@@ -267,7 +267,7 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
         ChannelState &state = g_pCtrl->channels_state[chnId];
         state.last_logic_frame = frame_for_logic;
         state.logic_state.reset();
-        state.logic_outputs = LogicOutputSet();
+        state.logic_outputs = empty_logic_output_snapshot();
         state.last_results = current_results;
         state.published_frame_seq = frame_id;
         state.draw_cmds.clear();
@@ -351,12 +351,19 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
     }
     fn(&ctx);
 
+    /* 堆分配在通道锁外完成，发布时只交换 shared_ptr。 */
+    std::shared_ptr<const LogicOutputSet> published_outputs;
+    if (logic_outputs.empty())
+        published_outputs = empty_logic_output_snapshot();
+    else
+        published_outputs = std::make_shared<const LogicOutputSet>(std::move(logic_outputs));
+
     /* 原子写回共享状态：媒体快照在同一把锁内读出，三者必定同帧。*/
     {
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         ch_state.last_logic_frame = frame_for_logic;
         ch_state.logic_state = std::move(logic_state);
-        ch_state.logic_outputs = std::move(logic_outputs);
+        ch_state.logic_outputs = std::move(published_outputs);
         ch_state.last_results = current_results;
         ch_state.published_frame_seq = frame_id;
         ch_state.draw_cmds = std::move(draw_cmds);

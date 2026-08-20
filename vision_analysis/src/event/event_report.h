@@ -148,8 +148,9 @@ struct EventRequest
     std::string message;
     EventFields fields;
     EventMergeMode merge_mode = EventMergeMode::NEVER;
-    /* 全局 logic 可为本次事件选择来源标识及事件视频通道；-1 使用节点配置的默认通道。
-     * 全局事件图片始终拼接该全局实例的全部输入通道，不受此字段影响。
+    /* 全局 logic 可为本次事件选择来源标识和单通道图片；-1 使用节点配置的默认通道。
+     * 有画布输入时图片拼接连入通道；没有画布输入时图片使用该来源通道。
+     * 事件视频始终使用全局上报节点明确选择的 media_source_channel_id，以限制预录开销。
      * 通道 logic 调用时无需设置，仍使用 ctx->chnId。 */
     int source_channel_id = -1;
 };

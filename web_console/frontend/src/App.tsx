@@ -16,14 +16,14 @@ import { useEditorStore } from './store/editorStore'
 import { apiLogout }    from './api/client'
 import './App.css'
 
-// 编辑器或服务配置有未保存改动时，侧边栏跳转/退出前先确认。
+// 编辑器或当前应用集成有未保存改动时，侧边栏跳转/退出前先确认。
 const confirmLeaveIfDirty = (): boolean => {
   const state = useEditorStore.getState()
   if (state.dirty) {
     return window.confirm('编辑器有未保存的改动，确定离开？未保存的修改将丢失。')
   }
-  if (state.serviceConfigDirty) {
-    return window.confirm('服务参数有未保存的改动，确定离开？未保存的修改将丢失。')
+  if (state.appIntegrationDirty) {
+    return window.confirm('当前程序的应用集成有未保存改动，确定离开？')
   }
   return true
 }
@@ -83,7 +83,7 @@ function AppShell() {
         </NavLink>
 
         <NavLink to="/services" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
-          <span className="nav-icon">⚙</span> 服务配置
+          <span className="nav-icon">⚙</span> 系统服务
         </NavLink>
 
         <NavLink to="/system-settings" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>

@@ -1,5 +1,8 @@
 {
     "label": "课程8:如何定时上报图片",
+    "report_templates": [
+        "report_templates/http_periodic_snapshot.json"
+    ],
     "event_types": [
         {
             "id": "logic_course_08",

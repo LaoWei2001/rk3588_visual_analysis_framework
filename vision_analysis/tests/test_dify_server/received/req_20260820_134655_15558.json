@@ -1,0 +1,30 @@
+{
+  "received_at": "2026-08-20 13:46:55",
+  "seq": 5,
+  "endpoint": "/v1/files/upload",
+  "headers": {
+    "Host": "127.0.0.1:9201",
+    "User-Agent": "python-requests/2.32.5",
+    "Accept-Encoding": "gzip, deflate",
+    "Accept": "*/*",
+    "Connection": "keep-alive",
+    "Authorization": "Bearer test-key-123",
+    "Content-Length": "110866",
+    "Content-Type": "multipart/form-data; boundary=3abea767912127d36c4e0f1cb0bfbfa5"
+  },
+  "form_fields": {
+    "user": "rk3588-ch0"
+  },
+  "files": [
+    {
+      "field_name": "file",
+      "original_filename": "annotated.jpg",
+      "saved_as": "seq0005_file_annotated.jpg",
+      "size_bytes": 110596
+    }
+  ],
+  "response": {
+    "id": "test-file-698fa2a7d9ce"
+  },
+  "response_status": 201
+}

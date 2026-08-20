@@ -1,0 +1,131 @@
+{
+  "label": "示例：Dify 周期截图与自定义变量",
+  "report_templates": [
+    "report_templates/dify_periodic_snapshot.json"
+  ],
+  "event_types": [
+    {
+      "id": "dify_periodic_snapshot",
+      "label": "Dify 周期截图",
+      "help": "按画布配置的时间间隔提交当前通道图片、提示词和自定义变量。"
+    }
+  ],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "report_interval_sec": {
+        "type": "integer",
+        "title": "截图上报间隔",
+        "description": "从第一张有效业务帧开始计时；修改后重新等待一个完整间隔。",
+        "minimum": 1,
+        "maximum": 86400,
+        "default": 10,
+        "x-unit": "秒",
+        "x-step": 1,
+        "x-hot-reload": "reset_state"
+      },
+      "first_report_immediately": {
+        "type": "boolean",
+        "title": "首帧立即上报",
+        "description": "关闭时先等待一个完整间隔；开启时收到第一张有效业务帧就创建事件，适合联调。",
+        "default": false,
+        "x-hot-reload": "reset_state"
+      },
+      "prompt": {
+        "type": "string",
+        "title": "Dify 提示词",
+        "description": "在画布填写并随每次事件发送，不需要在 Dify 工作流中写死。",
+        "default": "请分析这张监控图片，描述画面中的目标、行为和可能存在的风险。",
+        "x-placeholder": "请输入发送给 Dify 工作流的提示词",
+        "x-widget": "textarea",
+        "x-hot-reload": "preserve_state"
+      },
+      "scene_name": {
+        "type": "string",
+        "title": "场景名称",
+        "description": "自定义字符串变量示例；同一个 logic 放到不同通道时可以分别填写。",
+        "default": "RK3588 监控通道",
+        "x-placeholder": "例如：一号仓库东门",
+        "x-hot-reload": "preserve_state"
+      },
+      "custom_text": {
+        "type": "string",
+        "title": "自定义文本",
+        "description": "演示把额外业务文本从画布传入 Dify；不需要时可以留空。",
+        "default": "",
+        "x-placeholder": "例如：夜间巡检任务",
+        "x-hot-reload": "preserve_state"
+      },
+      "custom_payload": {
+        "type": "object",
+        "title": "自定义 JSON",
+        "description": "可在画布填写任意附加 JSON 对象；示例契约会序列化为 custom_payload_json 文本。",
+        "default": {},
+        "x-hot-reload": "preserve_state"
+      },
+      "max_detections": {
+        "type": "integer",
+        "title": "最多携带的检测目标数",
+        "description": "限制 detections JSON 数组长度，避免事件和 Dify inputs 过大；object_count 始终是完整数量。",
+        "minimum": 0,
+        "maximum": 200,
+        "default": 20,
+        "x-step": 1,
+        "x-hot-reload": "preserve_state"
+      }
+    }
+  },
+  "report_fields": [
+    {
+      "key": "prompt",
+      "type": "string",
+      "label": "Dify 提示词"
+    },
+    {
+      "key": "scene_name",
+      "type": "string",
+      "label": "场景名称"
+    },
+    {
+      "key": "custom_text",
+      "type": "string",
+      "label": "自定义文本"
+    },
+    {
+      "key": "report_interval_sec",
+      "type": "number",
+      "label": "上报间隔（秒）"
+    },
+    {
+      "key": "report_sequence",
+      "type": "number",
+      "label": "本通道上报序号"
+    },
+    {
+      "key": "object_count",
+      "type": "number",
+      "label": "当前目标数量"
+    },
+    {
+      "key": "has_objects",
+      "type": "boolean",
+      "label": "当前是否存在目标"
+    },
+    {
+      "key": "detections_truncated",
+      "type": "boolean",
+      "label": "检测结果是否截断"
+    },
+    {
+      "key": "detections",
+      "type": "json",
+      "label": "当前检测结果"
+    },
+    {
+      "key": "custom_payload",
+      "type": "json",
+      "label": "画布自定义 JSON"
+    }
+  ]
+}

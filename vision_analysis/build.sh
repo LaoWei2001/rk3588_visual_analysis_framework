@@ -291,6 +291,14 @@ for entry in "${PYTHON_SERVICES[@]}"; do
     echo "  打包: $SRC_REL  ->  services/$DST_NAME"
 done
 
+REPORT_TEMPLATE_GENERATOR="$PROJECT_DIR/scripts/generate_report_templates.py"
+python3 "$REPORT_TEMPLATE_GENERATOR" \
+    --logic-root "$PROJECT_DIR/src/logic" \
+    --app-dir "$PROJECT_DIR/report_templates" \
+    --adapter-catalog "$REPO_ROOT/service/upload/adapters/catalog.json" \
+    --output "$DIST_DIR/report_templates"
+echo "  聚合: Logic/应用上报模板  ->  report_templates/"
+
 # --- 生成运行时脚本 ---
 echo ""
 echo ">>> [3/4] 生成运行时与部署脚本 (systemd 架构)..."
@@ -344,6 +352,10 @@ cat > "$DIST_DIR/deploy.sh" << 'DEPLOY_EOF'
 # 注意: 交互式脚本为了更好的用户体验，未设置全局 set -e
 
 ABS_PATH=$(cd "$(dirname "$0")"; pwd)
+APP_NAME=$(basename "$ABS_PATH")
+APP_DATA_DIR=$(dirname "$ABS_PATH")/.data/$APP_NAME
+mkdir -p "$APP_DATA_DIR/event_store" "$APP_DATA_DIR/report_contracts" \
+    "$APP_DATA_DIR/contract_revisions" "$APP_DATA_DIR/delivery_history"
 
 if [ -z "$1" ]; then
     echo "用法: bash deploy.sh <配置文件路径>"
@@ -397,6 +409,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$ABS_PATH
 Environment=ASSETS_DIR=$ABS_PATH/assets
+Environment=EVENT_STORE_DIR=$APP_DATA_DIR/event_store
 Environment="LD_LIBRARY_PATH=$ABS_PATH/libs:/usr/lib:/usr/local/lib"
 ExecStart=$ABS_PATH/vision_analysis $CONFIG_PATH
 Restart=always
@@ -438,6 +451,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$ABS_PATH/services/upload
+Environment=UPLOAD_DATA_DIR=$APP_DATA_DIR
+Environment=EVENT_STORE_DIR=$APP_DATA_DIR/event_store
 ExecStart=/usr/bin/python3 -u main.py
 Restart=always
 RestartSec=5

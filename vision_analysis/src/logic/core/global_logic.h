@@ -2,9 +2,9 @@
  * @file global_logic.h
  * @brief 跨通道全局算法接口与轮询调度
  *
- * 全局算法每个 tick 接收一批固定的 ChannelLogicSnapshot。该批次只复制业务变量和
- * 元信息，不复制图像；同一函数调用内重复查询不会跨版本。只有确实需要图像、检测
- * 结果或绘制指令时，才显式调用 get_channel_frame_snapshot()。
+ * 全局算法每个 tick 接收应用全部通道的一批固定 ChannelLogicSnapshot。Web 画布连线
+ * 只是其中一个可选子集；业务既可以遍历连入通道，也可以按 ID 读取或遍历全部通道。
+ * 该批次只复制业务变量和元信息，不复制图像，同一函数调用内重复查询不会跨版本。
  *
  * 通道私有状态不是跨模块接口。通道 logic 必须在 logic.json 的 outputs 中声明业务
  * 变量，并通过 ctx->publish_*() 发布；全局算法只依赖这份公开数据契约。
@@ -66,7 +66,8 @@ struct GlobalContext
      * 框架构造的本 tick 固定输入批次；其中对象和查询返回的指针只在本次 logic 调用期间有效，
      * 不得缓存到 state 或异步线程。需要跨 tick 保存时复制所需标量/字符串。
      */
-    const std::vector<ChannelLogicSnapshot> *channel_snapshots = nullptr;
+    const std::vector<ChannelLogicSnapshot> *channel_snapshots = nullptr; /* 应用全部通道 */
+    const std::vector<int> *connected_channel_ids = nullptr;              /* Web 画布连入通道 */
     const std::vector<ChannelUpdate> *updated_channels = nullptr;
 
     bool has_param(const char *key) const;
@@ -79,6 +80,11 @@ struct GlobalContext
     std::size_t channel_count() const
     {
         return channel_snapshots ? channel_snapshots->size() : 0;
+    }
+
+    std::size_t connected_channel_count() const
+    {
+        return connected_channel_ids ? connected_channel_ids->size() : 0;
     }
 
     const ChannelLogicSnapshot *channel_at(std::size_t index) const
@@ -99,6 +105,23 @@ struct GlobalContext
     bool contains_channel(int configured_id) const
     {
         return channel(configured_id) != nullptr;
+    }
+
+    bool is_connected_channel(int configured_id) const
+    {
+        if (!connected_channel_ids)
+            return false;
+        for (int channel_id : *connected_channel_ids)
+            if (channel_id == configured_id)
+                return true;
+        return false;
+    }
+
+    const ChannelLogicSnapshot *connected_channel_at(std::size_t index) const
+    {
+        return connected_channel_ids && index < connected_channel_ids->size()
+                   ? channel((*connected_channel_ids)[index])
+                   : nullptr;
     }
 
     bool has_updates() const
@@ -132,13 +155,12 @@ struct GlobalContext
         return latest;
     }
 
-    /**
-     * 深拷贝当前最新媒体快照。它可能比本 tick 的轻量快照更新，不能混用两者证明
-     * 同一版本；需要核对时比较 frame.logic.publication_seq。
-     */
+    /** 深拷贝本 tick 对应的媒体快照；通道已更新到下一版时返回 false，绝不混用版本。 */
     bool get_channel_frame_snapshot(int configured_id, ChannelFrameSnapshot *out) const
     {
-        return out && app_ctrl_get_channel_frame_snapshot(configured_id, out) != 0;
+        const ChannelLogicSnapshot *expected = channel(configured_id);
+        return out && expected && app_ctrl_get_channel_frame_snapshot(configured_id, out) != 0 &&
+               out->logic.publication_seq == expected->publication_seq;
     }
 
     template <typename Func> void for_each_channel(Func &&fn) const
@@ -147,6 +169,18 @@ struct GlobalContext
             return;
         for (std::size_t i = 0; i < channel_snapshots->size(); ++i)
             fn((*channel_snapshots)[i], static_cast<int>(i));
+    }
+
+    template <typename Func> void for_each_connected_channel(Func &&fn) const
+    {
+        if (!connected_channel_ids)
+            return;
+        for (std::size_t i = 0; i < connected_channel_ids->size(); ++i)
+        {
+            const ChannelLogicSnapshot *snapshot = channel((*connected_channel_ids)[i]);
+            if (snapshot)
+                fn(*snapshot, static_cast<int>(i));
+        }
     }
 
     template <typename Func> void for_each_updated_channel(Func &&fn) const
@@ -182,6 +216,7 @@ struct GlobalLogicRegistrar
 #define REGISTER_GLOBAL_LOGIC(func) static const GlobalLogicRegistrar _global_logic_reg_##func(#func, func)
 
 int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs);
+int global_logic_reload_all(const std::vector<GlobalLogicConfig> &cfgs);
 void global_logic_stop_all(void);
 int global_logic_get_instance_count(void);
 void *global_logic_thread_func(void *arg);

@@ -2,14 +2,11 @@ import base64
 import json
 import mimetypes
 import os
-from typing import Any, Dict, Iterable, Tuple
+from typing import Any, Dict, Iterable
+
 
 MISSING = object()
-MEDIA_SOURCES = {
-    "media.annotated_image",
-    "media.raw_image",
-    "media.video",
-}
+MAPPING_LOCATIONS = {"body", "query", "form", "header", "file"}
 
 
 def lookup(event: Dict[str, Any], source: str) -> Any:
@@ -73,7 +70,7 @@ def transform_value(value: Any, transform: str, preview: bool = False) -> Any:
             with open(value, "rb") as stream:
                 encoded = base64.b64encode(stream.read()).decode()
         if transform == "data_url":
-            mime = mimetypes.guess_type(value)[0] or "application/octet-stream"
+            mime = mimetypes.guess_type(str(value))[0] or "application/octet-stream"
             return f"data:{mime};base64,{encoded}"
         return encoded
     if transform == "file":
@@ -83,20 +80,21 @@ def transform_value(value: Any, transform: str, preview: bool = False) -> Any:
     raise ValueError(f"unsupported mapping transform: {transform}")
 
 
-def mapped_values(
-    event: Dict[str, Any],
-    mappings: Iterable[Dict[str, Any]],
-    *,
-    preview: bool = False,
-) -> Tuple[Dict[str, Any], Dict[str, str]]:
-    values: Dict[str, Any] = {}
-    files: Dict[str, str] = {}
+def mapped_parts(
+    event: Dict[str, Any], mappings: Iterable[Dict[str, Any]], *, preview: bool = False,
+) -> Dict[str, Dict[str, Any]]:
+    parts: Dict[str, Dict[str, Any]] = {
+        "body": {}, "query": {}, "form": {}, "header": {}, "file": {},
+    }
     for mapping in mappings:
         if not isinstance(mapping, dict):
             raise ValueError("each mapping entry must be an object")
         source = str(mapping.get("source", "")).strip()
         target = str(mapping.get("target", "")).strip()
+        location = str(mapping.get("location", "body")).strip() or "body"
         required = bool(mapping.get("required", False))
+        if location not in MAPPING_LOCATIONS:
+            raise ValueError(f"unsupported mapping location: {location}")
         if not source or not target:
             if required:
                 raise ValueError("required mapping source/target is empty")
@@ -112,18 +110,24 @@ def mapped_values(
                 continue
         value = coerce(value, str(mapping.get("type", "")))
         transform = str(mapping.get("transform", "")).strip()
+        if transform in ("base64", "data_url", "file") and not source.startswith("media."):
+            raise ValueError(f"file-content transform requires a media source: {source}")
         value = transform_value(value, transform, preview)
-        if transform == "file":
-            files[target] = value
-        else:
-            set_path(values, target, value)
-    return values, files
+        if location == "file" and transform != "file":
+            raise ValueError(f"file mapping {target} requires transform=file")
+        set_path(parts[location], target, value)
+    return parts
 
 
 def response_path(root: Any, path: str) -> Any:
     current = root
     for part in (part for part in path.split(".") if part):
-        if not isinstance(current, dict) or part not in current:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+            continue
+        if isinstance(current, list) and part.isdigit() and int(part) < len(current):
+            current = current[int(part)]
+            continue
+        else:
             return MISSING
-        current = current[part]
     return current

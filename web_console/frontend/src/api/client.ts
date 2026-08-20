@@ -3,6 +3,14 @@ import { useAuthStore } from '../store/authStore'
 
 const api = axios.create({ baseURL: '/api' })
 
+export const apiErrorMessage = (error: unknown): string => {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail ?? error.response?.data?.message
+    return typeof detail === 'string' ? detail : error.message
+  }
+  return error instanceof Error ? error.message : String(error)
+}
+
 // ── Request: attach Bearer token ──────────────────────────────────────────
 api.interceptors.request.use(config => {
   const token = useAuthStore.getState().token
@@ -246,15 +254,15 @@ export const sendChannelAction = (
   payload: Record<string, unknown> = {},
 ) => api.post(`/apps/${name}/channels/${channelId}/actions/${encodeURIComponent(action)}`, { payload }).then(r => r.data)
 
-// ── 微服务配置 (上报服务 config.yaml 默认值 + OTA 升级服务 ota_config.json) ──
-export interface UploadProfile {
+// ── 当前程序包的投递连接、契约模板与 OTA 配置 ──
+export interface DeliveryConnection {
   adapter: string
   [key: string]: unknown
 }
-export interface UploadServiceConfig {
-  profiles: Record<string, UploadProfile>
+export interface DeliveryConnectionsConfig {
+  connections: Record<string, DeliveryConnection>
 }
-export interface AdapterProfileField {
+export interface AdapterConnectionField {
   key: string
   label: string
   type: 'string' | 'secret' | 'number' | 'json' | 'select'
@@ -266,13 +274,16 @@ export interface DeliveryAdapterDef {
   id: string
   label: string
   supported_media: Array<'annotated_image' | 'raw_image' | 'video'>
-  profile_fields: AdapterProfileField[]
+  connection_fields: AdapterConnectionField[]
   transforms: string[]
 }
 export interface ReportContract {
   id: string
+  version: number
   label: string
   description?: string
+  owner_logic?: string
+  event_types: string[]
   adapter: string
   media: Array<'annotated_image' | 'raw_image' | 'video'>
   mapping: Array<{
@@ -281,22 +292,24 @@ export interface ReportContract {
     value?: unknown
     type?: string
     transform?: string
+    location?: 'body' | 'query' | 'form' | 'header' | 'file'
     file_mode?: 'single' | 'list'
     required?: boolean
   }>
   request?: Record<string, unknown>
   success?: Record<string, unknown>
-  source_file?: string
+  origin?: 'package' | 'custom'
+  revision: string
 }
 export interface OtaConfig {
   platform_ws_host: string
   target_config: string
 }
 
-export const fetchUploadConfig = (name: string) =>
-  api.get<UploadServiceConfig>(`/apps/${name}/upload-config`).then(r => r.data)
-export const saveUploadConfig = (name: string, cfg: UploadServiceConfig) =>
-  api.post(`/apps/${name}/upload-config`, cfg).then(r => r.data)
+export const fetchConnections = (name: string) =>
+  api.get<DeliveryConnectionsConfig>(`/apps/${name}/connections`).then(r => r.data)
+export const saveConnections = (name: string, cfg: DeliveryConnectionsConfig) =>
+  api.put(`/apps/${name}/connections`, cfg).then(r => r.data)
 export const fetchDeliveryAdapters = (name: string) =>
   api.get<{ adapters: DeliveryAdapterDef[] }>(`/apps/${name}/delivery-adapters`).then(r => r.data.adapters)
 export const fetchReportContracts = (name: string) =>
@@ -306,6 +319,8 @@ export const saveReportContract = (name: string, contract: ReportContract) =>
     `/apps/${name}/report-contracts/${encodeURIComponent(contract.id)}`,
     contract,
   ).then(r => r.data.contract)
+export const deleteReportContract = (name: string, contractId: string) =>
+  api.delete(`/apps/${name}/report-contracts/${encodeURIComponent(contractId)}`).then(r => r.data)
 export const previewDelivery = (
   name: string,
   delivery: Record<string, unknown>,
@@ -525,7 +540,8 @@ export interface EventRecord {
   media_statuses?: Record<string, { status: string; error?: string }>
   total_bytes?: number
   deliveries: Array<{
-    id?: string; media?: string[]; profile_id?: string; contract_id?: string; status?: string
+    id?: string; media?: string[]; connection_id?: string; contract_id?: string
+    contract_revision?: string; status?: string
     attempts?: number; last_error?: string
   }>
 }
@@ -552,6 +568,26 @@ export interface RecordJsonResponse {
 export const fetchRecordJson = (name: string, id: string) =>
   api.get<RecordJsonResponse>(
     `/apps/${encodeURIComponent(name)}/records/${encodeURIComponent(id)}/json`,
+  ).then(r => r.data)
+
+export interface DeliveryHistoryRecord {
+  event_id: string
+  event_type: string
+  snap_time: string
+  channel_id: number | null
+  connection_id: string
+  contract_id: string
+  contract_revision: string
+  status: string
+  attempts: number
+  http_status: number
+  detail: string
+  response: unknown
+  updated_unix_ms: number
+}
+export const fetchDeliveryHistory = (name: string, limit = 500) =>
+  api.get<{ records: DeliveryHistoryRecord[]; count: number }>(
+    `/apps/${name}/delivery-history`, { params: { limit } },
   ).then(r => r.data)
 
 // <img> 无法带 Authorization 头，token 走查询参数（后端 auth_middleware 已放行）

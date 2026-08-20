@@ -1,10 +1,10 @@
 [
   {
-    "id": "http_json",
-    "label": "HTTP JSON",
+    "id": "http",
+    "label": "HTTP",
     "supported_media": ["annotated_image", "raw_image", "video"],
-    "profile_fields": [
-      {"key": "url", "label": "请求地址", "type": "string", "required": true},
+    "connection_fields": [
+      {"key": "base_url", "label": "服务器基础地址", "type": "string", "required": true},
       {"key": "timeout", "label": "超时（秒）", "type": "number", "default": 15},
       {"key": "headers", "label": "请求头 JSON", "type": "json", "default": {}}
     ],
@@ -14,7 +14,7 @@
     "id": "dify_workflow",
     "label": "Dify 工作流",
     "supported_media": ["annotated_image", "raw_image", "video"],
-    "profile_fields": [
+    "connection_fields": [
       {"key": "api_url", "label": "Dify API 地址", "type": "string", "required": true},
       {"key": "api_key", "label": "Dify API Key", "type": "secret", "required": true},
       {"key": "timeout", "label": "超时（秒）", "type": "number", "default": 120}

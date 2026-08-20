@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from routers import (apps, assets, auth, channel_control, config_io, logs, network_settings,
                      ota_config, process, records, services, snapshot, storage_settings, stream,
-                     system_settings, terminal, upload_config)
+                     system_settings, terminal, delivery_config)
 from services.auth_service import get_session
 from services import process_manager as process_manager
 from services import runtime_state
@@ -141,7 +141,7 @@ app.include_router(process.router,   prefix="/api")
 app.include_router(snapshot.router,  prefix="/api")
 app.include_router(records.router,   prefix="/api")
 app.include_router(stream.router,    prefix="/api")
-app.include_router(upload_config.router, prefix="/api")
+app.include_router(delivery_config.router, prefix="/api")
 app.include_router(ota_config.router,    prefix="/api")
 app.include_router(services.router,      prefix="/api")
 app.include_router(storage_settings.router, prefix="/api")

@@ -47,8 +47,9 @@
           {
             "id": "test_dify_image",
             "enabled": true,
-            "profile_id": "server_22",
-            "contract_id": "jnu_alarm_upload",
+            "connection_id": "",
+            "contract_id": "",
+            "contract_revision": "",
             "media": [
               "annotated_image",
               "raw_image"
@@ -103,8 +104,9 @@
           {
             "id": "test_dify_image",
             "enabled": true,
-            "profile_id": "server_22",
-            "contract_id": "jnu_alarm_upload",
+            "connection_id": "",
+            "contract_id": "",
+            "contract_revision": "",
             "media": [
               "annotated_image",
               "raw_image"
@@ -153,8 +155,9 @@
           {
             "id": "test_dify_image",
             "enabled": true,
-            "profile_id": "server_22",
-            "contract_id": "jnu_alarm_upload",
+            "connection_id": "",
+            "contract_id": "",
+            "contract_revision": "",
             "media": [
               "annotated_image",
               "raw_image"
@@ -203,8 +206,9 @@
           {
             "id": "test_dify_image",
             "enabled": true,
-            "profile_id": "server_22",
-            "contract_id": "jnu_alarm_upload",
+            "connection_id": "",
+            "contract_id": "",
+            "contract_revision": "",
             "media": [
               "annotated_image",
               "raw_image"
