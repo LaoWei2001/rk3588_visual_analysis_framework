@@ -5,8 +5,8 @@
  * 职责:
  *   - rga_convert_resize / rga_import_src_fd / rga_convert_resize_handle
  *       → RGA3 硬件格式转换与缩放（NV12→BGR / FD→虚拟地址）
- *   - convertToYoloInput
- *       → 解码帧→模型输入 640×640 BGR（RGA 优先，软件回退）
+ *   - LazyVideoFrame
+ *       → Logic 按需取得模型尺寸或原始尺寸 BGR（RGA 优先，软件回退）
  *   - rgaFmt
  *       → 格式字符串 → RK_FORMAT_* 枚举
  *
@@ -16,13 +16,13 @@
  *   此文件的 RGA 调用段不得修改 core 参数。
  */
 
-#include "../core/app_ctrl.h"
 #include "../core/image_utils.h"
 #include "frame_pipeline.h"
 
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 #include <opencv2/opencv.hpp>
 #include <rga/im2d.h>
 
@@ -158,86 +158,126 @@ bool rga_convert_resize_handle(int chnId, const RgaImportedBuffer &src, int dst_
     return true;
 }
 
-/*======================== YOLO 输入转换（RGA 优先，软件回退）========================*/
-
-bool convertToYoloInput(int chnId, void *pSrcData, int src_fd, int srcW, int srcH, int srcStrH, int srcStrV, int srcFmt,
-                        cv::Mat &out)
+bool rga_convert_resize_handle_to_bgr(int chnId, const RgaImportedBuffer &src, int dst_w, int dst_h, cv::Mat &out)
 {
-    if (srcW <= 0 || srcH <= 0 || srcStrH <= 0 || srcStrV <= 0 || (!pSrcData && src_fd < 0))
+    if (src.handle == 0 || dst_w <= 0 || dst_h <= 0)
+        return false;
+
+    out.create(dst_h, dst_w, CV_8UC3);
+    rga_buffer_t src_buf =
+        wrapbuffer_handle(src.handle, src.width, src.height, src.format, src.stride_w, src.stride_h);
+    rga_buffer_t dst_buf =
+        wrapbuffer_virtualaddr(out.data, dst_w, dst_h, RK_FORMAT_BGR_888, dst_w, dst_h);
+    dst_buf.fd = -1;
+
+    im_rect srect = {0, 0, src.width, src.height};
+    im_rect drect = {0, 0, dst_w, dst_h};
+    im_opt_t opt{};
+    opt.core = IM_SCHEDULER_RGA3_CORE0 | IM_SCHEDULER_RGA3_CORE1; /* ⚠ 禁改 */
+    rga_buffer_t pat{};
+    im_rect prect{};
+    const IM_STATUS status = improcess(src_buf, dst_buf, pat, srect, drect, prect, 0, nullptr, &opt, 0);
+    if (status == IM_STATUS_SUCCESS)
+        return true;
+
+    out.release();
+    static std::atomic<int> cnt{0};
+    const int c = ++cnt;
+    if (c <= 20 || (c % 200) == 0)
+        fprintf(stderr, "[RGA] ch%d handle-to-BGR failed cnt=%d: %s\n", chnId, c, imStrError(status));
+    return false;
+}
+
+LazyVideoFrame::LazyVideoFrame(int channel_id, std::shared_ptr<RgaImportedBuffer> source, int source_width,
+                               int source_height, int source_stride_w, int source_stride_h, int source_format,
+                               int model_width, int model_height, const void *borrowed_data)
+    : channel_id_(channel_id), source_(std::move(source)), source_width_(source_width), source_height_(source_height),
+      source_stride_w_(source_stride_w), source_stride_h_(source_stride_h), source_format_(source_format),
+      model_width_(model_width), model_height_(model_height), borrowed_data_(borrowed_data)
+{
+}
+
+bool LazyVideoFrame::materialize_borrowed(int dst_width, int dst_height, cv::Mat &out)
+{
+    if (!borrowed_data_ || source_width_ <= 0 || source_height_ <= 0 || source_stride_w_ <= 0 ||
+        source_stride_h_ <= 0 || dst_width <= 0 || dst_height <= 0)
+        return false;
+
+    if (dst_width == source_width_ && dst_height == source_height_)
+        return raw_to_bgr_mat(borrowed_data_, source_width_, source_height_, source_stride_w_, source_stride_h_,
+                              source_format_, out);
+
+    out.create(dst_height, dst_width, CV_8UC3);
+    RgaImage src_img;
+    src_img.fmt = static_cast<RgaSURF_FORMAT>(source_format_);
+    src_img.width = source_width_;
+    src_img.height = source_height_;
+    src_img.hor_stride = source_stride_w_;
+    src_img.ver_stride = source_stride_h_;
+    src_img.rotation = 0;
+    src_img.pBuf = const_cast<void *>(borrowed_data_);
+    RgaImage dst_img;
+    dst_img.fmt = RK_FORMAT_BGR_888;
+    dst_img.width = dst_width;
+    dst_img.height = dst_height;
+    dst_img.hor_stride = dst_width;
+    dst_img.ver_stride = dst_height;
+    dst_img.rotation = 0;
+    dst_img.pBuf = out.data;
+    if (rga_convert_resize(channel_id_, src_img, dst_img))
+        return true;
+
+    cv::Mat source_bgr;
+    if (!raw_to_bgr_mat(borrowed_data_, source_width_, source_height_, source_stride_w_, source_stride_h_,
+                        source_format_, source_bgr))
     {
-        static std::atomic<int> cnt{0};
-        int c = ++cnt;
-        if (c <= 20 || (c % 200) == 0)
-            fprintf(stderr, "[yolo_in] skip invalid frame cnt=%d  src=%dx%d stride=%dx%d fd=%d\n", c, srcW, srcH,
-                    srcStrH, srcStrV, src_fd);
+        out.release();
         return false;
     }
+    cv::resize(source_bgr, out, cv::Size(dst_width, dst_height));
+    return !out.empty();
+}
 
-    if (srcFmt == RK_FORMAT_YCbCr_420_SP || srcFmt == RK_FORMAT_YCrCb_420_SP || srcFmt == RK_FORMAT_BGR_888 ||
-        srcFmt == RK_FORMAT_RGB_888)
+const cv::Mat *LazyVideoFrame::model_frame()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!model_attempted_)
     {
-        out.create(g_pCtrl->inputH, g_pCtrl->inputW, CV_8UC3);
-
-        RgaImage dst_img;
-        dst_img.fmt = RK_FORMAT_BGR_888;
-        dst_img.width = g_pCtrl->inputW;
-        dst_img.height = g_pCtrl->inputH;
-        dst_img.hor_stride = g_pCtrl->inputW;
-        dst_img.ver_stride = g_pCtrl->inputH;
-        dst_img.rotation = 0;
-        dst_img.pBuf = out.data;
-
-        bool rga_ok = false;
-
-        if (src_fd >= 0)
-        {
-            rga_buffer_t src = wrapbuffer_fd(src_fd, srcW, srcH, srcFmt, srcStrH, srcStrV);
-            rga_buffer_t dst = wrapbuffer_virtualaddr(dst_img.pBuf, dst_img.width, dst_img.height, dst_img.fmt,
-                                                      dst_img.hor_stride, dst_img.ver_stride);
-            dst.fd = -1;
-
-            im_rect srect = {0, 0, srcW, srcH};
-            im_rect drect = {0, 0, dst_img.width, dst_img.height};
-
-            im_opt_t opt{};
-            opt.core = IM_SCHEDULER_RGA3_CORE0 | IM_SCHEDULER_RGA3_CORE1; /* ⚠ 禁改 */
-
-            rga_buffer_t pat{};
-            im_rect prect{};
-            rga_ok = (improcess(src, dst, pat, srect, drect, prect, 0, nullptr, &opt, 0) == IM_STATUS_SUCCESS);
-        }
-        else
-        {
-            RgaImage src_img;
-            src_img.fmt = static_cast<RgaSURF_FORMAT>(srcFmt);
-            src_img.width = srcW;
-            src_img.height = srcH;
-            src_img.hor_stride = srcStrH;
-            src_img.ver_stride = srcStrV;
-            src_img.rotation = 0;
-            src_img.pBuf = pSrcData;
-            rga_ok = rga_convert_resize(chnId, src_img, dst_img);
-        }
-
-        if (rga_ok)
-            return true;
-
-        static std::atomic<int> cnt{0};
-        int c = ++cnt;
-        if (c <= 20 || (c % 200) == 0)
-            fprintf(stderr, "[yolo_in] RGA fail cnt=%d  src=%dx%d stride=%dx%d fmt=%d\n", c, srcW, srcH, srcStrH,
-                    srcStrV, srcFmt);
+        model_attempted_ = true;
+        const bool converted = source_ &&
+                               rga_convert_resize_handle_to_bgr(channel_id_, *source_, model_width_, model_height_,
+                                                                model_bgr_);
+        if (!converted)
+            materialize_borrowed(model_width_, model_height_, model_bgr_);
     }
+    return model_bgr_.empty() ? nullptr : &model_bgr_;
+}
 
-    /* 软件回退：raw → BGR → resize */
-    out.release();
-    thread_local cv::Mat bgr;
-    if (raw_to_bgr_mat(pSrcData, srcW, srcH, srcStrH, srcStrV, srcFmt, bgr))
+const cv::Mat *LazyVideoFrame::source_frame()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!source_attempted_)
     {
-        cv::resize(bgr, out, cv::Size(g_pCtrl->inputW, g_pCtrl->inputH));
-        return true;
+        source_attempted_ = true;
+        const bool converted = source_ &&
+                               rga_convert_resize_handle_to_bgr(channel_id_, *source_, source_width_, source_height_,
+                                                                source_bgr_);
+        if (!converted)
+            materialize_borrowed(source_width_, source_height_, source_bgr_);
     }
-    return false;
+    return source_bgr_.empty() ? nullptr : &source_bgr_;
+}
+
+void LazyVideoFrame::clear_borrowed_source()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    borrowed_data_ = nullptr;
+}
+
+bool LazyVideoFrame::available() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return source_ || borrowed_data_ || !model_bgr_.empty() || !source_bgr_.empty();
 }
 
 /*======================== 格式字符串 → RK_FORMAT ========================*/

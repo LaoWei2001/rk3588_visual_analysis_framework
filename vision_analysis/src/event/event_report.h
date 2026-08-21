@@ -194,7 +194,7 @@ const char *event_report_status_name(EventReportStatus status);
 
 /*
  * 唯一事件提交入口。函数只创建本地持久化事件，不直接联网；远端投递结果由上传服务维护。
- * accepted() 表示事件已进入本地发件箱，不表示远端已经接收。
+ * accepted() 表示事件已进入本地持久化队列，不表示磁盘落盘或远端已经接收。
  */
 EventReportResult report_event(ChannelContext *ctx, const EventRequest &request);
 EventReportResult report_event(GlobalContext *ctx, const EventRequest &request);
@@ -204,5 +204,5 @@ void event_report_video_ready(const std::string &event_id, const std::string &vi
 void event_report_video_failed(const std::string &event_id, const std::string &video_path,
                                const std::string &reason);
 
-/* 停止图片落盘线程。 */
+/* 排空并停止事件持久化/图片落盘线程。 */
 void event_report_deinit(void);

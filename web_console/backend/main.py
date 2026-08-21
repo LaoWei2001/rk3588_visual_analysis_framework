@@ -17,6 +17,7 @@ from routers import (apps, assets, auth, channel_control, config_io, logs, netwo
 from services.auth_service import get_session
 from services import process_manager as process_manager
 from services import runtime_state
+from services import network_manager
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
@@ -40,6 +41,12 @@ _PUBLIC_CHANNEL_ACTION = re.compile(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 网络事务由独立 systemd 定时器保护。控制台异常重启时先确认保护仍存在，
+    # 若原切换工作中途退出则立即恢复原连接并清理临时配置。
+    try:
+        await asyncio.to_thread(network_manager.recover_incomplete_transactions)
+    except Exception as exc:
+        print(f"[Network] 未完成网络事务恢复失败：{exc}")
     process_manager.recover_processes()
 
     def restore_runtime() -> None:
@@ -101,7 +108,8 @@ async def auth_middleware(request: Request, call_next):
 
     # Static files, SPA HTML, health check → always pass through
     if (
-        not path.startswith("/api/")
+        request.method == "OPTIONS"
+        or not path.startswith("/api/")
         or path in _PUBLIC_API
         or path == "/health"
         or public_channel_action
@@ -121,12 +129,14 @@ async def auth_middleware(request: Request, call_next):
             content={"detail": "未登录，请先使用 SSH 账号密码登录"},
         )
 
-    if not get_session(token):
+    session = get_session(token)
+    if not session:
         return JSONResponse(
             status_code=401,
             content={"detail": "登录已过期，请重新登录"},
         )
 
+    request.state.session = session
     return await call_next(request)
 
 

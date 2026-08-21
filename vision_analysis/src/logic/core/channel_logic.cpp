@@ -19,6 +19,7 @@
 #include "logic_common.h"
 #include "logic_parameters.h"
 #include <ctime>
+#include <utility>
 
 /*======================== 模块专有参数访问 ========================*/
 bool ChannelContext::has_param(const char *key) const
@@ -273,22 +274,48 @@ int ChannelContext::roi_index_of(const cv::Rect &box) const
     return ROI_NONE;
 }
 
-cv::Mat ChannelContext::snapshot() const
+const cv::Mat *ChannelContext::model_frame() const
 {
-    return frame ? frame->clone() : cv::Mat();
+    return model_frame_getter ? model_frame_getter(frame_getter_opaque) : nullptr;
 }
 
-/* 按需取得原始分辨率 BGR 帧。具体转换器和解码缓冲生命周期由 analyzer 管线绑定；
- * 这里不持有原始裸指针，避免业务 logic 误把短生命周期缓冲保存到跨帧状态。 */
-const cv::Mat *ChannelContext::source_frame()
+const cv::Mat *ChannelContext::source_frame() const
 {
-    return source_frame_getter ? source_frame_getter(source_frame_opaque) : nullptr;
+    return source_frame_getter ? source_frame_getter(frame_getter_opaque) : nullptr;
+}
+
+bool ChannelContext::replace_display_frame(cv::Mat frame)
+{
+    if (!canvas || !show_canvas || frame.empty() || frame.depth() != CV_8U)
+        return false;
+
+    if (frame.channels() == 3)
+    {
+        /* cv::Mat 按引用计数持有像素；这里移动 Mat 头，不深拷贝整帧。 */
+        *canvas = std::move(frame);
+    }
+    else if (frame.channels() == 1)
+    {
+        cv::cvtColor(frame, *canvas, cv::COLOR_GRAY2BGR);
+    }
+    else if (frame.channels() == 4)
+    {
+        cv::cvtColor(frame, *canvas, cv::COLOR_BGRA2BGR);
+    }
+    else
+    {
+        return false;
+    }
+
+    *show_canvas = !canvas->empty();
+    return *show_canvas;
 }
 
 /* 取可写显示画布: 首次调用以当前帧为底克隆一张可写副本，并标记"本帧用它当显示底图"。
  * 之后随意 cv:: 处理(滤镜/贴图/putText 等)；中文叠加用 draw_text(走 draw_cmds, 会叠在它上面)。 */
 cv::Mat &ChannelContext::display_canvas()
 {
+    const cv::Mat *frame = model_frame();
     if (canvas->empty() && frame && !frame->empty())
         *canvas = frame->clone();
     *show_canvas = true;
@@ -335,6 +362,7 @@ FrameTime ChannelContext::datetime() const
 RenderParams ChannelContext::render_params(int64_t result_age_ms) const
 {
     RenderParams p;
+    const cv::Mat *frame = model_frame();
     p.chnId = chnId;
     p.inputW = frame ? frame->cols : 0;
     p.inputH = frame ? frame->rows : 0;

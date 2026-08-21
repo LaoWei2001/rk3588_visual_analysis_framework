@@ -1,6 +1,6 @@
 /**
  * @file algoProcess.cpp
- * @brief 推理引擎公有 API — algorithm_init / deinit / process_mat / take_results …
+ * @brief 推理引擎公有 API — algorithm_init / deinit / process_source / take_results …
  *
  * 实现细节说明:
  *   内部数据结构 (AlgoEngine, AlgoTask, …) 定义在 algo_internal.h。
@@ -30,11 +30,11 @@
 
 /*======================== 取结果（dispatch_worker 调用）========================*/
 
-bool algorithm_take_results(int chnId, std::vector<AlgoResult> &out, cv::Mat &out_frame, int64_t &out_frame_id,
-                            uint64_t &out_frame_steady_ms, uint64_t &out_frame_unix_ms)
+bool algorithm_take_results(int chnId, std::vector<AlgoResult> &out, std::shared_ptr<LazyVideoFrame> &out_frame,
+                            int64_t &out_frame_id, uint64_t &out_frame_steady_ms, uint64_t &out_frame_unix_ms)
 {
     out.clear();
-    out_frame.release();
+    out_frame.reset();
     out_frame_id = 0;
     out_frame_steady_ms = 0;
     out_frame_unix_ms = 0;
@@ -45,7 +45,7 @@ bool algorithm_take_results(int chnId, std::vector<AlgoResult> &out, cv::Mat &ou
     if (g_algo.channel_results[chnId].has_new)
     {
         out = std::move(g_algo.channel_results[chnId].data);
-        out_frame = std::move(g_algo.channel_results[chnId].data_frame);
+        out_frame = std::move(g_algo.channel_results[chnId].frame);
         out_frame_id = g_algo.channel_results[chnId].latest_seq;
         out_frame_steady_ms = g_algo.channel_results[chnId].frame_steady_ms;
         out_frame_unix_ms = g_algo.channel_results[chnId].frame_unix_ms;
@@ -302,7 +302,7 @@ void algorithm_deinit()
     g_algo.worker_tids.clear();
     g_algo.worker_started.clear();
 
-    /* 排干所有正在临界区内的 algorithm_process_mat 调用者 */
+    /* 排干所有正在临界区内的 algorithm_process_source 调用者 */
     pthread_rwlock_wrlock(&g_algo.dispatch_mtx);
 
     for (auto &tq : g_algo.task_queues)
@@ -317,6 +317,9 @@ void algorithm_deinit()
 
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
     {
+        g_algo.channel_results[i].data.clear();
+        g_algo.channel_results[i].frame.reset();
+        g_algo.channel_results[i].has_new = 0;
         pthread_mutex_destroy(&g_algo.channel_results[i].mtx);
         pthread_mutex_destroy(&g_algo.result_ready_mtx[i]);
         pthread_cond_destroy(&g_algo.result_ready_cv[i]);
@@ -330,12 +333,12 @@ void algorithm_deinit()
 
 /*======================== 帧入队（videoOutHandle 调用）========================*/
 
-int algorithm_process_mat(int chnId, cv::Mat &&frame, int fd, int srcW, int srcH, int srcFmt, int srcStrH, int srcStrV,
-                          int64_t frame_seq, uint64_t frame_steady_ms, uint64_t frame_unix_ms)
+int algorithm_process_source(int chnId, void *source_data, int fd, int srcW, int srcH, int srcFmt, int srcStrH,
+                             int srcStrV, int64_t frame_seq, uint64_t frame_steady_ms, uint64_t frame_unix_ms)
 {
     if (!g_algo.running)
         return -1;
-    if (frame.empty() && fd < 0)
+    if (!source_data && fd < 0)
         return -1;
 
     pthread_rwlock_rdlock(&g_algo.dispatch_mtx);
@@ -370,21 +373,47 @@ int algorithm_process_mat(int chnId, cv::Mat &&frame, int fd, int srcW, int srcH
                     pthread_rwlock_unlock(&g_algo.dispatch_mtx);
                     return 0;
                 }
+                pthread_mutex_unlock(&tq.mtx);
+
+                /* 先检查队列容量，被覆盖/丢弃的帧不做 DMA-BUF import。FD 只在解码回调
+                 * 期间有效，所以必须在本函数返回前导入为稳定 handle。导入失败才准备 CPU 兜底帧。 */
+                std::shared_ptr<RgaImportedBuffer> imported;
+                if (fd >= 0)
+                    imported = rga_import_src_fd(fd, srcW, srcH, srcStrH, srcStrV, srcFmt);
+                std::shared_ptr<LazyVideoFrame> lazy_frame = std::make_shared<LazyVideoFrame>(
+                    chnId, imported, srcW, srcH, srcStrH, srcStrV, srcFmt, g_algo.input_w, g_algo.input_h,
+                    imported ? nullptr : source_data);
+                if (!imported)
+                {
+                    /* 异步 worker 不能借用解码回调指针；无 DMA-BUF 时仅为 CPU 推理兜底立即生成模型图。 */
+                    if (!lazy_frame->model_frame())
+                    {
+                        pthread_rwlock_unlock(&g_algo.dispatch_mtx);
+                        return -1;
+                    }
+                    lazy_frame->clear_borrowed_source();
+                }
 
                 AlgoTask task;
                 task.chnId = chnId;
-                task.img = std::move(frame);
+                task.frame = std::move(lazy_frame);
                 task.enqueue_tp = std::chrono::steady_clock::now();
                 task.frame_seq = frame_seq > 0 ? frame_seq : g_fps[chnId].next_frame_seq();
                 task.frame_steady_ms = frame_steady_ms;
                 task.frame_unix_ms = frame_unix_ms;
-                if (fd >= 0)
-                    task.src_buf = rga_import_src_fd(fd, srcW, srcH, srcStrH, srcStrV, srcFmt);
+                task.src_buf = std::move(imported);
                 task.srcW = srcW;
                 task.srcH = srcH;
                 task.srcFmt = srcFmt;
                 task.srcStrH = srcStrH;
                 task.srcStrV = srcStrV;
+                pthread_mutex_lock(&tq.mtx);
+                if (tq.q.size() >= (size_t)g_algo.max_queue_size)
+                {
+                    pthread_mutex_unlock(&tq.mtx);
+                    pthread_rwlock_unlock(&g_algo.dispatch_mtx);
+                    return 0;
+                }
                 tq.q.push(std::move(task));
                 pthread_cond_signal(&tq.cv);
                 pthread_mutex_unlock(&tq.mtx);
@@ -593,6 +622,7 @@ bool algorithm_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
         {
             pthread_mutex_lock(&g_algo.channel_results[chnId].mtx);
             g_algo.channel_results[chnId].data.clear();
+            g_algo.channel_results[chnId].frame.reset();
             g_algo.channel_results[chnId].has_new = 0;
             pthread_mutex_unlock(&g_algo.channel_results[chnId].mtx);
         }

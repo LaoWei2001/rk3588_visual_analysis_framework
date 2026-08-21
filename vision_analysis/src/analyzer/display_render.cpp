@@ -197,17 +197,19 @@ void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt, int srcW
     staging_view.copyTo(front_roi);
     display_unlock();
 
-    /* 显示 FPS 统计（display_worker 独占 cs，无需锁）。
+    /* 预览合成 FPS 统计（display_worker 独占 counter/timestamp）。
      * RTSP 在网络抖动后可能把缓存帧短时突发交给 appsink；多路显示线程也会因
      * RGA/内存带宽争用呈现“停一下再集中完成”的调度形态。原先 1 秒硬窗口会把
      * 这种突发直接显示成 40+ FPS，下一秒又跌到个位数，容易被误认为摄像头真实帧率。
-     * 改为 3 秒采样 + EMA，保留长期吞吐变化，同时过滤窗口边界和短时调度尖峰。 */
+     * 冷启动首轮用 1 秒快速取得有效值；之后使用 3 秒采样 + EMA，保留长期吞吐
+     * 变化，同时过滤窗口边界和短时调度尖峰。 */
     auto now_ts =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
             .count();
     cs.fps_counter++;
     int64_t elapsed = static_cast<int64_t>(now_ts) - static_cast<int64_t>(cs.last_fps_ts_ms);
-    if (elapsed >= 3000)
+    const int64_t sample_window_ms = cs.disp_fps > 0.0f ? 3000 : 1000;
+    if (elapsed >= sample_window_ms)
     {
         const float measured_fps = (1000.0f * cs.fps_counter) / static_cast<float>(elapsed);
         const float new_disp_fps = cs.disp_fps > 0.0f

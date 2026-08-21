@@ -2,7 +2,7 @@
  * ServicesPanel — 板级「后台服务」面板，由左侧“系统服务”独立页面承载。
  *
  * 托管两个 systemd 单元(OTA 升级 / 告警上报): 安装/启停/重启/看健康/看日志。
- * systemd 是唯一进程管家, 与命令行 deploy.sh / systemctl 操作同一套单元, 并存不冲突。
+ * systemd 是唯一进程管家，单元由 Web 后端绑定当前运行的视觉程序并统一管理。
  */
 import { useEffect, useRef, useState } from 'react'
 import axios from 'axios'

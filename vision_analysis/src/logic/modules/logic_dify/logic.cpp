@@ -95,8 +95,8 @@ static void log_report_failure_periodically(ChannelContext *ctx, DifyPeriodicSta
 
 static void logic_dify(ChannelContext *ctx)
 {
-    /* report_event() 要从当前业务帧生成截图，所以没有有效帧时不能启动周期，也不能上报。 */
-    if (!ctx || !ctx->state || !ctx->frame || ctx->frame->empty())
+    /* 到达上报周期后，report_event() 才会通过 model_frame() 惰性取得截图。 */
+    if (!ctx || !ctx->state)
         return;
 
     if (!*ctx->state)
@@ -161,7 +161,7 @@ static void logic_dify(ChannelContext *ctx)
     if (report.accepted())
     {
         state.accepted_sequence = next_sequence;
-        printf("[logic_dify][ch%02d] local event created: %s, sequence=%llu\n", ctx->chnId,
+        printf("[logic_dify][ch%02d] local event queued: %s, sequence=%llu\n", ctx->chnId,
                report.event_id.c_str(), static_cast<unsigned long long>(next_sequence));
     }
     else

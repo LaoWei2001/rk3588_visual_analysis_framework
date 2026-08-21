@@ -131,6 +131,37 @@
 .network-config-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
 .network-config-grid label { margin: 0; }
 .network-config-grid label.wide { grid-column: 1 / -1; }
+.wifi-network-list { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 8px; margin-bottom: 16px; }
+.wifi-network-list button { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 10px 12px; color: var(--text2); border: 1px solid var(--border); border-radius: 8px; background: var(--surface2); text-align: left; }
+.wifi-network-list button:hover { border-color: #64748b; }
+.wifi-network-list button.active { border-color: var(--accent); background: rgba(79,142,247,.12); }
+.wifi-network-list button span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.wifi-network-list button b { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.wifi-network-list button small { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.wifi-network-list button strong { flex-shrink: 0; color: #86efac; font-size: 11px; }
+.network-profile-list { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; }
+.network-profile-list > div { display: grid; grid-template-columns: minmax(0,1fr) auto auto auto; align-items: center; gap: 9px; padding: 10px 12px; background: var(--surface2); }
+.network-profile-list > div + div { border-top: 1px solid var(--border); }
+.network-profile-list > div > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.network-profile-list b { color: var(--text); font-size: 12px; }
+.network-profile-list small { overflow: hidden; color: var(--text2); font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.network-profile-list em { color: var(--text2); font-size: 10px; font-style: normal; white-space: nowrap; }
+.network-profile-list em.active { color: #86efac; }
+.network-transaction-card { padding: 15px 17px; border: 1px solid rgba(245,158,11,.55); border-radius: 10px; background: rgba(245,158,11,.09); }
+.network-transaction-card.confirmed { border-color: #16a34a; background: rgba(22,163,74,.12); }
+.network-transaction-card.rolled_back { border-color: #64748b; background: rgba(100,116,139,.12); }
+.network-transaction-card.rollback_failed { border-color: #ef4444; background: rgba(239,68,68,.12); }
+.network-transaction-card > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.network-transaction-card span { color: var(--text2); font-size: 11px; }
+.network-transaction-card strong { color: #fde68a; font-size: 13px; }
+.network-transaction-card.confirmed strong { color: #86efac; }
+.network-transaction-card.rollback_failed strong { color: #fca5a5; }
+.network-transaction-card p { margin: 7px 0 3px; color: var(--text); font-size: 12px; }
+.network-transaction-card small { display: block; color: #bfdbfe; font-size: 10px; line-height: 1.5; }
+.network-transaction-card small.error { color: #fca5a5; }
+.network-transaction-card .settings-actions { padding-top: 11px; }
+.network-transaction-progress { height: 5px; margin-top: 10px; overflow: hidden; border-radius: 3px; background: rgba(15,23,42,.7); }
+.network-transaction-progress span { display: block; height: 100%; border-radius: inherit; background: #f59e0b; transition: width 1s linear; }
 
 @media (max-width: 900px) {
   .device-settings-layout { grid-template-columns: 1fr; }
@@ -154,4 +185,6 @@
   .settings-actions { flex-direction: column-reverse; }
   .root-cleanup-footer { grid-template-columns: 1fr; }
   .root-cleanup-footer > span { text-align: right; }
+  .network-profile-list > div { grid-template-columns: 1fr 1fr; }
+  .network-profile-list > div > span { grid-column: 1 / -1; }
 }

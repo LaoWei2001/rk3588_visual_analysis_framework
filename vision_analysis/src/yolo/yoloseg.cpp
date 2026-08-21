@@ -187,6 +187,7 @@ void YoloSeg::query_model_info()
     }
 
     is_quant_ = !all_float;
+    proto_cache_.resize(PROTO_CHANNEL * PROTO_HEIGHT * PROTO_WEIGHT);
 
     if (!out_attrs_.empty())
     {
@@ -482,20 +483,26 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
     std::vector<int> classId;
 
     std::vector<float> filterSegments;
-    float proto[PROTO_CHANNEL * PROTO_HEIGHT * PROTO_WEIGHT];
+    float *proto = proto_cache_.data();
     std::vector<float> filterSegments_by_nms;
+    filterBoxes.reserve(256 * 4);
+    objProbs.reserve(256);
+    classId.reserve(256);
+    filterSegments.reserve(256 * PROTO_CHANNEL);
 
     int validCount = 0;
     int stride = 0;
     int grid_h = 0;
     int grid_w = 0;
 
-    if (num_classes_ <= 0)
+    if (num_classes_ <= 0 || io_num_out_ < 7 || out_attrs_.size() < 7)
     {
         return 0;
     }
 
-    for (int i = 0; i < 7; i++)
+    /* 0/2/4 是三个检测头，1/3/5 是对应 mask 系数，6 是 proto。
+     * 旧循环还会调用三个必然立即返回的奇数分支，并在 i=6 时形成 ANCHORS[3] 越界地址。 */
+    for (int i = 0; i < 6; i += 2)
     {
         grid_h = out_attrs_[i].dims[2];
         grid_w = out_attrs_[i].dims[3];
@@ -513,6 +520,15 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
                              filterBoxes, filterSegments, proto, objProbs, classId, obj_thresh_);
         }
     }
+
+    const int proto_grid_h = out_attrs_[6].dims[2];
+    const int proto_grid_w = out_attrs_[6].dims[3];
+    if (is_quant_)
+        process_i8(outputs, 6, nullptr, proto_grid_h, proto_grid_w, model_h_, model_w_, 1, num_classes_, filterBoxes,
+                   filterSegments, proto, objProbs, classId, obj_thresh_);
+    else
+        process_fp32(outputs, 6, nullptr, proto_grid_h, proto_grid_w, model_h_, model_w_, 1, num_classes_,
+                     filterBoxes, filterSegments, proto, objProbs, classId, obj_thresh_);
 
     if (validCount <= 0)
     {
@@ -584,39 +600,26 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
     if (boxes_num == 0)
         return 0;
 
-    // Mask generation
-    // 1. matmul
-    cv::Mat matmul_out(boxes_num, PROTO_HEIGHT * PROTO_WEIGHT, CV_32FC1);
-    float *matmul_ptr = (float *)matmul_out.data;
-    for (int i = 0; i < boxes_num; i++)
-    {
-        for (int j = 0; j < PROTO_HEIGHT * PROTO_WEIGHT; j++)
-        {
-            float temp = 0;
-            for (int k = 0; k < PROTO_CHANNEL; k++)
-            {
-                temp += filterSegments_by_nms[i * PROTO_CHANNEL + k] * proto[k * PROTO_HEIGHT * PROTO_WEIGHT + j];
-            }
-            matmul_ptr[i * (PROTO_HEIGHT * PROTO_WEIGHT) + j] = temp;
-        }
-    }
+    /* Mask generation: OpenCV GEMM 会使用平台优化内核（RK3588 上可走 NEON），替代
+     * boxes × 32 × 25600 的手写标量三重循环。 */
+    cv::Mat coefficients(boxes_num, PROTO_CHANNEL, CV_32FC1, filterSegments_by_nms.data());
+    cv::Mat proto_matrix(PROTO_CHANNEL, PROTO_HEIGHT * PROTO_WEIGHT, CV_32FC1, proto);
+    cv::Mat matmul_out;
+    cv::gemm(coefficients, proto_matrix, 1.0, cv::Mat(), 0.0, matmul_out);
+    float *matmul_ptr = reinterpret_cast<float *>(matmul_out.data);
 
     // 2. resize to model_w_ x model_h_
     cv::Mat seg_mask(boxes_num, model_h_ * model_w_, CV_32FC1);
     for (int b = 0; b < boxes_num; b++)
     {
         cv::Mat src_image(PROTO_HEIGHT, PROTO_WEIGHT, CV_32F, &matmul_ptr[b * PROTO_HEIGHT * PROTO_WEIGHT]);
-        cv::Mat dst_image;
+        cv::Mat dst_image = seg_mask.row(b).reshape(1, model_h_);
         cv::resize(src_image, dst_image, cv::Size(model_w_, model_h_), 0, 0, cv::INTER_LINEAR);
-        memcpy(&((float *)seg_mask.data)[b * model_w_ * model_h_], dst_image.data, model_w_ * model_h_ * sizeof(float));
     }
 
     // 3. Crop mask
     // This part generates a combined mask for the whole image (model_h_ x model_w_)
     cv::Mat all_mask_in_one = cv::Mat::zeros(model_h_, model_w_, CV_8UC1);
-    uint8_t *out_mask_ptr = (uint8_t *)all_mask_in_one.data;
-    float *src_mask_ptr = (float *)seg_mask.data;
-
     // NMS may have changed the boxes, we must use the ones inside the model
     // The mask generation happens inside model_w_ x model_h_ frame
     // original box on `model_w_ x model_h_`: x1, y1, x2, y2 from filterBoxes (using indices arrays)
@@ -636,19 +639,15 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
         int x_end = clamp((int)x2, 0, model_w_);
         int y_end = clamp((int)y2, 0, model_h_);
 
-        for (int i = y_start; i < y_end; i++)
-        {
-            for (int j = x_start; j < x_end; j++)
-            {
-                if (out_mask_ptr[i * model_w_ + j] == 0)
-                {
-                    if (src_mask_ptr[b * model_w_ * model_h_ + i * model_w_ + j] > 0)
-                    {
-                        out_mask_ptr[i * model_w_ + j] = (cls_id + 1);
-                    }
-                }
-            }
-        }
+        if (x_end <= x_start || y_end <= y_start)
+            continue;
+        const cv::Rect roi(x_start, y_start, x_end - x_start, y_end - y_start);
+        cv::Mat object_mask = seg_mask.row(b).reshape(1, model_h_)(roi);
+        cv::Mat output_roi = all_mask_in_one(roi);
+        cv::Mat positive = object_mask > 0.0f;
+        cv::Mat unassigned = output_roi == 0;
+        cv::bitwise_and(positive, unassigned, positive);
+        output_roi.setTo(cv::Scalar(cls_id + 1), positive);
     }
 
     // 4. Reverse the padding and scale back to the original image dimensions
@@ -720,7 +719,8 @@ bool YoloSeg::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfSt
     memset(outputs, 0, sizeof(outputs));
     for (int i = 0; i < io_num_out_; i++)
     {
-        outputs[i].want_float = 0;
+        outputs[i].index = i;
+        outputs[i].want_float = is_quant_ ? 0 : 1;
     }
 
     if (rknn_outputs_get(ctx_, io_num_out_, outputs, NULL) < 0)
@@ -766,7 +766,8 @@ bool YoloSeg::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *pe
     memset(outputs, 0, sizeof(outputs));
     for (int i = 0; i < io_num_out_; i++)
     {
-        outputs[i].want_float = 0; /* 与 infer() 保持一致, 走 i8 路径 */
+        outputs[i].index = i;
+        outputs[i].want_float = is_quant_ ? 0 : 1;
     }
     if (rknn_outputs_get(ctx_, io_num_out_, outputs, NULL) < 0)
     {

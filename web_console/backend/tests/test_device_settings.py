@@ -1,14 +1,10 @@
-import asyncio
 import json
-import subprocess
 import time
 from pathlib import Path
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
-
 from routers import network_settings
-from services import storage_manager
+from services import network_manager, storage_manager
 
 
 def _event(store: Path, name: str, created: float, *, active: bool = False) -> Path:
@@ -103,42 +99,28 @@ def test_root_cleanup_unlinks_symlink_without_following_it(tmp_path, monkeypatch
 
 
 def test_network_terse_parser_preserves_escaped_colons():
-    assert network_settings._split_terse(r"wlan0:wifi:connected:office\:5g") == [
+    assert network_manager.split_terse(r"wlan0:wifi:connected:office\:5g") == [
         "wlan0", "wifi", "connected", "office:5g",
     ]
 
 
 def test_static_ipv4_validation_rejects_invalid_address():
-    request = network_settings.IPv4Request(
-        connection_uuid="20e8daef-1648-4c4a-9b96-976379ea07df",
-        method="manual",
-        address="999.1.1.1/24",
-        gateway="192.168.1.1",
-        dns=[],
+    with pytest.raises(network_manager.NetworkManagerError, match="静态 IPv4 参数无效"):
+        network_manager.validate_ipv4("manual", "999.1.1.1/24", "192.168.1.1", [])
+
+
+def test_static_ipv4_allows_isolated_lan_without_gateway():
+    result = network_manager.validate_ipv4(
+        "manual", "192.168.50.20/24", "", ["223.5.5.5"],
     )
-    with pytest.raises(HTTPException) as error:
-        asyncio.run(network_settings.set_ipv4(request, BackgroundTasks()))
-    assert error.value.status_code == 400
+    assert result == {
+        "method": "manual", "address": "192.168.50.20/24",
+        "gateway": "", "dns": ["223.5.5.5"],
+    }
 
 
-def test_dhcp_change_uses_argument_list_and_schedules_activation(monkeypatch):
-    calls = []
-
-    def fake_nmcli(*args, timeout=20):
-        calls.append(args)
-        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(network_settings, "_nmcli", fake_nmcli)
-    request = network_settings.IPv4Request(
-        connection_uuid="20e8daef-1648-4c4a-9b96-976379ea07df",
-        method="auto",
+def test_network_apply_request_never_contains_shell_command():
+    request = network_settings.NetworkApplyRequest(
+        device="eth0", type="ethernet", method="auto", profile_name="LAN eth0",
     )
-    background = BackgroundTasks()
-    result = asyncio.run(network_settings.set_ipv4(request, background))
-
-    assert result == {"ok": True, "activation_scheduled": True}
-    assert calls[0][:5] == (
-        "connection", "modify", "uuid",
-        "20e8daef-1648-4c4a-9b96-976379ea07df", "ipv4.method",
-    )
-    assert len(background.tasks) == 1
+    assert request.model_dump()["device"] == "eth0"

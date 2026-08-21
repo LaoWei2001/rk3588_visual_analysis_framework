@@ -363,7 +363,11 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
                 continue;
 
             const cv::Scalar color = (res.box_color[0] >= 0) ? res.box_color : cv::Scalar(0, 255, 0);
-            cv::rectangle(screen_roi, box, color, thk(2));
+            /* 检测框随后会转为 NV12 4:2:0 并进行 H264 编码。过细的高饱和度线条落在
+             * 不同色度采样网格上时，某些边会只保留亮度而呈灰色；至少3像素可让四条边
+             * 都覆盖完整色度样本，同时仍按窗口比例继续放大。 */
+            const int detection_thickness = std::max(3, thk(2));
+            cv::rectangle(screen_roi, box, color, detection_thickness);
             std::string txt = res.label;
             if (res.track_id >= 0)
                 txt = "ID " + std::to_string(res.track_id) + " " + txt;
@@ -526,7 +530,11 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
     if (app_ctrl_get_performance_display() && p.show_fps)
     {
         char fps_text[80];
-        snprintf(fps_text, sizeof(fps_text), "Ch%d disp %.1f / inf %.1f FPS", p.chnId, p.disp_fps, p.infer_fps);
+        if (p.disp_fps > 0.0f)
+            snprintf(fps_text, sizeof(fps_text), "Ch%d preview %.1f / infer %.1f FPS", p.chnId, p.disp_fps,
+                     p.infer_fps);
+        else
+            snprintf(fps_text, sizeof(fps_text), "Ch%d preview -- / infer %.1f FPS", p.chnId, p.infer_fps);
         constexpr double font_scale = 0.58;
         constexpr int margin = 10;
         const int font_height = std::max(12, static_cast<int>(std::lround(font_scale * 30.0)));

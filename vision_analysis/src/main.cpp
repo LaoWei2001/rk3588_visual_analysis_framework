@@ -450,8 +450,9 @@ cleanup:
     if (analyzer_initialized)
         analyzer_deinit();
 
-    event_video_recorder_deinit();
+    /* 先排空事件持久化队列，其中可能还会向录像器提交最后一批任务。 */
     event_report_deinit();
+    event_video_recorder_deinit();
 
     if (analyzer_initialized)
         analyzer_destroy_display_queues();

@@ -9,7 +9,7 @@ import { useEditorStore }  from '../store/editorStore'
 import { useConsoleStore } from '../store/consoleStore'
 import { useROIStore, type Zone } from '../store/roiStore'
 import {
-  fetchAppLogics, asLogicDef, uploadAsset, deleteAsset,
+  fetchAppLogics, uploadAsset, deleteAsset,
   type LogicDef, type LogicParam,
 } from '../api/client'
 import { getSrcType, SRC_TYPES } from '../utils/streamSource'
@@ -113,8 +113,8 @@ function GlobalLogicForm({ node, onUpdate, inputs }: {
     fetchAppLogics(appName)
       .then(result => {
         if (!cancelled) {
-          setDefinitions(result.global_logics.map(asLogicDef))
-          setChannelDefinitions(result.channel_logics.map(asLogicDef))
+          setDefinitions(result.global_logics)
+          setChannelDefinitions(result.channel_logics)
         }
       })
       .catch(() => {
@@ -486,13 +486,11 @@ function LogicForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
   const appName = useEditorStore(s => s.appName)
   const [logicDefs, setLogicDefs] = useState<LogicDef[]>([])
   const [catalogLoading, setCatalogLoading] = useState(false)
-  const [catalogSource, setCatalogSource] = useState<'catalog' | 'binary' | 'unavailable' | null>(null)
   const [catalogError, setCatalogError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     setLogicDefs([])
-    setCatalogSource(null)
     setCatalogError(null)
     setCatalogLoading(false)
     if (!appName) return () => { cancelled = true }
@@ -500,14 +498,12 @@ function LogicForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
     fetchAppLogics(appName)
       .then(res => {
         if (cancelled) return
-        setLogicDefs(res.channel_logics.map(asLogicDef))
-        setCatalogSource(res.source)
+        setLogicDefs(res.channel_logics)
         setCatalogError(res.error ?? null)
       })
       .catch(() => {
         if (cancelled) return
         setLogicDefs([])
-        setCatalogSource('unavailable')
         setCatalogError('无法从后端读取当前应用的通道逻辑清单')
       })
       .finally(() => {
@@ -560,12 +556,6 @@ function LogicForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
       {!catalogLoading && !catalogError && logicDefs.length === 0 && (
         <div className="ncp-hint">⚠ 当前应用没有声明任何通道逻辑。</div>
       )}
-      {!catalogLoading && catalogSource === 'binary' && (
-        <div className="ncp-hint">
-          当前仅从二进制读取到逻辑名称；参数、动作和字段信息需要应用包中的 logics.json。
-        </div>
-      )}
-
       {/* 动态渲染该 logic 的可调参数（来自 logics.json） */}
       <LogicParameterFields node={node} params={params} onUpdate={onUpdate} />
 
@@ -760,8 +750,7 @@ function SopInfo({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'] }
     if (!appName) return
     fetchAppLogics(appName)
       .then(result => {
-        const def = result.channel_logics.map(asLogicDef)
-          .find(item => item.name === 'logic_path_sop')
+        const def = result.channel_logics.find(item => item.name === 'logic_path_sop')
         setModuleParams(def?.params ?? [])
       })
       .catch(() => setModuleParams([]))

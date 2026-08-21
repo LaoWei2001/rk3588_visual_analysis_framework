@@ -66,12 +66,15 @@ class YoloPose : public ModelBase
     void configure_pose_layout();
     void load_pose_label(const std::string &label_path);
     bool output_grid_size(const rknn_tensor_attr &attr, int &grid_h, int &grid_w) const;
-    float keypoint_value(const float *buffer, int keypoint_index, int component, int candidate_index) const;
+    float keypoint_value(const rknn_output &output, const rknn_tensor_attr &attr, int keypoint_index, int component,
+                         int candidate_index) const;
     bool init_zero_copy_input();
     cv::Mat preprocess(cv::Mat &img, YoloPoseLetterBoxInfo &lb);
 
-    int process_i8(int8_t *input, int grid_h, int grid_w, int stride, std::vector<float> &boxes,
-                   std::vector<float> &boxScores, std::vector<int> &classId, int32_t zp, float scale, int index);
+    template <typename T>
+    int process_quantized(const T *input, int grid_h, int grid_w, int stride, std::vector<float> &boxes,
+                          std::vector<float> &boxScores, std::vector<int> &classId, int32_t zp, float scale,
+                          int index);
     int process_fp32(float *input, int grid_h, int grid_w, int stride, std::vector<float> &boxes,
                      std::vector<float> &boxScores, std::vector<int> &classId, int32_t zp, float scale, int index);
 

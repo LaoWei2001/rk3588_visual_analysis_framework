@@ -10,7 +10,8 @@
  *   1. 新建 src/logic/modules/logic_xxx/logic.cpp 和 logic.json
  *      logic.cpp 顶部 #include "logic/core/logic_common.h"
  *   2. 实现 static void logic_xxx(ChannelContext* ctx)
- *   3. 文件末尾写一行: REGISTER_LOGIC(logic_xxx);  // 自动注册, 无需改动其它文件
+ *   3. 文件末尾注册: REGISTER_LOGIC(logic_xxx);
+ *      需要像素时直接调用 ctx->model_frame() / ctx->source_frame()，框架会惰性取帧。
  *   4. 需要该后处理时，在 config.json 中把对应通道的 "logic" 字段设为 "logic_xxx"；
  *      不写或留空则只运行视频/模型管线，不执行任何业务模块。
  *
@@ -148,7 +149,7 @@ class LogicParameterSet;
 typedef void (*ChannelLogicFunc)(struct ChannelContext *ctx);
 /* action 是仅在本次 handler 调用期间有效的只读借用指针；业务代码应先检查非空，不得跨帧保存。 */
 typedef ChannelActionResult (*ChannelActionFunc)(struct ChannelContext *ctx, const ChannelAction *action);
-typedef const cv::Mat *(*ChannelSourceFrameFunc)(void *opaque);
+typedef const cv::Mat *(*ChannelFrameGetter)(void *opaque);
 
 struct ChannelContext
 {
@@ -156,25 +157,25 @@ struct ChannelContext
     int chnId = -1;
 
     /* ---- 当前帧数据 ---- */
-    /* BGR, 模型输入尺寸(通常 640×640); 检测框/ROI 均在此坐标系 */
-    const cv::Mat *frame;
     /* 原始视频分辨率(摄像头/视频源解码出的真实尺寸, 如 1920×1080)。
-     * 与 ctx->frame 的区别: frame 是缩放后的"模型输入尺寸"; 下面这两个才是视频源的真实宽高。
+     * 与 model_frame() 的区别: model_frame() 是缩放后的模型输入尺寸；下面是视频源真实宽高。
      * 首帧解码前可能为 0, 逻辑里用前可自行判一下 > 0。 */
     int src_width = 0;
     int src_height = 0;
 
-    /* ---- 原始分辨率帧（按需转换）----
-     * source_frame() 返回当前解码源帧转换得到的原分辨率 BGR Mat。
-     * 与 frame 的区别：frame 是模型输入尺寸；source_frame() 保留 src_width×src_height。
-     * 仅传统 CV 同步通道(infer_enable=false)保证可用；异步推理路径返回 nullptr。
-     * 转换只在本帧第一次调用时发生并缓存到本次 logic 返回，未调用时零额外开销。
-     * 返回指针及其像素不得缓存、跨帧使用或交给异步线程。 */
-    const cv::Mat *source_frame();
+    /* ---- 当前视频帧（惰性获取）----
+     * model_frame(): 模型输入尺寸 BGR，坐标与 results/ROI 一致。
+     * source_frame(): 原始视频分辨率 BGR，保留 src_width×src_height。
+     * 每个函数只在本帧第一次调用时转换，之后复用同一份不可变缓存；完全不调用就没有转换开销。
+     * 推理与非推理通道使用相同接口。返回对象只读，业务代码不得修改或跨帧保存指针；
+     * 如需异步持有或修改，请显式 clone()。取帧失败返回 nullptr。 */
+    const cv::Mat *model_frame() const;
+    const cv::Mat *source_frame() const;
 
     /* 框架内部的惰性取帧绑定，业务 logic 不直接访问。 */
-    ChannelSourceFrameFunc source_frame_getter = nullptr;
-    void *source_frame_opaque = nullptr;
+    ChannelFrameGetter model_frame_getter = nullptr;
+    ChannelFrameGetter source_frame_getter = nullptr;
+    void *frame_getter_opaque = nullptr;
     // 帧号
     int64_t frame_id;
     /* 近似系统开机后运行的毫秒数 */
@@ -218,13 +219,22 @@ struct ChannelContext
      * 业务代码通常不直接操作，也绝不能缓存该指针跨帧使用。 */
     std::vector<DrawCommand> *draw_cmds = nullptr;
 
-    /* ---- 显示画布(可选: 从中间拦截整帧) ----
+    /* ---- 显示输出（只影响当前通道的视频窗口）----
+     * replace_display_frame(frame): 直接把处理后的图片作为本帧显示底图。
+     * - 接受任意分辨率的 CV_8UC1 灰度图、CV_8UC3 BGR 图或 CV_8UC4 BGRA 图；
+     * - 灰度/BGRA 会在此处一次性转成显示需要的 BGR，BGR 不深拷贝像素；
+     * - 显示管线负责缩放到通道窗口，检测框、ROI、draw_* 指令仍会继续叠加；
+     * - 传入 Mat 后不要再修改其像素；如必须继续修改，请传 frame.clone()。
+     * 返回 false 表示图片为空、类型不支持，或当前上下文没有显示输出绑定。 */
+    bool replace_display_frame(cv::Mat frame);
+
+    /* ---- 可写模型尺寸显示画布 ----
      * 想"拿到显示画面 → 自由改像素 → 再显示"时调 display_canvas():
      * 返回一张可写的 640×640 BGR 图(首次调用 = 当前帧副本)，随意 cv:: 处理/贴图/写字；
      * 调用即表示"本帧用这张图当显示底图"。不调用则显示走原实时采集帧，行为不变。
-     * 注意: 只改"显示"; 推理/上报仍用原始 ctx->frame。draw_cmds(含中文 draw_text)仍叠加在它上面。*/
-    cv::Mat *canvas = nullptr;   /* 框架提供的画布缓冲(初始空; display_canvas() 首用时克隆 frame) */
-    bool *show_canvas = nullptr; /* display_canvas() 置 true → 框架把 canvas 路由到显示 */
+     * 注意: 只改"显示"; 推理/上报仍用 model_frame()。draw_cmds(含中文 draw_text)仍叠加在它上面。*/
+    cv::Mat *canvas = nullptr;   /* 两种显示接口共用的本帧输出缓冲 */
+    bool *show_canvas = nullptr; /* 任一显示接口成功调用后置 true */
     cv::Mat &display_canvas();   /* 取可写显示画布并标记启用(见上) */
 
   /* ---- 跨帧持久化状态 ---- */
@@ -278,14 +288,13 @@ struct ChannelContext
     std::string time_str() const; /* "YYYY-MM-DD HH:MM:SS" —— 上报/记录用 */
     FrameTime datetime() const; /* 拆成年月日时分秒独立 int(见 FrameTime), 不是字符串, 而是结构体元素 */
 
-    cv::Mat snapshot() const;
-
     RenderParams render_params(int64_t result_age_ms = 0) const;
 
     /* ===== 跨通道安全取数 (本通道 或 任意其它通道) =====
      *
      * get_channel_frame_snapshot(ch, out) 在一把 chn_mtx 锁内原子读出该通道的
-     * frame + results + outputs + 绘制指令和发布元信息。frame 与 results 必定来自同一帧，
+     * frame + results + outputs + 绘制指令和发布元信息。frame 若存在则与 results 必定同帧；
+     * 只有调用该带图快照接口时，框架才会惰性生成目标通道的模型尺寸图，
      * 返回后不持锁。失败会明确返回 false，不用空对象猜测通道是否存在。
      *
      * 典型用法 (在 channel logic 或 global logic 中):
@@ -293,7 +302,7 @@ struct ChannelContext
      *   if (ctx->get_channel_frame_snapshot(2, &s) && s.logic.publication_age_ms < 500) {
      *       for (auto &r : s.results) { ... r.box, r.score, r.label ... }
      *   }
-     * 本通道的当帧数据直接用 ctx->frame / ctx->results / ctx->frame_id 即可 (同样保证同帧)。 */
+     * 本通道的当帧数据直接用 ctx->model_frame() / ctx->results / ctx->frame_id 即可。 */
     bool get_channel_frame_snapshot(int configuredId, ChannelFrameSnapshot *out) const;
     std::string get_channel_logic_name(int configuredId) const;
     int channel_has_logic(int configuredId, const char *logicName) const;
@@ -383,6 +392,7 @@ void register_logic_action(const char *name, ChannelActionFunc func);
 /**
  * 在某个 logic 的 .cpp 文件末尾写一行:
  *     REGISTER_LOGIC(logic_xxx);
+ * 若代码需要图像，直接调用 ctx->model_frame() / ctx->source_frame()；无需在注册处预先声明。
  * 即可在 main() 之前(静态初始化阶段)把该 logic 自动注册进分发表 ——
  * 原理是构造一个文件作用域的静态对象, 其构造函数调用 register_logic。
  * 宏会把函数标识符自动字符串化；该函数名同时作为 config/Web/外部 API

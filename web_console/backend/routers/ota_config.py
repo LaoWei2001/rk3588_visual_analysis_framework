@@ -5,17 +5,17 @@ ota_config.py — 网页管理「模型 OTA 升级服务」的配置。
 
 字段:
   platform_ws_host : 云平台 WebSocket 地址（不含协议/路径）
-  target_config    : OTA 要改写的配置文件名；默认 active，动态跟随 run.config
 
-文件位置: APPS_ROOT/{name}/services/model_update/ota_config.json
+程序包中的 services/model_update/ota_config.json 是初始值；用户修改后保存在
+APPS_ROOT/.data/{name}/ota_config.json。目标配置始终由当前运行实例决定。
 """
 
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 
@@ -23,10 +23,9 @@ from services.data_dir import data_dir, initialize_app_data
 
 router = APIRouter()
 
-DEFAULT_OTA_CONFIG: Dict[str, Any] = {
-    "platform_ws_host": "tunnel.memanager.cn",
-    "target_config": "active",
-}
+
+class OtaConfigBody(BaseModel):
+    platform_ws_host: str
 
 
 def _config_path(name: str) -> Path:
@@ -41,19 +40,28 @@ def _config_path(name: str) -> Path:
 async def get_ota_config(name: str):
     path = _config_path(name)
     if not path.exists():
-        return DEFAULT_OTA_CONFIG
+        raise HTTPException(status_code=500, detail="当前应用包缺少模型 OTA 配置")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"解析 ota_config.json 失败: {e}")
-    return {**DEFAULT_OTA_CONFIG, **data}
+    platform_ws_host = data.get("platform_ws_host") if isinstance(data, dict) else None
+    if not isinstance(platform_ws_host, str) or not platform_ws_host.strip():
+        raise HTTPException(status_code=500, detail="ota_config.json 缺少 platform_ws_host")
+    return {"platform_ws_host": platform_ws_host.strip()}
 
 
 @router.post("/apps/{name}/ota-config")
-async def save_ota_config(name: str, body: Dict[str, Any]):
+async def save_ota_config(name: str, body: OtaConfigBody):
     path = _config_path(name)
+    platform_ws_host = body.platform_ws_host.strip()
+    if not platform_ws_host:
+        raise HTTPException(status_code=400, detail="平台 WebSocket 地址不能为空")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.write_text(
+        json.dumps({"platform_ws_host": platform_ws_host}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     os.replace(tmp, path)
     return {"ok": True}

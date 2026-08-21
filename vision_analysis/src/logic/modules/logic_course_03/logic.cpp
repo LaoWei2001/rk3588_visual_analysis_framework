@@ -4,7 +4,7 @@
 
 static void logic_course_03(ChannelContext *ctx)
 {
-    if (!ctx || !ctx->frame || ctx->frame->empty())
+    if (!ctx)
     {
         return;
     }

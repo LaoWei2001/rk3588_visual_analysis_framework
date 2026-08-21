@@ -1,6 +1,7 @@
 #pragma once
 #include "../config/config.h"
 #include <opencv2/opencv.hpp>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -51,21 +52,23 @@ struct AlgoResult
     cv::Mat boxMask; // for segmentation (mask of the whole image with class ids, or object specific mask)
 };
 
+class LazyVideoFrame;
+
 int algorithm_init(const AppConfig &cfg);
-int algorithm_process_mat(int chnId, cv::Mat &&frame, int fd = -1, int srcW = 0, int srcH = 0, int srcFmt = 0,
-                          int srcStrH = 0, int srcStrV = 0, int64_t frame_seq = 0, uint64_t frame_steady_ms = 0,
-                          uint64_t frame_unix_ms = 0);
+int algorithm_process_source(int chnId, void *source_data, int fd, int srcW, int srcH, int srcFmt, int srcStrH,
+                             int srcStrV, int64_t frame_seq = 0, uint64_t frame_steady_ms = 0,
+                             uint64_t frame_unix_ms = 0);
 void algorithm_deinit();
 /** 停止并唤醒推理/结果等待线程，但不 join、也不销毁同步对象。 */
 void algorithm_request_stop();
 /*
- * out_frame 是产出 out 这批检测结果时使用的 yolo 输入帧 (BGR, inputW×inputH)，
+ * out_frame 是产出 out 这批检测结果时对应的惰性帧句柄；这里只传递稳定 DMA-BUF 引用，不转换像素。
  * out_frame_steady_ms/out_frame_unix_ms 是该帧进入分析管线时的双时钟。
  * logic 用这一组数据做"图像 + 检测框 + 时间"一致的报警/上报。
  * 没有新结果时返回 false, out 和 out_frame 都被 clear/release。
  */
-bool algorithm_take_results(int chnId, std::vector<AlgoResult> &out, cv::Mat &out_frame, int64_t &out_frame_id,
-                            uint64_t &out_frame_steady_ms, uint64_t &out_frame_unix_ms);
+bool algorithm_take_results(int chnId, std::vector<AlgoResult> &out, std::shared_ptr<LazyVideoFrame> &out_frame,
+                            int64_t &out_frame_id, uint64_t &out_frame_steady_ms, uint64_t &out_frame_unix_ms);
 int algorithm_get_input_w();
 int algorithm_get_input_h();
 float algorithm_get_infer_fps(int chnId);

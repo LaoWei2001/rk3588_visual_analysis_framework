@@ -439,14 +439,16 @@ def load_channel_manifests(logic_root: Path) -> List[Dict[str, Any]]:
         manifest = load_object(manifest_path)
         if "name" in manifest:
             raise ManifestError(
-                f"{manifest_path}: name is generated from REGISTER_LOGIC(func); remove it"
+                f"{manifest_path}: name is generated from "
+                "REGISTER_LOGIC(func); remove it"
             )
 
         registrations = registered_logic_names(module_dir)
         if len(registrations) != 1:
             found = ", ".join(sorted(registrations)) or "none"
             raise ManifestError(
-                f"{manifest_path}: module must contain exactly one REGISTER_LOGIC(func) "
+                f"{manifest_path}: module must contain exactly one "
+                "REGISTER_LOGIC(func) "
                 f"(found: {found})"
             )
         name = registrations[0]

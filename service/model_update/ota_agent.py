@@ -32,23 +32,25 @@ ASSETS_DIR = _resolve_assets_dir()
 
 
 def _load_ota_config():
-    """读取 ota_config.json；优先 OTA_CONFIG_FILE 环境变量，其次本目录。"""
+    """读取 Web 为当前应用绑定的 OTA 配置。"""
     cfg_path = os.environ.get("OTA_CONFIG_FILE")
     if not cfg_path:
-        cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ota_config.json")
+        raise RuntimeError("缺少 OTA_CONFIG_FILE，OTA 服务必须由应用服务管理器启动")
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+            config = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"无法读取 OTA 配置 {cfg_path}: {exc}") from exc
+    if not isinstance(config, dict):
+        raise RuntimeError(f"OTA 配置必须是 JSON 对象: {cfg_path}")
+    return config
 
 
 _OTA_CFG = _load_ota_config()
 
-# 目标配置文件。默认 active：每次操作都读取 App 根目录的 run.config，
-# 避免用户切换启动配置后 OTA 仍改写旧文件。
-# 优先级：环境变量 CONFIG_FILE > ota_config.json > active。
-_TARGET_CONFIG = os.environ.get("CONFIG_FILE") or _OTA_CFG.get("target_config") or "active"
+_TARGET_CONFIG = os.environ.get("CONFIG_FILE", "").strip()
+if not _TARGET_CONFIG:
+    raise RuntimeError("缺少 CONFIG_FILE，OTA 服务未绑定当前视觉程序的运行配置")
 
 
 def _config_path_for_name(name):
@@ -61,30 +63,14 @@ def _config_path_for_name(name):
 
 
 def resolve_config_path():
-    """解析本次操作的目标配置；active 模式动态跟随 run.config。"""
-    if str(_TARGET_CONFIG).strip().lower() != "active":
-        return _config_path_for_name(_TARGET_CONFIG)
+    """返回服务管理器明确绑定的当前运行配置。"""
+    return _config_path_for_name(_TARGET_CONFIG)
 
-    app_root = os.path.dirname(ASSETS_DIR)
-    run_config = os.path.join(app_root, "run.config")
-    try:
-        with open(run_config, "r", encoding="utf-8") as f:
-            selected = f.read().strip()
-        if selected:
-            return _config_path_for_name(selected)
-    except OSError:
-        pass
-
-    for fallback in ("config.json", "config_sop.json", "config_button.json"):
-        candidate = _config_path_for_name(fallback)
-        if os.path.isfile(candidate):
-            return candidate
-    return _config_path_for_name("config.json")
-
-# 平台 WebSocket 基础地址。优先级：环境变量 PLATFORM_WS_HOST > ota_config.json > 默认
-PLATFORM_WS_HOST = (os.environ.get("PLATFORM_WS_HOST")
-                    or _OTA_CFG.get("platform_ws_host")
-                    or "tunnel.memanager.cn")
+# 平台地址属于当前应用配置，不在通用服务代码中保存客户默认值。
+PLATFORM_WS_HOST = str(os.environ.get("PLATFORM_WS_HOST")
+                       or _OTA_CFG.get("platform_ws_host") or "").strip()
+if not PLATFORM_WS_HOST:
+    raise RuntimeError("OTA 配置缺少 platform_ws_host")
 # ====================================================
 
 def get_device_id():

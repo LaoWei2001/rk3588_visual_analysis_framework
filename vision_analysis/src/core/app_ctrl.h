@@ -24,12 +24,14 @@
 #include <atomic>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <opencv2/opencv.hpp>
 #include <pthread.h>
 #include <string>
 #include <vector>
 
 class DecChannel; /* 前置声明, 底层 C++ 类型 */
+class LazyVideoFrame;
 
 /*======================== 魔数 ========================*/
 #define APP_CTRL_MAGIC 0x524B3358U /* "RK3X" */
@@ -38,19 +40,14 @@ class DecChannel; /* 前置声明, 底层 C++ 类型 */
  * 通道在线状态枚举
  *================================================================*/
 /**
- * 状态转移:
- *   捕获线程检测到断流 → CH_OFFLINE
- *   捕获线程发起重连   → CH_RECONNECTING
- *   重连成功（首帧到达）→ CH_ONLINE
- *
+ * 状态转移: 捕获线程检测到断流时进入 CH_OFFLINE，恢复首帧时进入 CH_ONLINE。
  * 写操作由 analyzer_channel_offline / analyzer_channel_online 持 chn_mtx 完成；
- * 读操作由 analyzer_is_channel_online / 通道快照接口持同一把锁完成。
+ * 读操作由通道快照接口持同一把锁完成。
  */
 enum ChannelOnlineState
 {
-    CH_ONLINE = 0,       /*!< 流正常到达 */
-    CH_OFFLINE = 1,      /*!< 流已断开    */
-    CH_RECONNECTING = 2, /*!< 重连进行中  */
+    CH_ONLINE = 0,  /*!< 流正常到达 */
+    CH_OFFLINE = 1, /*!< 流已断开    */
 };
 
 /*================================================================
@@ -63,15 +60,7 @@ struct ChannelRawFrame
     /* 同一业务帧进入 videoOutHandle 时采集的双时钟；异步 NPU 路径随任务原样透传。 */
     uint64_t frame_steady_ms = 0;
     uint64_t frame_unix_ms = 0;
-    cv::Mat model_input_mat;
-
-    /* 解码源帧的借用视图：仅在 videoOutHandle 当前回调及其同步调用链内有效。
-     * 传统 CV logic 可通过 ChannelContext::source_frame() 按需转成原分辨率 BGR；
-     * 不得把 source_data 保存到本次 logic 调用之外。异步推理结果路径不设置这些字段。 */
-    const void *source_data = nullptr;
-    int source_format = 0;
-    int source_hstride = 0;
-    int source_vstride = 0;
+    std::shared_ptr<LazyVideoFrame> lazy_frame;
 };
 
 /*================================================================
@@ -105,15 +94,12 @@ struct ChannelState
     int fps_counter = 0;
     uint64_t last_fps_ts_ms = 0;
 
-    /* 最近一帧进入分析入口的时间；所有通道健康检查统一使用，不依赖是否启用 NPU。 */
-    uint64_t last_input_frame_steady_ms = 0;
-
     /* 由 chn_mtx[chnId] 保护 */
     ChannelOnlineState online_state = CH_ONLINE; /*!< 当前在线状态 */
     uint64_t offline_ts_ms = 0;                  /*!< 最近一次离线时刻 */
     uint64_t online_ts_ms = 0;                   /*!< 最近一次上线时刻 */
     std::vector<AlgoResult> last_results;
-    int64_t published_frame_seq = 0; /* last_results/last_logic_frame 对应的帧序号 */
+    int64_t published_frame_seq = 0; /* last_results/last_lazy_frame 对应的帧序号 */
     uint64_t publication_seq = 0;    /* 每次对外发布可观察状态时递增，永不因断流/热更新重置 */
     uint64_t published_steady_ms = 0;
     uint64_t frame_steady_ms = 0;
@@ -130,10 +116,8 @@ struct ChannelState
     std::shared_ptr<void> logic_state;
     /* 每个业务帧只生成一份不可变变量表；所有全局 Logic 共享读取，不再逐实例复制。 */
     std::shared_ptr<const LogicOutputSet> logic_outputs = empty_logic_output_snapshot();
-    cv::Mat last_frame;
-    cv::Mat last_logic_frame;
-    cv::Mat
-        logic_display_frame; /* logic 经 display_canvas() 自绘的显示底图(640×640 BGR)；空=不覆盖，显示走实时采集帧 */
+    std::shared_ptr<LazyVideoFrame> last_lazy_frame;
+    cv::Mat logic_display_frame; /* Logic 输出的任意尺寸 BGR 显示底图；空=不覆盖，显示走实时采集帧 */
     uint64_t logic_display_ts_ms = 0; /* 上面那帧的产生时刻(steady ms)，显示端据此判新鲜度，过期回退实时帧 */
     int64_t logic_frame_id = 0;
     int64_t input_frame_seq = 0;
@@ -145,7 +129,8 @@ struct ChannelState
 
     /** 调用方必须持有本通道 chn_mtx；用于统一提交对全局算法可见的新版本。 */
     void commit_publication(const std::shared_ptr<const AppRuntimeSnapshot> &runtime, uint64_t commit_steady_ms,
-                            uint64_t source_steady_ms, uint64_t source_unix_ms, int infer_enabled)
+                            uint64_t source_steady_ms, uint64_t source_unix_ms, int infer_enabled,
+                            int source_width = 0, int source_height = 0)
     {
         ++publication_seq;
         published_steady_ms = commit_steady_ms;
@@ -154,8 +139,8 @@ struct ChannelState
         published_runtime = runtime;
         published_config_generation = runtime ? runtime->generation : 0;
         published_infer_enabled = infer_enabled ? 1 : 0;
-        published_src_width = src_w_now;
-        published_src_height = src_h_now;
+        published_src_width = source_width > 0 ? source_width : src_w_now;
+        published_src_height = source_height > 0 ? source_height : src_h_now;
         published_logic_frame_id = logic_frame_id;
     }
 };
@@ -336,7 +321,6 @@ extern "C"
     int app_ctrl_get_chn_nums(void);
     int app_ctrl_get_enable_disp(void);
     int app_ctrl_get_enable_rtsp(void);
-    int app_ctrl_get_preview_fps(void);
     int app_ctrl_get_disp_width(void);
     int app_ctrl_get_disp_height(void);
     int app_ctrl_get_tile_cols(void);

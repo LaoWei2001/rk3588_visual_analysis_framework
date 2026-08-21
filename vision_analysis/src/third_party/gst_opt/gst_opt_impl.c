@@ -1,7 +1,6 @@
 /**
  * gst_opt_impl.c — gstopt_sample_get_buffer() 通用实现
  *
- * 替代原 libgst_opt.a（广州易百珑/灵眸专有静态库），
  * 仅使用标准 GStreamer + GStreamer-Video API，
  * 可在任意厂商的 RK3588 板（正点原子、PINE64、Radxa 等）上编译运行。
  *
@@ -27,7 +26,6 @@
  *         出错时返回 NULL。
  *
  * 实现说明：
- *   - 原始实现由灵眸专有 libgst_opt.a 提供，本文件以标准 API 等价替换。
  *   - GStreamer 的格式名称（NV12/NV21/BGR/RGB 等）与 Rockchip RGA 格式名称一致，
  *     直接透传给 imgDesc.fmt 无需转换。
  *   - 垂直步长 = UV 平面偏移 / Y 平面行步长（NV12/NV21 适用）；

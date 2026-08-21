@@ -3,8 +3,6 @@ services.py — 网页托管「板端后台微服务」(systemd 单元)。
 
 设计要点:
   - systemd 是唯一的进程管家, 本路由只是它的遥控器 + 仪表盘。
-  - deploy.sh(开发者命令行) 与 web 操作的是同一套**同名**单元(ota_agent.service /
-    unified_upload.service), 互相覆盖同一文件、不会双开, 因此并存不冲突。
   - 控制台以 root 运行(rk3588-console.service), 可直接 systemctl / 写单元文件。
   - 只管两个 python 服务; 二进制(vision_app)仍由 process_manager 按 App 托管(维持分工)。
 

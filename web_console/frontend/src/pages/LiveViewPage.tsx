@@ -456,8 +456,9 @@ export default function LiveViewPage() {
 
       if (sourceBuffer.buffered.length > 0) {
         const liveEdge = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1)
-        if (!Number.isFinite(video.currentTime) || liveEdge - video.currentTime > 1.2) {
-          video.currentTime = Math.max(0, liveEdge - 0.15)
+        // 保留约两个25FPS视频帧的解码余量；落后超过600ms时主动追赶实时点。
+        if (!Number.isFinite(video.currentTime) || liveEdge - video.currentTime > 0.6) {
+          video.currentTime = Math.max(0, liveEdge - 0.08)
         }
       }
       if (video.paused) void video.play().catch(() => {})

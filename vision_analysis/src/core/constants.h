@@ -10,6 +10,9 @@ namespace constants
 // 通道相关
 constexpr int MAX_CHANNELS = 15;
 
+// 实时预览：按源帧自动更新，超过此速率时丢弃旧帧保护 RGA/内存带宽
+constexpr int PREVIEW_MAX_FPS = 30;
+
 // 配置热加载
 constexpr int CONFIG_MONITOR_INTERVAL_SEC = 2;
 

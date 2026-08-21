@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <rga/im2d.h>
 #include <stdexcept>
 
@@ -89,6 +90,7 @@ void YoloPose::query_model_info()
     }
 
     out_attrs_.clear();
+    is_quant_ = true;
     for (int i = 0; i < io_num_out_; i++)
     {
         rknn_tensor_attr attr{};
@@ -96,6 +98,8 @@ void YoloPose::query_model_info()
         if (rknn_query(ctx_, RKNN_QUERY_OUTPUT_ATTR, &attr, sizeof(attr)) < 0)
             throw std::runtime_error("YoloPose failed to query output attributes");
         out_attrs_.push_back(attr);
+        if (attr.type != RKNN_TENSOR_INT8 && attr.type != RKNN_TENSOR_UINT8)
+            is_quant_ = false;
         printf("[YoloPose] output[%d] shape=", i);
         for (uint32_t d = 0; d < attr.n_dims; ++d)
             printf("%s%u", d == 0 ? "[" : ",", attr.dims[d]);
@@ -244,7 +248,8 @@ void YoloPose::load_pose_label(const std::string &label_path)
                pose_label_.c_str());
 }
 
-float YoloPose::keypoint_value(const float *buffer, int keypoint_index, int component, int candidate_index) const
+float YoloPose::keypoint_value(const rknn_output &output, const rknn_tensor_attr &attr, int keypoint_index,
+                               int component, int candidate_index) const
 {
     const int channel = keypoint_index * 3 + component;
     size_t offset = 0;
@@ -252,7 +257,13 @@ float YoloPose::keypoint_value(const float *buffer, int keypoint_index, int comp
         offset = static_cast<size_t>(channel) * total_grid_points_ + candidate_index;
     else
         offset = static_cast<size_t>(candidate_index) * keypoint_values_per_candidate_ + channel;
-    return buffer[offset];
+    if (!output.buf)
+        return 0.0f;
+    if (is_quant_ && attr.type == RKNN_TENSOR_INT8)
+        return (static_cast<const int8_t *>(output.buf)[offset] - attr.zp) * attr.scale;
+    if (is_quant_ && attr.type == RKNN_TENSOR_UINT8)
+        return (static_cast<const uint8_t *>(output.buf)[offset] - attr.zp) * attr.scale;
+    return static_cast<const float *>(output.buf)[offset];
 }
 
 bool YoloPose::init_zero_copy_input()
@@ -434,6 +445,55 @@ int YoloPose::process_fp32(float *input, int grid_h, int grid_w, int stride, std
     return validCount;
 }
 
+template <typename T>
+int YoloPose::process_quantized(const T *input, int grid_h, int grid_w, int stride, std::vector<float> &boxes,
+                                std::vector<float> &boxScores, std::vector<int> &classId, int32_t zp, float scale,
+                                int index)
+{
+    if (!input || scale == 0.0f)
+        return 0;
+    constexpr int input_loc_len = 64;
+    const int grid_len = grid_h * grid_w;
+    const float threshold_logit = unsigmoid(obj_thresh_);
+    const long quantized_threshold = std::lround(threshold_logit / scale + zp);
+    const T threshold = static_cast<T>(std::max<long>(std::numeric_limits<T>::min(),
+                                                       std::min<long>(std::numeric_limits<T>::max(),
+                                                                      quantized_threshold)));
+    int valid_count = 0;
+    for (int h = 0; h < grid_h; ++h)
+    {
+        for (int w = 0; w < grid_w; ++w)
+        {
+            const int cell = h * grid_w + w;
+            const T confidence_q = input[input_loc_len * grid_len + cell];
+            if (confidence_q < threshold)
+                continue;
+
+            float loc[input_loc_len];
+            for (int channel = 0; channel < input_loc_len; ++channel)
+                loc[channel] = (static_cast<int>(input[channel * grid_len + cell]) - zp) * scale;
+            for (int side = 0; side < 4; ++side)
+                softmax(&loc[side * 16], 16);
+
+            float distance[4] = {0, 0, 0, 0};
+            for (int bin = 0; bin < 16; ++bin)
+                for (int side = 0; side < 4; ++side)
+                    distance[side] += loc[side * 16 + bin] * bin;
+
+            const float x1 = ((w + 0.5f) - distance[0]) * stride;
+            const float y1 = ((h + 0.5f) - distance[1]) * stride;
+            const float x2 = ((w + 0.5f) + distance[2]) * stride;
+            const float y2 = ((h + 0.5f) + distance[3]) * stride;
+            boxes.insert(boxes.end(), {x1, y1, x2 - x1, y2 - y1, static_cast<float>(index + cell)});
+            const float confidence_logit = (static_cast<int>(confidence_q) - zp) * scale;
+            boxScores.push_back(sigmoid(confidence_logit));
+            classId.push_back(0);
+            ++valid_count;
+        }
+    }
+    return valid_count;
+}
+
 static int quick_sort_indice_inverse(std::vector<float> &input, int left, int right, std::vector<int> &indices)
 {
     float key;
@@ -468,6 +528,9 @@ int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std:
     std::vector<float> filterBoxes;
     std::vector<float> objProbs;
     std::vector<int> classId;
+    filterBoxes.reserve(256 * 5);
+    objProbs.reserve(256);
+    classId.reserve(256);
     int validCount = 0;
     int index = 0;
 
@@ -479,8 +542,17 @@ int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std:
             return -1;
         int stride = model_h_ / grid_h;
 
-        validCount += process_fp32((float *)outputs[i].buf, grid_h, grid_w, stride, filterBoxes, objProbs, classId,
-                                   out_attrs_[i].zp, out_attrs_[i].scale, index);
+        if (is_quant_ && out_attrs_[i].type == RKNN_TENSOR_INT8)
+            validCount += process_quantized(static_cast<const int8_t *>(outputs[i].buf), grid_h, grid_w, stride,
+                                            filterBoxes, objProbs, classId, out_attrs_[i].zp, out_attrs_[i].scale,
+                                            index);
+        else if (is_quant_ && out_attrs_[i].type == RKNN_TENSOR_UINT8)
+            validCount += process_quantized(static_cast<const uint8_t *>(outputs[i].buf), grid_h, grid_w, stride,
+                                            filterBoxes, objProbs, classId, out_attrs_[i].zp, out_attrs_[i].scale,
+                                            index);
+        else
+            validCount += process_fp32(static_cast<float *>(outputs[i].buf), grid_h, grid_w, stride, filterBoxes,
+                                       objProbs, classId, out_attrs_[i].zp, out_attrs_[i].scale, index);
         index += grid_h * grid_w;
     }
 
@@ -548,14 +620,17 @@ int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std:
         if (keypoints_index >= 0 && keypoints_index < total_grid_points_ && keypoint_output_index_ >= 0 &&
             outputs[keypoint_output_index_].buf)
         {
-            const float *kpts_buf = static_cast<const float *>(outputs[keypoint_output_index_].buf);
+            const rknn_output &keypoint_output = outputs[keypoint_output_index_];
+            const rknn_tensor_attr &keypoint_attr = out_attrs_[keypoint_output_index_];
             res.keypoints.resize(keypoint_count_);
             res.keypoint_scores.resize(keypoint_count_);
             for (int j = 0; j < keypoint_count_; ++j)
             {
-                float kx = (keypoint_value(kpts_buf, j, 0, keypoints_index) - lb.x_pad) / lb.scale;
-                float ky = (keypoint_value(kpts_buf, j, 1, keypoints_index) - lb.y_pad) / lb.scale;
-                float keypoint_score = keypoint_value(kpts_buf, j, 2, keypoints_index);
+                float kx = (keypoint_value(keypoint_output, keypoint_attr, j, 0, keypoints_index) - lb.x_pad) /
+                           lb.scale;
+                float ky = (keypoint_value(keypoint_output, keypoint_attr, j, 1, keypoints_index) - lb.y_pad) /
+                           lb.scale;
+                float keypoint_score = keypoint_value(keypoint_output, keypoint_attr, j, 2, keypoints_index);
                 if (keypoint_score < 0.0f || keypoint_score > 1.0f)
                     keypoint_score = sigmoid(keypoint_score);
                 res.keypoints[j] = cv::Point2f(kx, ky);
@@ -595,7 +670,8 @@ bool YoloPose::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfS
     memset(outputs, 0, sizeof(outputs));
     for (int i = 0; i < io_num_out_; i++)
     {
-        outputs[i].want_float = 1; // Force fp32 output so we don't have to deal with quantization math
+        outputs[i].index = i;
+        outputs[i].want_float = is_quant_ ? 0 : 1;
     }
     if (rknn_outputs_get(ctx_, io_num_out_, outputs, NULL) < 0)
         return false;
@@ -636,7 +712,7 @@ bool YoloPose::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *p
     {
         memset(&rknn_outputs_cache_[i], 0, sizeof(rknn_output));
         rknn_outputs_cache_[i].index = i;
-        rknn_outputs_cache_[i].want_float = 1; /* pose 强制 fp32 输出 */
+        rknn_outputs_cache_[i].want_float = is_quant_ ? 0 : 1;
     }
     if (rknn_outputs_get(ctx_, io_num_out_, rknn_outputs_cache_.data(), NULL) < 0)
     {

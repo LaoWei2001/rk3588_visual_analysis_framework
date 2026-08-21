@@ -44,40 +44,24 @@ add_definitions(-Wall -Wpointer-arith -O3 -ffast-math)
 set(toolkit_root ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party)
 set(common_root  ${toolkit_root})
 
-if(EXISTS ${common_root}/system_opt/api.cmake)
-    include(${common_root}/system_opt/api.cmake)
-else()
-    set(SYSOPT_INCLUDE_DIRS "")
-    set(SYSOPT_SOURCE_DIRS "")
-    set(SYSOPT_LIBS "")
-endif()
-
 if(EXISTS ${common_root}/gst_opt/api.cmake)
     include(${common_root}/gst_opt/api.cmake)
 else()
     set(GSTOPT_INCLUDE_DIRS "")
     set(GSTOPT_SOURCE_DIRS "")
     set(GSTOPT_LIBS "")
-    set(GSTOPT_LIBS_DIRS "")
 endif()
 
 set(api_inc
-    ${SYSOPT_INCLUDE_DIRS}
     ${GSTOPT_INCLUDE_DIRS}
 )
 
-# 注意：GSTOPT_SOURCE_DIRS 现在包含 gst_opt_impl.c（替代原 libgst_opt.a）
+# GStreamer 辅助实现直接随引擎源码编译。
 file(GLOB api_srcs
-    ${SYSOPT_SOURCE_DIRS}
     ${GSTOPT_SOURCE_DIRS}
 )
 
-link_directories(
-    ${GSTOPT_LIBS_DIRS}
-)
-
 set(sysLib_list
-    ${SYSOPT_LIBS}
     ${GSTOPT_LIBS}
 )
 # ======================== third_party helpers END =========================
@@ -85,6 +69,7 @@ set(sysLib_list
 # ========================== custom ============================
 find_package(OpenCV REQUIRED)
 find_package(PkgConfig REQUIRED)
+find_package(Threads REQUIRED)
 
 # 画面文字统一用 OpenCV freetype 模块渲染(中英文), 不再回退 Hershey。该模块为【必需】:
 # 找不到 opencv2/freetype.hpp 直接报错, 而不是静默降级。opencv_freetype 库已含在 OpenCV_LIBS 中。
@@ -96,12 +81,6 @@ if(NOT OPENCV_FREETYPE_HEADER)
         "请安装带 contrib freetype 的 OpenCV(libopencv-contrib / 自编 opencv_contrib)。")
 endif()
 message(STATUS "OpenCV freetype module found -> overlay text rendered via FreeType (CN + EN)")
-
-# BLAS / LAPACK：源码中无直接调用，设为可选。
-# OpenCV 已自带所需的矩阵运算后端，不依赖外部 BLAS。
-# 若将来引入直接调用（cblas_sgemm 等），再改回 REQUIRED。
-find_package(BLAS)
-find_package(LAPACK)
 
 pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
 
@@ -120,14 +99,6 @@ set(custom_libs
     Threads::Threads
     gpiod
 )
-
-# 仅在找到时才链接，避免板端未安装时报错
-if(BLAS_FOUND)
-    list(APPEND custom_libs ${BLAS_LIBRARIES})
-endif()
-if(LAPACK_FOUND)
-    list(APPEND custom_libs ${LAPACK_LIBRARIES})
-endif()
 
 aux_source_directory(${PROJECT_SOURCE_DIR}/src                          dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/config                   dir_srcs)

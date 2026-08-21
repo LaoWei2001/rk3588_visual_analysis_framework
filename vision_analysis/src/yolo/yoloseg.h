@@ -90,6 +90,8 @@ class YoloSeg : public ModelBase
     std::vector<rknn_tensor_attr> out_attrs_;
     std::vector<std::string> labels_;
     bool is_quant_ = true;
+    /* 约 3.2 MB 的 proto 工作区按模型实例复用，避免每帧大栈对象和重复堆分配。 */
+    std::vector<float> proto_cache_;
 
     float obj_thresh_ = 0.4f;
     float nms_thresh_ = 0.45f;

@@ -6,7 +6,7 @@
 static void logic_course_02(ChannelContext *ctx)
 {
     // 空指针验证
-    if (!ctx || !ctx->frame || ctx->frame->empty())
+    if (!ctx)
     {
         return;
     }

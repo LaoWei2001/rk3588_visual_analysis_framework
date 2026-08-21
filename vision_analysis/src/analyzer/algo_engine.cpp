@@ -8,7 +8,7 @@
  *   - names_to_class_ids / create_model   — 跨文件辅助（声明在 algo_internal.h）
  *   - worker_thread_func                  — NPU 推理 worker（声明在 algo_internal.h）
  *
- * 公有 API（algorithm_init / algorithm_process_mat / …）在 algoProcess.cpp。
+ * 公有 API（algorithm_init / algorithm_process_source / …）在 algoProcess.cpp。
  */
 
 #include <algorithm>
@@ -150,6 +150,14 @@ std::shared_ptr<ModelBase> create_model(const std::string &type, const std::stri
  * 单模型 worker 与多模型子线程共用此函数，保证两条路径都优先使用
  * DMA-BUF -> RGA -> RKNN input memory 的零拷贝路径；失败时才回退 CPU Mat。
  */
+static cv::Mat ensure_cpu_frame(const AlgoTask &task)
+{
+    if (!task.frame)
+        return {};
+    const cv::Mat *frame = task.frame->model_frame();
+    return frame ? *frame : cv::Mat();
+}
+
 static bool run_model_task(int chnId, const AlgoTask &task, const std::shared_ptr<ModelBase> &model,
                            std::vector<AlgoResult> &results, YoloPerfStat &perf, float &lock_wait_ms)
 {
@@ -178,11 +186,12 @@ static bool run_model_task(int chnId, const AlgoTask &task, const std::shared_pt
                 ret = model->infer_zero_copy(results, &perf);
         }
 
-        if (!ret && !task.img.empty())
+        if (!ret)
         {
-            /* 每个并行子模型使用独立 Mat 头；像素数据只读共享，避免并发修改同一 Mat 头。 */
-            cv::Mat cpu_frame = task.img;
-            ret = model->infer(cpu_frame, results, &perf);
+            /* 只有零拷贝失败才生成 CPU BGR；多模型并发时由 LazyVideoFrame 保证只生成一份。 */
+            cv::Mat cpu_frame = ensure_cpu_frame(task);
+            if (!cpu_frame.empty())
+                ret = model->infer(cpu_frame, results, &perf);
         }
     }
     catch (const std::exception &e)
@@ -484,7 +493,7 @@ void *worker_thread_func(void *arg)
                 if (seq > g_algo.channel_results[task.chnId].latest_seq)
                 {
                     g_algo.channel_results[task.chnId].data = std::move(filtered);
-                    g_algo.channel_results[task.chnId].data_frame = task.img;
+                    g_algo.channel_results[task.chnId].frame = task.frame;
                     g_algo.channel_results[task.chnId].frame_steady_ms = ts_ms;
                     g_algo.channel_results[task.chnId].frame_unix_ms = task.frame_unix_ms;
                     g_algo.channel_results[task.chnId].latest_seq = seq;

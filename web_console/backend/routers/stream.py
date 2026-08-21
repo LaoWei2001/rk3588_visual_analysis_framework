@@ -71,7 +71,8 @@ def _build_gst_args(rtsp_url: str) -> list[str]:
         "rtspsrc",
         f"location={rtsp_url}",
         "protocols=tcp",
-        "latency=100",
+        # 板内回环 RTSP 不经过外部网络，50ms 足以吸收线程调度抖动。
+        "latency=50",
         "buffer-mode=1",
         "drop-on-latency=true",
         "!",
@@ -88,7 +89,7 @@ def _build_gst_args(rtsp_url: str) -> list[str]:
         "max-size-time=2000000000",
         "!",
         "mp4mux",
-        "fragment-duration=100",
+        "fragment-duration=80",
         "streamable=true",
         "!",
         "fdsink",

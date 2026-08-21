@@ -7,6 +7,7 @@
 #include "app_ctrl.h"
 
 #include "../analyzer/analyzer.h"
+#include "../analyzer/frame_pipeline.h"
 #include "../config/config_registry.h"
 #include <algorithm>
 #include <chrono>
@@ -233,13 +234,14 @@ extern "C" void *config_monitor_thread_func(void *arg)
             new_cfg.disp_width != old_cfg.disp_width || new_cfg.disp_height != old_cfg.disp_height ||
             new_cfg.tile_cols != old_cfg.tile_cols || new_cfg.tile_rows != old_cfg.tile_rows ||
             new_cfg.enable_pause_key != old_cfg.enable_pause_key || new_cfg.rtsp_port != old_cfg.rtsp_port ||
-            new_cfg.rtsp_path != old_cfg.rtsp_path || new_cfg.rtsp_fps != old_cfg.rtsp_fps ||
+            new_cfg.rtsp_path != old_cfg.rtsp_path ||
             new_cfg.rtsp_bitrate != old_cfg.rtsp_bitrate || new_cfg.rtsp_codec != old_cfg.rtsp_codec ||
             new_cfg.rtsp_encoder != old_cfg.rtsp_encoder;
         if (channel_topology_changed || output_topology_changed)
         {
-            fprintf(stderr, "[ConfigMonitor] Hot reload rejected: channel topology or display/RTSP layout/settings "
-                            "cannot change; restart required\n");
+            fprintf(stderr,
+                    "[ConfigMonitor] Hot reload rejected: channel topology or display/RTSP layout/settings "
+                    "cannot change; restart required\n");
             ctrl->configLastMtime = mtime;
             continue;
         }
@@ -740,11 +742,10 @@ int app_ctrl_init(const char *cfgPath)
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
         pthread_mutex_init(&g_pCtrl->chn_mtx[i], nullptr);
 
-    /* 初始化通道状态时间戳 */
+    /* 初始化通道逻辑时间戳；预览 FPS 由 display_worker 在首帧建立采样窗口。 */
     uint64_t now_ms = steady_now_ms();
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
     {
-        g_pCtrl->channels_state[i].last_fps_ts_ms = now_ms;
         g_pCtrl->channels_state[i].last_logic_ts_ms = now_ms;
     }
 
@@ -833,12 +834,6 @@ int app_ctrl_get_enable_rtsp(void)
 {
     auto snapshot = app_ctrl_get_runtime_snapshot();
     return snapshot ? (snapshot->config.enable_rtsp ? 1 : 0) : 0;
-}
-
-int app_ctrl_get_preview_fps(void)
-{
-    auto snapshot = app_ctrl_get_runtime_snapshot();
-    return snapshot ? snapshot->config.preview_fps : 15;
 }
 
 int app_ctrl_get_disp_width(void)
@@ -978,7 +973,7 @@ static void fill_channel_logic_snapshot_locked(int chnId, const ChannelState &st
                                                std::shared_ptr<const AppRuntimeSnapshot> *published_runtime)
 {
     out->has_publication = state.publication_seq != 0;
-    out->has_frame = !state.last_logic_frame.empty();
+    out->has_frame = state.last_lazy_frame && state.last_lazy_frame->available();
     out->channel_id = chnId;
     out->publication_seq = state.publication_seq;
     out->published_steady_ms = state.published_steady_ms;
@@ -1043,18 +1038,24 @@ int app_ctrl_get_channel_frame_snapshot(int chnId, ChannelFrameSnapshot *out)
     *out = ChannelFrameSnapshot();
     const float infer_fps = algorithm_get_infer_fps(chnId);
 
-    cv::Mat frame_shallow;
+    std::shared_ptr<LazyVideoFrame> lazy_frame;
     std::shared_ptr<const AppRuntimeSnapshot> published_runtime;
     {
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         const auto &cs = g_pCtrl->channels_state[chnId];
-        frame_shallow = cs.last_logic_frame;
+        lazy_frame = cs.last_lazy_frame;
         out->results = cs.last_results;
         out->draw_cmds = cs.draw_cmds;
         fill_channel_logic_snapshot_locked(chnId, cs, &out->logic, &published_runtime);
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
     }
-    out->frame = frame_shallow.clone();
+    if (lazy_frame)
+    {
+        const cv::Mat *frame = lazy_frame->model_frame();
+        if (frame)
+            out->frame = frame->clone();
+    }
+    out->logic.has_frame = !out->frame.empty();
     fill_channel_publication_config(chnId, published_runtime, &out->logic);
     const std::vector<RoiZone> *rois = app_ctrl_runtime_channel_rois(published_runtime, chnId);
     if (rois)

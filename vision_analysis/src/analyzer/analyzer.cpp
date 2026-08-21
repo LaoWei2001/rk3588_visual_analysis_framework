@@ -94,6 +94,7 @@ int analyzer_init(void)
         pthread_mutex_init(&g_disp_queues[channel_id].mtx, nullptr);
         pthread_cond_init(&g_disp_queues[channel_id].cv, nullptr);
         g_disp_queues[channel_id].has_task = 0;
+        g_disp_queues[channel_id].reset_fps_pending = true;
         g_disp_queues[channel_id].pool.init(); /* 预分配三槽帧缓冲（≈9 MB/通道，NV12 1080p）*/
     }
 
@@ -188,8 +189,7 @@ void analyzer_channel_offline(int chnId)
         ch.draw_cmds.clear();
         ch.logic_state.reset();
         ch.logic_outputs = empty_logic_output_snapshot();
-        ch.last_frame.release();
-        ch.last_logic_frame.release();
+        ch.last_lazy_frame.reset();
         ch.logic_display_frame.release();
         ch.logic_frame_id = 0;
         ch.last_logic_ts_ms = ts;
@@ -227,8 +227,7 @@ void analyzer_channel_online(int chnId)
         ch.draw_cmds.clear();
         ch.logic_state.reset();
         ch.logic_outputs = empty_logic_output_snapshot();
-        ch.last_frame.release();
-        ch.last_logic_frame.release();
+        ch.last_lazy_frame.reset();
         ch.logic_display_frame.release();
         ch.logic_frame_id = 0;
         ch.last_logic_ts_ms = ts;
@@ -243,33 +242,6 @@ void analyzer_channel_online(int chnId)
     /* 同 offline：reset 接口内部与 tracker->update() 串行。 */
     analyzer_reset_tracker_ids(chnId);
     printf("[Analyzer] ch%d came ONLINE at %llums (logic_state reset)\n", chnId, (unsigned long long)ts);
-}
-
-int analyzer_is_channel_online(int chnId)
-{
-    if (!app_ctrl_has_channel(chnId))
-        return 0;
-    pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-    const ChannelOnlineState s = g_pCtrl->channels_state[chnId].online_state;
-    pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
-    return (s != CH_OFFLINE) ? 1 : 0;
-}
-
-ChannelHealth analyzer_get_channel_health(int chnId, int stale_ms, int dead_ms)
-{
-    if (!app_ctrl_has_channel(chnId))
-        return CH_HEALTH_DEAD;
-    pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-    const uint64_t last_ts = g_pCtrl->channels_state[chnId].last_input_frame_steady_ms;
-    pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
-    if (last_ts == 0)
-        return CH_HEALTH_DEAD; /* 从未收到输入帧 */
-    const int64_t age_ms = (int64_t)(steady_now_ms() - last_ts);
-    if (age_ms >= dead_ms)
-        return CH_HEALTH_DEAD;
-    if (age_ms >= stale_ms)
-        return CH_HEALTH_STALE;
-    return CH_HEALTH_HEALTHY;
 }
 
 /*======================== 线程数量 / 通道号查询（供 main 创建线程）========================*/

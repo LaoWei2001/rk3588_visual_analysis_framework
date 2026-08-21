@@ -5,7 +5,7 @@
 #   ssh root@<板子IP> "cd ~/web_console && bash install.sh"
 set -e
 
-# 可移植安装路径：默认保持向后兼容；迁移到其他目录时可执行
+# 可移植安装路径；迁移到其他目录时可执行
 #   APPS_ROOT=/data/ai_apps bash install.sh
 APPS_ROOT="${APPS_ROOT:-/opt/ai_apps}"
 INSTALL_DIR="${INSTALL_DIR:-$APPS_ROOT/_console}"
@@ -73,17 +73,35 @@ fi
 
 # 3. 安装 systemd 服务
 echo "[3/4] 安装 systemd 服务..."
-cp "$SCRIPT_DIR/rk3588-console.service" /etc/systemd/system/
-# 基础 unit 保留默认路径以兼容旧安装方式；安装器用 drop-in 覆盖为本次实际路径。
-# 同时覆盖 Python 路径，适配 python3 位于 /usr/local/bin 等布局的系统。
-mkdir -p /etc/systemd/system/rk3588-console.service.d
 {
+    echo "[Unit]"
+    echo "Description=RK3588 Web Config Console"
+    echo "After=network-online.target"
+    echo "Wants=network-online.target"
+    echo ""
     echo "[Service]"
+    echo "Type=simple"
+    echo "User=root"
     printf 'WorkingDirectory=%s\n' "$INSTALL_DIR/backend"
     printf 'Environment="APPS_ROOT=%s"\n' "$APPS_ROOT"
-    echo "ExecStart="
+    echo 'Environment="BINARY_NAME=vision_analysis"'
+    echo "ExecStartPre=-/usr/bin/nm-online -q --timeout=30"
     printf 'ExecStart="%s" -m uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --log-level info\n' "$PYTHON_BIN"
-} > /etc/systemd/system/rk3588-console.service.d/paths.conf
+    echo "Restart=always"
+    echo "RestartSec=5"
+    echo "StandardOutput=journal"
+    echo "StandardError=journal"
+    echo "SyslogIdentifier=rk3588-console"
+    echo "KillMode=control-group"
+    echo "KillSignal=SIGTERM"
+    echo "TimeoutStopSec=10"
+    echo ""
+    echo "[Install]"
+    echo "WantedBy=multi-user.target"
+} > /etc/systemd/system/rk3588-console.service
+# 旧安装可能遗留同名路径覆盖文件；必须移除，保证上面的完整 unit 是唯一配置源。
+rm -f /etc/systemd/system/rk3588-console.service.d/paths.conf
+rmdir /etc/systemd/system/rk3588-console.service.d 2>/dev/null || true
 systemctl daemon-reload
 systemctl enable rk3588-console
 

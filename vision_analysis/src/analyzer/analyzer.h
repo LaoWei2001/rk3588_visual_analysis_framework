@@ -77,24 +77,9 @@ extern "C"
     int analyzer_get_dispatch_chn_id(int idx);
 
     /*======================== 跟踪器接口 ========================*/
-    void analyzer_update_tracker(int chnId, const ChannelConfig *ch);
     void analyzer_reset_tracker_ids(int chnId);
 
     /*======================== 通道热插拔 / 断流重连 ========================*/
-
-    /**
-     * 通道健康度（由 analyzer_get_channel_health 在内部短暂持锁计算，供快速轮询）。
-     *
-     * 用法示例（在 capture_bus_thread 的重连循环中）：
-     *   ChannelHealth h = analyzer_get_channel_health(chnId, 2000, 10000);
-     *   if (h == CH_HEALTH_DEAD) { / 触发告警 / }
-     */
-    typedef enum
-    {
-        CH_HEALTH_HEALTHY = 0, /*!< 帧正常到达（距上次推理 < stale_ms）*/
-        CH_HEALTH_STALE = 1,   /*!< 超过 stale_ms 未收到帧，可能断流   */
-        CH_HEALTH_DEAD = 2,    /*!< 超过 dead_ms  未收到帧，确认断流   */
-    } ChannelHealth;
 
     /**
      * @brief 标记通道离线（捕获线程检测到断流时调用）。
@@ -119,21 +104,6 @@ extern "C"
      * 典型调用点：重连后 GStreamer pipeline 首帧到达前。
      */
     void analyzer_channel_online(int chnId);
-
-    /**
-     * @brief 查询通道是否在线（线程安全，持 chn_mtx 短暂查询）。
-     * @return 1 = ONLINE 或 RECONNECTING；0 = OFFLINE
-     */
-    int analyzer_is_channel_online(int chnId);
-
-    /**
-     * @brief 根据距上次推理时间戳计算通道健康度（函数内部短暂持锁）。
-     *
-     * @param stale_ms  超过此毫秒数认为 STALE（推荐 2000 ms）
-     * @param dead_ms   超过此毫秒数认为 DEAD （推荐 10000 ms）
-     * @return ChannelHealth 枚举值
-     */
-    ChannelHealth analyzer_get_channel_health(int chnId, int stale_ms, int dead_ms);
 
 #ifdef __cplusplus
 }

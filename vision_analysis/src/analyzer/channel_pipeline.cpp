@@ -20,9 +20,9 @@
 #include <vector>
 
 #include "../control/channel_control.h"
-#include "../core/image_utils.h"
 #include "analyzer.h"
 #include "analyzer_internal.h"
+#include "frame_pipeline.h"
 #include "logic/core/channel_logic.h"
 #include "tracker.h"
 
@@ -76,16 +76,6 @@ void trackers_deinit(void)
 {
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
         g_trackers[i].reset();
-}
-
-/* 公开接口: 供 config_monitor 热重载时更新跟踪器参数 */
-void analyzer_update_tracker(int chnId, const ChannelConfig *ch)
-{
-    if (!ch || chnId < 0 || chnId >= MAX_CHANNEL_NUM)
-        return;
-    pthread_mutex_lock(&g_process_mtx[chnId]);
-    update_tracker_locked(chnId, *ch, nullptr, false);
-    pthread_mutex_unlock(&g_process_mtx[chnId]);
 }
 
 void analyzer_reset_tracker_ids(int chnId)
@@ -155,8 +145,7 @@ bool analyzer_publish_runtime_snapshot(const AppConfig &config, uint64_t generat
             state.logic_outputs = empty_logic_output_snapshot();
             state.last_results.clear();
             state.draw_cmds.clear();
-            state.last_frame.release();
-            state.last_logic_frame.release();
+            state.last_lazy_frame.reset();
             state.logic_display_frame.release();
             state.logic_frame_id = 0;
             state.published_frame_seq = 0;
@@ -180,32 +169,17 @@ bool analyzer_publish_runtime_snapshot(const AppConfig &config, uint64_t generat
     return true;
 }
 
-/*======================== 原始分辨率帧的惰性访问 ========================*/
-
-struct SourceFrameAccess
+/*======================== 当前视频帧的统一惰性访问 ========================*/
+static const cv::Mat *get_model_frame_bgr(void *opaque)
 {
-    const ChannelRawFrame *raw = nullptr;
-    cv::Mat bgr;
-    bool attempted = false;
-};
+    LazyVideoFrame *frame = static_cast<LazyVideoFrame *>(opaque);
+    return frame ? frame->model_frame() : nullptr;
+}
 
 static const cv::Mat *get_source_frame_bgr(void *opaque)
 {
-    SourceFrameAccess *access = static_cast<SourceFrameAccess *>(opaque);
-    if (!access || !access->raw)
-        return nullptr;
-    if (access->attempted)
-        return access->bgr.empty() ? nullptr : &access->bgr;
-    access->attempted = true;
-
-    const ChannelRawFrame &raw = *access->raw;
-    if (!raw.source_data || raw.width <= 0 || raw.height <= 0 || raw.source_hstride <= 0 || raw.source_vstride <= 0)
-        return nullptr;
-
-    if (!raw_to_bgr_mat(raw.source_data, raw.width, raw.height, raw.source_hstride, raw.source_vstride,
-                        raw.source_format, access->bgr))
-        return nullptr;
-    return access->bgr.empty() ? nullptr : &access->bgr;
+    LazyVideoFrame *frame = static_cast<LazyVideoFrame *>(opaque);
+    return frame ? frame->source_frame() : nullptr;
 }
 
 /*======================== invoke_channel_logic ========================*/
@@ -216,11 +190,10 @@ static const cv::Mat *get_source_frame_bgr(void *opaque)
  * (调用栈中可见函数名) 并允许将来单独测试 logic 调用路径。
  *
  * 持 chn_mtx[chnId] 的时间窗口（已优化）：
- *   fn(&ctx) 在锁外运行；仅写回 last_logic_frame/last_results/draw_cmds 时短暂持锁。
+ *   fn(&ctx) 在锁外运行；仅写回 lazy_frame/last_results/draw_cmds 时短暂持锁。
  * 这使快照读取等待时间从"logic 执行时长"降至"赋值时长"（μs 级）。
  *
  * @param chnId          通道号
- * @param frame_for_logic 与 current_results 严格同帧的 640 BGR 图
  * @param current_results 当帧检测结果（tracker 已更新 track_id）
  * @param frame_id        帧序号（用于写 published_frame_seq）
  * @param timestamp_ms    帧时间戳（毫秒）
@@ -229,9 +202,8 @@ static const cv::Mat *get_source_frame_bgr(void *opaque)
  * @param infer_enabled   本通道是否开启推理（透传给 ctx）
  * @param raw_frame       当前同步解码源帧；异步推理路径中不含有效 source_data
  */
-static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std::vector<AlgoResult> &current_results,
-                                 int64_t frame_id, uint64_t timestamp_ms, uint64_t unix_ms, float dt_ms,
-                                 int infer_enabled,
+static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_results, int64_t frame_id,
+                                 uint64_t timestamp_ms, uint64_t unix_ms, float dt_ms, int infer_enabled,
                                  const ChannelRawFrame *raw_frame,
                                  const std::shared_ptr<const AppRuntimeSnapshot> &runtime)
 {
@@ -246,16 +218,19 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
      * 仍提交严格同帧的 frame/results，供通用检测框绘制、快照和跨通道读取使用。 */
     if (logic_name.empty())
     {
+        if (raw_frame && raw_frame->lazy_frame)
+            raw_frame->lazy_frame->clear_borrowed_source();
         ChannelState &ch_state = g_pCtrl->channels_state[chnId];
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-        ch_state.last_logic_frame = frame_for_logic;
+        ch_state.last_lazy_frame = raw_frame ? raw_frame->lazy_frame : nullptr;
         ch_state.logic_state.reset();
         ch_state.logic_outputs = empty_logic_output_snapshot();
         ch_state.last_results = current_results;
         ch_state.published_frame_seq = frame_id;
         ch_state.draw_cmds.clear();
         ch_state.logic_display_frame.release();
-        ch_state.commit_publication(runtime, steady_now_ms(), timestamp_ms, unix_ms, infer_enabled);
+        ch_state.commit_publication(runtime, steady_now_ms(), timestamp_ms, unix_ms, infer_enabled,
+                                    raw_frame ? raw_frame->width : 0, raw_frame ? raw_frame->height : 0);
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
         return;
     }
@@ -263,16 +238,19 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
     ChannelLogicFunc fn = channel_logic_get(logic_name.c_str());
     if (!fn)
     {
+        if (raw_frame && raw_frame->lazy_frame)
+            raw_frame->lazy_frame->clear_borrowed_source();
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         ChannelState &state = g_pCtrl->channels_state[chnId];
-        state.last_logic_frame = frame_for_logic;
+        state.last_lazy_frame = raw_frame ? raw_frame->lazy_frame : nullptr;
         state.logic_state.reset();
         state.logic_outputs = empty_logic_output_snapshot();
         state.last_results = current_results;
         state.published_frame_seq = frame_id;
         state.draw_cmds.clear();
         state.logic_display_frame.release();
-        state.commit_publication(runtime, steady_now_ms(), timestamp_ms, unix_ms, infer_enabled);
+        state.commit_publication(runtime, steady_now_ms(), timestamp_ms, unix_ms, infer_enabled,
+                                 raw_frame ? raw_frame->width : 0, raw_frame ? raw_frame->height : 0);
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
         return;
     }
@@ -283,10 +261,9 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
     /* 构造 ChannelContext（栈上，logic 函数只在本次调用内使用）*/
     ChannelContext ctx;
     ctx.chnId = chnId;
-    ctx.frame = &frame_for_logic;
     pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-    ctx.src_width = ch_state.src_w_now; /* 原始视频分辨率(解码源帧尺寸, 如 1920×1080) */
-    ctx.src_height = ch_state.src_h_now;
+    ctx.src_width = raw_frame && raw_frame->width > 0 ? raw_frame->width : ch_state.src_w_now;
+    ctx.src_height = raw_frame && raw_frame->height > 0 ? raw_frame->height : ch_state.src_h_now;
     ctx.disp_fps = ch_state.disp_fps;
     logic_state = ch_state.logic_state;
     pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
@@ -306,21 +283,19 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
     ctx.infer_enabled = infer_enabled;
     ctx.infer_fps = algorithm_get_infer_fps(chnId);
 
-    /* 原始帧只绑定短生命周期的惰性转换器。传统 CV 通道与 videoOutHandle 同步执行，
-     * raw_frame.source_data 在 fn(&ctx) 返回前有效；异步推理路径没有该借用视图。 */
-    SourceFrameAccess source_frame_access;
-    source_frame_access.raw = raw_frame;
-    if (raw_frame && raw_frame->source_data)
+    /* model/source 两种尺寸共享同一个帧提供者，各自首次调用时才转换，且每帧最多一次。 */
+    if (raw_frame && raw_frame->lazy_frame)
     {
+        ctx.model_frame_getter = get_model_frame_bgr;
         ctx.source_frame_getter = get_source_frame_bgr;
-        ctx.source_frame_opaque = &source_frame_access;
+        ctx.frame_getter_opaque = raw_frame->lazy_frame.get();
     }
 
     /* logic 在 chn_mtx 外运行。runtime shared_ptr 保证 config/ROI 在本帧全程有效；
      * ctx.state 由外层 g_process_mtx 保护，热更新只能在本帧 logic 返回后切换。 */
     std::vector<DrawCommand> draw_cmds;
     ctx.draw_cmds = &draw_cmds;
-    /* 显示画布(可选): logic 调 ctx->display_canvas() 才会启用并克隆，不调则零开销 */
+    /* 显示输出(可选): display_canvas()/replace_display_frame() 共用，不调用则零开销。 */
     cv::Mat canvas_buf;
     bool show_canvas = false;
     ctx.canvas = &canvas_buf;
@@ -351,6 +326,10 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
     }
     fn(&ctx);
 
+    /* 同步回调借用的解码裸指针到这里即将失效。已经生成的 Mat 缓存及 DMA-BUF 句柄仍可安全持有。 */
+    if (raw_frame && raw_frame->lazy_frame)
+        raw_frame->lazy_frame->clear_borrowed_source();
+
     /* 堆分配在通道锁外完成，发布时只交换 shared_ptr。 */
     std::shared_ptr<const LogicOutputSet> published_outputs;
     if (logic_outputs.empty())
@@ -361,13 +340,13 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
     /* 原子写回共享状态：媒体快照在同一把锁内读出，三者必定同帧。*/
     {
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-        ch_state.last_logic_frame = frame_for_logic;
+        ch_state.last_lazy_frame = raw_frame ? raw_frame->lazy_frame : nullptr;
         ch_state.logic_state = std::move(logic_state);
         ch_state.logic_outputs = std::move(published_outputs);
         ch_state.last_results = current_results;
         ch_state.published_frame_seq = frame_id;
         ch_state.draw_cmds = std::move(draw_cmds);
-        /* logic 拦截了整帧 → 存为本通道显示底图；否则清掉，显示回到实时采集帧 */
+        /* Logic 提交了显示帧 → 存为通道显示底图；否则清掉，显示回到实时采集帧。 */
         if (show_canvas && !canvas_buf.empty())
         {
             ch_state.logic_display_frame = std::move(canvas_buf);
@@ -377,7 +356,8 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
         {
             ch_state.logic_display_frame.release();
         }
-        ch_state.commit_publication(runtime, steady_now_ms(), timestamp_ms, unix_ms, infer_enabled);
+        ch_state.commit_publication(runtime, steady_now_ms(), timestamp_ms, unix_ms, infer_enabled,
+                                    raw_frame ? raw_frame->width : 0, raw_frame ? raw_frame->height : 0);
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
     }
 }
@@ -394,8 +374,7 @@ static void invoke_channel_logic(int chnId, const cv::Mat &frame_for_logic, std:
  * （videoOutHandle 非推理直通 / dispatch_worker 推理完成通知 可能同时触发）。
  */
 std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame &raw_frame,
-                                                std::vector<AlgoResult> *new_results, cv::Mat *infer_frame,
-                                                int64_t result_frame_id)
+                                                std::vector<AlgoResult> *new_results, int64_t result_frame_id)
 {
     if (!g_pCtrl)
         return {};
@@ -404,15 +383,6 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
     const ChannelConfig *channel_config = app_ctrl_runtime_channel_config(runtime, chnId);
     if (!channel_config)
         return {};
-
-    /* 存储最新解码帧（RGA 失败时作兜底）*/
-    if (!raw_frame.model_input_mat.empty())
-    {
-        pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-        if (raw_frame.model_input_mat.data != ch_state.last_frame.data)
-            ch_state.last_frame = raw_frame.model_input_mat;
-        pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
-    }
 
     const uint64_t now_ms = steady_now_ms();
     const uint64_t logic_time_ms = raw_frame.frame_steady_ms != 0 ? raw_frame.frame_steady_ms : now_ms;
@@ -456,14 +426,9 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
 
         std::vector<AlgoResult> empty_results;
-        /* 防御：RGA 转换失败且无历史帧时 model_input_mat 为空。
-         * 跳过 logic 调用，避免 logic 对空 cv::Mat 做矩阵运算崩溃。 */
-        if (!raw_frame.model_input_mat.empty())
-        {
-            const uint64_t frame_unix_ms = raw_frame.frame_unix_ms != 0 ? raw_frame.frame_unix_ms : system_now_ms();
-            invoke_channel_logic(chnId, raw_frame.model_input_mat, empty_results, logic_frame_id, logic_time_ms,
-                                 frame_unix_ms, dt_ms, infer_enabled, &raw_frame, runtime);
-        }
+        const uint64_t frame_unix_ms = raw_frame.frame_unix_ms != 0 ? raw_frame.frame_unix_ms : system_now_ms();
+        invoke_channel_logic(chnId, empty_results, logic_frame_id, logic_time_ms, frame_unix_ms, dt_ms,
+                             infer_enabled, &raw_frame, runtime);
         return empty_results;
     }
 
@@ -489,15 +454,9 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
                                   : (!results.empty() ? results.front().timestamp_ms : now_ms);
     const uint64_t frame_unix_ms = raw_frame.frame_unix_ms != 0 ? raw_frame.frame_unix_ms : system_now_ms();
 
-    const cv::Mat &frame_for_logic = (infer_frame && !infer_frame->empty()) ? *infer_frame : raw_frame.model_input_mat;
-
     std::vector<AlgoResult> out = std::move(results);
     for (auto &result : out)
         result.chn_id = chnId;
-    /* 防御：若 infer_frame 与 last_frame 均为空（极少见），跳过 logic 调用。*/
-    if (frame_for_logic.empty())
-        return out;
-    invoke_channel_logic(chnId, frame_for_logic, out, frame_seq, frame_ts, frame_unix_ms, dt_ms, infer_enabled,
-                         &raw_frame, runtime);
+    invoke_channel_logic(chnId, out, frame_seq, frame_ts, frame_unix_ms, dt_ms, infer_enabled, &raw_frame, runtime);
     return out;
 }

@@ -80,11 +80,6 @@ bool ConfigValidator::validate_global(const AppConfig &cfg, std::vector<Validati
         errors.push_back({"global.max_fps", "必须 > 0"});
         valid = false;
     }
-    if (cfg.preview_fps <= 0 || cfg.preview_fps > 60)
-    {
-        errors.push_back({"global.preview_fps", "必须在 1~60 之间"});
-        valid = false;
-    }
     if (cfg.local_default_fps <= 0)
     {
         errors.push_back({"global.local_default_fps", "必须 > 0"});

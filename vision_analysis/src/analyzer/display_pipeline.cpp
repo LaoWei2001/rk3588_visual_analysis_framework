@@ -39,6 +39,7 @@ extern "C" void *display_worker_thread(void *arg)
     {
         /* ---- 等待新帧（条件变量阻塞，零 CPU 占用）---- */
         DispTask task;
+        bool reset_fps = false;
         {
             pthread_mutex_lock(&dq.mtx);
             while (!dq.has_task && g_pCtrl && g_pCtrl->isRunning)
@@ -49,9 +50,23 @@ extern "C" void *display_worker_thread(void *arg)
                 break;
             }
             task = dq.task;                /* 仅拷贝元数据（6 个整数，约 24 B）*/
+            reset_fps = dq.reset_fps_pending;
+            dq.reset_fps_pending = false;
             dq.pool.swap_front_if_dirty(); /* mid↔front 整数交换，将最新帧切为 front */
             dq.has_task = 0;
             pthread_mutex_unlock(&dq.mtx);
+        }
+
+        if (reset_fps)
+        {
+            /* fps_counter/last_fps_ts_ms 由本线程独占；共享显示值在通道锁下清零。
+             * 第一帧随后立即进入新的统计窗口，不包含程序启动或 RTSP 断连时间。 */
+            ChannelState &state = g_pCtrl->channels_state[chnId];
+            state.fps_counter = 0;
+            state.last_fps_ts_ms = steady_now_ms();
+            pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
+            state.disp_fps = 0.0f;
+            pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
         }
 
         /* ---- RGA 缩放 + render_overlays + 写 framebuffer ----

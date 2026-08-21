@@ -10,7 +10,7 @@
  * 实现分布 (本 .h 的声明分散在两个 .cpp 中; 原空壳 frame_pipeline.cpp 已删除):
  *   rga_convert.cpp    — RGA 硬件转换 + YOLO 输入帧准备
  *                        (rga_convert_resize / rga_import_src_fd /
- *                         rga_convert_resize_handle / convertToYoloInput / rgaFmt)
+ *                         rga_convert_resize_handle / LazyVideoFrame / rgaFmt)
  *   display_render.cpp — 显示 tile 布局 + framebuffer 提交
  *                        (tile_x / tile_y / tile_width / tile_height /
  *                         calcBufMapOffset / commitImgtoDispBufMap)
@@ -23,6 +23,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <opencv2/opencv.hpp>
 #include <rga/RgaApi.h>
 #include <rga/im2d.h>
@@ -68,6 +69,46 @@ struct RgaImportedBuffer
 };
 
 /**
+ * 同一业务帧的惰性图像容器。
+ * - source handle 只保留 DMA-BUF 引用，不主动转换像素；
+ * - model_frame()/source_frame() 各自在第一次调用时生成一份 BGR 并缓存；
+ * - borrowed_data 仅服务同步解码回调，回调结束前必须 clear_borrowed_source()。
+ */
+class LazyVideoFrame
+{
+  public:
+    LazyVideoFrame(int channel_id, std::shared_ptr<RgaImportedBuffer> source, int source_width, int source_height,
+                   int source_stride_w, int source_stride_h, int source_format, int model_width, int model_height,
+                   const void *borrowed_data = nullptr);
+
+    const cv::Mat *model_frame();
+    const cv::Mat *source_frame();
+    void clear_borrowed_source();
+    bool available() const;
+    int source_width() const { return source_width_; }
+    int source_height() const { return source_height_; }
+
+  private:
+    bool materialize_borrowed(int dst_width, int dst_height, cv::Mat &out);
+
+    int channel_id_ = -1;
+    std::shared_ptr<RgaImportedBuffer> source_;
+    int source_width_ = 0;
+    int source_height_ = 0;
+    int source_stride_w_ = 0;
+    int source_stride_h_ = 0;
+    int source_format_ = 0;
+    int model_width_ = 0;
+    int model_height_ = 0;
+    const void *borrowed_data_ = nullptr;
+    mutable std::mutex mutex_;
+    cv::Mat model_bgr_;
+    cv::Mat source_bgr_;
+    bool model_attempted_ = false;
+    bool source_attempted_ = false;
+};
+
+/**
  * @brief 在 FD 仍然有效时立即调用, 返回 shared_ptr; 失败时返回 nullptr (调用方走软件回退).
  */
 std::shared_ptr<RgaImportedBuffer> rga_import_src_fd(int fd, int w, int h, int stride_w, int stride_h, int fmt);
@@ -82,12 +123,11 @@ std::shared_ptr<RgaImportedBuffer> rga_import_src_fd(int fd, int w, int h, int s
 bool rga_convert_resize_handle(int chnId, const RgaImportedBuffer &src, int dst_fd, int dst_w, int dst_h,
                                int dst_stride_w, int dst_stride_h, int dst_fmt, int cached_dst_handle = 0);
 
+/** 用稳定的源 handle 按需生成 CPU BGR 图；供 Logic 截图和零拷贝推理失败兜底共用。 */
+bool rga_convert_resize_handle_to_bgr(int chnId, const RgaImportedBuffer &src, int dst_w, int dst_h, cv::Mat &out);
+
 /*======================== 格式字符串 → RK_FORMAT ========================*/
 int rgaFmt(const char *strFmt);
-
-/*======================== Yolo 输入转换 (RGA 优先, 软件回退) ========================*/
-bool convertToYoloInput(int chnId, void *pSrcData, int src_fd, int srcW, int srcH, int srcStrH, int srcStrV, int srcFmt,
-                        cv::Mat &out);
 
 /*======================== 显示 tile 布局 ========================*/
 int tile_x(int chnId);

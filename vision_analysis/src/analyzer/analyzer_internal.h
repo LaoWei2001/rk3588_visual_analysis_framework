@@ -223,6 +223,9 @@ struct DispQueue
     pthread_mutex_t mtx;
     pthread_cond_t cv;
     int has_task = 0;
+    /* 由生产者在预览重新开始时置位，由 display_worker 随下一帧消费并清零。
+     * FPS 状态仍只由 display_worker 修改，避免解码线程与显示线程并发写 ChannelState。 */
+    bool reset_fps_pending = true;
     DispTask task;      /* 元数据：6 个整数 */
     DispFramePool pool; /* 帧像素：三槽预分配缓冲 */
 };
@@ -257,7 +260,7 @@ void feed_stats_reset(int chnId);
 
 std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame &raw_frame,
                                                 std::vector<AlgoResult> *new_results = nullptr,
-                                                cv::Mat *infer_frame = nullptr, int64_t result_frame_id = 0);
+                                                int64_t result_frame_id = 0);
 
 /*======================== 跟踪器生命周期 (实现在 channel_pipeline.cpp) ========================*/
 

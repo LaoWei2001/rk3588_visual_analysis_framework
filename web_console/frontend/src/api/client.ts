@@ -77,11 +77,6 @@ export const fetchApps = () => api.get<AppInfo[]>('/apps', {
   params: { _status_ts: Date.now() },
 }).then(r => r.data)
 
-export const fetchStatus = (name: string) =>
-  api.get<Pick<AppInfo, 'status' | 'mode' | 'pid' | 'uptime_seconds' | 'config'>>(
-    `/apps/${name}/status`, { params: { _status_ts: Date.now() } },
-  ).then(r => r.data)
-
 // config: 指定运行的配置文件名（assets/ 下，默认 config.json）。不传则用 config.json。
 export const startApp = (name: string, mode: 'deploy' | 'debug', config?: string) =>
   api.post(`/apps/${name}/start`, { mode, config }).then(r => r.data)
@@ -207,17 +202,11 @@ export interface LogicDef {
 }
 
 export interface AppLogics {
-  // 兼容两种格式: 富对象(来自 logics.json) 或 仅名字字符串(回退)
-  channel_logics: (string | LogicDef)[]
-  global_logics:  (string | LogicDef)[]
+  channel_logics: LogicDef[]
+  global_logics:  LogicDef[]
   model_types:    string[]
-  source: 'catalog' | 'binary' | 'unavailable'
   error?: string
 }
-
-// 归一化: 名字字符串 → LogicDef
-export const asLogicDef = (l: string | LogicDef): LogicDef =>
-  typeof l === 'string' ? { name: l } : l
 
 export const fetchAppLogics = (name: string) =>
   api.get<AppLogics>(`/apps/${name}/logics`).then(r => r.data)
@@ -303,7 +292,6 @@ export interface ReportContract {
 }
 export interface OtaConfig {
   platform_ws_host: string
-  target_config: string
 }
 
 export const fetchConnections = (name: string) =>
@@ -431,14 +419,58 @@ export interface NetworkInterfaceInfo {
   gateway: string
   dns: string[]
   ipv4_method: string
+  ssid: string
   configurable: boolean
+}
+
+export interface NetworkConnectionInfo {
+  name: string
+  uuid: string
+  type: 'ethernet' | 'wifi'
+  device: string
+  autoconnect: boolean
+  active: boolean
+  ipv4_method: string
+  addresses: string[]
+  gateway: string
+  dns: string[]
+  ssid: string
+  security: string
+}
+
+export type NetworkTransactionStatus =
+  | 'scheduled' | 'activating' | 'awaiting_confirmation' | 'committing'
+  | 'rolling_back' | 'confirmed' | 'rolled_back' | 'rollback_failed'
+
+export interface NetworkTransaction {
+  id: string
+  status: NetworkTransactionStatus
+  device: string
+  kind: 'staged_profile' | 'saved_profile'
+  old_uuid: string | null
+  new_uuid: string | null
+  profile_name: string
+  target_addresses: string[]
+  deadline: number
+  remaining_seconds: number
+  error: string | null
+}
+
+export interface WifiNetworkInfo {
+  in_use: boolean
+  ssid: string
+  signal: number
+  security: string
 }
 
 export interface NetworkSettings {
   hostname: string
   manager: string
   config_supported: boolean
+  rollback_supported: boolean
   interfaces: NetworkInterfaceInfo[]
+  connections: NetworkConnectionInfo[]
+  pending_transaction: NetworkTransaction | null
   error: string | null
 }
 
@@ -448,13 +480,60 @@ export const fetchNetworkSettings = () =>
 export const saveDeviceHostname = (hostname: string) =>
   api.put<{ ok: boolean; hostname: string }>('/system/network/hostname', { hostname }).then(r => r.data)
 
-export const saveNetworkIPv4 = (config: {
-  connection_uuid: string
+export interface NetworkApplyConfig {
+  device: string
+  type: 'ethernet' | 'wifi'
+  connection_uuid?: string | null
+  profile_name: string
   method: 'auto' | 'manual'
   address: string
   gateway: string
   dns: string[]
-}) => api.put<{ ok: boolean; activation_scheduled: boolean }>('/system/network/ipv4', config).then(r => r.data)
+  ssid: string
+  wifi_security: 'wpa-psk' | 'sae' | 'open'
+  wifi_password: string
+  rollback_seconds?: number
+}
+
+export const startNetworkChange = (config: NetworkApplyConfig) =>
+  api.post<{ ok: boolean; transaction: NetworkTransaction }>('/system/network/changes', config).then(r => r.data)
+
+export const scanWifiNetworks = (device: string) =>
+  api.post<{ device: string; networks: WifiNetworkInfo[] }>('/system/network/wifi/scan', null, { params: { device } }).then(r => r.data)
+
+export const activateNetworkConnection = (connection_uuid: string, device: string) =>
+  api.post<{ ok: boolean; transaction: NetworkTransaction }>('/system/network/connections/activate', {
+    connection_uuid, device, rollback_seconds: 60,
+  }).then(r => r.data)
+
+export const fetchNetworkTransaction = (id: string, baseUrl = '') => {
+  if (!baseUrl) return api.get<NetworkTransaction>(`/system/network/transactions/${id}`).then(r => r.data)
+  const token = useAuthStore.getState().token
+  return axios.get<NetworkTransaction>(`${baseUrl}/api/system/network/transactions/${id}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    timeout: 5000,
+  }).then(r => r.data)
+}
+
+export const confirmNetworkTransaction = (id: string, baseUrl = '') => {
+  const token = useAuthStore.getState().token
+  const url = baseUrl
+    ? `${baseUrl}/api/system/network/transactions/${id}/confirm`
+    : `/api/system/network/transactions/${id}/confirm`
+  return axios.post<NetworkTransaction>(url, null, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    timeout: 12_000,
+  }).then(r => r.data)
+}
+
+export const rollbackNetworkTransaction = (id: string) =>
+  api.post<NetworkTransaction>(`/system/network/transactions/${id}/rollback`).then(r => r.data)
+
+export const deleteNetworkConnection = (uuid: string) =>
+  api.delete<{ ok: boolean }>(`/system/network/connections/${uuid}`).then(r => r.data)
+
+export const pingNetworkTarget = (target: string) =>
+  api.post<{ target: string; reachable: boolean; detail: string }>('/system/network/ping', { target }).then(r => r.data)
 
 // ── 板端后台服务 (systemd 单元: OTA 升级 / 告警上报) ────────────────────────
 export interface ServiceInfo {

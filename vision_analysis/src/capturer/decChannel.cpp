@@ -4,7 +4,6 @@
 #include "../core/pause_ctrl.h"
 #include "gst_opt.h"
 #include "system.h"
-#include "system_opt.h"
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -12,6 +11,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <pthread.h>
 #include <string>
 #include <sys/socket.h>
 #include <thread>
@@ -714,7 +714,7 @@ int DecChannel::createVideoDecChannel(bool start_thread)
     {
         g_printerr("[DecChannel ch%d] RTSP TCP probe failed for %s, skip pipeline build this round\n", channelId(),
                    mCfg.location.c_str());
-        if (start_thread && 0 == CreateJoinThread(initialRtspConnect, this, &mTid))
+        if (start_thread && 0 == pthread_create(&mTid, nullptr, initialRtspConnect, this))
         {
             /* 线程本身就是该采集器的生命周期；即使 pipeline 尚未建立也必须
              * 标记为已托管，让 main 保留对象并让 stop() 能 join 它。 */
@@ -769,7 +769,8 @@ int DecChannel::createVideoDecChannel(bool start_thread)
         return -1;
     }
 
-    g_object_set(mGstChn.source, "location", mCfg.location.c_str(), "latency", 100, "protocols", 0x04,
+    /* 80ms 在保留少量网络抖动余量的同时，比原来的 100ms 更贴近实时画面。 */
+    g_object_set(mGstChn.source, "location", mCfg.location.c_str(), "latency", 80, "protocols", 0x04,
                  "drop-on-latency", TRUE, NULL);
     g_signal_connect(mGstChn.source, "pad-added", G_CALLBACK(rtsp_pad_added), &mGstChn);
 
@@ -788,7 +789,7 @@ int DecChannel::createVideoDecChannel(bool start_thread)
 
     if (start_thread)
     {
-        if (0 == CreateJoinThread(busListen, mGstChn.pipeline, &mTid))
+        if (0 == pthread_create(&mTid, nullptr, busListen, mGstChn.pipeline))
         {
             bObjIsInited = true;
             mThreadStarted = true;
@@ -892,7 +893,7 @@ int DecChannel::createFileDecChannel(bool start_thread)
 
     if (start_thread)
     {
-        if (0 == CreateJoinThread(busListen, mGstChn.pipeline, &mTid))
+        if (0 == pthread_create(&mTid, nullptr, busListen, mGstChn.pipeline))
         {
             bObjIsInited = true;
             mThreadStarted = true;
@@ -1057,7 +1058,7 @@ int DecChannel::createUsbDecChannel(bool start_thread)
 
     if (start_thread)
     {
-        if (0 == CreateJoinThread(busListen, mGstChn.pipeline, &mTid))
+        if (0 == pthread_create(&mTid, nullptr, busListen, mGstChn.pipeline))
         {
             bObjIsInited = true;
             mThreadStarted = true;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Node } from '@xyflow/react'
 import {
-  apiErrorMessage, asLogicDef, fetchAppLogics, fetchRecords, fetchReportContracts, previewDelivery,
+  apiErrorMessage, fetchAppLogics, fetchRecords, fetchReportContracts, previewDelivery,
   type EventRecord, type LogicDef, type ReportContract,
 } from '../api/client'
 import { useEditorStore } from '../store/editorStore'
@@ -65,8 +65,8 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
       .then(([availableContracts, logics]) => {
         setContracts(availableContracts)
         setLogicDefs([
-          ...logics.channel_logics.map(asLogicDef),
-          ...logics.global_logics.map(asLogicDef),
+          ...logics.channel_logics,
+          ...logics.global_logics,
         ])
       })
       .catch(() => {

@@ -1,6 +1,5 @@
 import json
 import os
-import subprocess
 from pathlib import Path
 from typing import Any, Dict
 
@@ -57,86 +56,50 @@ async def console_info():
 
 @router.get("/apps/{name}/logics")
 async def get_app_logics(name: str):
-    """动态获取该 App 可用的 logic 清单。
-
-    优先级: logics.json > 二进制 --list-logics。两者都不可用时返回空清单和
-    明确错误，不回退到可能已经过期的硬编码通道逻辑名。
-    """
+    """从程序包的唯一能力清单 logics.json 获取可用 Logic。"""
     app_dir = _app_dir(name)
-    errors = []
-
-    # 1. logics.json（通道/全局 ID 来自各自注册宏，其余元数据由模块 logic.json 聚合）
     logics_file = app_dir / "logics.json"
-    if logics_file.exists():
-        try:
-            data = json.loads(logics_file.read_text(encoding="utf-8"))
-            channel_logics = data.get("channel_logics") if isinstance(data, dict) else None
-            global_logics = data.get("global_logics") if isinstance(data, dict) else None
-            if not isinstance(channel_logics, list):
-                errors.append("logics.json 缺少有效的 channel_logics 数组")
-            elif not isinstance(global_logics, list):
-                errors.append("logics.json 缺少有效的 global_logics 数组")
-            else:
-                model_types = data.get("model_types", KNOWN_MODEL_TYPES)
-                return {
-                    "channel_logics": channel_logics,
-                    "global_logics": global_logics,
-                    "model_types": (
-                        model_types
-                        if isinstance(model_types, list)
-                        else KNOWN_MODEL_TYPES
-                    ),
-                    "source": "catalog",
-                }
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            errors.append(f"logics.json 读取失败: {exc}")
-    else:
-        errors.append("应用包中没有 logics.json")
+    if not logics_file.is_file():
+        return {
+            "channel_logics": [],
+            "global_logics": [],
+            "model_types": KNOWN_MODEL_TYPES,
+            "error": "应用包不完整：缺少 logics.json",
+        }
 
-    # 2. 尝试运行二进制 --list-logics
-    binary_name = os.environ.get("BINARY_NAME", "vision_analysis")
-    binary_path = app_dir / binary_name
-    if binary_path.exists():
-        try:
-            channel_result = subprocess.run(
-                [str(binary_path), "--list-logics"],
-                capture_output=True, text=True, timeout=3, cwd=str(app_dir),
-            )
-            global_result = subprocess.run(
-                [str(binary_path), "--list-global-logics"],
-                capture_output=True, text=True, timeout=3, cwd=str(app_dir),
-            )
-            if channel_result.returncode == 0 and global_result.returncode == 0:
-                channel_lines = [
-                    ln.strip() for ln in channel_result.stdout.splitlines() if ln.strip()
-                ]
-                global_lines = [
-                    ln.strip() for ln in global_result.stdout.splitlines() if ln.strip()
-                ]
-                return {
-                    "channel_logics": channel_lines,
-                    "global_logics": global_lines,
-                    "model_types":    KNOWN_MODEL_TYPES,
-                    "source": "binary",
-                }
-            errors.append(
-                "二进制 logic 清单读取失败"
-                f"（channel={channel_result.returncode}, global={global_result.returncode}）"
-            )
-        except subprocess.TimeoutExpired:
-            errors.append("二进制 --list-logics 执行超时")
-        except (OSError, UnicodeError) as exc:
-            errors.append(f"二进制 --list-logics 无法执行: {exc}")
-    else:
-        errors.append(f"应用包中没有可执行文件 {binary_name}")
+    try:
+        data = json.loads(logics_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return {
+            "channel_logics": [],
+            "global_logics": [],
+            "model_types": KNOWN_MODEL_TYPES,
+            "error": f"应用包 logics.json 读取失败：{exc}",
+        }
 
-    # 不返回静态逻辑名，避免已删除模块重新出现在 Web 下拉框中。
+    channel_logics = data.get("channel_logics") if isinstance(data, dict) else None
+    global_logics = data.get("global_logics") if isinstance(data, dict) else None
+    valid_channel = isinstance(channel_logics, list) and all(
+        isinstance(item, dict) and isinstance(item.get("name"), str) and item["name"]
+        for item in channel_logics
+    )
+    valid_global = isinstance(global_logics, list) and all(
+        isinstance(item, dict) and isinstance(item.get("name"), str) and item["name"]
+        for item in global_logics
+    )
+    if not valid_channel or not valid_global:
+        return {
+            "channel_logics": [],
+            "global_logics": [],
+            "model_types": KNOWN_MODEL_TYPES,
+            "error": "应用包 logics.json 缺少有效的 Logic 对象清单",
+        }
+
+    model_types = data.get("model_types", KNOWN_MODEL_TYPES)
     return {
-        "channel_logics": [],
-        "global_logics":  [],
-        "model_types":    KNOWN_MODEL_TYPES,
-        "source": "unavailable",
-        "error": "；".join(errors),
+        "channel_logics": channel_logics,
+        "global_logics": global_logics,
+        "model_types": model_types if isinstance(model_types, list) else KNOWN_MODEL_TYPES,
     }
 
 

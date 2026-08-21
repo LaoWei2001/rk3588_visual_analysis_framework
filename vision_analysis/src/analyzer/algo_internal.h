@@ -7,7 +7,7 @@
  *
  * 文件职责分工:
  *   algo_engine.cpp  — g_algo/g_fps/g_perf 定义 + worker_thread_func + 私有辅助函数
- *   algoProcess.cpp  — 公有 API 实现 (algorithm_init / process_mat / take_results …)
+ *   algoProcess.cpp  — 公有 API 实现 (algorithm_init / process_source / take_results …)
  */
 #pragma once
 
@@ -28,14 +28,14 @@
 #include "../config/config.h"
 #include "../yolo/yolo.h" /* ModelBase */
 #include "algoProcess.h"
-#include "frame_pipeline.h" /* RgaImportedBuffer */
+#include "frame_pipeline.h" /* RgaImportedBuffer / LazyVideoFrame */
 
 /*======================== 内部任务结构 ========================*/
 
 struct AlgoTask
 {
     int chnId;
-    cv::Mat img;
+    std::shared_ptr<LazyVideoFrame> frame;
     std::chrono::steady_clock::time_point enqueue_tp;
     int64_t frame_seq;
     uint64_t frame_steady_ms;
@@ -47,7 +47,7 @@ struct AlgoTask
 struct ChannelResult
 {
     std::vector<AlgoResult> data;
-    cv::Mat data_frame;
+    std::shared_ptr<LazyVideoFrame> frame;
     uint64_t frame_steady_ms{0};
     uint64_t frame_unix_ms{0};
     pthread_mutex_t mtx;

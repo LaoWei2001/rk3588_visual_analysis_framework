@@ -15,7 +15,6 @@ void init_config_fields(AppConfig &cfg)
     REG_G("disp_height", INT, disp_height);
     REG_G("tile_cols", INT, tile_cols);
     REG_G("tile_rows", INT, tile_rows);
-    REG_G("preview_fps", INT, preview_fps);
     REG_G("performance_display", BOOL, performance_display);
     REG_G("debug_display", BOOL, debug_display);
     REG_G("enable_pause_key", BOOL, enable_pause_key);
@@ -24,7 +23,6 @@ void init_config_fields(AppConfig &cfg)
     REG_G("enable_rtsp", BOOL, enable_rtsp);
     REG_G("rtsp_port", INT, rtsp_port);
     REG_G("rtsp_path", STRING, rtsp_path);
-    REG_G("rtsp_fps", INT, rtsp_fps);
     REG_G("rtsp_bitrate", INT, rtsp_bitrate);
     REG_G("rtsp_codec", STRING, rtsp_codec);
     REG_G("rtsp_encoder", STRING, rtsp_encoder);

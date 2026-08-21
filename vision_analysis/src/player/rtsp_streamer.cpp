@@ -4,7 +4,7 @@
  *
  * 线程:
  *   rtsp_loop_thread   — 跑独立 GMainContext 上的 GMainLoop, 服务 gst-rtsp-server
- *   rtsp_feeder_thread — 以 rtsp_fps 周期读 g_disp 拼接大图, push 进 appsrc
+ *   rtsp_feeder_thread — 以引擎预览安全上限读 g_disp 拼接大图, push 进 appsrc
  *
  * 数据流:
  *   display_worker[N] → commitImgtoDispBufMap → g_disp.front (RGB 拼接大图)
@@ -19,11 +19,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <pthread.h>
 #include <string>
-#include <unistd.h>
+#include <thread>
 #include <vector>
 
 #include <gst/gst.h>
@@ -186,7 +187,8 @@ static void *rtsp_feeder_thread(void *arg)
     const size_t nv12_frame_bytes = (size_t)dst_w * dst_h * 3 / 2;
     const size_t frame_bytes = g_st.use_hw ? nv12_frame_bytes : rgb_frame_bytes;
     const bool need_pad = (dst_w != src_w) || (dst_h != src_h);
-    const useconds_t period_us = (useconds_t)(1000000 / (g_st.fps > 0 ? g_st.fps : 15));
+    const auto period = std::chrono::microseconds(1000000 / std::max(1, g_st.fps));
+    auto next_wakeup = std::chrono::steady_clock::now();
     std::vector<unsigned char> rgb_snapshot((size_t)src_w * src_h * 3);
 
     while (g_pCtrl && g_pCtrl->isRunning.load() && !g_st.feeder_exit.load())
@@ -262,7 +264,13 @@ static void *rtsp_feeder_thread(void *arg)
             }
             gst_object_unref(src);
         }
-        usleep(period_us);
+        /* 绝对节拍：RGA/编码前准备耗时包含在本周期内，不再“处理耗时 + 固定 sleep”
+         * 造成目标30FPS实际只有二十几帧。严重超时时直接从当前时刻重新起算，禁止追帧突发。 */
+        next_wakeup += period;
+        const auto now = std::chrono::steady_clock::now();
+        if (next_wakeup + period < now)
+            next_wakeup = now;
+        std::this_thread::sleep_until(next_wakeup);
     }
     printf("[RTSP] feeder thread exit\n");
     return nullptr;
@@ -352,7 +360,7 @@ int rtsp_streamer_init(void)
         enabled = g_pCtrl->config.enable_rtsp;
         g_st.port = g_pCtrl->config.rtsp_port > 0 ? g_pCtrl->config.rtsp_port : 8554;
         g_st.path = g_pCtrl->config.rtsp_path.empty() ? "/live" : g_pCtrl->config.rtsp_path;
-        g_st.fps = g_pCtrl->config.rtsp_fps > 0 ? g_pCtrl->config.rtsp_fps : 15;
+        g_st.fps = constants::PREVIEW_MAX_FPS;
         g_st.bitrate = g_pCtrl->config.rtsp_bitrate > 0 ? g_pCtrl->config.rtsp_bitrate : 4096;
         g_st.codec = g_pCtrl->config.rtsp_codec.empty() ? "h264" : g_pCtrl->config.rtsp_codec;
         g_st.encoder = g_pCtrl->config.rtsp_encoder.empty() ? "auto" : g_pCtrl->config.rtsp_encoder;

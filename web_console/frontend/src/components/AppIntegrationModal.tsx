@@ -16,7 +16,7 @@ interface Props {
 }
 
 const EMPTY_CONNECTIONS: DeliveryConnectionsConfig = { connections: {} }
-const EMPTY_OTA: OtaConfig = { platform_ws_host: 'tunnel.memanager.cn', target_config: 'active' }
+const EMPTY_OTA: OtaConfig = { platform_ws_host: '' }
 const inputStyle: React.CSSProperties = {
   background: '#0f1117', color: '#e6e9ef', border: '1px solid #2e3352',
   borderRadius: 6, padding: '6px 8px', fontSize: 13, width: '100%',
@@ -230,8 +230,6 @@ export default function AppIntegrationModal({ appName, onClose, onToast }: Props
         <div style={sectionTitle}>模型 OTA</div>
         <Field label="平台 WebSocket 地址"><input style={inputStyle} value={ota.platform_ws_host}
           onChange={event => { markDirty(); setOta(current => ({ ...current, platform_ws_host: event.target.value })) }} /></Field>
-        <Field label="目标配置文件名"><input style={inputStyle} value={ota.target_config}
-          onChange={event => { markDirty(); setOta(current => ({ ...current, target_config: event.target.value })) }} /></Field>
       </>}
     </div>
     <div className="app-integration-footer">

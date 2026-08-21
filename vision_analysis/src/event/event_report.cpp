@@ -79,18 +79,57 @@ struct CompositeImage
     std::vector<ImageJob::Pane> panes;
 };
 
+static const cv::Mat *borrowed_mat_frame(void *opaque)
+{
+    const cv::Mat *frame = static_cast<const cv::Mat *>(opaque);
+    return frame && !frame->empty() ? frame : nullptr;
+}
+
 struct ActiveEvent
 {
     std::string event_id;
     uint64_t last_trigger_ms = 0;
 };
 
+struct PersistenceJob
+{
+    enum Type
+    {
+        CREATE,
+        MERGE
+    } type = CREATE;
+
+    std::string event_id;
+    std::string event_dir;
+    std::string merge_key;
+    std::string delivery_json;
+    std::string media_json;
+    std::string event_json;
+    bool has_image_job = false;
+    ImageJob image_job;
+    bool has_video_job = false;
+    EventVideoRequest video_job;
+
+    uint64_t trigger_unix_ms = 0;
+    std::string trigger_time;
+    EventFields fields;
+    bool extend_video = false;
+};
+
 static pthread_mutex_t g_mtx = PTHREAD_MUTEX_INITIALIZER;
+/* event/media JSON 的读改写专用锁；绝不与 Logic 入队/active map 共用，避免 fsync 反向阻塞热路径。 */
+static pthread_mutex_t g_file_mtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER;
 static pthread_t g_worker_tid;
 static bool g_worker_started = false;
 static bool g_running = false;
 static std::queue<ImageJob> g_image_jobs;
+static pthread_mutex_t g_persist_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_persist_cv = PTHREAD_COND_INITIALIZER;
+static pthread_t g_persist_tid;
+static bool g_persist_started = false;
+static bool g_persist_running = false;
+static std::queue<PersistenceJob> g_persist_jobs;
 static std::map<std::string, ActiveEvent> g_active; /* channel:type/dedup → event */
 static unsigned long g_seq = 0;
 
@@ -131,10 +170,15 @@ static int mkdir_p(const std::string &path)
     return 0;
 }
 
-static std::string store_dir()
+static std::string store_dir_path()
 {
     const char *env = getenv("EVENT_STORE_DIR");
-    std::string dir = (env && *env) ? env : "./event_store";
+    return (env && *env) ? env : "./event_store";
+}
+
+static std::string store_dir()
+{
+    std::string dir = store_dir_path();
     mkdir_p(dir);
     return dir;
 }
@@ -484,6 +528,39 @@ static bool atomic_write_json(const std::string &path, cJSON *root)
     return true;
 }
 
+static bool json_to_text(cJSON *root, std::string &out)
+{
+    char *text = cJSON_Print(root);
+    if (!text)
+        return false;
+    out.assign(text);
+    if (out.empty() || out.back() != '\n')
+        out.push_back('\n');
+    cJSON_free(text);
+    return true;
+}
+
+static bool atomic_write_text(const std::string &path, const std::string &text)
+{
+    const std::string tmp = path + ".tmp";
+    FILE *fp = fopen(tmp.c_str(), "wb");
+    const bool wrote = fp && fwrite(text.data(), 1, text.size(), fp) == text.size();
+    bool ok = wrote;
+    if (fp)
+    {
+        if (ok)
+            ok = fflush(fp) == 0 && fsync(fileno(fp)) == 0;
+        if (fclose(fp) != 0)
+            ok = false;
+    }
+    if (!ok || ::rename(tmp.c_str(), path.c_str()) != 0)
+    {
+        ::unlink(tmp.c_str());
+        return false;
+    }
+    return true;
+}
+
 static cJSON *read_event_document(const std::string &event_dir)
 {
     return read_json_file(event_dir + "/event.json");
@@ -494,7 +571,7 @@ static bool record_merged_trigger(const std::string &event_id, uint64_t trigger_
 {
     bool updated = false;
     const std::string event_dir = store_dir() + "/" + event_id;
-    pthread_mutex_lock(&g_mtx);
+    pthread_mutex_lock(&g_file_mtx);
     cJSON *root = read_event_document(event_dir);
     if (root)
     {
@@ -503,7 +580,7 @@ static bool record_merged_trigger(const std::string &event_id, uint64_t trigger_
         if (!cJSON_IsObject(event) || !cJSON_IsObject(data))
         {
             cJSON_Delete(root);
-            pthread_mutex_unlock(&g_mtx);
+            pthread_mutex_unlock(&g_file_mtx);
             return false;
         }
         cJSON *count = cJSON_GetObjectItemCaseSensitive(event, "trigger_count");
@@ -527,7 +604,7 @@ static bool record_merged_trigger(const std::string &event_id, uint64_t trigger_
         updated = atomic_write_json(event_dir + "/event.json", root);
         cJSON_Delete(root);
     }
-    pthread_mutex_unlock(&g_mtx);
+    pthread_mutex_unlock(&g_file_mtx);
     return updated;
 }
 
@@ -585,7 +662,7 @@ static bool update_media_state(const std::string &event_dir, const char *kind, c
                                std::initializer_list<std::pair<const char *, const char *>> files = {})
 {
     bool updated = false;
-    pthread_mutex_lock(&g_mtx);
+    pthread_mutex_lock(&g_file_mtx);
     cJSON *root = read_json_file(event_dir + "/media_state.json");
     cJSON *media = cJSON_IsObject(root) ? cJSON_GetObjectItemCaseSensitive(root, "media") : nullptr;
     cJSON *entry = cJSON_IsObject(media) ? cJSON_GetObjectItemCaseSensitive(media, kind) : nullptr;
@@ -601,7 +678,7 @@ static bool update_media_state(const std::string &event_dir, const char *kind, c
         updated = atomic_write_json(event_dir + "/media_state.json", root);
     }
     cJSON_Delete(root);
-    pthread_mutex_unlock(&g_mtx);
+    pthread_mutex_unlock(&g_file_mtx);
     return updated;
 }
 
@@ -690,12 +767,17 @@ static void *image_worker(void *)
             {
                 render_composite_image(job);
             }
-            else if (job.need_annotated && job.overlay_mode != "none" && !job.annotated.empty())
+            else if (job.need_annotated)
             {
-                job.render_params.roi_zones = &job.rois;
-                job.render_params.results = &job.results;
-                job.render_params.draw_cmds = &job.commands;
-                render_overlays(job.annotated, job.render_params);
+                /* report_event 只传递不可变 Mat 引用；深拷贝和叠加统一留在图片线程。 */
+                job.annotated = job.overlay_mode == "none" ? job.raw : job.raw.clone();
+                if (job.overlay_mode != "none" && !job.annotated.empty())
+                {
+                    job.render_params.roi_zones = &job.rois;
+                    job.render_params.results = &job.results;
+                    job.render_params.draw_cmds = &job.commands;
+                    render_overlays(job.annotated, job.render_params);
+                }
             }
             snapshot_ok = !job.need_annotated || (!job.annotated.empty() &&
                                                   cv::imwrite(job.event_dir + "/annotated.jpg", job.annotated, params));
@@ -735,17 +817,96 @@ static void *image_worker(void *)
     return nullptr;
 }
 
-static bool ensure_worker_locked()
+static void *persistence_worker(void *)
 {
-    if (g_worker_started)
-        return true;
-    g_running = true;
-    if (pthread_create(&g_worker_tid, nullptr, image_worker, nullptr) != 0)
+    while (true)
     {
-        g_running = false;
-        return false;
+        PersistenceJob job;
+        pthread_mutex_lock(&g_persist_mtx);
+        while (g_persist_jobs.empty() && g_persist_running)
+            pthread_cond_wait(&g_persist_cv, &g_persist_mtx);
+        if (g_persist_jobs.empty() && !g_persist_running)
+        {
+            pthread_mutex_unlock(&g_persist_mtx);
+            break;
+        }
+        job = std::move(g_persist_jobs.front());
+        g_persist_jobs.pop();
+        pthread_mutex_unlock(&g_persist_mtx);
+
+        if (job.type == PersistenceJob::MERGE)
+        {
+            if (record_merged_trigger(job.event_id, job.trigger_unix_ms, job.trigger_time, job.fields))
+            {
+                if (job.extend_video)
+                    event_video_recorder_extend(job.event_id);
+            }
+            else
+            {
+                fprintf(stderr, "[event_outbox] merge persistence failed: %s\n", job.event_id.c_str());
+                clear_active_event_by_id(job.event_id);
+            }
+            continue;
+        }
+
+        const bool stored = mkdir_p(job.event_dir) == 0 &&
+                            atomic_write_text(job.event_dir + "/delivery_state.json", job.delivery_json) &&
+                            atomic_write_text(job.event_dir + "/media_state.json", job.media_json) &&
+                            atomic_write_text(job.event_dir + "/event.json", job.event_json);
+        if (!stored)
+        {
+            fprintf(stderr, "[event_outbox] event persistence failed: %s\n", job.event_id.c_str());
+            clear_active_event(job.merge_key, job.event_id);
+            remove_tree(job.event_dir);
+            continue;
+        }
+
+        if (job.has_image_job)
+        {
+            pthread_mutex_lock(&g_mtx);
+            g_image_jobs.push(std::move(job.image_job));
+            pthread_cond_signal(&g_cv);
+            pthread_mutex_unlock(&g_mtx);
+        }
+
+        if (job.has_video_job && !event_video_recorder_trigger(job.video_job))
+        {
+            update_media_state(job.event_dir, "video", "failed", "event video recorder rejected request");
+            clear_active_event_by_id(job.event_id);
+            fprintf(stderr, "[event_outbox] video recorder rejected event: %s\n", job.event_id.c_str());
+        }
+        enforce_outbox_cap();
     }
-    g_worker_started = true;
+    return nullptr;
+}
+
+static bool ensure_workers_locked(bool need_image_worker)
+{
+    if (!g_persist_started)
+    {
+        pthread_mutex_lock(&g_persist_mtx);
+        g_persist_running = true;
+        pthread_mutex_unlock(&g_persist_mtx);
+        if (pthread_create(&g_persist_tid, nullptr, persistence_worker, nullptr) != 0)
+        {
+            pthread_mutex_lock(&g_persist_mtx);
+            g_persist_running = false;
+            pthread_mutex_unlock(&g_persist_mtx);
+            return false;
+        }
+        g_persist_started = true;
+    }
+
+    if (need_image_worker && !g_worker_started)
+    {
+        g_running = true;
+        if (pthread_create(&g_worker_tid, nullptr, image_worker, nullptr) != 0)
+        {
+            g_running = false;
+            return false;
+        }
+        g_worker_started = true;
+    }
     return true;
 }
 
@@ -801,7 +962,6 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
 
     if (!ctx || !ctx->config || input.event_type.empty())
         return result(EventReportStatus::INVALID_REQUEST, "", "ctx/config is null or event type is empty");
-    enforce_outbox_cap();
     const ChannelConfig &cfg = *ctx->config;
     cJSON *policy = parse_object_or_empty(cfg.report_policy_json);
     if (cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(policy, "enabled")))
@@ -842,6 +1002,12 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
     const bool allow_merge = input.merge_mode == EventMergeMode::POLICY && merge_sec > 0.0f;
 
     pthread_mutex_lock(&g_mtx);
+    if (!ensure_workers_locked((media_flags & EVENT_MEDIA_IMAGE) != 0))
+    {
+        pthread_mutex_unlock(&g_mtx);
+        cJSON_Delete(policy);
+        return result(EventReportStatus::WORKER_UNAVAILABLE, "", "event persistence worker could not start");
+    }
     auto found = g_active.find(merge_key);
     if (allow_merge && found != g_active.end() &&
         now_ms - found->second.last_trigger_ms <= (uint64_t)(merge_sec * 1000.0f))
@@ -849,24 +1015,19 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
         found->second.last_trigger_ms = now_ms;
         std::string existing = found->second.event_id;
         pthread_mutex_unlock(&g_mtx);
-        if (record_merged_trigger(existing, ctx->unix_ms, ctx->time_str(), input.fields))
-        {
-            if (media_flags & EVENT_MEDIA_VIDEO)
-                event_video_recorder_extend(existing);
-            cJSON_Delete(policy);
-            return result(EventReportStatus::MERGED, existing, "merged into active event");
-        }
-        pthread_mutex_lock(&g_mtx);
-        auto stale = g_active.find(merge_key);
-        if (stale != g_active.end() && stale->second.event_id == existing)
-            g_active.erase(stale);
-    }
-
-    if ((media_flags & EVENT_MEDIA_IMAGE) && !ensure_worker_locked())
-    {
-        pthread_mutex_unlock(&g_mtx);
+        PersistenceJob merge_job;
+        merge_job.type = PersistenceJob::MERGE;
+        merge_job.event_id = existing;
+        merge_job.trigger_unix_ms = ctx->unix_ms;
+        merge_job.trigger_time = ctx->time_str();
+        merge_job.fields = input.fields;
+        merge_job.extend_video = (media_flags & EVENT_MEDIA_VIDEO) != 0;
+        pthread_mutex_lock(&g_persist_mtx);
+        g_persist_jobs.push(std::move(merge_job));
+        pthread_cond_signal(&g_persist_cv);
+        pthread_mutex_unlock(&g_persist_mtx);
         cJSON_Delete(policy);
-        return result(EventReportStatus::WORKER_UNAVAILABLE, "", "image worker could not start");
+        return result(EventReportStatus::MERGED, existing, "merge queued for local persistence");
     }
     std::string event_id = make_event_id(ctx->chnId);
     if (allow_merge)
@@ -878,13 +1039,7 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
     }
     pthread_mutex_unlock(&g_mtx);
 
-    std::string dir = store_dir() + "/" + event_id;
-    if (mkdir_p(dir) != 0)
-    {
-        clear_active_event(merge_key, event_id);
-        cJSON_Delete(policy);
-        return result(EventReportStatus::STORAGE_ERROR, "", "event directory could not be created");
-    }
+    const std::string dir = store_dir_path() + "/" + event_id;
 
     /*
      * schema v3 按写入者拆分状态，避免 C++ 和 Python 对同一 JSON 做读改写：
@@ -955,34 +1110,31 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
     add_delivery_statuses(policy, input.event_type, delivery_root);
     cJSON_AddItemToObject(root, "policy_snapshot", policy); /* ownership transferred */
 
-    const bool stored = atomic_write_json(dir + "/delivery_state.json", delivery_root) &&
-                        atomic_write_json(dir + "/media_state.json", media_root) &&
-                        atomic_write_json(dir + "/event.json", root);
-    cJSON_Delete(delivery_root);
-    cJSON_Delete(media_root);
-    cJSON_Delete(root);
-    if (!stored)
-    {
-        clear_active_event(merge_key, event_id);
-        remove_tree(dir);
-        return result(EventReportStatus::STORAGE_ERROR, "", "event state files could not be written");
-    }
-
+    PersistenceJob persist_job;
+    persist_job.type = PersistenceJob::CREATE;
+    persist_job.event_id = event_id;
+    persist_job.event_dir = dir;
+    persist_job.merge_key = merge_key;
     std::vector<std::string> media_errors;
     if (media_flags & EVENT_MEDIA_IMAGE)
     {
+        const cv::Mat *event_frame = composite_image ? nullptr : ctx->model_frame();
         const bool has_composite_frame =
             composite_image && std::any_of(composite_image->panes.begin(), composite_image->panes.end(),
                                            [](const ImageJob::Pane &pane) { return !pane.frame.empty(); });
-        if ((!composite_image && (!ctx->frame || ctx->frame->empty())) || (composite_image && !has_composite_frame))
+        if ((!composite_image && (!event_frame || event_frame->empty())) ||
+            (composite_image && !has_composite_frame))
         {
             const char *reason = composite_image ? "all selected channel frames are empty" : "current frame is empty";
-            update_media_state(dir, "image", "failed", reason);
+            cJSON *image = cJSON_GetObjectItemCaseSensitive(media_entries, "image");
+            cJSON_ReplaceItemInObjectCaseSensitive(image, "status", cJSON_CreateString("failed"));
+            cJSON_ReplaceItemInObjectCaseSensitive(image, "error", cJSON_CreateString(reason));
             media_errors.push_back(std::string("image: ") + reason);
         }
         else
         {
-            update_media_state(dir, "image", "generating", "");
+            cJSON *image = cJSON_GetObjectItemCaseSensitive(media_entries, "image");
+            cJSON_ReplaceItemInObjectCaseSensitive(image, "status", cJSON_CreateString("generating"));
             ImageJob job;
             job.event_dir = dir;
             job.need_annotated = requirements.annotated_image;
@@ -998,10 +1150,9 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
             }
             else
             {
-                job.raw = ctx->frame->clone();
-                /* 无叠加时 annotated/raw 共享同一不可变像素块，少一次深拷贝。 */
-                if (job.need_annotated)
-                    job.annotated = image_overlay == "none" ? job.raw : job.raw.clone();
+                /* CPU 帧在推理完成后不再修改；Mat 引用计数保证像素活到图片线程，
+                 * 避免在 Logic 热路径深拷贝 640×640×3。 */
+                job.raw = *event_frame;
                 if (job.need_annotated && image_overlay != "none")
                 {
                     job.render_params = ctx->render_params();
@@ -1022,30 +1173,43 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
                     job.render_params.draw_cmds = nullptr;
                 }
             }
-            pthread_mutex_lock(&g_mtx);
-            g_image_jobs.push(std::move(job));
-            pthread_cond_signal(&g_cv);
-            pthread_mutex_unlock(&g_mtx);
+            persist_job.has_image_job = true;
+            persist_job.image_job = std::move(job);
         }
     }
 
     if (media_flags & EVENT_MEDIA_VIDEO)
     {
-        EventVideoRequest vr;
-        vr.event_id = event_id;
-        vr.channel_id = resolved_video_source_channel_id;
-        vr.event_type = input.event_type;
-        vr.pre_sec = video_pre_sec;
-        vr.post_sec = video_post_sec;
-        vr.fps = video_fps;
-        vr.output_path = dir + "/clip.mp4";
-        update_media_state(dir, "video", "generating", "");
-        if (!event_video_recorder_trigger(vr))
-        {
-            update_media_state(dir, "video", "failed", "event video recorder rejected request");
-            media_errors.push_back("video: recorder rejected request");
-        }
+        cJSON *video = cJSON_GetObjectItemCaseSensitive(media_entries, "video");
+        cJSON_ReplaceItemInObjectCaseSensitive(video, "status", cJSON_CreateString("generating"));
+        persist_job.has_video_job = true;
+        persist_job.video_job.event_id = event_id;
+        persist_job.video_job.channel_id = resolved_video_source_channel_id;
+        persist_job.video_job.event_type = input.event_type;
+        persist_job.video_job.pre_sec = video_pre_sec;
+        persist_job.video_job.post_sec = video_post_sec;
+        persist_job.video_job.fps = video_fps;
+        persist_job.video_job.output_path = dir + "/clip.mp4";
     }
+    refresh_media_status(media_root);
+
+    const bool serialized = json_to_text(delivery_root, persist_job.delivery_json) &&
+                            json_to_text(media_root, persist_job.media_json) &&
+                            json_to_text(root, persist_job.event_json);
+    cJSON_Delete(delivery_root);
+    cJSON_Delete(media_root);
+    cJSON_Delete(root);
+    if (!serialized)
+    {
+        clear_active_event(merge_key, event_id);
+        return result(EventReportStatus::STORAGE_ERROR, "", "event state could not be serialized");
+    }
+
+    pthread_mutex_lock(&g_persist_mtx);
+    g_persist_jobs.push(std::move(persist_job));
+    pthread_cond_signal(&g_persist_cv);
+    pthread_mutex_unlock(&g_persist_mtx);
+
     if (!media_errors.empty())
     {
         clear_active_event_by_id(event_id);
@@ -1056,9 +1220,9 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
                 detail += "; ";
             detail += error;
         }
-        return result(EventReportStatus::CREATED_MEDIA_FAILED, event_id, detail);
+        return result(EventReportStatus::CREATED_MEDIA_FAILED, event_id, detail + "; event queued for persistence");
     }
-    return result(EventReportStatus::CREATED, event_id, "event created");
+    return result(EventReportStatus::CREATED, event_id, "event queued for local persistence");
 }
 
 EventReportResult report_event(ChannelContext *ctx, const EventRequest &request)
@@ -1178,7 +1342,13 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
 
     ChannelContext ctx{};
     ctx.chnId = source_channel_id;
-    ctx.frame = source_frame_loaded ? &source_frame.frame : nullptr;
+    if (source_frame_loaded && !source_frame.frame.empty())
+    {
+        ctx.model_frame_getter = borrowed_mat_frame;
+        ctx.frame_getter_opaque = &source_frame.frame;
+    }
+    ctx.src_width = source_logic->src_width;
+    ctx.src_height = source_logic->src_height;
     ctx.frame_id = source_frame_loaded ? source_frame.logic.frame_seq : source_logic->frame_seq;
     ctx.timestamp_ms = source_frame_loaded && source_frame.logic.frame_steady_ms != 0
                            ? source_frame.logic.frame_steady_ms
@@ -1230,17 +1400,26 @@ void event_report_video_failed(const std::string &event_id, const std::string &v
 void event_report_deinit(void)
 {
     pthread_mutex_lock(&g_mtx);
-    if (!g_worker_started)
-    {
-        pthread_mutex_unlock(&g_mtx);
-        return;
-    }
+    const bool join_persist = g_persist_started;
+    pthread_mutex_unlock(&g_mtx);
+    pthread_mutex_lock(&g_persist_mtx);
+    g_persist_running = false;
+    pthread_cond_broadcast(&g_persist_cv);
+    pthread_mutex_unlock(&g_persist_mtx);
+    if (join_persist)
+        pthread_join(g_persist_tid, nullptr);
+
+    pthread_mutex_lock(&g_mtx);
+    const bool join_image = g_worker_started;
     g_running = false;
     pthread_cond_broadcast(&g_cv);
     pthread_mutex_unlock(&g_mtx);
-    pthread_join(g_worker_tid, nullptr);
+    if (join_image)
+        pthread_join(g_worker_tid, nullptr);
+
     pthread_mutex_lock(&g_mtx);
     g_worker_started = false;
+    g_persist_started = false;
     g_active.clear();
     pthread_mutex_unlock(&g_mtx);
 }
