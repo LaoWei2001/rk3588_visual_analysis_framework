@@ -161,10 +161,9 @@ struct AppConfig
     std::string rtsp_encoder = "auto"; /* "auto"=有硬件就硬编否则软编; "hw"=强制硬编 */
 
     /* 推理引擎 */
-    int channel_threads = 1;                 /* 每个通道并发数默认值 */
+    int channel_threads = 1;                 /* 单通道模式并发上限；多通道实时模式自动收敛为每通道1个在途任务 */
     int max_fps = 30;                        /* 每通道推理帧率上限默认值 (从15提高到30) */
     int local_default_fps = 25;              /* 本地文件默认播放采样率 */
-    int queue_size = 1;                      /* 每核任务队列深度 */
     /* 跟踪器 (全局默认，可被通道覆盖) */
     int tracker_enable = 1; /* 0=关闭, 1=开启 */
     float tracker_iou_thresh = 0.3f;

@@ -1,0 +1,104 @@
+{
+  "id": "logic_dify.dify_periodic_snapshot",
+  "version": 1,
+  "label": "Dify 周期截图、提示词和自定义变量",
+  "description": "logic_dify 随附模板：上传当前通道标注图片，并发送画布提示词和业务变量",
+  "owner_logic": "logic_dify",
+  "event_types": [
+    "dify_periodic_snapshot"
+  ],
+  "adapter": "dify_workflow",
+  "media": [
+    "annotated_image"
+  ],
+  "mapping": [
+    {
+      "source": "media.annotated_image",
+      "target": "image",
+      "location": "file",
+      "transform": "file",
+      "file_mode": "list",
+      "required": true
+    },
+    {
+      "source": "fields.prompt",
+      "target": "prompt",
+      "location": "body",
+      "required": true
+    },
+    {
+      "source": "source.channel_id",
+      "target": "channel_id",
+      "location": "body",
+      "type": "number",
+      "required": true
+    },
+    {
+      "source": "event.snap_time",
+      "target": "capture_time",
+      "location": "body",
+      "required": true
+    },
+    {
+      "source": "fields.scene_name",
+      "target": "scene_name",
+      "location": "body",
+      "required": true
+    },
+    {
+      "source": "fields.custom_text",
+      "target": "custom_text",
+      "location": "body",
+      "required": false
+    },
+    {
+      "source": "fields.report_interval_sec",
+      "target": "report_interval_sec",
+      "location": "body",
+      "type": "number",
+      "required": true
+    },
+    {
+      "source": "fields.report_sequence",
+      "target": "report_sequence",
+      "location": "body",
+      "type": "number",
+      "required": true
+    },
+    {
+      "source": "fields.object_count",
+      "target": "object_count",
+      "location": "body",
+      "type": "number",
+      "required": true
+    },
+    {
+      "source": "fields.has_objects",
+      "target": "has_objects",
+      "location": "body",
+      "type": "boolean",
+      "required": true
+    },
+    {
+      "source": "fields.detections_truncated",
+      "target": "detections_truncated",
+      "location": "body",
+      "type": "boolean",
+      "required": true
+    },
+    {
+      "source": "fields.detections",
+      "target": "detections_json",
+      "location": "body",
+      "transform": "json_string",
+      "required": true
+    },
+    {
+      "source": "fields.custom_payload",
+      "target": "custom_payload_json",
+      "location": "body",
+      "transform": "json_string",
+      "required": true
+    }
+  ]
+}

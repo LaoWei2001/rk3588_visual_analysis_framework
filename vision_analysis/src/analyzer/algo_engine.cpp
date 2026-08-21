@@ -51,6 +51,31 @@ AlgoEngine g_algo;
 FpsTracker g_fps[MAX_CHANNEL_NUM];
 PerfCounters g_perf[MAX_CHANNEL_NUM];
 
+namespace
+{
+/* 无论 worker 以正常路径、暂停路径还是异常路径结束本轮，都必须释放在途名额。 */
+class InFlightGuard
+{
+  public:
+    explicit InFlightGuard(TaskQueue *queue) : queue_(queue) {}
+    InFlightGuard(const InFlightGuard &) = delete;
+    InFlightGuard &operator=(const InFlightGuard &) = delete;
+    ~InFlightGuard()
+    {
+        if (!queue_)
+            return;
+        pthread_mutex_lock(&queue_->mtx);
+        if (queue_->in_flight > 0)
+            --queue_->in_flight;
+        pthread_cond_broadcast(&queue_->cv);
+        pthread_mutex_unlock(&queue_->mtx);
+    }
+
+  private:
+    TaskQueue *queue_;
+};
+} // namespace
+
 /*======================== 私有辅助（仅本文件可见）========================*/
 
 /** @brief 跳过已被 NMS 抑制的候选框，就地过滤。*/
@@ -400,17 +425,20 @@ void *worker_thread_func(void *arg)
         AlgoTask task;
         {
             pthread_mutex_lock(&tq_ptr->mtx);
-            while (tq_ptr->q.empty() && g_algo.running && !g_algo.chn_reload_stop[chnId])
+            while ((tq_ptr->q.empty() || tq_ptr->in_flight >= tq_ptr->max_in_flight) && g_algo.running &&
+                   !g_algo.chn_reload_stop[chnId])
                 pthread_cond_wait(&tq_ptr->cv, &tq_ptr->mtx);
-            if ((!g_algo.running || g_algo.chn_reload_stop[chnId]) && tq_ptr->q.empty())
+            if (!g_algo.running || g_algo.chn_reload_stop[chnId])
             {
                 pthread_mutex_unlock(&tq_ptr->mtx);
                 break;
             }
-            task = tq_ptr->q.front();
+            task = std::move(tq_ptr->q.front());
             tq_ptr->q.pop();
+            ++tq_ptr->in_flight;
             pthread_mutex_unlock(&tq_ptr->mtx);
         }
+        InFlightGuard in_flight_guard(tq_ptr);
 
         if (pause_ctrl::is_paused())
             continue;
@@ -423,6 +451,15 @@ void *worker_thread_func(void *arg)
 
         auto work_begin = std::chrono::steady_clock::now();
         float queue_wait_ms = std::chrono::duration<float, std::milli>(work_begin - task.enqueue_tp).count();
+
+        /* 如果本任务等待过久且槽内已经有更新帧，继续推理只会制造追赶画面。
+         * 直接释放本轮在途名额，让 worker 立即领取最新 pending 帧。 */
+        bool has_newer_pending = false;
+        pthread_mutex_lock(&tq_ptr->mtx);
+        has_newer_pending = !tq_ptr->q.empty();
+        pthread_mutex_unlock(&tq_ptr->mtx);
+        if (queue_wait_ms > 200.0f && has_newer_pending)
+            continue;
 
         std::vector<AlgoResult> results;
         YoloPerfStat perf;

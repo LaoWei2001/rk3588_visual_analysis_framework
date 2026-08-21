@@ -138,4 +138,4 @@ uint64_t calcBufMapOffset(int chnId, int bytesPerPixel);
 
 /*======================== 显示缓冲区提交 ========================*/
 void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt, int srcWidth, int srcHeight, int srcHStride,
-                           int srcVStride);
+                           int srcVStride, uint64_t frameSteadyMs);

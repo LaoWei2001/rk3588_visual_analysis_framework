@@ -188,7 +188,7 @@ static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
         params.infer_fps = algorithm_get_infer_fps(raw.channel_id);
         params.result_frame_id = raw.result_frame_id;
         params.result_age_ms = raw.result_ts_ms && raw.timestamp_ms >= raw.result_ts_ms
-                                   ? static_cast<int64_t>(std::min<uint64_t>(raw.timestamp_ms - raw.result_ts_ms, 200))
+                                   ? static_cast<int64_t>(raw.timestamp_ms - raw.result_ts_ms)
                                    : 0;
         /* 视频自动复用实时画面的绘制层，并保留 VIDEO 专用绘制能力。 */
         params.target_mask = static_cast<uint8_t>(DrawCommand::DISPLAY | DrawCommand::VIDEO);
@@ -215,7 +215,7 @@ static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
     params.infer_fps = algorithm_get_infer_fps(raw.channel_id);
     params.result_frame_id = raw.result_frame_id;
     params.result_age_ms = raw.result_ts_ms && raw.timestamp_ms >= raw.result_ts_ms
-                               ? static_cast<int64_t>(std::min<uint64_t>(raw.timestamp_ms - raw.result_ts_ms, 200))
+                               ? static_cast<int64_t>(raw.timestamp_ms - raw.result_ts_ms)
                                : 0;
     params.show_fps = 0;
     params.target_mask = DrawCommand::VIDEO;
@@ -709,7 +709,7 @@ void event_video_recorder_push_source_frame(int channel_id, const void *data, in
         raw.commands = state.draw_cmds;
         raw.disp_fps = state.disp_fps;
         raw.result_frame_id = state.published_frame_seq;
-        raw.result_ts_ms = state.published_steady_ms;
+        raw.result_ts_ms = state.frame_steady_ms;
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[channel_id]);
 
         raw.input_w = g_pCtrl->inputW;

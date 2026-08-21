@@ -367,7 +367,6 @@ export function graphToConfig(
     tile_rows:          g.tile_rows          ?? 1,
     tile_cols:          g.tile_cols          ?? 1,
     max_fps:            g.max_fps            ?? 25,
-    queue_size:         g.queue_size         ?? 1,
     channel_threads:    g.channel_threads    ?? 3,
     tracker_enable:     g.tracker_enable     ?? 1,
     tracker_iou_thresh: g.tracker_iou_thresh ?? 0.3,

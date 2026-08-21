@@ -1,0 +1,755 @@
+{
+    "_comment": "Generated from channel/global registration macros, module logic.json files and src/logic/catalog.json; do not edit the generated file.",
+    "channel_logics": [
+        {
+            "name": "logic_course_01",
+            "label": "课程1：自定义文字和图形叠加",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "params": []
+        },
+        {
+            "name": "logic_course_02",
+            "label": "课程2：ctx变量调用",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "test_string": {
+                        "type": "string",
+                        "title": "测试文本",
+                        "description": "用于测试文本显示功能",
+                        "default": "Hello RK3588"
+                    },
+                    "test_num": {
+                        "type": "number",
+                        "title": "测试数字",
+                        "description": "用于测试数字显示功能",
+                        "default": 666
+                    }
+                }
+            },
+            "report_fields": [],
+            "params": [
+                {
+                    "key": "test_string",
+                    "type": "string",
+                    "default": "Hello RK3588",
+                    "hot_reload": "preserve_state",
+                    "label": "测试文本",
+                    "help": "用于测试文本显示功能"
+                },
+                {
+                    "key": "test_num",
+                    "type": "float",
+                    "default": 666,
+                    "hot_reload": "preserve_state",
+                    "label": "测试数字",
+                    "help": "用于测试数字显示功能"
+                }
+            ]
+        },
+        {
+            "name": "logic_course_03",
+            "label": "课程3: 模型推理结果获取示例",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "params": []
+        },
+        {
+            "name": "logic_course_04",
+            "label": "课程4:ROI区域信息获取示例",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "params": []
+        },
+        {
+            "name": "logic_course_05",
+            "label": "课程5:ROI区域与检测框的交互(前4节课的内容总结)",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "roi_name": {
+                        "type": "string",
+                        "title": "roi区域名称",
+                        "description": "把该区域内部的目标找出来",
+                        "default": ""
+                    }
+                }
+            },
+            "report_fields": [],
+            "params": [
+                {
+                    "key": "roi_name",
+                    "type": "string",
+                    "default": "",
+                    "hot_reload": "preserve_state",
+                    "label": "roi区域名称",
+                    "help": "把该区域内部的目标找出来"
+                }
+            ]
+        },
+        {
+            "name": "logic_course_06",
+            "label": "课程6:如何保存跨帧状态变量",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "params": []
+        },
+        {
+            "name": "logic_course_07",
+            "label": "课程7:如何添加一个带自定义功能的按钮",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "actions": [
+                {
+                    "id": "increment",
+                    "label": "+1",
+                    "style": "primary",
+                    "help": "将当前通道画面中的数字加 1"
+                },
+                {
+                    "id": "decrement",
+                    "label": "-1",
+                    "style": "default",
+                    "help": "将当前通道画面中的数字减 1"
+                },
+                {
+                    "id": "change",
+                    "label": "切换数字",
+                    "style": "default",
+                    "help": "切换控制的数字"
+                }
+            ],
+            "params": []
+        },
+        {
+            "name": "logic_course_08",
+            "label": "课程8:如何定时上报图片",
+            "report_templates": [
+                "report_templates/http_periodic_snapshot.json"
+            ],
+            "event_types": [
+                {
+                    "id": "logic_course_08",
+                    "label": "定时触发告警",
+                    "help": "按照设定的报警时间间隔上报图片"
+                }
+            ],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "time_interval": {
+                        "type": "number",
+                        "title": "报警时间间隔",
+                        "description": "报警时间间隔",
+                        "default": 3.0
+                    }
+                }
+            },
+            "report_fields": [],
+            "params": [
+                {
+                    "key": "time_interval",
+                    "type": "float",
+                    "default": 3.0,
+                    "hot_reload": "preserve_state",
+                    "label": "报警时间间隔",
+                    "help": "报警时间间隔"
+                }
+            ]
+        },
+        {
+            "name": "logic_course_09",
+            "label": "课程9:如何通过自定义的按钮上报图片",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "params": []
+        },
+        {
+            "name": "logic_course_10",
+            "label": "课程10:实际案例:行车吊钩歪拉斜吊检测",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "params": []
+        },
+        {
+            "name": "logic_course_gpio",
+            "label": "课程:GPIO引脚控制(检测到目标驱动继电器/指示灯)",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "out_pin": {
+                        "type": "string",
+                        "title": "输出引脚名",
+                        "description": "GPIOx_Yz 格式, 如 GPIO6_A2",
+                        "default": "GPIO6_A2"
+                    },
+                    "target_label": {
+                        "type": "string",
+                        "title": "触发类别",
+                        "description": "画面中检测到该类别目标时输出有效电平, 如 person",
+                        "default": "person"
+                    },
+                    "active_level": {
+                        "type": "integer",
+                        "title": "有效电平",
+                        "description": "检测到目标时输出的电平: 1=高电平触发, 0=低电平触发(部分继电器模块为低电平触发)",
+                        "default": 1,
+                        "minimum": 0,
+                        "maximum": 1
+                    }
+                }
+            },
+            "report_fields": [],
+            "params": [
+                {
+                    "key": "out_pin",
+                    "type": "string",
+                    "default": "GPIO6_A2",
+                    "hot_reload": "preserve_state",
+                    "label": "输出引脚名",
+                    "help": "GPIOx_Yz 格式, 如 GPIO6_A2"
+                },
+                {
+                    "key": "target_label",
+                    "type": "string",
+                    "default": "person",
+                    "hot_reload": "preserve_state",
+                    "label": "触发类别",
+                    "help": "画面中检测到该类别目标时输出有效电平, 如 person"
+                },
+                {
+                    "key": "active_level",
+                    "type": "int",
+                    "default": 1,
+                    "hot_reload": "preserve_state",
+                    "label": "有效电平",
+                    "help": "检测到目标时输出的电平: 1=高电平触发, 0=低电平触发(部分继电器模块为低电平触发)",
+                    "min": 0,
+                    "max": 1
+                }
+            ]
+        },
+        {
+            "name": "logic_default",
+            "label": "空白逻辑示例",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "report_fields": [],
+            "params": []
+        },
+        {
+            "name": "logic_dify",
+            "label": "示例：Dify 周期截图与自定义变量",
+            "report_templates": [
+                "report_templates/dify_periodic_snapshot.json"
+            ],
+            "event_types": [
+                {
+                    "id": "dify_periodic_snapshot",
+                    "label": "Dify 周期截图",
+                    "help": "按画布配置的时间间隔提交当前通道图片、提示词和自定义变量。"
+                }
+            ],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "report_interval_sec": {
+                        "type": "integer",
+                        "title": "截图上报间隔",
+                        "description": "从第一张有效业务帧开始计时；修改后重新等待一个完整间隔。",
+                        "minimum": 1,
+                        "maximum": 86400,
+                        "default": 10,
+                        "x-unit": "秒",
+                        "x-step": 1,
+                        "x-hot-reload": "reset_state"
+                    },
+                    "first_report_immediately": {
+                        "type": "boolean",
+                        "title": "首帧立即上报",
+                        "description": "关闭时先等待一个完整间隔；开启时收到第一张有效业务帧就创建事件，适合联调。",
+                        "default": false,
+                        "x-hot-reload": "reset_state"
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "title": "Dify 提示词",
+                        "description": "在画布填写并随每次事件发送，不需要在 Dify 工作流中写死。",
+                        "default": "请分析这张监控图片，描述画面中的目标、行为和可能存在的风险。",
+                        "x-placeholder": "请输入发送给 Dify 工作流的提示词",
+                        "x-widget": "textarea",
+                        "x-hot-reload": "preserve_state"
+                    },
+                    "scene_name": {
+                        "type": "string",
+                        "title": "场景名称",
+                        "description": "自定义字符串变量示例；同一个 logic 放到不同通道时可以分别填写。",
+                        "default": "RK3588 监控通道",
+                        "x-placeholder": "例如：一号仓库东门",
+                        "x-hot-reload": "preserve_state"
+                    },
+                    "custom_text": {
+                        "type": "string",
+                        "title": "自定义文本",
+                        "description": "演示把额外业务文本从画布传入 Dify；不需要时可以留空。",
+                        "default": "",
+                        "x-placeholder": "例如：夜间巡检任务",
+                        "x-hot-reload": "preserve_state"
+                    },
+                    "custom_payload": {
+                        "type": "object",
+                        "title": "自定义 JSON",
+                        "description": "可在画布填写任意附加 JSON 对象；示例契约会序列化为 custom_payload_json 文本。",
+                        "default": {},
+                        "x-hot-reload": "preserve_state"
+                    },
+                    "max_detections": {
+                        "type": "integer",
+                        "title": "最多携带的检测目标数",
+                        "description": "限制 detections JSON 数组长度，避免事件和 Dify inputs 过大；object_count 始终是完整数量。",
+                        "minimum": 0,
+                        "maximum": 200,
+                        "default": 20,
+                        "x-step": 1,
+                        "x-hot-reload": "preserve_state"
+                    }
+                }
+            },
+            "report_fields": [
+                {
+                    "key": "prompt",
+                    "type": "string",
+                    "label": "Dify 提示词"
+                },
+                {
+                    "key": "scene_name",
+                    "type": "string",
+                    "label": "场景名称"
+                },
+                {
+                    "key": "custom_text",
+                    "type": "string",
+                    "label": "自定义文本"
+                },
+                {
+                    "key": "report_interval_sec",
+                    "type": "number",
+                    "label": "上报间隔（秒）"
+                },
+                {
+                    "key": "report_sequence",
+                    "type": "number",
+                    "label": "本通道上报序号"
+                },
+                {
+                    "key": "object_count",
+                    "type": "number",
+                    "label": "当前目标数量"
+                },
+                {
+                    "key": "has_objects",
+                    "type": "boolean",
+                    "label": "当前是否存在目标"
+                },
+                {
+                    "key": "detections_truncated",
+                    "type": "boolean",
+                    "label": "检测结果是否截断"
+                },
+                {
+                    "key": "detections",
+                    "type": "json",
+                    "label": "当前检测结果"
+                },
+                {
+                    "key": "custom_payload",
+                    "type": "json",
+                    "label": "画布自定义 JSON"
+                }
+            ],
+            "params": [
+                {
+                    "key": "report_interval_sec",
+                    "type": "int",
+                    "default": 10,
+                    "hot_reload": "reset_state",
+                    "label": "截图上报间隔",
+                    "help": "从第一张有效业务帧开始计时；修改后重新等待一个完整间隔。",
+                    "min": 1,
+                    "max": 86400,
+                    "step": 1,
+                    "unit": "秒"
+                },
+                {
+                    "key": "first_report_immediately",
+                    "type": "bool",
+                    "default": false,
+                    "hot_reload": "reset_state",
+                    "label": "首帧立即上报",
+                    "help": "关闭时先等待一个完整间隔；开启时收到第一张有效业务帧就创建事件，适合联调。"
+                },
+                {
+                    "key": "prompt",
+                    "type": "text",
+                    "default": "请分析这张监控图片，描述画面中的目标、行为和可能存在的风险。",
+                    "hot_reload": "preserve_state",
+                    "label": "Dify 提示词",
+                    "help": "在画布填写并随每次事件发送，不需要在 Dify 工作流中写死。",
+                    "placeholder": "请输入发送给 Dify 工作流的提示词"
+                },
+                {
+                    "key": "scene_name",
+                    "type": "string",
+                    "default": "RK3588 监控通道",
+                    "hot_reload": "preserve_state",
+                    "label": "场景名称",
+                    "help": "自定义字符串变量示例；同一个 logic 放到不同通道时可以分别填写。",
+                    "placeholder": "例如：一号仓库东门"
+                },
+                {
+                    "key": "custom_text",
+                    "type": "string",
+                    "default": "",
+                    "hot_reload": "preserve_state",
+                    "label": "自定义文本",
+                    "help": "演示把额外业务文本从画布传入 Dify；不需要时可以留空。",
+                    "placeholder": "例如：夜间巡检任务"
+                },
+                {
+                    "key": "custom_payload",
+                    "type": "json",
+                    "default": {},
+                    "hot_reload": "preserve_state",
+                    "json_type": "object",
+                    "label": "自定义 JSON",
+                    "help": "可在画布填写任意附加 JSON 对象；示例契约会序列化为 custom_payload_json 文本。"
+                },
+                {
+                    "key": "max_detections",
+                    "type": "int",
+                    "default": 20,
+                    "hot_reload": "preserve_state",
+                    "label": "最多携带的检测目标数",
+                    "help": "限制 detections JSON 数组长度，避免事件和 Dify inputs 过大；object_count 始终是完整数量。",
+                    "min": 0,
+                    "max": 200,
+                    "step": 1
+                }
+            ]
+        },
+        {
+            "name": "logic_global_input_demo",
+            "label": "示例：向全局逻辑发布通道指标",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "channel_role": {
+                        "type": "string",
+                        "title": "通道业务角色",
+                        "description": "仅用于业务识别，例如入口、出口；同一模块放到不同视频通道时可分别配置。",
+                        "default": "监控点"
+                    },
+                    "target_label": {
+                        "type": "string",
+                        "title": "统计目标标签",
+                        "description": "必须与该通道模型的标签名称一致。",
+                        "default": "person"
+                    },
+                    "local_count_threshold": {
+                        "type": "integer",
+                        "title": "本通道局部人数阈值",
+                        "description": "当前目标数量达到该值时，发布的 local_alarm 变量为 true。",
+                        "minimum": 1,
+                        "maximum": 10000,
+                        "default": 1,
+                        "x-step": 1
+                    }
+                }
+            },
+            "outputs": [
+                {
+                    "key": "target_count",
+                    "type": "integer",
+                    "label": "当前目标数量",
+                    "help": "当前业务帧中 target_label 对应的目标数量。"
+                },
+                {
+                    "key": "local_alarm",
+                    "type": "boolean",
+                    "label": "本通道是否达到局部阈值",
+                    "help": "target_count >= local_count_threshold 时为 true。"
+                },
+                {
+                    "key": "risk_ratio",
+                    "type": "number",
+                    "label": "本通道风险比例",
+                    "help": "target_count / local_count_threshold；全局逻辑用它动态选择事件来源和视频通道。"
+                }
+            ],
+            "report_fields": [],
+            "params": [
+                {
+                    "key": "channel_role",
+                    "type": "string",
+                    "default": "监控点",
+                    "hot_reload": "preserve_state",
+                    "label": "通道业务角色",
+                    "help": "仅用于业务识别，例如入口、出口；同一模块放到不同视频通道时可分别配置。"
+                },
+                {
+                    "key": "target_label",
+                    "type": "string",
+                    "default": "person",
+                    "hot_reload": "preserve_state",
+                    "label": "统计目标标签",
+                    "help": "必须与该通道模型的标签名称一致。"
+                },
+                {
+                    "key": "local_count_threshold",
+                    "type": "int",
+                    "default": 1,
+                    "hot_reload": "preserve_state",
+                    "label": "本通道局部人数阈值",
+                    "help": "当前目标数量达到该值时，发布的 local_alarm 变量为 true。",
+                    "min": 1,
+                    "max": 10000,
+                    "step": 1
+                }
+            ]
+        },
+        {
+            "name": "logic_relay",
+            "label": "继电器控制(按钮开/关)",
+            "event_types": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "relay_pin": {
+                        "type": "string",
+                        "title": "继电器控制引脚",
+                        "description": "GPIOx_Yz 格式, 如 GPIO6_A2",
+                        "default": "GPIO6_A2"
+                    },
+                    "on_level": {
+                        "type": "integer",
+                        "title": "开启所需电平",
+                        "description": "继电器开启(吸合)时引脚输出的电平: 1=高电平触发, 0=低电平触发",
+                        "default": 1,
+                        "minimum": 0,
+                        "maximum": 1
+                    },
+                    "start_state": {
+                        "type": "boolean",
+                        "title": "上电默认开启",
+                        "description": "true=程序启动时继电器为开启状态; false=启动时为关闭状态",
+                        "default": false
+                    }
+                }
+            },
+            "report_fields": [],
+            "actions": [
+                {
+                    "id": "toggle",
+                    "label": "开/关继电器",
+                    "style": "primary",
+                    "help": "点击切换继电器开启与关闭"
+                }
+            ],
+            "params": [
+                {
+                    "key": "relay_pin",
+                    "type": "string",
+                    "default": "GPIO6_A2",
+                    "hot_reload": "preserve_state",
+                    "label": "继电器控制引脚",
+                    "help": "GPIOx_Yz 格式, 如 GPIO6_A2"
+                },
+                {
+                    "key": "on_level",
+                    "type": "int",
+                    "default": 1,
+                    "hot_reload": "preserve_state",
+                    "label": "开启所需电平",
+                    "help": "继电器开启(吸合)时引脚输出的电平: 1=高电平触发, 0=低电平触发",
+                    "min": 0,
+                    "max": 1
+                },
+                {
+                    "key": "start_state",
+                    "type": "bool",
+                    "default": false,
+                    "hot_reload": "preserve_state",
+                    "label": "上电默认开启",
+                    "help": "true=程序启动时继电器为开启状态; false=启动时为关闭状态"
+                }
+            ]
+        }
+    ],
+    "global_logics": [
+        {
+            "name": "global_channel_aggregate_demo",
+            "label": "示例：多通道变量聚合与上报",
+            "report_templates": [
+                "report_templates/http_channel_aggregate.json"
+            ],
+            "event_types": [
+                {
+                    "id": "channel_aggregate_alarm",
+                    "label": "多通道聚合告警",
+                    "help": "画布连入通道或应用全部通道的公开变量满足组合条件时触发。"
+                }
+            ],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "total_count_threshold": {
+                        "type": "integer",
+                        "title": "目标总数阈值",
+                        "minimum": 1,
+                        "maximum": 20000,
+                        "default": 3,
+                        "x-step": 1,
+                        "x-hot-reload": "preserve_state"
+                    },
+                    "require_local_alarm": {
+                        "type": "boolean",
+                        "title": "要求至少一路局部告警",
+                        "default": false,
+                        "x-hot-reload": "preserve_state"
+                    },
+                    "max_data_age_ms": {
+                        "type": "integer",
+                        "title": "通道变量最大年龄",
+                        "description": "超过该时间未更新的通道变量不参与本轮计算。",
+                        "minimum": 100,
+                        "maximum": 60000,
+                        "default": 2000,
+                        "x-unit": "毫秒",
+                        "x-step": 100,
+                        "x-hot-reload": "preserve_state"
+                    }
+                }
+            },
+            "report_fields": [
+                {
+                    "key": "valid_channel_count",
+                    "type": "number",
+                    "label": "有效通道数"
+                },
+                {
+                    "key": "alarm_channel_count",
+                    "type": "number",
+                    "label": "局部告警通道数"
+                },
+                {
+                    "key": "total_count",
+                    "type": "number",
+                    "label": "目标总数"
+                }
+            ],
+            "business_fields": [],
+            "params": [
+                {
+                    "key": "total_count_threshold",
+                    "type": "int",
+                    "default": 3,
+                    "hot_reload": "preserve_state",
+                    "label": "目标总数阈值",
+                    "min": 1,
+                    "max": 20000,
+                    "step": 1
+                },
+                {
+                    "key": "require_local_alarm",
+                    "type": "bool",
+                    "default": false,
+                    "hot_reload": "preserve_state",
+                    "label": "要求至少一路局部告警"
+                },
+                {
+                    "key": "max_data_age_ms",
+                    "type": "int",
+                    "default": 2000,
+                    "hot_reload": "preserve_state",
+                    "label": "通道变量最大年龄",
+                    "help": "超过该时间未更新的通道变量不参与本轮计算。",
+                    "min": 100,
+                    "max": 60000,
+                    "step": 100,
+                    "unit": "毫秒"
+                }
+            ]
+        },
+        {
+            "name": "global_default",
+            "label": "默认全局逻辑",
+            "event_types": [],
+            "report_fields": [],
+            "business_fields": [],
+            "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "params": []
+        }
+    ],
+    "model_types": [
+        "yolov5",
+        "yolov8_det",
+        "yolov8_pose",
+        "yolov5_seg"
+    ]
+}
