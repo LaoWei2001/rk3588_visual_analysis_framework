@@ -9,8 +9,8 @@
  * 数据流:
  *   display_worker[N] → commitImgtoDispBufMap → g_disp.front (RGB 拼接大图)
  *                                                     │ (本模块)
- *   rtsp_feeder_thread: display_lock 内复制一份一致的 RGB 快照
- *                       → 硬编时 RGA RGB→NV12，软编时保持 RGB
+ *   rtsp_feeder_thread: display_lock 内取得一致画面
+ *                       → 硬编时复制到 RGB DMA-BUF，再由 RGA 写入 NV12 DMA-BUF；软编时保持 RGB
  *                       → g_signal_emit_by_name(appsrc,"push-buffer")
  *                       → queue → (mpph264enc|videoconvert→x264enc)
  *                       → h264parse → rtph264pay(pay0) → gst-rtsp-server
@@ -19,20 +19,266 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <fcntl.h>
+#include <memory>
 #include <pthread.h>
 #include <string>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
+#include <linux/dma-buf.h>
+#include <linux/dma-heap.h>
+#include <gst/allocators/gstdmabuf.h>
 #include <gst/gst.h>
 #include <gst/rtsp-server/rtsp-server.h>
+#include <gst/video/video.h>
 
 #include "../core/app_ctrl.h"
 #include "../analyzer/frame_pipeline.h"
 #include "display.h" /* display_lock / display_unlock */
+
+namespace
+{
+static constexpr size_t RTSP_DMA_OUTPUT_SLOTS = 6;
+
+struct DmaFrameSlot
+{
+    int fd{-1};
+    void *mapped{MAP_FAILED};
+    size_t size{0};
+    std::shared_ptr<RgaImportedBuffer> rga;
+    std::atomic<bool> in_use{false};
+
+    ~DmaFrameSlot()
+    {
+        rga.reset();
+        if (mapped != MAP_FAILED)
+            munmap(mapped, size);
+        if (fd >= 0)
+            close(fd);
+    }
+};
+
+static bool dma_buf_sync_cpu(int fd, bool start)
+{
+    struct dma_buf_sync sync_request{};
+    sync_request.flags = (start ? DMA_BUF_SYNC_START : DMA_BUF_SYNC_END) | DMA_BUF_SYNC_WRITE;
+    int ret;
+    do
+    {
+        ret = ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync_request);
+    } while (ret < 0 && errno == EINTR);
+    if (ret < 0 && errno != ENOTTY)
+    {
+        fprintf(stderr, "[RTSP] DMA_BUF_IOCTL_SYNC failed: fd=%d errno=%d (%s)\n", fd, errno, strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static int open_rtsp_dma_heap()
+{
+    static const char *const heap_paths[] = {
+        "/dev/dma_heap/rk-dma-heap-cma", "/dev/dma_heap/linux,cma", "/dev/dma_heap/cma",
+        "/dev/dma_heap/system-uncached", "/dev/dma_heap/system"};
+    for (const char *path : heap_paths)
+    {
+        int fd = open(path, O_RDWR | O_CLOEXEC);
+        if (fd >= 0)
+        {
+            printf("[RTSP] DMA heap selected: %s\n", path);
+            return fd;
+        }
+    }
+    return -1;
+}
+
+static std::shared_ptr<DmaFrameSlot> allocate_dma_slot(int heap_fd, size_t size, int width, int height,
+                                                       int stride_w, int stride_h, int format)
+{
+    struct dma_heap_allocation_data allocation{};
+    allocation.len = size;
+    allocation.fd_flags = O_RDWR | O_CLOEXEC;
+    if (ioctl(heap_fd, DMA_HEAP_IOCTL_ALLOC, &allocation) < 0)
+    {
+        fprintf(stderr, "[RTSP] DMA_HEAP_IOCTL_ALLOC failed: size=%zu errno=%d (%s)\n", size, errno,
+                strerror(errno));
+        return nullptr;
+    }
+
+    const int dma_fd = static_cast<int>(allocation.fd);
+    void *mapped = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, dma_fd, 0);
+    if (mapped == MAP_FAILED)
+    {
+        fprintf(stderr, "[RTSP] mmap DMA-BUF failed: size=%zu errno=%d (%s)\n", size, errno, strerror(errno));
+        close(dma_fd);
+        return nullptr;
+    }
+
+    auto imported = rga_import_src_fd(dma_fd, width, height, stride_w, stride_h, format);
+    if (!imported)
+    {
+        fprintf(stderr, "[RTSP] RGA cannot import allocated DMA-BUF: fd=%d format=%d\n", dma_fd, format);
+        munmap(mapped, size);
+        close(dma_fd);
+        return nullptr;
+    }
+
+    auto slot = std::make_shared<DmaFrameSlot>();
+    slot->fd = dma_fd;
+    slot->mapped = mapped;
+    slot->size = size;
+    slot->rga = std::move(imported);
+    return slot;
+}
+
+struct DmaFramePool
+{
+    std::shared_ptr<DmaFrameSlot> rgb_source;
+    std::vector<std::shared_ptr<DmaFrameSlot>> nv12_outputs;
+    int src_w{0};
+    int src_h{0};
+    int out_stride_w{0};
+    int out_stride_h{0};
+
+    static std::shared_ptr<DmaFramePool> create(int source_width, int source_height, int output_width,
+                                                int output_height)
+    {
+        const int heap_fd = open_rtsp_dma_heap();
+        if (heap_fd < 0)
+        {
+            fprintf(stderr, "[RTSP] no usable DMA heap found; hardware encoder DMA path unavailable\n");
+            return nullptr;
+        }
+
+        auto pool = std::make_shared<DmaFramePool>();
+        pool->src_w = source_width;
+        pool->src_h = source_height;
+        pool->out_stride_w = output_width;
+        pool->out_stride_h = output_height;
+        pool->rgb_source = allocate_dma_slot(heap_fd, static_cast<size_t>(source_width) * source_height * 3,
+                                             source_width, source_height, source_width, source_height,
+                                             RK_FORMAT_RGB_888);
+        const size_t nv12_size = static_cast<size_t>(output_width) * output_height * 3 / 2;
+        for (size_t index = 0; pool->rgb_source && index < RTSP_DMA_OUTPUT_SLOTS; ++index)
+        {
+            auto output = allocate_dma_slot(heap_fd, nv12_size, output_width, output_height, output_width,
+                                            output_height, RK_FORMAT_YCbCr_420_SP);
+            if (!output)
+                break;
+            if (!dma_buf_sync_cpu(output->fd, true))
+                break;
+            memset(output->mapped, 0, static_cast<size_t>(output_width) * output_height);
+            memset(static_cast<unsigned char *>(output->mapped) + static_cast<size_t>(output_width) * output_height,
+                   128, nv12_size - static_cast<size_t>(output_width) * output_height);
+            if (!dma_buf_sync_cpu(output->fd, false))
+                break;
+            pool->nv12_outputs.push_back(std::move(output));
+        }
+        close(heap_fd);
+
+        if (!pool->rgb_source || pool->nv12_outputs.size() != RTSP_DMA_OUTPUT_SLOTS)
+        {
+            fprintf(stderr, "[RTSP] DMA frame pool initialization failed (%zu/%zu output slots)\n",
+                    pool->nv12_outputs.size(), RTSP_DMA_OUTPUT_SLOTS);
+            return nullptr;
+        }
+        printf("[RTSP] DMA frame pool ready: RGB source + %zu NV12 output slots\n", pool->nv12_outputs.size());
+        return pool;
+    }
+
+    std::shared_ptr<DmaFrameSlot> acquire_output()
+    {
+        for (const auto &slot : nv12_outputs)
+        {
+            bool expected = false;
+            if (slot->in_use.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+                return slot;
+        }
+        return nullptr;
+    }
+
+    void release_output(const std::shared_ptr<DmaFrameSlot> &slot)
+    {
+        if (slot)
+            slot->in_use.store(false, std::memory_order_release);
+    }
+
+    bool begin_rgb_write()
+    {
+        return rgb_source && dma_buf_sync_cpu(rgb_source->fd, true);
+    }
+
+    bool end_rgb_write()
+    {
+        return rgb_source && dma_buf_sync_cpu(rgb_source->fd, false);
+    }
+
+    bool convert_to_nv12(const std::shared_ptr<DmaFrameSlot> &output)
+    {
+        if (!rgb_source || !rgb_source->rga || !output || !output->rga)
+            return false;
+        return rga_convert_resize_handle(-1, *rgb_source->rga, output->fd, src_w, src_h, out_stride_w, out_stride_h,
+                                         RK_FORMAT_YCbCr_420_SP, static_cast<int>(output->rga->handle));
+    }
+};
+
+struct DmaSlotLease
+{
+    std::shared_ptr<DmaFrameSlot> slot;
+};
+
+static void release_dma_slot_when_memory_dies(gpointer user_data, GstMiniObject *object)
+{
+    (void)object;
+    std::unique_ptr<DmaSlotLease> lease(static_cast<DmaSlotLease *>(user_data));
+    lease->slot->in_use.store(false, std::memory_order_release);
+}
+
+static GstBuffer *make_dmabuf_video_buffer(GstAllocator *allocator, const std::shared_ptr<DmaFrameSlot> &slot,
+                                           int width, int height)
+{
+    if (!allocator || !slot)
+        return nullptr;
+    const int exported_fd = fcntl(slot->fd, F_DUPFD_CLOEXEC, 0);
+    if (exported_fd < 0)
+        return nullptr;
+
+    GstMemory *memory = gst_dmabuf_allocator_alloc(allocator, exported_fd, slot->size);
+    if (!memory)
+    {
+        close(exported_fd);
+        return nullptr;
+    }
+
+    GstBuffer *buffer = gst_buffer_new();
+    auto *lease = new DmaSlotLease{slot};
+    gst_mini_object_weak_ref(GST_MINI_OBJECT(memory), release_dma_slot_when_memory_dies, lease);
+    if (!buffer)
+    {
+        gst_memory_unref(memory);
+        return nullptr;
+    }
+    gst_buffer_append_memory(buffer, memory);
+
+    gsize offsets[GST_VIDEO_MAX_PLANES] = {0};
+    gint strides[GST_VIDEO_MAX_PLANES] = {0};
+    offsets[1] = static_cast<gsize>(width) * height;
+    strides[0] = width;
+    strides[1] = width;
+    gst_buffer_add_video_meta_full(buffer, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_NV12, width, height, 2,
+                                   offsets, strides);
+
+    return buffer;
+}
+} // namespace
 
 /*======================== 模块状态 ========================*/
 struct RtspStreamer
@@ -69,6 +315,9 @@ struct RtspStreamer
     bool feeder_running = false;
     std::atomic<bool> feeder_exit{false};
     std::atomic<bool> client_active{false};
+
+    /* 硬编只接收 DMA-BUF NV12；池初始化失败时 auto 模式回退软编。 */
+    std::shared_ptr<DmaFramePool> dma_pool;
 };
 
 static RtspStreamer g_st;
@@ -184,12 +433,22 @@ static void *rtsp_feeder_thread(void *arg)
     const size_t src_stride = (size_t)src_w * 3; /* RGB packed */
     const size_t dst_stride = (size_t)dst_w * 3;
     const size_t rgb_frame_bytes = dst_stride * (size_t)dst_h;
-    const size_t nv12_frame_bytes = (size_t)dst_w * dst_h * 3 / 2;
-    const size_t frame_bytes = g_st.use_hw ? nv12_frame_bytes : rgb_frame_bytes;
     const bool need_pad = (dst_w != src_w) || (dst_h != src_h);
     const auto period = std::chrono::microseconds(1000000 / std::max(1, g_st.fps));
     auto next_wakeup = std::chrono::steady_clock::now();
-    std::vector<unsigned char> rgb_snapshot((size_t)src_w * src_h * 3);
+    const std::shared_ptr<DmaFramePool> dma_pool = g_st.dma_pool;
+    GstAllocator *dmabuf_allocator = g_st.use_hw ? gst_dmabuf_allocator_new() : nullptr;
+
+    auto push_buffer = [](GstElement *appsrc, GstBuffer *buffer) {
+        GstFlowReturn ret = GST_FLOW_OK;
+        g_signal_emit_by_name(appsrc, "push-buffer", buffer, &ret);
+        if (ret != GST_FLOW_OK)
+        {
+            static int warn_cnt = 0;
+            if ((warn_cnt++ % 200) == 0)
+                fprintf(stderr, "[RTSP] push-buffer ret=%d\n", (int)ret);
+        }
+    };
 
     while (g_pCtrl && g_pCtrl->isRunning.load() && !g_st.feeder_exit.load())
     {
@@ -202,65 +461,70 @@ static void *rtsp_feeder_thread(void *arg)
         if (src)
         {
             char *front = (g_pCtrl->pDispBuffer) ? *g_pCtrl->pDispBuffer : nullptr;
-            if (front)
+            if (front && g_st.use_hw && dma_pool && dmabuf_allocator)
             {
-                GstBuffer *buf = gst_buffer_new_allocate(nullptr, frame_bytes, nullptr);
-                GstMapInfo map;
-                if (buf && gst_buffer_map(buf, &map, GST_MAP_WRITE))
+                auto output = dma_pool->acquire_output();
+                bool frame_ready = output && dma_pool->begin_rgb_write();
+                if (frame_ready)
                 {
-                    bool frame_ready = false;
-                    /* 只在 display_lock 内取得一致快照，RGA/补边均在锁外完成，避免阻塞各通道提交 tile。 */
-                    /* RTSP 是可丢帧的实时预览：显示线程正在提交 tile 时直接跳过本帧，
-                     * 避免 feeder 排队等待后反过来卡住显示合成。 */
                     if (display_try_lock())
                     {
-                        if (g_st.use_hw)
-                            memcpy(rgb_snapshot.data(), front, rgb_snapshot.size());
-                        else if (!need_pad)
-                            memcpy(map.data, front, frame_bytes);
+                        memcpy(dma_pool->rgb_source->mapped, front, static_cast<size_t>(src_w) * src_h * 3);
+                        display_unlock();
+                    }
+                    else
+                        frame_ready = false;
+                    if (!dma_pool->end_rgb_write())
+                        frame_ready = false;
+                }
+                if (frame_ready)
+                    frame_ready = dma_pool->convert_to_nv12(output);
+
+                GstBuffer *buffer =
+                    frame_ready ? make_dmabuf_video_buffer(dmabuf_allocator, output, dst_w, dst_h) : nullptr;
+                if (buffer)
+                {
+                    push_buffer(src, buffer);
+                    gst_buffer_unref(buffer);
+                }
+                else
+                    dma_pool->release_output(output);
+            }
+            else if (front && !g_st.use_hw)
+            {
+                GstBuffer *buffer = gst_buffer_new_allocate(nullptr, rgb_frame_bytes, nullptr);
+                GstMapInfo map;
+                bool frame_ready = buffer && gst_buffer_map(buffer, &map, GST_MAP_WRITE);
+                if (frame_ready)
+                {
+                    if (display_try_lock())
+                    {
+                        if (!need_pad)
+                            memcpy(map.data, front, rgb_frame_bytes);
                         else
                             for (int y = 0; y < src_h; ++y)
                                 memcpy(map.data + (size_t)y * dst_stride, front + (size_t)y * src_stride, src_stride);
                         display_unlock();
-                        frame_ready = true;
                     }
+                    else
+                        frame_ready = false;
 
-                    if (frame_ready && g_st.use_hw)
+                    if (frame_ready && need_pad)
                     {
-                        /* MPP 直接消费 NV12。先清零保证向上对齐区域为黑色，再让 RGA 只写可见区域。 */
-                        const size_t y_plane_bytes = (size_t)dst_w * dst_h;
-                        memset(map.data, 0, y_plane_bytes);
-                        memset(map.data + y_plane_bytes, 128, frame_bytes - y_plane_bytes);
-                        RgaImage src_img{RK_FORMAT_RGB_888, src_w, src_h, src_w, src_h, 0, rgb_snapshot.data()};
-                        RgaImage dst_img{RK_FORMAT_YCbCr_420_SP, src_w, src_h, dst_w, dst_h, 0, map.data};
-                        frame_ready = rga_convert_resize(-1, src_img, dst_img);
-                    }
-                    else if (frame_ready && need_pad)
-                    {
-                        /* 黑边填充 (buf 私有于本次迭代, 锁外做) */
                         if (dst_w > src_w)
                             for (int y = 0; y < src_h; ++y)
-                                memset(map.data + (size_t)y * dst_stride + src_stride, 0, (size_t)(dst_w - src_w) * 3);
+                                memset(map.data + (size_t)y * dst_stride + src_stride, 0,
+                                       (size_t)(dst_w - src_w) * 3);
                         if (dst_h > src_h)
-                            memset(map.data + (size_t)src_h * dst_stride, 0, (size_t)(dst_h - src_h) * dst_stride);
+                            memset(map.data + (size_t)src_h * dst_stride, 0,
+                                   (size_t)(dst_h - src_h) * dst_stride);
                     }
-                    gst_buffer_unmap(buf, &map);
-
-                    if (frame_ready)
-                    {
-                        GstFlowReturn ret = GST_FLOW_OK;
-                        /* 信号版 push-buffer 不夺取所有权(steal_ref=FALSE), 故下面仍需 unref。*/
-                        g_signal_emit_by_name(src, "push-buffer", buf, &ret);
-                        if (ret != GST_FLOW_OK)
-                        {
-                            static int warn_cnt = 0;
-                            if ((warn_cnt++ % 200) == 0)
-                                fprintf(stderr, "[RTSP] push-buffer ret=%d\n", (int)ret);
-                        }
-                    }
+                    gst_buffer_unmap(buffer, &map);
                 }
-                if (buf)
-                    gst_buffer_unref(buf);
+                if (frame_ready)
+                    push_buffer(src, buffer);
+                if (buffer)
+                    gst_buffer_unref(buffer);
             }
             gst_object_unref(src);
         }
@@ -272,6 +536,8 @@ static void *rtsp_feeder_thread(void *arg)
             next_wakeup = now;
         std::this_thread::sleep_until(next_wakeup);
     }
+    if (dmabuf_allocator)
+        gst_object_unref(dmabuf_allocator);
     printf("[RTSP] feeder thread exit\n");
     return nullptr;
 }
@@ -316,6 +582,18 @@ static std::string build_launch_string(void)
         use_hw = true;
     else
         use_hw = hw_available; /* auto (含旧 "sw" 值不再强制软编) */
+    if (use_hw)
+    {
+        g_st.dma_pool = DmaFramePool::create(g_st.width, g_st.height, g_st.enc_w, g_st.enc_h);
+        if (!g_st.dma_pool)
+        {
+            fprintf(stderr,
+                    "[RTSP] hardware DMA path unavailable; falling back to software encoder for portability\n");
+            use_hw = false;
+        }
+    }
+    if (!use_hw)
+        g_st.dma_pool.reset();
     g_st.use_hw = use_hw;
 
     char launch[1024];
@@ -433,6 +711,7 @@ int rtsp_streamer_init(void)
         g_st.loop = nullptr;
         g_main_context_unref(g_st.ctx);
         g_st.ctx = nullptr;
+        g_st.dma_pool.reset();
         return -1;
     }
 
@@ -512,6 +791,7 @@ void rtsp_streamer_deinit(void)
         g_main_context_unref(g_st.ctx);
         g_st.ctx = nullptr;
     }
+    g_st.dma_pool.reset();
 
     g_st.inited = false;
     printf("[RTSP] streamer deinit done\n");

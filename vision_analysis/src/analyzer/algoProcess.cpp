@@ -15,7 +15,6 @@
 #include <memory>
 #include <opencv2/opencv.hpp>
 #include <pthread.h>
-#include <queue>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -123,13 +122,6 @@ int algorithm_init(const AppConfig &cfg)
     int core_masks[3] = {RKNN_NPU_CORE_0, RKNN_NPU_CORE_1, RKNN_NPU_CORE_2};
     int auto_model_instances = 0, loaded_models_count = 0;
 
-    int configured_infer_channels = 0;
-    for (const auto &channel : cfg.channels)
-        if (channel.id >= 0 && channel.id < MAX_CHANNEL_NUM && channel.enable &&
-            config_utils::is_channel_infer_enabled(channel))
-            ++configured_infer_channels;
-    g_algo.multi_channel_low_latency = configured_infer_channels > 1;
-
     g_algo.model_registry.clear();
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
         g_algo.result_dispatch_pending[i] = 0;
@@ -150,11 +142,7 @@ int algorithm_init(const AppConfig &cfg)
 
         try
         {
-            const int configured_threads = chn_cfg.threads > 0 ? chn_cfg.threads : 1;
-            const int threads_for_chn = g_algo.multi_channel_low_latency ? 1 : configured_threads;
-            if (threads_for_chn != configured_threads)
-                log_printf_threadsafe("[Algo] ch%d multi-channel low-latency mode: workers %d -> %d\n", channel_id,
-                                      configured_threads, threads_for_chn);
+            int threads_for_chn = chn_cfg.threads > 0 ? chn_cfg.threads : 1;
             g_algo.models_per_chn[channel_id].clear();
             std::vector<ChannelModelConfig> active_models;
             for (const auto &model : chn_cfg.models)
@@ -231,20 +219,18 @@ int algorithm_init(const AppConfig &cfg)
     if (!g_algo.running.load())
     {
         g_algo.running.store(true);
+        g_algo.max_queue_size = std::max(1, cfg.queue_size);
         g_algo.task_queues.clear();
+        int q_count = 0;
         for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
         {
             if (!g_algo.models_per_chn[i].empty())
             {
                 auto tq = std::make_unique<TaskQueue>();
-                /* 单通道允许配置的多个 worker 并行以保留峰值吞吐；多通道优先结果新鲜度，
-                 * 每通道最多一帧在 NPU 内，剩余位置只保存一张最新待处理帧。 */
-                tq->max_in_flight = g_algo.multi_channel_low_latency
-                                         ? 1
-                                         : std::max(1, static_cast<int>(g_algo.models_per_chn[i].size()));
                 pthread_mutex_init(&tq->mtx, nullptr);
                 pthread_cond_init(&tq->cv, nullptr);
                 g_algo.task_queues.push_back(std::move(tq));
+                q_count++;
             }
         }
         auto now = std::chrono::steady_clock::now();
@@ -380,8 +366,17 @@ int algorithm_process_source(int chnId, void *source_data, int fd, int srcW, int
             if (i == chnId)
             {
                 TaskQueue &tq = *g_algo.task_queues[q_idx];
-                /* FD 只在解码回调期间有效，必须在返回前导入稳定 handle。
-                 * 队列中的旧 pending 帧会在入队临界区被这张更新的帧替换。 */
+                pthread_mutex_lock(&tq.mtx);
+                if (tq.q.size() >= (size_t)g_algo.max_queue_size)
+                {
+                    pthread_mutex_unlock(&tq.mtx);
+                    pthread_rwlock_unlock(&g_algo.dispatch_mtx);
+                    return 0;
+                }
+                pthread_mutex_unlock(&tq.mtx);
+
+                /* 先检查队列容量，被覆盖/丢弃的帧不做 DMA-BUF import。FD 只在解码回调
+                 * 期间有效，所以必须在本函数返回前导入为稳定 handle。导入失败才准备 CPU 兜底帧。 */
                 std::shared_ptr<RgaImportedBuffer> imported;
                 if (fd >= 0)
                     imported = rga_import_src_fd(fd, srcW, srcH, srcStrH, srcStrV, srcFmt);
@@ -412,17 +407,18 @@ int algorithm_process_source(int chnId, void *source_data, int fd, int srcW, int
                 task.srcFmt = srcFmt;
                 task.srcStrH = srcStrH;
                 task.srcStrV = srcStrV;
-                std::queue<AlgoTask> superseded;
                 pthread_mutex_lock(&tq.mtx);
-                const bool replaced_pending = !tq.q.empty();
-                /* swap 只交换容器元数据；旧 DMA-BUF 引用在解锁后随 superseded 析构，
-                 * 避免 releasebuffer_handle 等清理工作阻塞 worker 领取最新帧。 */
-                tq.q.swap(superseded);
+                if (tq.q.size() >= (size_t)g_algo.max_queue_size)
+                {
+                    pthread_mutex_unlock(&tq.mtx);
+                    pthread_rwlock_unlock(&g_algo.dispatch_mtx);
+                    return 0;
+                }
                 tq.q.push(std::move(task));
                 pthread_cond_signal(&tq.cv);
                 pthread_mutex_unlock(&tq.mtx);
                 pthread_rwlock_unlock(&g_algo.dispatch_mtx);
-                return replaced_pending ? 2 : 1;
+                return 1;
             }
             q_idx++;
         }
@@ -480,6 +476,13 @@ bool algorithm_wait_result(int chnId, int timeout_ms)
 }
 
 /*======================== 热重载接口 ========================*/
+
+void algorithm_update_queue_size(int queue_size)
+{
+    pthread_rwlock_wrlock(&g_algo.dispatch_mtx);
+    g_algo.max_queue_size = std::max(1, queue_size);
+    pthread_rwlock_unlock(&g_algo.dispatch_mtx);
+}
 
 void algorithm_update_thresh(int chnId, const ChannelConfig &config)
 {
@@ -578,8 +581,7 @@ bool algorithm_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
     for (int i = 0; i < chnId; ++i)
         worker_start += (int)g_algo.models_per_chn[i].size();
     int worker_count = (int)g_algo.models_per_chn[chnId].size();
-    const int configured_worker_count = new_cfg.threads > 0 ? new_cfg.threads : 1;
-    const int requested_worker_count = g_algo.multi_channel_low_latency ? 1 : configured_worker_count;
+    const int requested_worker_count = new_cfg.threads > 0 ? new_cfg.threads : 1;
     if (requested_worker_count != worker_count)
     {
         log_printf_threadsafe("[Algo] ch%d worker topology change rejected (%d -> %d); restart required\n", chnId,

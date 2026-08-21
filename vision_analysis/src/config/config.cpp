@@ -159,6 +159,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
     cfg.channel_threads = 1;
     cfg.max_fps = 30;
     cfg.local_default_fps = 25;
+    cfg.queue_size = 1;
     cfg.tracker_enable = 1;
     cfg.tracker_iou_thresh = 0.3f;
     cfg.tracker_max_miss = 10;
@@ -762,6 +763,8 @@ bool load_config(const std::string &path, AppConfig &cfg)
         cfg.tile_cols = 2;
     if (cfg.tile_rows <= 0)
         cfg.tile_rows = 2;
+    if (cfg.queue_size <= 0)
+        cfg.queue_size = 1;
     cJSON_Delete(root);
 
     // 【修改点】：分级验证 — 首次加载做完整验证，热重载只做关键字段验证

@@ -60,10 +60,6 @@ struct TaskQueue
     std::queue<AlgoTask> q;
     pthread_mutex_t mtx;
     pthread_cond_t cv;
-    /* 实时模式只允许有限数量的帧真正进入 NPU。多路通道时为 1，
-     * 防止多个 worker 把旧帧提前取走后在驱动内部形成不可见队列。 */
-    int in_flight{0};
-    int max_in_flight{1};
 };
 
 /*======================== 性能计数器（每通道，支持多个 worker 汇总）========================*/
@@ -210,7 +206,7 @@ struct AlgoEngine
     pthread_mutex_t chn_reload_mtx[MAX_CHANNEL_NUM];
     std::vector<pthread_t> worker_tids;
     std::vector<unsigned char> worker_started;
-    bool multi_channel_low_latency{false};
+    int max_queue_size{1};
 
     ChannelResult channel_results[MAX_CHANNEL_NUM];
 

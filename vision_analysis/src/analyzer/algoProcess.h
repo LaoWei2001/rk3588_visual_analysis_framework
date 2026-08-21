@@ -49,8 +49,7 @@ struct AlgoResult
     std::vector<cv::Point2f> keypoints; // pose关键点坐标，数量由模型决定
     std::vector<float> keypoint_scores; // 与keypoints一一对应的可见度/置信度
     std::string text_result;            // for OCR
-    /* 分割目标自己的裁剪掩码，尺寸对应 box.width × box.height；0=背景，其他值=class_id+1。 */
-    cv::Mat boxMask;
+    cv::Mat boxMask; // for segmentation (mask of the whole image with class ids, or object specific mask)
 };
 
 class LazyVideoFrame;
@@ -75,6 +74,7 @@ int algorithm_get_input_h();
 float algorithm_get_infer_fps(int chnId);
 void algorithm_update_thresh(int chnId, const ChannelConfig &config);
 void algorithm_update_detect_classes(int chnId, const ChannelConfig &config);
+void algorithm_update_queue_size(int queue_size);
 /**
  * @return true 仅当新模型已经完整启用；false 表示旧模型仍保持运行，调用方不得
  *         把新模型字段发布到运行配置。线程拓扑变化目前明确要求重启。

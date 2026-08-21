@@ -208,7 +208,6 @@ struct DispTask
     int srcHeight = 0;
     int srcHStride = 0;
     int srcVStride = 0;
-    uint64_t frameSteadyMs = 0;
 };
 
 /**

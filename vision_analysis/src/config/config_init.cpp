@@ -29,6 +29,7 @@ void init_config_fields(AppConfig &cfg)
     REG_G("channel_threads", INT, channel_threads);
     REG_G("max_fps", INT, max_fps);
     REG_G("local_default_fps", INT, local_default_fps);
+    REG_G("queue_size", INT, queue_size);
     REG_G("tracker_enable", INT, tracker_enable);
     REG_G("tracker_iou_thresh", FLOAT, tracker_iou_thresh);
     REG_G("tracker_max_miss", INT, tracker_max_miss);

@@ -115,65 +115,61 @@ static const SegmentationColorLuts &segmentation_color_luts()
     return luts;
 }
 
-struct SegmentationInstanceOverlay
-{
-    cv::Rect screen_box;
-    cv::Mat mask;
-    cv::Mat color_bgr;
-    float vx = 0.0f;
-    float vy = 0.0f;
-    int track_id = -1;
-    int track_hits = 0;
-};
-
 struct SegmentationOverlayCache
 {
     int64_t result_frame_id = -1;
+    const unsigned char *source_data = nullptr;
+    int source_rows = 0;
+    int source_cols = 0;
+    int source_type = -1;
     cv::Size output_size;
-    std::vector<SegmentationInstanceOverlay> instances;
+    cv::Rect active_rect;
+    cv::Mat active_mask;
+    cv::Mat active_color_bgr;
     cv::Mat blend_scratch;
+    bool prepared = false;
 
-    bool matches(const cv::Size &size, int64_t frame_id) const
+    bool matches(const cv::Mat &source, const cv::Size &size, int64_t frame_id) const
     {
-        return frame_id > 0 && result_frame_id == frame_id && output_size == size;
+        /* frame_id<=0 的调用方没有稳定的结果版本号，宁可重建也不能误用旧掩码。 */
+        return frame_id > 0 && prepared && result_frame_id == frame_id && source_data == source.data &&
+               source_rows == source.rows && source_cols == source.cols && source_type == source.type() &&
+               output_size == size;
     }
 
-    void prepare(const std::vector<AlgoResult> &results, const cv::Size &size, int64_t frame_id, float scale_x,
-                 float scale_y)
+    void prepare(const cv::Mat &source, const cv::Size &size, int64_t frame_id)
     {
         result_frame_id = frame_id;
+        source_data = source.data;
+        source_rows = source.rows;
+        source_cols = source.cols;
+        source_type = source.type();
         output_size = size;
-        instances.clear();
-        instances.reserve(results.size());
+        active_rect = cv::Rect();
+        active_mask.release();
+        active_color_bgr.release();
+        prepared = true;
 
-        for (const auto &res : results)
-        {
-            if (res.boxMask.empty() || res.boxMask.type() != CV_8UC1 || res.box.width <= 0 || res.box.height <= 0)
-                continue;
+        if (source.empty() || source.type() != CV_8UC1 || size.width <= 0 || size.height <= 0)
+            return;
 
-            const int dst_w = std::max(1, cvRound(res.box.width * scale_x));
-            const int dst_h = std::max(1, cvRound(res.box.height * scale_y));
-            SegmentationInstanceOverlay item;
-            item.screen_box = cv::Rect(cvRound(res.box.x * scale_x), cvRound(res.box.y * scale_y), dst_w, dst_h);
-            item.vx = res.vx;
-            item.vy = res.vy;
-            item.track_id = res.track_id;
-            item.track_hits = res.track_hits;
+        cv::Mat resized_mask;
+        cv::resize(source, resized_mask, size, 0, 0, cv::INTER_NEAREST);
 
-            cv::Mat class_ids;
-            cv::resize(res.boxMask, class_ids, cv::Size(dst_w, dst_h), 0, 0, cv::INTER_NEAREST);
-            cv::compare(class_ids, 0, item.mask, cv::CMP_NE);
-            if (cv::countNonZero(item.mask) == 0)
-                continue;
+        cv::Mat foreground_mask;
+        cv::compare(resized_mask, 0, foreground_mask, cv::CMP_NE);
+        active_rect = cv::boundingRect(foreground_mask);
+        if (active_rect.empty())
+            return;
 
-            const SegmentationColorLuts &luts = segmentation_color_luts();
-            std::array<cv::Mat, 3> bgr_channels;
-            cv::LUT(class_ids, luts.b, bgr_channels[0]);
-            cv::LUT(class_ids, luts.g, bgr_channels[1]);
-            cv::LUT(class_ids, luts.r, bgr_channels[2]);
-            cv::merge(bgr_channels.data(), static_cast<int>(bgr_channels.size()), item.color_bgr);
-            instances.push_back(std::move(item));
-        }
+        active_mask = foreground_mask(active_rect).clone();
+        const cv::Mat class_ids = resized_mask(active_rect);
+        const SegmentationColorLuts &luts = segmentation_color_luts();
+        std::array<cv::Mat, 3> bgr_channels;
+        cv::LUT(class_ids, luts.b, bgr_channels[0]);
+        cv::LUT(class_ids, luts.g, bgr_channels[1]);
+        cv::LUT(class_ids, luts.r, bgr_channels[2]);
+        cv::merge(bgr_channels.data(), static_cast<int>(bgr_channels.size()), active_color_bgr);
     }
 };
 
@@ -190,31 +186,30 @@ static SegmentationOverlayCache &segmentation_cache_for(int channel_id)
 }
 
 static void draw_segmentation_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult> &results, int channel_id,
-                                      int64_t result_frame_id, float scale_x, float scale_y, float frames_elapsed)
+                                      int64_t result_frame_id)
 {
-    SegmentationOverlayCache &cache = segmentation_cache_for(channel_id);
-    if (!cache.matches(screen_roi.size(), result_frame_id))
-        cache.prepare(results, screen_roi.size(), result_frame_id, scale_x, scale_y);
-
-    const cv::Rect screen_bounds(0, 0, screen_roi.cols, screen_roi.rows);
-    for (const auto &item : cache.instances)
+    const cv::Mat *seg_mask = nullptr;
+    for (const auto &res : results)
     {
-        cv::Rect predicted = item.screen_box;
-        if (frames_elapsed > 0.0f && item.track_id >= 0 && item.track_hits >= 3)
+        if (!res.boxMask.empty())
         {
-            predicted.x += cvRound(item.vx * scale_x * frames_elapsed);
-            predicted.y += cvRound(item.vy * scale_y * frames_elapsed);
+            seg_mask = &res.boxMask;
+            break;
         }
-
-        const cv::Rect clipped = predicted & screen_bounds;
-        if (clipped.empty())
-            continue;
-        const cv::Rect source_roi(clipped.x - predicted.x, clipped.y - predicted.y, clipped.width, clipped.height);
-        cv::Mat dst = screen_roi(clipped);
-        cache.blend_scratch.create(clipped.size(), screen_roi.type());
-        cv::addWeighted(dst, 0.5, item.color_bgr(source_roi), 0.5, 0.0, cache.blend_scratch);
-        cache.blend_scratch.copyTo(dst, item.mask(source_roi));
     }
+    if (!seg_mask || seg_mask->empty())
+        return;
+
+    SegmentationOverlayCache &cache = segmentation_cache_for(channel_id);
+    if (!cache.matches(*seg_mask, screen_roi.size(), result_frame_id))
+        cache.prepare(*seg_mask, screen_roi.size(), result_frame_id);
+    if (cache.active_rect.empty())
+        return;
+
+    cv::Mat dst = screen_roi(cache.active_rect);
+    cache.blend_scratch.create(cache.active_rect.size(), screen_roi.type());
+    cv::addWeighted(dst, 0.5, cache.active_color_bgr, 0.5, 0.0, cache.blend_scratch);
+    cache.blend_scratch.copyTo(dst, cache.active_mask);
 }
 
 static cv::Rect clipped_draw_bounds(const cv::Mat &image, int64_t left, int64_t top, int64_t right, int64_t bottom)
@@ -250,21 +245,12 @@ static int draw_padding(int thickness, bool antialiased)
 
 } // namespace
 
-static void draw_pose_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult> &results, float scale_x, float scale_y,
-                              float frames_elapsed)
+static void draw_pose_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult> &results, float scale_x, float scale_y)
 {
     for (const auto &res : results)
     {
         if (res.keypoints.empty())
             continue;
-
-        float shift_x = 0.0f;
-        float shift_y = 0.0f;
-        if (frames_elapsed > 0.0f && res.track_id >= 0 && res.track_hits >= 3)
-        {
-            shift_x = res.vx * frames_elapsed;
-            shift_y = res.vy * frames_elapsed;
-        }
 
         const PoseSkeletonView skeleton = pose_skeleton_for(res.keypoints.size());
         for (size_t j = 0; j < skeleton.count; ++j)
@@ -276,10 +262,8 @@ static void draw_pose_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult>
 
             const cv::Point2f &raw_p1 = res.keypoints[idx1];
             const cv::Point2f &raw_p2 = res.keypoints[idx2];
-            cv::Point p1(static_cast<int>((raw_p1.x + shift_x) * scale_x),
-                         static_cast<int>((raw_p1.y + shift_y) * scale_y));
-            cv::Point p2(static_cast<int>((raw_p2.x + shift_x) * scale_x),
-                         static_cast<int>((raw_p2.y + shift_y) * scale_y));
+            cv::Point p1(static_cast<int>(raw_p1.x * scale_x), static_cast<int>(raw_p1.y * scale_y));
+            cv::Point p2(static_cast<int>(raw_p2.x * scale_x), static_cast<int>(raw_p2.y * scale_y));
             cv::line(screen_roi, p1, p2, cv::Scalar(0, 165, 255), 2);
         }
 
@@ -288,8 +272,7 @@ static void draw_pose_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult>
             if (!pose_keypoint_visible(res, j))
                 continue;
             const cv::Point2f &raw_p = res.keypoints[j];
-            cv::Point p(static_cast<int>((raw_p.x + shift_x) * scale_x),
-                        static_cast<int>((raw_p.y + shift_y) * scale_y));
+            cv::Point p(static_cast<int>(raw_p.x * scale_x), static_cast<int>(raw_p.y * scale_y));
             cv::circle(screen_roi, p, 3, cv::Scalar(0, 255, 255), -1);
         }
     }
@@ -326,19 +309,9 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
     const double draw_scale = (static_cast<double>(scale_x) + static_cast<double>(scale_y)) * 0.5;
     auto thk = [draw_scale](int t) { return t < 0 ? t : std::max(1, cvRound(t * draw_scale)); };
 
-    /* 当前显示帧相对结果源帧经过了多少个推理周期。检测框、姿态和逐目标掩码
-     * 共用同一个时间基准，避免三种结果各自表现出不同程度的视觉滞后。 */
-    float frames_elapsed = 0.0f;
-    if (p.result_age_ms > 0 && p.infer_fps > 0.5f)
-    {
-        frames_elapsed = static_cast<float>(p.result_age_ms) / 1000.0f * p.infer_fps;
-        frames_elapsed = std::min(frames_elapsed, 2.0f);
-    }
-
     // Segmentation mask
     if (p.show_system_overlays && p.results && !p.results->empty())
-        draw_segmentation_overlay(screen_roi, *p.results, p.chnId, p.result_frame_id, scale_x, scale_y,
-                                  frames_elapsed);
+        draw_segmentation_overlay(screen_roi, *p.results, p.chnId, p.result_frame_id);
 
     // Detections
     if (p.show_system_overlays && p.results && !p.results->empty())
@@ -354,6 +327,13 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
          *  - frames_elapsed 上限 2.0f，避免网络抖动时 result_age 突然很大导致框飞走
          *  - 外推后对框做边界裁剪
          */
+        float frames_elapsed = 0.0f;
+        if (p.result_age_ms > 0 && p.infer_fps > 0.5f)
+        {
+            frames_elapsed = static_cast<float>(p.result_age_ms) / 1000.0f * p.infer_fps;
+            frames_elapsed = std::min(frames_elapsed, 2.0f);
+        }
+
         for (const auto &res : *p.results)
         {
             float fx = res.box.x * scale_x;
@@ -394,7 +374,7 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
             put_text_auto(screen_roi, txt, cv::Point(box.x, std::max(20, box.y - 5)), std::max(0.3, 0.6 * draw_scale),
                           color, 1);
         }
-        draw_pose_overlay(screen_roi, *p.results, scale_x, scale_y, frames_elapsed);
+        draw_pose_overlay(screen_roi, *p.results, scale_x, scale_y);
     }
 
     // 自定义绘制指令（坐标系：inputW×inputH）
@@ -596,26 +576,18 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms)
     logic_frame = state.logic_display_frame;
     disp_fps = state.disp_fps;
     result_frame_id = state.published_frame_seq;
-    /* 必须使用产生结果的源视频帧时间，而不是结果提交完成时间。
-     * 后者会把排队、预处理和 NPU 耗时全部误算成零。 */
-    result_ts_ms = state.frame_steady_ms;
+    result_ts_ms = state.published_steady_ms;
     logic_ts_ms = state.logic_display_ts_ms;
     pthread_mutex_unlock(&g_pCtrl->chn_mtx[chn_id]);
 
-    uint64_t current_ms = frame_timestamp_ms != 0
-                              ? frame_timestamp_ms
-                              : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                          std::chrono::steady_clock::now().time_since_epoch())
-                                                          .count());
+    const uint64_t current_ms = frame_timestamp_ms != 0
+                                    ? frame_timestamp_ms
+                                    : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                                std::chrono::steady_clock::now().time_since_epoch())
+                                                                .count());
 
     if (!logic_frame.empty() && current_ms >= logic_ts_ms && current_ms - logic_ts_ms < 1000)
-    {
         cv::resize(logic_frame, bgr, bgr.size());
-        /* Logic 显示底图来自本次业务结果帧，不再是最新解码帧；此时不应把结果
-         * 再向前预测到被替换掉的实时画面时间。 */
-        if (result_ts_ms != 0)
-            current_ms = result_ts_ms;
-    }
 
     RenderParams params;
     params.chnId = chn_id;
@@ -627,7 +599,7 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms)
     params.infer_fps = algorithm_get_infer_fps(chn_id);
     params.result_frame_id = result_frame_id;
     params.result_age_ms = result_ts_ms != 0 && current_ms >= result_ts_ms
-                               ? static_cast<int64_t>(current_ms - result_ts_ms)
+                               ? static_cast<int64_t>(std::min<uint64_t>(current_ms - result_ts_ms, 200))
                                : 0;
     params.target_mask = DrawCommand::DISPLAY;
     params.show_system_overlays = true;

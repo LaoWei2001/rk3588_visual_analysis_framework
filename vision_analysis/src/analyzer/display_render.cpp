@@ -98,7 +98,7 @@ uint64_t calcBufMapOffset(int chnId, int bytesPerPixel)
  * 零尺寸帧保护：RTSP 重连期间上游可能推入无效帧，在入口早退避免 RGA 崩溃。
  */
 void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt, int srcWidth, int srcHeight, int srcHStride,
-                           int srcVStride, uint64_t frameSteadyMs)
+                           int srcVStride)
 {
     static constexpr int SCREEN_BPP = 3;
     char *pFront = *g_pCtrl->pDispBuffer;
@@ -181,7 +181,7 @@ void commitImgtoDispBufMap(int chnId, const void *pSrcData, int srcFmt, int srcW
     }
 
     /* 显示和录像共用同一个纯渲染函数；这里只负责写入显示缓冲。 */
-    render_channel_view(staging_view, chnId, frameSteadyMs);
+    render_channel_view(staging_view, chnId);
 
     /* BGR → RGB（GTK 期望 RGB），再 copyTo front tile（持 display_lock 防撕裂）。
      * 本通道 swap_rb=1 时故意跳过这步：GTK 把 BGR 当 RGB 解析 → 屏幕上 R/B 互换显示

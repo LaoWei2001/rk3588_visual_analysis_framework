@@ -16,8 +16,8 @@
  *     → commitImgtoDispBufMap (RGA 缩放 + overlay + framebuffer)
  *
  * 与推理结果的关系（有意设计）：
- *   显示的是最新解码帧，叠加结果来自共享的 last_results（可能旧几帧），
- *   由 commitImgtoDispBufMap 内部用源帧时间与卡尔曼速度补偿框、姿态和逐目标掩码延迟。
+ *   显示的是最新解码帧，叠加的框来自共享的 last_results（可能旧几帧），
+ *   由 commitImgtoDispBufMap 内部用卡尔曼速度外推补偿管线延迟。
  *   这是实时预览的合理取舍；logic/上报路径用严格同帧匹配的数据。
  *
  * 帧池设计要点（见 DispFramePool 注释）：
@@ -75,9 +75,9 @@ extern "C" void *display_worker_thread(void *arg)
          *   front 槽由本线程独占直到下次 swap_front_if_dirty。
          *
          * overlay 在 commitImgtoDispBufMap 内读取共享 last_results，
-         * 按结果源帧到当前显示帧的真实时间差做运动外推。*/
+         * 按 result_age_ms 做卡尔曼速度外推绘制框（实时平滑预览）。*/
         commitImgtoDispBufMap(task.chnId, dq.pool.front_buf(), task.srcFmt, task.srcWidth, task.srcHeight,
-                              task.srcHStride, task.srcVStride, task.frameSteadyMs);
+                              task.srcHStride, task.srcVStride);
     }
 
     return nullptr;

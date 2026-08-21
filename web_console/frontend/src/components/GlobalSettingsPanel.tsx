@@ -35,6 +35,7 @@ export interface GlobalSettingsData {
   tile_rows: number
   tile_cols: number
   max_fps: number
+  queue_size: number
   channel_threads: number
   tracker_enable: number
   tracker_iou_thresh: number
@@ -50,7 +51,7 @@ export const DEFAULT_GLOBAL_SETTINGS: GlobalSettingsData = {
   enable_display: 0,
   disp_width: 640, disp_height: 640,
   tile_rows: 1, tile_cols: 1,
-  max_fps: 25,
+  max_fps: 25, queue_size: 1,
   channel_threads: 3,
   tracker_enable: 1, tracker_iou_thresh: 0.3,
   tracker_max_miss: 30, tracker_min_hits: 3,
@@ -84,6 +85,7 @@ export default function GlobalSettingsPanel({ settings: s, onChange }: Props) {
             <NumField label="显示窗口行数" value={s.tile_rows}       def={1}   onChange={v => set('tile_rows', v)} />
             <NumField label="显示窗口列数" value={s.tile_cols}       def={1}   onChange={v => set('tile_cols', v)} />
             <NumField label="最大 FPS"     value={s.max_fps}         def={25}  onChange={v => set('max_fps', v)} />
+            <NumField label="队列深度"     value={s.queue_size}      def={1}    onChange={v => set('queue_size', v)} />
             <NumField label="通道线程"     value={s.channel_threads} def={3}    onChange={v => set('channel_threads', v)} />
           </div>
 

@@ -434,6 +434,7 @@ extern "C" void *config_monitor_thread_func(void *arg)
             algorithm_update_thresh(channel.id, channel);
             algorithm_update_detect_classes(channel.id, channel);
         }
+        algorithm_update_queue_size(base_applied_cfg.queue_size);
 
         if (!analyzer_publish_runtime_snapshot(base_applied_cfg, base_generation, logic_changed_channels,
                                                tracker_reset_channels))

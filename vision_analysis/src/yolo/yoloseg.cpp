@@ -4,7 +4,6 @@
 #include <cstring>
 #include <rga/im2d.h>
 #include <set>
-#include <utility>
 
 static const int ANCHORS[3][6] = {{10, 13, 16, 30, 33, 23}, {30, 61, 62, 45, 59, 119}, {116, 90, 156, 198, 373, 326}};
 
@@ -618,12 +617,16 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
         cv::resize(src_image, dst_image, cv::Size(model_w_, model_h_), 0, 0, cv::INTER_LINEAR);
     }
 
-    /* 3. 为每个目标生成独立的裁剪掩码。
-     * 旧实现把所有目标合成整图 mask 并挂到第一个结果上，显示端无法对不同运动方向
-     * 的目标分别做延迟补偿。现在 boxMask 与同一个 AlgoResult::box 一一对应，尺寸也
-     * 与 box 相同；显示时只需移动目标 ROI，不需要平移整张 640x640 掩码。 */
+    // 3. Crop mask
+    // This part generates a combined mask for the whole image (model_h_ x model_w_)
+    cv::Mat all_mask_in_one = cv::Mat::zeros(model_h_, model_w_, CV_8UC1);
+    // NMS may have changed the boxes, we must use the ones inside the model
+    // The mask generation happens inside model_w_ x model_h_ frame
+    // original box on `model_w_ x model_h_`: x1, y1, x2, y2 from filterBoxes (using indices arrays)
     for (int b = 0; b < boxes_num; b++)
     {
+        // Reconstruct box within the model image space before reversing padding
+        // Because algorithm filters masks using the bounding box
         float x1 = validModelBoxes[b].x;
         float y1 = validModelBoxes[b].y;
         float x2 = x1 + validModelBoxes[b].width;
@@ -640,16 +643,35 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
             continue;
         const cv::Rect roi(x_start, y_start, x_end - x_start, y_end - y_start);
         cv::Mat object_mask = seg_mask.row(b).reshape(1, model_h_)(roi);
+        cv::Mat output_roi = all_mask_in_one(roi);
         cv::Mat positive = object_mask > 0.0f;
-        const cv::Rect &output_box = filtered_results[b].box;
-        if (output_box.width <= 0 || output_box.height <= 0)
-            continue;
+        cv::Mat unassigned = output_roi == 0;
+        cv::bitwise_and(positive, unassigned, positive);
+        output_roi.setTo(cv::Scalar(cls_id + 1), positive);
+    }
 
-        cv::Mat resized_positive;
-        cv::resize(positive, resized_positive, output_box.size(), 0, 0, cv::INTER_NEAREST);
-        cv::Mat class_mask = cv::Mat::zeros(output_box.size(), CV_8UC1);
-        class_mask.setTo(cv::Scalar(cls_id + 1), resized_positive);
-        filtered_results[b].boxMask = std::move(class_mask);
+    // 4. Reverse the padding and scale back to the original image dimensions
+    // We only take the part of all_mask_in_one that maps to the original image
+    int cropped_width = model_w_ - lb.dw * 2;
+    int cropped_height = model_h_ - lb.dh * 2;
+    // ensure within bounds
+    if (cropped_width <= 0 || cropped_height <= 0)
+    {
+        for (auto &r : filtered_results)
+            results.push_back(r);
+        return validCount;
+    }
+
+    cv::Mat cropped_seg = all_mask_in_one(cv::Rect(lb.dw, lb.dh, cropped_width, cropped_height)).clone();
+    cv::Mat final_mask_out;
+    cv::resize(cropped_seg, final_mask_out, cv::Size(ori_in_width, ori_in_height), 0, 0,
+               cv::INTER_NEAREST); // use NEAREST to preserve class ids
+
+    // Attach mask to the first result to avoid passing big arrays across structures separately
+    // The mask covers the full original image dimensions.
+    if (!filtered_results.empty())
+    {
+        filtered_results[0].boxMask = final_mask_out;
     }
 
     for (auto &r : filtered_results)

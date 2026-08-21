@@ -12,7 +12,7 @@
  *      - 传统算法通道(infer_enable=false)：同步调 process_channel_results（持 g_process_mtx，ctx->results 为空）
  *      - 显示：不论是否推理，均将最新解码帧推入 g_disp_queues（单槽覆盖）
  *
- * 每 5 秒打印一次每通道的 recv/throttle/enq/replace/drop 统计。
+ * 每 5 秒打印一次每通道的 recv/throttle/enq/drop 统计。
  */
 
 #include <algorithm>
@@ -37,8 +37,7 @@ struct FeedStats
 {
     uint64_t recv = 0;      /* appsink 收到的总帧数 */
     uint64_t enq = 0;       /* 成功入推理队列的帧数 */
-    uint64_t replace = 0;   /* 用新帧替换尚未处理的旧 pending 帧 */
-    uint64_t drop = 0;      /* 未能送入推理引擎的帧数（停机、重载或帧导入失败） */
+    uint64_t drop = 0;      /* 推理队列满、被丢弃的帧数 */
     uint64_t throttle = 0;  /* FPS 节流跳过的帧数 */
     uint64_t log_last_ms = 0;
     uint64_t next_due_us = 0; /* FPS 节流：下次允许推理的时刻（微秒） */
@@ -267,7 +266,6 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
                 dq.task.srcHeight = imgDesc.height;
                 dq.task.srcHStride = imgDesc.horStride;
                 dq.task.srcVStride = imgDesc.verStride;
-                dq.task.frameSteadyMs = frame_steady_ms;
                 dq.pool.publish();
                 dq.has_task = 1;
                 pthread_mutex_unlock(&dq.mtx);
@@ -286,15 +284,11 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
             ch, imgData, imgDesc.fd, imgDesc.width, imgDesc.height, fmt_int, imgDesc.horStride, imgDesc.verStride,
             current_frame_seq, raw_frame.frame_steady_ms, raw_frame.frame_unix_ms);
         if (enq_ret > 0)
-        {
             g_feed[ch].enq++;
-            if (enq_ret == 2)
-                g_feed[ch].replace++;
-        }
         else
         {
             g_feed[ch].drop++;
-            /* 暂时未能送入引擎：小步快追，下次提前尝试。 */
+            /* 队列满：小步快追，下次提前允许推理 */
             if (throttle_period_us > 0)
                 g_feed[ch].next_due_us = steady_now_us() + throttle_period_us / 2ULL;
         }
@@ -317,8 +311,6 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
         g_feed[ch].enq = 0;
         const uint64_t drop_s = g_feed[ch].drop;
         g_feed[ch].drop = 0;
-        const uint64_t replace_s = g_feed[ch].replace;
-        g_feed[ch].replace = 0;
         const uint64_t throttle_s = g_feed[ch].throttle;
         g_feed[ch].throttle = 0;
 
@@ -329,11 +321,10 @@ int videoOutHandle(char *imgData, ImgDesc_t imgDesc)
         const int show_perf = app_ctrl_get_performance_display();
         if (show_perf)
         {
-            log_printf_threadsafe("[Feed][ch%02d][5s] recv=%llu throttle=%llu enq=%llu replace=%llu "
+            log_printf_threadsafe("[Feed][ch%02d][5s] recv=%llu throttle=%llu enq=%llu "
                                   "qdrop=%llu(%.1f%%) infer=%.1ffps\n",
                                   ch, (unsigned long long)recv_s, (unsigned long long)throttle_s,
-                                  (unsigned long long)enq_s, (unsigned long long)replace_s,
-                                  (unsigned long long)drop_s, q_drop_rate, infer_fps_val);
+                                  (unsigned long long)enq_s, (unsigned long long)drop_s, q_drop_rate, infer_fps_val);
         }
     }
 
