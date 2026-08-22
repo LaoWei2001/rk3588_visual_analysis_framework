@@ -75,6 +75,52 @@ class DeliveryConfigurationTest(unittest.TestCase):
             self.assertEqual(saved["contract"]["origin"], "custom")
             self.assertTrue(saved["contract"]["revision"])
             self.assertEqual(listed["contracts"][0]["owner_logic"], "logic_demo")
+            self.assertFalse(listed["contracts"][0]["package_template"])
+
+    def test_saving_existing_template_overwrites_active_content_without_duplicate_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.fixture(root)
+            body = {
+                "id": "logic_demo.http", "version": 1, "label": "程序包模板",
+                "owner_logic": "logic_demo", "event_types": ["demo"],
+                "adapter": "http", "media": [],
+                "request": {"method": "POST", "path": "/events", "encoding": "json"},
+                "mapping": [{
+                    "source": "fields.score", "target": "score", "location": "body",
+                    "type": "number", "required": True,
+                }],
+            }
+            (app / "report_templates" / "package.json").write_text(
+                json.dumps(body), encoding="utf-8",
+            )
+            legacy_dir = root / ".data" / "demo" / "report_contracts"
+            legacy_dir.mkdir(parents=True)
+            (legacy_dir / "logic_demo.http.json").write_text(
+                json.dumps({**body, "version": 9, "label": "历史隐藏覆盖"}),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(delivery_config, "APPS_ROOT", root),
+                patch.object(app_data_dir, "APPS_ROOT", root),
+            ):
+                first = {**body, "version": 2, "label": "第一次修改"}
+                second = {**body, "version": 3, "label": "最终模板名称"}
+                asyncio.run(delivery_config.save_report_contract("demo", body["id"], first))
+                saved = asyncio.run(
+                    delivery_config.save_report_contract("demo", body["id"], second),
+                )
+                listed = asyncio.run(delivery_config.get_report_contracts("demo"))
+
+            package_path = app / "report_templates" / "package.json"
+            custom_path = root / ".data" / "demo" / "report_contracts" / "logic_demo.http.json"
+            self.assertEqual(json.loads(package_path.read_text(encoding="utf-8"))["label"], "最终模板名称")
+            self.assertFalse(custom_path.exists())
+            self.assertEqual(saved["contract"]["label"], "最终模板名称")
+            self.assertEqual(saved["contract"]["origin"], "package")
+            self.assertEqual(len(listed["contracts"]), 1)
+            self.assertEqual(listed["contracts"][0]["label"], "最终模板名称")
+            self.assertTrue(listed["contracts"][0]["package_template"])
 
 
 if __name__ == "__main__":

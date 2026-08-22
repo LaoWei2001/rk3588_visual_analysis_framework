@@ -30,9 +30,9 @@ static bool relay_apply(ChannelContext *ctx, const std::shared_ptr<RelayState> &
     return true;
 }
 
-static ChannelActionResult logic_relay_action(ChannelContext *ctx, const ChannelAction *action)
+static LogicActionResult logic_relay_action(ChannelContext *ctx, const LogicAction *action)
 {
-    ChannelActionResult result;
+    LogicActionResult result;
     if (!ctx || !ctx->state || !action)
     {
         result.handled = false;

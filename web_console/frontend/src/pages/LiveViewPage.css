@@ -397,12 +397,6 @@
   border-color: var(--text2);
 }
 
-.live-view-control-tip {
-  margin-top: 8px;
-  color: var(--text2);
-  font-size: 10px;
-}
-
 .live-view-control-empty {
   height: 100%;
   min-height: 90px;

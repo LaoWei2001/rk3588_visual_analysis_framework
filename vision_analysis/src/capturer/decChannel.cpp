@@ -1,9 +1,9 @@
 #include "decChannel.h"
-#include "../analyzer/analyzer.h"
-#include "../core/app_ctrl.h"
-#include "../core/pause_ctrl.h"
+#include "pipeline/pipeline_runtime.h"
+#include "runtime/app_ctrl.h"
+#include "runtime/pause_ctrl.h"
 #include "gst_opt.h"
-#include "system.h"
+#include "common/logging.h"
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -277,7 +277,7 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
     {
         for (int cid : data->chnIds)
         {
-            ImgDesc_t imgDesc = {0};
+            FrameInputDesc imgDesc = {0};
             imgDesc.chnId = cid;
             imgDesc.width = stFrameDesc.width;
             imgDesc.height = stFrameDesc.height;
@@ -286,7 +286,7 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
             imgDesc.dataSize = map.size;
             imgDesc.fd = stFrameDesc.fd; /* DMA-BUF 零拷贝句柄 */
             snprintf(imgDesc.fmt, sizeof(imgDesc.fmt), "%s", stFrameDesc.strFmt);
-            videoOutHandle((char *)map.data, imgDesc);
+            pipeline_submit_frame((char *)map.data, imgDesc);
         }
         gst_buffer_unmap(buffer, &map);
     }
@@ -504,21 +504,21 @@ static void *busListen(void *para)
             if (pThis->mGstChn.is_file && !pThis->isLoop())
             {
                 g_print("[Ch%d] Local video finished, exiting bus thread safely.\n", pThis->channelId());
-                /* 文件播完：通知 analyzer 逻辑通道已离线，停止推旧框/旧状态 */
+                /* 文件播完：通知 pipeline 逻辑通道已离线，停止推旧框/旧状态 */
                 for (int cid : pThis->mGstChn.chnIds)
-                    analyzer_channel_offline(cid);
+                    pipeline_channel_offline(cid);
                 break; // 跳出外层 while(true)，彻底安全下班
             }
 
-            /* 断流/错误：立即通知 analyzer 所有逻辑通道已离线。
-             * analyzer_channel_offline 会:
+            /* 断流/错误：立即通知 pipeline 所有逻辑通道已离线。
+             * pipeline_channel_offline 会:
              *   - 清空 last_results / draw_cmds (避免旧框冻结在画面上)
              *   - 重置跟踪器 track_id (重连后 ID 从新分配,不与旧目标混淆)
              *   - 重置 feed throttle 时间戳
              * 在所有 chnIds 上调用，因为一条 GstChannel 可能服务多个逻辑通道
              * (例如通过 addTargetChannel 共享同一 RTSP 流)。 */
             for (int cid : pThis->mGstChn.chnIds)
-                analyzer_channel_offline(cid);
+                pipeline_channel_offline(cid);
 
             // 【修复点 2】RTSP掉线等需要重连的情况，必须用 while 死等，绝不把 NULL 漏给上层！
             // 同时检测 mStopRequested，以便流地址热切换时 stop() 能快速中断此循环。
@@ -528,11 +528,11 @@ static void *busListen(void *para)
                 pPipeLine = pThis->mGstChn.pipeline;
                 if (pPipeLine)
                 {
-                    /* 管道重建成功：通知 analyzer 通道恢复上线。
-                     * analyzer_channel_online 会清空旧结果并复位跟踪器，
+                    /* 管道重建成功：通知 pipeline 通道恢复上线。
+                     * pipeline_channel_online 会清空旧结果并复位跟踪器，
                      * 之后的第一帧推理结果将作为全新起点写入 channel_results。*/
                     for (int cid : pThis->mGstChn.chnIds)
-                        analyzer_channel_online(cid);
+                        pipeline_channel_online(cid);
                     break; // 成功拿到新管道，可以跳出死等
                 }
                 // 创建失败（比如网络断了或硬件被锁），原地睡2秒继续试，不准跑去上面！
@@ -577,7 +577,7 @@ static void *initialRtspConnect(void *para)
             continue;
 
         for (int cid : pThis->mGstChn.chnIds)
-            analyzer_channel_online(cid);
+            pipeline_channel_online(cid);
         g_print("[Ch%d] RTSP initial connection recovered; entering bus loop\n", pThis->channelId());
         return busListen(pipeline);
     }

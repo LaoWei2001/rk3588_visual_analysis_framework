@@ -476,7 +476,7 @@ static int g_logic_count = 0;
 struct LogicActionEntry
 {
     const char *name = nullptr;
-    ChannelActionFunc func = nullptr;
+    ChannelLogicActionFunc func = nullptr;
 };
 static LogicActionEntry g_action_registry[MAX_LOGIC_FUNCS];
 static int g_action_count = 0;
@@ -520,7 +520,7 @@ std::vector<std::string> channel_logic_names()
     return names;
 }
 
-void register_logic_action(const char *name, ChannelActionFunc func)
+void register_logic_action(const char *name, ChannelLogicActionFunc func)
 {
     if (!name || !func)
         return;
@@ -538,7 +538,7 @@ void register_logic_action(const char *name, ChannelActionFunc func)
     }
 }
 
-ChannelActionFunc channel_logic_action_get(const char *name)
+ChannelLogicActionFunc channel_logic_action_get(const char *name)
 {
     if (name)
         for (int i = 0; i < g_action_count; ++i)

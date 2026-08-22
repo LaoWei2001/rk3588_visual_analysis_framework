@@ -119,9 +119,9 @@ def load_contracts(
     """Return active contracts by id and immutable contracts by revision."""
     templates = _load_directory(templates_dir, "package")
     custom = _load_directory(custom_dir, "custom")
-    active = {**templates, **custom}
-    # 即使自定义契约覆盖了同 ID 的包内模板，也必须归档两者。旧画布或积压事件可能仍固定到
-    # 被覆盖模板的 revision，遮蔽关系不应破坏它们的可重放性。
+    # 程序包模板是当前源码能力；历史 Web 版本留下的同键 custom 文件不能遮蔽新部署内容。
+    # custom 仍可提供程序包中不存在的新模板。两边的 revision 都会继续归档，旧事件可重放。
+    active = {**custom, **templates}
     revisions = _archive_contracts(
         [*templates.values(), *custom.values()], revisions_dir,
     )

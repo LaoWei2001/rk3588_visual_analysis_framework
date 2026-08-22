@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "label": "JNU objectInvadeDet 图片告警",
+  "description": "兼容旧设备协议：以 application/json 上传告警字段、标注图和原始图 Base64。连接地址请配置为 http://<server>:9200。",
+  "owner_logic": "logic_course_08",
+  "event_types": [
+    "logic_course_08"
+  ],
+  "adapter": "http",
+  "media": [
+    "annotated_image",
+    "raw_image"
+  ],
+  "request": {
+    "method": "POST",
+    "path": "/api/objectInvadeDet",
+    "encoding": "json"
+  },
+  "mapping": [
+    {
+      "source": "constant",
+      "target": "source",
+      "location": "body",
+      "value": "JNU",
+      "type": "string",
+      "required": true
+    },
+    {
+      "source": "fields.server_event_type",
+      "target": "eventType",
+      "location": "body",
+      "required": true
+    },
+    {
+      "source": "event.snap_time",
+      "target": "snapTime",
+      "location": "body",
+      "required": true
+    },
+    {
+      "source": "event.end_time",
+      "target": "endTime",
+      "location": "body",
+      "required": true
+    },
+    {
+      "source": "media.annotated_image",
+      "target": "base64Data",
+      "location": "body",
+      "transform": "base64",
+      "required": true
+    },
+    {
+      "source": "media.raw_image",
+      "target": "base64DataRaw",
+      "location": "body",
+      "transform": "base64",
+      "required": true
+    },
+    {
+      "source": "fields.invade_flag",
+      "target": "invadeFlag",
+      "location": "body",
+      "type": "number",
+      "required": true
+    },
+    {
+      "source": "fields.yuv_width",
+      "target": "yuvWidth",
+      "location": "body",
+      "type": "number",
+      "required": true
+    },
+    {
+      "source": "fields.yuv_height",
+      "target": "yuvHeight",
+      "location": "body",
+      "type": "number",
+      "required": true
+    },
+    {
+      "source": "fields.yuv_flag",
+      "target": "yuvFlag",
+      "location": "body",
+      "required": true
+    }
+  ],
+  "success": {
+    "http_status": [
+      200
+    ],
+    "json_path": "code",
+    "equals": 200
+  }
+}

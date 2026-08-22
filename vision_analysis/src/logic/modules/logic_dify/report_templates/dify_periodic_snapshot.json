@@ -1,5 +1,4 @@
 {
-  "id": "logic_dify.dify_periodic_snapshot",
   "version": 1,
   "label": "Dify 周期截图、提示词和自定义变量",
   "description": "logic_dify 随附模板：上传当前通道标注图片，并发送画布提示词和业务变量",

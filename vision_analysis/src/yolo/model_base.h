@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../analyzer/algoProcess.h"
+#include "inference/inference_types.h"
 #include <opencv2/opencv.hpp>
 #include <pthread.h>
 #include <string>

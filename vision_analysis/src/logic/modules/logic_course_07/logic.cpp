@@ -13,14 +13,14 @@ struct ButtonDemoState
     std::vector<cv::Point> num_loc = {cv::Point(500, 65), cv::Point(500, 130)};
 };
 
-// 返回类型不能是 void，所有执行路径都必须返回 ChannelActionResult，否则属于未定义行为
-static ChannelActionResult logic_course_07_action(ChannelContext *ctx, const ChannelAction *action)
+// 返回类型不能是 void，所有执行路径都必须返回 LogicActionResult，否则属于未定义行为
+static LogicActionResult logic_course_07_action(ChannelContext *ctx, const LogicAction *action)
 {
     if (!ctx || !ctx->state || !action)
     {
         return {false, "ctx or action is null"};
     }
-    ChannelActionResult result;
+    LogicActionResult result;
     if (!*(ctx->state))
     {
         // 第一次按按钮的时候,初始化状态
@@ -96,8 +96,7 @@ REGISTER_LOGIC_ACTION(logic_course_07, logic_course_07_action);
 
     Linux、macOS Bash、Windows PowerShell：
 
-    1. curl -X POST "http://设备IP:8080/api/apps/App名称/channels/通道ID/actions/increment" -H "Content-Type:
-   application/json" -d '{"payload":{}}'
+    1. curl -X POST "http://设备IP:8080/api/apps/App名称/channels/通道ID/actions/increment" -H "Content-Type: application/json" -d '{"payload":{}}'
 
     2. curl -X POST "http://设备IP:8080/api/apps/App名称/channels/通道ID/actions/decrement" -H "Content-Type:
    application/json" -d '{"payload":{}}'
@@ -107,8 +106,10 @@ REGISTER_LOGIC_ACTION(logic_course_07, logic_course_07_action);
 
     示例：
 
-    curl -X POST "http://192.168.2.43:8080/api/apps/test_7_27/channels/0/actions/change" -H "Content-Type:
-   application/json" -d '{"payload":{}}'
+    curl -i -X POST \
+    "http://192.168.2.43:8080/api/apps/test/channels/0/actions/increment" \
+    -H "Content-Type: application/json" \
+    -d '{"payload":{}}'
 
     Windows CMD 需要使用 curl.exe，并对 JSON 中的双引号进行转义：
 

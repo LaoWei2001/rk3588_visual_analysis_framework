@@ -44,6 +44,4 @@ def format_cpp_code(directory='.'):
 
 if __name__ == "__main__":
     # 默认格式化当前路径下所有文件
-    # 你也可以把 '.' 改成你的具体的工程绝对路径，例如 '/userdata/rk3588_visual_analysis_framework'
     format_cpp_code('.')
-    

@@ -668,6 +668,20 @@
   font-size: 11px;
 }
 
+.report-request-preview {
+  margin: 8px 0 0;
+  padding: 12px;
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 6px;
+  background: #090c13;
+  color: #cbd5e1;
+  font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .report-contract-actions {
   display: flex;
   justify-content: flex-end;

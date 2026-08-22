@@ -2,7 +2,6 @@
 
 import json
 import os
-import re
 import shutil
 import time
 from pathlib import Path
@@ -37,15 +36,12 @@ class EventOutboxForwarder:
         templates_dir: Path,
         custom_contracts_dir: Path,
         revisions_dir: Path,
-        history_dir: Path,
     ):
         self.store_dir = store_dir
         self.connections_path = connections_path
         self.templates_dir = templates_dir
         self.custom_contracts_dir = custom_contracts_dir
         self.revisions_dir = revisions_dir
-        self.history_dir = history_dir
-        self.history_dir.mkdir(parents=True, exist_ok=True)
         self.connections: Dict[str, Dict[str, Any]] = {}
         self.contract_revisions: Dict[str, Dict[str, Any]] = {}
         self._media_pending = False
@@ -134,54 +130,6 @@ class EventOutboxForwarder:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, final)
-
-    def _write_history(
-        self, meta: Dict[str, Any], delivery: Dict[str, Any], response: Any = None,
-    ) -> None:
-        event = meta.get("event", {})
-        source = meta.get("source", {})
-        event_id = str(event.get("id", "unknown"))
-        delivery_id = str(delivery.get("id", "delivery"))
-        updated_unix_ms = int(time.time() * 1000)
-        document = {
-            "event_id": event_id,
-            "event_type": event.get("type", ""),
-            "snap_time": event.get("snap_time", ""),
-            "channel_id": source.get("channel_id"),
-            "connection_id": delivery.get("connection_id", ""),
-            "contract_id": delivery.get("contract_id", ""),
-            "contract_revision": delivery.get("contract_revision", ""),
-            "status": delivery.get("status", ""),
-            "attempts": delivery.get("attempts", 0),
-            "http_status": delivery.get("last_http_status", 0),
-            "detail": delivery.get("last_error", ""),
-            "response": response,
-            "updated_unix_ms": updated_unix_ms,
-        }
-        safe_event_id = re.sub(r"[^A-Za-z0-9._-]", "_", event_id)
-        safe_delivery_id = re.sub(r"[^A-Za-z0-9._-]", "_", delivery_id)
-        attempt = max(0, int(delivery.get("attempts", 0)))
-        destination = self.history_dir / (
-            f"{safe_event_id}.{safe_delivery_id}.{attempt}.{time.time_ns()}.json"
-        )
-        temporary = destination.with_suffix(destination.suffix + ".tmp")
-        with temporary.open("w", encoding="utf-8") as stream:
-            json.dump(document, stream, ensure_ascii=False, indent=2)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, destination)
-        limit = max(1, int(os.environ.get("DELIVERY_HISTORY_MAX_RECORDS", "1000")))
-        files = sorted(
-            self.history_dir.glob("*.json"),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-        for expired in files[limit:]:
-            try:
-                expired.unlink()
-            except FileNotFoundError:
-                pass
 
     def _connection(self, delivery: Dict[str, Any]) -> Dict[str, Any]:
         connection_id = str(delivery.get("connection_id", "")).strip()
@@ -290,7 +238,6 @@ class EventOutboxForwarder:
                 delivery["last_error"] = str(exc)
                 delivery.pop("next_retry_unix_ms", None)
                 self._write(event_dir, meta)
-                self._write_history(meta, delivery)
                 continue
             now_ms = time.time() * 1000.0
             if delivery.get("status") == "retry" and now_ms < float(
@@ -312,7 +259,6 @@ class EventOutboxForwarder:
                 delivery["last_error"] = str(exc)
                 delivery.pop("next_retry_unix_ms", None)
                 self._write(event_dir, meta)
-                self._write_history(meta, delivery)
                 continue
 
             attempts = int(delivery.get("attempts", 0)) + 1
@@ -339,7 +285,6 @@ class EventOutboxForwarder:
                     self._schedule_retry(
                         delivery, now_ms, result.detail, result.status_code,
                     )
-                self._write_history(meta, delivery, result.response)
             except MediaNotReadyError as exc:
                 delivery["status"] = "retry"
                 delivery["last_error"] = str(exc)
@@ -349,10 +294,8 @@ class EventOutboxForwarder:
                 delivery["status"] = "invalid"
                 delivery["last_error"] = str(exc)
                 delivery.pop("next_retry_unix_ms", None)
-                self._write_history(meta, delivery)
             except Exception as exc:
                 self._schedule_retry(delivery, now_ms, str(exc))
-                self._write_history(meta, delivery)
             self._write(event_dir, meta)
 
         if all(

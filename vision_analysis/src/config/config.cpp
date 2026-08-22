@@ -3,7 +3,7 @@
  * @brief JSON 配置解析与热加载
  */
 #include "config.h"
-#include "../third_party/json/cJSON.h"
+#include "third_party/json/cJSON.h"
 #include "config_registry.h"
 #include "config_validator.h"
 #include "logic/core/logic_parameters.h"
@@ -556,6 +556,23 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "npu_core");
                 if (cJSON_IsNumber(v))
                     model.npu_core = v->valueint;
+                else if (cJSON_IsString(v) && v->valuestring)
+                {
+                    if (config_utils::to_lower_copy(v->valuestring) == "auto")
+                        model.npu_core = -1;
+                    else
+                    {
+                        fprintf(stderr, "[Config] channel %d model npu_core must be auto, -1, 0, 1 or 2\n", ch.id);
+                        cJSON_Delete(root);
+                        return false;
+                    }
+                }
+                else if (v)
+                {
+                    fprintf(stderr, "[Config] channel %d model npu_core must be a number or 'auto'\n", ch.id);
+                    cJSON_Delete(root);
+                    return false;
+                }
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "detect_classes");
                 if (cJSON_IsArray(v))
                 {

@@ -207,22 +207,19 @@ export default function AppIntegrationModal({ appName, onClose, onToast }: Props
         <button type="button" className="app-integration-button app-integration-button-add"
           onClick={addConnection} disabled={!adapters.length}>＋ 新增投递连接</button>
 
-        <div style={sectionTitle}>当前程序包契约</div>
+        <div style={sectionTitle}>接口模板</div>
         {contracts.map(contract => <div key={contract.id} style={{
-          display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 10, alignItems: 'center',
+          display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'center',
           padding: '8px 10px', borderBottom: '1px solid #2e3352', fontSize: 12,
         }}>
-          <div><strong>{contract.label}</strong><div style={{ color: '#9aa4b2' }}>
-            {contract.id} · {contract.owner_logic || '通用'} · v{contract.version} · {contract.revision.slice(0, 12)}
-          </div></div>
-          <span>{contract.origin === 'custom' ? '应用自定义' : '程序包模板'}</span>
+          <div><strong>{contract.label}</strong></div>
           {contract.origin === 'custom' && <button type="button"
             className="app-integration-button app-integration-button-danger" onClick={async () => {
-            if (!window.confirm(`删除自定义契约 ${contract.id}？`)) return
+            if (!window.confirm(`删除自定义模板“${contract.label}”？`)) return
             try {
               await deleteReportContract(appName, contract.id)
               setContracts(await fetchReportContracts(appName))
-              onToast(`已删除 ${appName} 的自定义契约 ${contract.id}`)
+              onToast(`已删除 ${appName} 的自定义模板“${contract.label}”`)
             } catch (error) { onToast(`删除失败: ${apiErrorMessage(error)}`, false) }
           }}>删除</button>}
         </div>)}

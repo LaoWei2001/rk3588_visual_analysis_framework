@@ -521,7 +521,7 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
 
         env = os.environ.copy()
         control_sock.unlink(missing_ok=True)
-        env["RK_CHANNEL_CONTROL_SOCKET"] = str(control_sock)
+        env["RK_LOGIC_CONTROL_SOCKET"] = str(control_sock)
         env["ASSETS_DIR"] = str(assets_dir)
         env["EVENT_STORE_DIR"] = str(data_dir(app_name) / "event_store")
         env.update(storage_manager.vision_environment())

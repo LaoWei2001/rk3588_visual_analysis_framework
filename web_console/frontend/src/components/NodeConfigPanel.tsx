@@ -157,10 +157,6 @@ function GlobalLogicForm({ node, onUpdate, inputs }: {
       <NumberField min={10} def={200} value={data.poll_interval_ms}
         onChange={value => onUpdate(node.id, { poll_interval_ms: value ?? 200 })} />
     </F>
-    <div className="ncp-hint">
-      连线提供 connected_channels 这一组可选输入；C++ 也可以按通道号读取或遍历应用全部通道。
-      所有方式都使用本 tick 的线程安全 ChannelLogicSnapshot，不需要业务代码加锁。
-    </div>
     <div className="ncp-section-label">已连接的通道数据契约</div>
     {inputs.length === 0
       ? <div className="ncp-hint">尚未连接单通道逻辑；该节点仍可由 C++ 或参数自行选择通道。</div>
@@ -391,7 +387,8 @@ function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
 
       <div className="node-row">
         <F label="NPU 核心">
-          <select value={String(d.npu_core ?? 0)} onChange={e => set('npu_core', +e.target.value)}>
+          <select value={String(d.npu_core ?? -1)} onChange={e => set('npu_core', +e.target.value)}>
+            <option value="-1">自动（推荐）</option>
             <option value="0">核心 0</option>
             <option value="1">核心 1</option>
             <option value="2">核心 2</option>
@@ -731,11 +728,6 @@ function ROIInfo({ node }: { node: Node }) {
           ))}
         </ul>
       )}
-      <div className="ncp-hint" style={{ marginTop: 10 }}>
-        将 ROI 节点连接到视频流节点后，点「绘制/编辑 ROI 区域」即可配置该通道的多个命名区域。
-        ROI 与模型推理解耦；无论是否连接模型，逻辑里都可用
-        ctx-&gt;rois / ctx-&gt;roi_by_name(...) 访问。
-      </div>
     </div>
   )
 }
@@ -776,10 +768,6 @@ function SopInfo({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'] }
         ) : (
           <div className="ncp-roi-status">还没有步骤</div>
         )}
-      </div>
-      <div className="ncp-hint" style={{ marginTop: 10 }}>
-        在画布的 SOP 节点上点「⚙ 配置流程」编排步骤(选区域 + 每步独立参数)；
-        区域沿用上游连接的「ROI 区域」节点。
       </div>
       {moduleParams.length > 0 && (
         <>

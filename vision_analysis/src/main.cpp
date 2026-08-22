@@ -26,7 +26,7 @@
  * 3. capture_bus_thread[N]  — GStreamer bus 监听 + 重连 (DecChannel::init 内部创建, 底层)
  * 4. display_worker[N]      — 异步显示 RGA + framebuffer (main 直接 pthread_create)
  * 5. dispatch_worker[N]     — NPU 结果分发 + channel_logic (main 直接 pthread_create)
- * 6. infer_worker[N]        — NPU 推理 worker (algorithm_init 内部创建, 底层)
+ * 6. infer_worker[N]        — NPU 推理 worker (inference_init 内部创建, 底层)
  * 7. global_logic[N]        — 跨通道全局逻辑轮询 (global_logic_start_all 内部创建)
  * 8. event_image_worker     — 事件图片异步渲染/编码并更新媒体状态 (首次图片事件时创建)
  * 9. event_video_worker     — 报警前后片段异步编码 (首次启用录像时创建)
@@ -55,19 +55,20 @@
 #include <vector>
 
 #include "event/event_report.h"
-#include "analyzer/analyzer.h"
+#include "pipeline/pipeline_runtime.h"
 #include "capturer/decChannel.h"
 #include "config/config.h"
-#include "control/channel_control.h"
-#include "core/app_ctrl.h"
-#include "core/pause_ctrl.h"
-#include "core/process_signals.h"
+#include "control/logic_control.h"
+#include "runtime/app_ctrl.h"
+#include "runtime/pause_ctrl.h"
+#include "runtime/process_signals.h"
 #include "logic/core/channel_logic.h"
 #include "logic/core/global_logic.h"
-#include "player/display.h"
-#include "player/rtsp_streamer.h"
+#include "display/display.h"
+#include "display/display_pipeline.h"
+#include "rtsp/rtsp_streamer.h"
 #include "recorder/event_video_recorder.h"
-#include "system.h"
+#include "common/logging.h"
 
 /* config_monitor_thread_func — 由 app_ctrl.cpp 导出 (C++ mangling) */
 extern "C" void *config_monitor_thread_func(void *arg);
@@ -207,7 +208,7 @@ int main(int argc, char **argv)
     const char *cfgPath = (argc > 1) ? argv[1] : "./assets/config_sop.json";
     int exit_code = 0;
     bool ctrl_initialized = false;
-    bool analyzer_initialized = false;
+    bool pipeline_initialized = false;
     bool config_monitor_started = false;
     bool fd_monitor_started = false;
     std::vector<pthread_t> display_tids;
@@ -269,15 +270,15 @@ int main(int argc, char **argv)
         }
     }
 
-    if (analyzer_init() != 0)
+    if (pipeline_init() != 0)
     {
-        fprintf(stderr, "[FATAL] analyzer init failed\n");
+        fprintf(stderr, "[FATAL] pipeline init failed\n");
         exit_code = -3;
         goto cleanup;
     }
-    analyzer_initialized = true;
+    pipeline_initialized = true;
 
-    if (channel_control_init() != 0)
+    if (logic_control_init() != 0)
         fprintf(stderr, "[Main] WARNING: channel control init failed, web action buttons disabled\n");
 
     g_pCtrl->capturer_count = 0;
@@ -337,9 +338,9 @@ int main(int argc, char **argv)
         printf("[Main] capture_bus_thread[channel=%d] created\n", channel_id);
     }
 
-    for (int i = 0; i < analyzer_get_display_thread_count(); ++i)
+    for (int i = 0; i < pipeline_get_display_thread_count(); ++i)
     {
-        const int channel_id = analyzer_get_display_chn_id(i);
+        const int channel_id = pipeline_get_display_chn_id(i);
         pthread_t tid{};
         const int ret = pthread_create(&tid, nullptr, display_worker_thread, (void *)(intptr_t)channel_id);
         if (ret != 0)
@@ -351,11 +352,11 @@ int main(int argc, char **argv)
         }
     }
 
-    for (int i = 0; i < analyzer_get_dispatch_thread_count(); ++i)
+    for (int i = 0; i < pipeline_get_dispatch_thread_count(); ++i)
     {
-        const int channel_id = analyzer_get_dispatch_chn_id(i);
+        const int channel_id = pipeline_get_dispatch_chn_id(i);
         pthread_t tid{};
-        const int ret = pthread_create(&tid, nullptr, dispatch_worker_thread, (void *)(intptr_t)channel_id);
+        const int ret = pthread_create(&tid, nullptr, pipeline_dispatch_worker, (void *)(intptr_t)channel_id);
         if (ret != 0)
             fprintf(stderr, "[Main] pthread_create dispatch_worker[channel=%d] failed: %s\n", channel_id,
                     strerror(ret));
@@ -366,7 +367,7 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("[Main] infer workers managed by algorithm_init; global logic instances=%d\n",
+    printf("[Main] infer workers managed by inference_init; global logic instances=%d\n",
            global_logic_get_instance_count());
     if (rtsp_streamer_init() != 0)
     {
@@ -416,7 +417,7 @@ cleanup:
     if (ctrl_initialized)
         app_ctrl_request_stop();
     pause_ctrl::resume_all();
-    channel_control_deinit();
+    logic_control_deinit();
 
     /* 配置线程可能重建 capturer，必须先于 capturer 销毁完成 join。 */
     if (fd_monitor_started)
@@ -425,8 +426,8 @@ cleanup:
         pthread_join(g_pCtrl->config_monitor_tid, nullptr);
 
     /* 热重载线程退出后再停止算法，避免它在 shutdown 中途重启模型 worker。 */
-    if (analyzer_initialized)
-        analyzer_request_stop();
+    if (pipeline_initialized)
+        pipeline_request_stop();
 
     if (g_pCtrl)
     {
@@ -447,15 +448,15 @@ cleanup:
     for (pthread_t tid : display_tids)
         pthread_join(tid, nullptr);
 
-    if (analyzer_initialized)
-        analyzer_deinit();
+    if (pipeline_initialized)
+        pipeline_deinit();
 
     /* 先排空事件持久化队列，其中可能还会向录像器提交最后一批任务。 */
     event_report_deinit();
     event_video_recorder_deinit();
 
-    if (analyzer_initialized)
-        analyzer_destroy_display_queues();
+    if (pipeline_initialized)
+        pipeline_destroy_display_queues();
     dispBufferUnmap();
     if (ctrl_initialized)
         app_ctrl_deinit();

@@ -4,12 +4,6 @@ cmake_minimum_required(VERSION 3.10.2)
 # 从根上消除 cv:: 的红波浪线，且永远和真实编译保持一致（不用再往 third_party 拷 opencv2）。
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-STRING(REGEX REPLACE ".*/(.*)" "\\1" CURRENT_FOLDER ${CMAKE_CURRENT_SOURCE_DIR})
-MESSAGE("current project: " ${CURRENT_FOLDER})
-
-set(CMAKE_SYSTEM_NAME Linux)
-set(CMAKE_CROSSCOMPILING TRUE)
-
 cmake_host_system_information(RESULT arch_value QUERY OS_PLATFORM)
 message(STATUS "architecture: " ${arch_value})
 
@@ -37,7 +31,7 @@ if((NOT "${arch_value}" STREQUAL "armv7l") AND (NOT "${arch_value}" STREQUAL "aa
 endif()
 # ===================== 交叉编译工具链 END =====================
 
-project(${CURRENT_FOLDER})
+project(vision_analysis LANGUAGES C CXX)
 add_definitions(-Wall -Wpointer-arith -O3 -ffast-math)
 
 # ======================== third_party helpers =========================
@@ -102,9 +96,11 @@ set(custom_libs
 
 aux_source_directory(${PROJECT_SOURCE_DIR}/src                          dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/config                   dir_srcs)
-aux_source_directory(${PROJECT_SOURCE_DIR}/src/core                     dir_srcs)
+aux_source_directory(${PROJECT_SOURCE_DIR}/src/runtime                  dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/capturer                 dir_srcs)
-aux_source_directory(${PROJECT_SOURCE_DIR}/src/analyzer                 dir_srcs)
+aux_source_directory(${PROJECT_SOURCE_DIR}/src/pipeline                 dir_srcs)
+aux_source_directory(${PROJECT_SOURCE_DIR}/src/inference                dir_srcs)
+aux_source_directory(${PROJECT_SOURCE_DIR}/src/tracking                 dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/control                  dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/gpio                     dir_srcs)
 # 通道逻辑位于 src/logic/modules/<logic_name>/，全局逻辑位于
@@ -155,7 +151,8 @@ add_custom_command(
     VERBATIM
 )
 list(APPEND dir_srcs "${logic_catalog_cpp}")
-aux_source_directory(${PROJECT_SOURCE_DIR}/src/player                   dir_srcs)
+aux_source_directory(${PROJECT_SOURCE_DIR}/src/display                  dir_srcs)
+aux_source_directory(${PROJECT_SOURCE_DIR}/src/rtsp                     dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/yolo                     dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/recorder                 dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/event                    dir_srcs)

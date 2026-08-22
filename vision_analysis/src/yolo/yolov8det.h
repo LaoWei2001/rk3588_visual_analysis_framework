@@ -15,7 +15,7 @@ class YoloV8Det : public ModelBase
 
     virtual bool infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat *perf = nullptr) override;
 
-    /* ---- 零拷贝接口: 与 YOLO (v5) 完全对称, 让 algoProcess 走 RGA 直写 NPU 路径 ---- */
+    /* ---- 零拷贝接口: 与 YOLO (v5) 完全对称, 让 inference_engine 走 RGA 直写 NPU 路径 ---- */
     virtual int get_input_fd() const override
     {
         return in_mem_ ? in_mem_->fd : -1;

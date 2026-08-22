@@ -194,15 +194,6 @@
   }
 }
 
-.flow-hint {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px 10px;
-  font-size: 11px;
-  color: var(--text2);
-}
-
 .tb-btn.import     { color: #c4b5fd; border-color: #7c3aed; }
 .tb-btn.add-stream { color: #93c5fd; border-color: #2563eb; }
 .tb-btn.add-model  { color: #86efac; border-color: #16a34a; }

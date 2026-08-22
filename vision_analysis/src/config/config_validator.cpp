@@ -209,6 +209,11 @@ bool ConfigValidator::validate_channels(const AppConfig &cfg, std::vector<Valida
                 errors.push_back({mp + ".threshold", "obj_thresh/nms_thresh必须在[0,1]范围内"});
                 valid = false;
             }
+            if (model.npu_core < -1 || model.npu_core > 2)
+            {
+                errors.push_back({mp + ".npu_core", "必须是auto(-1)、0、1或2"});
+                valid = false;
+            }
         }
     }
 

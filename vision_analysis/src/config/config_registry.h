@@ -4,7 +4,7 @@
  */
 #pragma once
 
-#include "../third_party/json/cJSON.h"
+#include "third_party/json/cJSON.h"
 #include <cstddef>
 #include <functional>
 #include <string>

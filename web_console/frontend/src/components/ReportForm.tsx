@@ -15,6 +15,7 @@ type Delivery = {
   enabled: boolean
   connection_id: string
   contract_id: string
+  contract_label?: string
   contract_revision: string
   media: MediaKind[]
   when?: { event_types?: string[] }
@@ -59,9 +60,9 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
     setContractEditor(undefined)
   }
 
-  useEffect(() => {
+  const loadCatalog = useCallback(() => {
     if (!appName) return
-    Promise.all([fetchReportContracts(appName), fetchAppLogics(appName)])
+    return Promise.all([fetchReportContracts(appName), fetchAppLogics(appName)])
       .then(([availableContracts, logics]) => {
         setContracts(availableContracts)
         setLogicDefs([
@@ -74,6 +75,8 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
         setLogicDefs([])
       })
   }, [appName])
+
+  useEffect(() => { loadCatalog() }, [loadCatalog])
 
   const refreshEvents = useCallback(() => {
     if (!appName) return
@@ -100,24 +103,26 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
     enabled: true,
     connection_id: '',
     contract_id: '',
+    contract_label: '',
     contract_revision: '',
     media: [],
   }
   const reportEnabled = policy.enabled !== false && delivery.enabled !== false
-  const selectedContract = contracts.find(item => item.id === delivery.contract_id)
   const logic = logicDefs.find(item => item.name === String(data.logic_name ?? ''))
   const declaredFields = useMemo(() => logic?.report_fields ?? [], [logic])
   const declaredEventTypes = useMemo(() => logic?.event_types ?? [], [logic])
   const declaredEventTypeIds = new Set(declaredEventTypes.map(item => item.id))
-  const compatibleContracts = contracts.filter(contract =>
-    (!contract.owner_logic || contract.owner_logic === logic?.name)
-    && (contract.event_types.length === 0
-      || contract.event_types.some(eventType => declaredEventTypeIds.has(eventType))))
+  const declaredTemplateIds = new Set(logic?.report_template_ids ?? [])
+  const hasExactTemplateCatalog = Array.isArray(logic?.report_template_ids)
+  const compatibleContracts = contracts.filter(contract => {
+    const belongsToLogicFolder = hasExactTemplateCatalog
+      ? declaredTemplateIds.has(contract.id)
+      : contract.package_template === true && contract.owner_logic === logic?.name
+    return belongsToLogicFolder && (contract.event_types.length === 0
+      || contract.event_types.some(eventType => declaredEventTypeIds.has(eventType)))
+  })
+  const selectedContract = compatibleContracts.find(item => item.id === delivery.contract_id)
   const selectedConnection = connections[delivery.connection_id]
-  const contractUpdateAvailable = Boolean(
-    selectedContract && delivery.contract_revision
-    && selectedContract.revision !== delivery.contract_revision,
-  )
   const compatibleConnections = Object.entries(connections).filter(([, connection]) =>
     selectedContract && connection.adapter === selectedContract.adapter)
   const configuredMediaChannel = Number(data.media_source_channel_id ?? -1)
@@ -137,17 +142,29 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
     })
   }
 
+  useEffect(() => {
+    if (!selectedContract || delivery.contract_revision === selectedContract.revision) return
+    patchDelivery({
+      contract_label: selectedContract.label,
+      contract_revision: selectedContract.revision,
+      media: copy(selectedContract.media),
+    })
+    setPreview(null)
+    setTestResult(null)
+  }, [selectedContract?.id, selectedContract?.revision, delivery.contract_revision])
+
   const selectConnection = (connectionId: string) => patchDelivery({ connection_id: connectionId })
 
   const applySelectedContract = (contractId: string) => {
     const contract = contracts.find(item => item.id === contractId)
     if (!contract) {
-      patchDelivery({ contract_id: '', contract_revision: '', connection_id: '', media: [] })
+      patchDelivery({ contract_id: '', contract_label: '', contract_revision: '', connection_id: '', media: [] })
       return
     }
     const keepConnection = connections[delivery.connection_id]?.adapter === contract.adapter
     patchDelivery({
       contract_id: contract.id,
+      contract_label: contract.label,
       contract_revision: contract.revision,
       connection_id: keepConnection ? delivery.connection_id : '',
       media: copy(contract.media),
@@ -194,32 +211,27 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
     })
     patchDelivery({
       contract_id: saved.id,
+      contract_label: saved.label,
       contract_revision: saved.revision,
       connection_id: connections[delivery.connection_id]?.adapter === saved.adapter
         ? delivery.connection_id : '',
       media: copy(saved.media),
     })
     setPreview(null)
-    setTestResult({ ok: true, detail: '应用自定义契约已保存，并已绑定到当前上报节点的新 revision。' })
+    setTestResult({ ok: true, detail: '接口模板已保存并应用。' })
   }
 
   return <div className="ncp-form">
     <label className="node-toggle ncp-top-toggle">
       <input type="checkbox" checked={reportEnabled}
         onChange={event => patchDelivery({ enabled: event.target.checked })} />
-      上报开关（{reportEnabled ? '已开启' : '已关闭'}）
+      启用上报
     </label>
-    <div style={{ fontSize: 12, color: '#94a3b8', marginTop: -6, marginBottom: 6 }}>
-      关闭后等同于未连接上报节点：不创建告警箱记录，也不进入上传队列。
-    </div>
-    <div className="ncp-hint">
-      C++ 只提交 EventRequest 和算法 fields。服务器字段、固定值、媒体与成功条件来自接口模板。
-    </div>
     <div className="report-delivery-card">
       {isGlobalReport && hasImageMedia && <div className="report-mapping-help">
         {channelIds.length
-          ? `上报图片会拼接画布连入的全部通道（${channelIds.map(channelId => `通道 ${channelId}`).join('、')}）。`
-          : '当前没有画布输入；上报图片使用 EventRequest.source_channel_id 选择的通道。'}
+          ? `图片来源：${channelIds.map(channelId => `通道 ${channelId}`).join('、')}`
+          : '图片来源由事件指定。'}
       </div>}
       {isGlobalReport && hasVideoMedia && <Field label="事件视频来源通道">
         <select
@@ -232,41 +244,34 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
             <option key={channelId} value={channelId}>通道 {channelId}</option>)}
         </select>
         <div className="report-mapping-help">
-          只有该通道会长期保留事件视频预录。EventRequest.source_channel_id 仍可动态选择
-          事件和图片来源，但不会改变视频通道，也不会扩大预录范围。
+          仅预录所选通道。
         </div>
       </Field>}
       <Field label="接口模板">
-        <select value={delivery.contract_id} onChange={event => applySelectedContract(event.target.value)}>
+        <select value={delivery.contract_id}
+          onFocus={() => { void loadCatalog() }}
+          onChange={event => applySelectedContract(event.target.value)}>
           <option value="">请选择接口模板</option>
           {compatibleContracts.map(contract =>
             <option key={contract.id} value={contract.id}>
-              {contract.label} · {contract.origin === 'custom' ? '应用自定义' : '程序包'} · v{contract.version}
+              {contract.label}
             </option>)}
         </select>
+        {logic && compatibleContracts.length === 0 && <div className="report-contract-error">
+          当前逻辑函数文件夹没有声明可用的上报模板 JSON。
+        </div>}
       </Field>
 
       <Field label="投递连接">
         <select value={delivery.connection_id} disabled={!selectedContract}
           onChange={event => selectConnection(event.target.value)}>
-          <option value="">请选择与契约兼容的连接</option>
+          <option value="">请选择投递连接</option>
           {compatibleConnections.map(([id, connection]) =>
             <option key={id} value={id}>{id} · {connection.adapter}</option>)}
         </select>
       </Field>
 
-      {selectedContract && <div className="report-mapping-help">
-        {selectedContract.description || selectedContract.label}
-        {' '}· 当前模板 revision {selectedContract.revision.slice(0, 12)}
-      </div>}
-      {contractUpdateAvailable && selectedContract && <div className="report-contract-error">
-        此节点固定使用旧 revision {delivery.contract_revision.slice(0, 12)}；当前模板已有新 revision。
-        <button type="button" onClick={() => applySelectedContract(selectedContract.id)}>升级到当前模板</button>
-      </div>}
       <div className="report-event-actions">
-        <button type="button" className="report-event-button" disabled={Object.keys(connections).length === 0}
-          title={Object.keys(connections).length === 0 ? '请先在当前程序的应用集成中创建投递连接' : ''}
-          onClick={() => setContractEditor(null)}>＋新建接口模板</button>
         <button type="button" className="report-event-button" disabled={!selectedContract}
           onClick={() => setContractEditor(selectedContract ?? null)}>编辑当前模板</button>
       </div>
@@ -281,10 +286,10 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
               adapter={selectedContract?.adapter ?? Object.values(connections)[0]?.adapter ?? 'http'}
               contract={contractEditor}
               logicName={logic?.name ?? ''}
-              logicLabel={logic?.label || logic?.name || String(data.logic_name ?? '')}
               eventTypes={declaredEventTypes.map(item => item.id)}
               reportFields={declaredFields}
-              existingContractIds={contracts.map(item => item.id)}
+              connection={selectedConnection}
+              deliveryId={delivery.id}
               onSaved={contractSaved}
               onDirtyChange={setEditorDirty}
             />
@@ -305,7 +310,7 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
           <label className={eventTypes.length === 0 ? 'selected' : ''}>
             <input type="radio" name={`report-event-type-${node.id}`}
               checked={eventTypes.length === 0} onChange={() => setEventTypes([])} />
-            <span><strong>全部事件</strong><small>不设置过滤，接收当前算法产生的所有事件</small></span>
+            <span><strong>全部事件</strong></span>
           </label>
           {declaredEventTypes.map(item => (
             <label key={item.id} className={selectedEventTypes.includes(item.id) ? 'selected' : ''}>
@@ -314,7 +319,6 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
               <span>
                 <strong>{item.label || item.id}</strong>
                 <code>{item.id}</code>
-                {item.help && <small>{item.help}</small>}
               </span>
             </label>
           ))}
@@ -339,10 +343,6 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
 
         <details className="report-extra-inputs">
           <summary>查看当前模板字段对接</summary>
-          <div className="report-mapping-help">
-            投递绑定固定使用当前 revision。编辑自定义契约或基于程序包模板创建新契约后，
-            请重新选择它，明确把该上报节点升级到新 revision。
-          </div>
           {selectedContract.mapping.map((item, index) =>
             <div key={`${item.target}-${index}`} className="report-map-preview">
               {item.source === 'constant'
@@ -353,7 +353,7 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
               {item.required ? ' · 必填' : ''}
             </div>)}
           {declaredFields.length > 0 && <div className="report-mapping-help">
-            当前 logic 声明的算法字段：{declaredFields.map(field => field.key).join('、')}
+            可用算法字段：{declaredFields.map(field => field.key).join('、')}
           </div>}
         </details>
       </>}
@@ -393,7 +393,7 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
 
     <div className="report-advanced-section">
       <div className="report-section-title">请求预览与测试发送</div>
-      <Field label="本地事件（示例事件只能预览，真实事件才能测试发送）">
+      <Field label="预览数据">
         <select value={eventId} onChange={event => setEventId(event.target.value)}>
           <option value="">示例事件</option>
           {localEvents.map(event => <option key={event.id} value={event.id}>
@@ -413,7 +413,6 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
           title={!reportEnabled ? '请先开启上报' : !eventId ? '请先选择一条真实本地事件' : ''}
           onClick={() => runPreview(true)}>测试发送</button>
       </div>
-      {!templateReady && <div className="report-mapping-help">请先选择发送连接和接口模板。</div>}
       {preview && <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{JSON.stringify(preview, null, 2)}</pre>}
       {testResult && <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{JSON.stringify(testResult, null, 2)}</pre>}
     </div>

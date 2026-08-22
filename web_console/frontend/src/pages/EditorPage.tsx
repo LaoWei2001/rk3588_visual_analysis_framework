@@ -79,7 +79,8 @@ const DEFAULT_RTSP_URL = 'rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels
 const NODE_DEFAULTS: Record<string, Record<string, unknown>> = {
   stream: { src_type: 'rtsp', url: DEFAULT_RTSP_URL, video_enc: 'h264', channel_id: 0 },
   model:  { enable: true, model_type: 'yolov8_det',
-            model_path: '', label_path: '', obj_thresh: 0.3, nms_thresh: 0.45, detect_classes: [] },
+            model_path: '', label_path: '', obj_thresh: 0.3, nms_thresh: 0.45,
+            detect_classes: [], npu_core: -1 },
   roi:    {},
   logic:  { logic: '' },
   sop:    { target_label: '', reset_sec: 5, end_mode: 'leave', end_zone: '', end_dwell_sec: 0, report_normal: false, steps: [] },
@@ -571,9 +572,9 @@ export default function EditorPage() {
     const id = uid(nodeType)
     setNodes(ns => {
       const data = { ...(NODE_DEFAULTS[nodeType] ?? {}) }
-      // 新增 YOLO 节点按现有模型数量循环绑定 Core 0/1/2，避免默认全部压到 Core 0。
+      // 新增 YOLO 节点默认交给 RKNN runtime 自动调度；仍可在节点面板手工固定核心。
       if (nodeType === 'model')
-        data.npu_core = ns.filter(n => n.type === 'model').length % 3
+        data.npu_core = -1
       // 一个上报节点固定一条投递，并使用节点级唯一 ID。
       if (nodeType === 'report') {
         data.report_policy = {
@@ -639,14 +640,13 @@ export default function EditorPage() {
     let probe = 0
     const nextFreeCh = () => { while (usedCh.has(probe)) probe++; usedCh.add(probe); return probe }
 
-    let nextModelCore = nodesRef.current.filter(n => n.type === 'model').length
     const newNodes: Node[] = clip.nodes.map(n => {
       const newId = uid(n.type ?? 'node')
       idMap.set(n.id, newId)
       const data = { ...(n.data as Record<string, unknown>) }
       if (n.type === 'stream') data.channel_id = nextFreeCh()
-      // 粘贴出的 YOLO 节点视为新节点，同样继续 0/1/2 轮询分配。
-      if (n.type === 'model') data.npu_core = (nextModelCore++) % 3
+      // 粘贴出的模型保留原绑核选择；缺省时使用 RKNN runtime 自动调度。
+      if (n.type === 'model' && data.npu_core == null) data.npu_core = -1
       if (n.type === 'globalLogic') data.instance_id = `global_${newId}`
       return { ...n, id: newId, selected: true,
                position: { x: n.position.x + OFFSET, y: n.position.y + OFFSET }, data } as Node
@@ -973,7 +973,7 @@ export default function EditorPage() {
       if (!delivery || !String(delivery.connection_id ?? '').trim()
           || !String(delivery.contract_id ?? '').trim()
           || !String(delivery.contract_revision ?? '').trim()) {
-        showToast('存在已开启但未完整选择“接口契约 + 投递连接”的上报节点', false)
+        showToast('存在已开启但未完整选择“接口模板 + 投递连接”的上报节点', false)
         return null
       }
       const media = Array.isArray(delivery.media) ? delivery.media : []
@@ -1204,11 +1204,6 @@ export default function EditorPage() {
             <Background color="#2e3352" gap={20} size={1} />
             <Controls />
             <MiniMap nodeColor={nodeColor} maskColor="rgba(15,17,23,0.8)" />
-            <Panel position="bottom-left">
-              <div className="flow-hint">
-                左键拖拽空白处 = 框选节点 · 中键平移视角 · 单击节点查看配置 · Delete 删除 · Ctrl+C/X/V 复制/剪切/粘贴
-              </div>
-            </Panel>
             {nodes.length === 0 && (
               <Panel position="top-center">
                 <div className="canvas-empty-hint">

@@ -25,6 +25,9 @@ Adapter                       HTTP / Dify 协议实现
 打包时 `scripts/generate_report_templates.py` 校验模板归属、事件类型、算法字段、媒体和 Adapter
 能力，并把结果聚合到程序包只读目录 `report_templates/`。
 
+Web 上报节点只识别所连接 Logic 的 `logic.json.report_templates` 明确声明的模板。应用自定义内容
+只能作为这些模板的同 ID 覆盖生效，不会把额外模板注入其他 Logic 的候选列表。
+
 设备上通过 Web 创建或修改的契约保存在：
 
 ```text
@@ -68,9 +71,7 @@ HTTP 契约的 `request` 声明 `method`、`path` 和 `encoding=json|form|multip
 Multipart 同时携带 JSON body 时，由契约的 `request.json_part` 明确 JSON Part 名称，Adapter
 不写死服务器字段。
 
-## 结果记录
+## 投递状态
 
-每次远端请求结果写入 `.data/<app>/delivery_history/`，包括连接、契约 revision、HTTP 状态、
-重试次数和远端响应。Web“事件记录 → 远端回复历史”可以查看普通服务器响应或 Dify Outputs。
-
-连接和契约在每次处理事件前重新加载；原子保存失败时不会生成半份运行配置。
+待投递事件只在自身的 `delivery_state.json` 中保存当前状态、重试次数和最近一次错误，不持久化
+远端响应正文。连接和契约在每次处理事件前重新加载；原子保存失败时不会生成半份运行配置。

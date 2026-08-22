@@ -91,6 +91,27 @@ def _resolved_contracts(name: str) -> Tuple[Dict[str, Dict[str, Any]], Dict[str,
         raise HTTPException(status_code=500, detail=f"接口契约目录无效: {exc}") from exc
 
 
+def _package_contract_ids(name: str) -> set:
+    """Return IDs originating from the installed package, excluding app-created extras."""
+    try:
+        package, _revisions = _contracts_module(name).load_contracts(
+            _templates_dir(name), None, _revisions_dir(name),
+        )
+        return set(package)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"程序包接口模板目录无效: {exc}") from exc
+
+
+def _package_contracts(name: str) -> Dict[str, Dict[str, Any]]:
+    try:
+        package, _revisions = _contracts_module(name).load_contracts(
+            _templates_dir(name), None, _revisions_dir(name),
+        )
+        return package
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"程序包接口模板目录无效: {exc}") from exc
+
+
 def _catalog(name: str) -> List[Dict[str, Any]]:
     path = _catalog_path(name)
     if not path.is_file():
@@ -127,7 +148,10 @@ def _validated_contract(name: str, contract_id: str, body: Dict[str, Any]) -> Di
     if not _SAFE_ID.fullmatch(contract_id):
         raise HTTPException(status_code=400, detail="契约 ID 只能包含字母、数字、点、下划线和短横线")
     contract = dict(body)
-    for key in ("origin", "revision", "source_file", "_origin", "_revision", "_source_file"):
+    for key in (
+        "origin", "revision", "source_file", "package_template",
+        "_origin", "_revision", "_source_file",
+    ):
         contract.pop(key, None)
     if str(contract.get("id", "")).strip() != contract_id:
         raise HTTPException(status_code=400, detail="契约 ID 与请求路径不一致")
@@ -314,11 +338,13 @@ async def save_connections(name: str, body: Dict[str, Any]):
 @router.get("/apps/{name}/report-contracts")
 async def get_report_contracts(name: str):
     active, _revisions = _resolved_contracts(name)
+    package_ids = _package_contract_ids(name)
     contracts = []
-    for contract in active.values():
+    for contract_id, contract in active.items():
         item = {key: value for key, value in contract.items() if not key.startswith("_")}
         item["origin"] = contract.get("_origin")
         item["revision"] = contract.get("_revision")
+        item["package_template"] = contract_id in package_ids
         contracts.append(item)
     return {"contracts": sorted(contracts, key=lambda item: str(item.get("id", "")))}
 
@@ -326,14 +352,27 @@ async def get_report_contracts(name: str):
 @router.put("/apps/{name}/report-contracts/{contract_id}")
 async def save_report_contract(name: str, contract_id: str, body: Dict[str, Any]):
     contract = _validated_contract(name, contract_id, body)
-    directory = _custom_contracts_dir(name)
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{contract_id}.json"
+    # 先归档当前包模板和历史 custom 覆盖，保证已入队事件仍可按旧 revision 重放。
+    _resolved_contracts(name)
+    package_contract = _package_contracts(name).get(contract_id)
+    if package_contract:
+        path = Path(str(package_contract.get("_source_file", "")))
+        if not path.is_file() or path.parent.resolve() != _templates_dir(name).resolve():
+            raise HTTPException(status_code=500, detail="程序包模板来源文件无效")
+    else:
+        directory = _custom_contracts_dir(name)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{contract_id}.json"
     _atomic_write_text(path, json.dumps(contract, ensure_ascii=False, indent=2) + "\n")
+
+    if package_contract:
+        legacy_override = _custom_contracts_dir(name) / f"{contract_id}.json"
+        if legacy_override.is_file():
+            legacy_override.unlink()
     active, _revisions = _resolved_contracts(name)
     saved = active[contract_id]
     result = {key: value for key, value in saved.items() if not key.startswith("_")}
-    result.update({"origin": "custom", "revision": saved["_revision"]})
+    result.update({"origin": saved["_origin"], "revision": saved["_revision"]})
     return {"ok": True, "contract": result}
 
 

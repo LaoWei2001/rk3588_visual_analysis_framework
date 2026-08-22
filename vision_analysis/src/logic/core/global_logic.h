@@ -19,8 +19,9 @@
 #include <vector>
 
 #include "config/config.h"
-#include "core/app_ctrl.h"
+#include "runtime/app_ctrl.h"
 #include "event/event_report.h"
+#include "logic_action.h"
 #include "logic_parameters.h"
 
 /**
@@ -46,8 +47,8 @@ struct GlobalContext
     /** 本全局 logic 实例配置，实例存活期间稳定。 */
     const GlobalLogicConfig *config = nullptr;
 
-    /** 本 tick 的单调时间、墙钟时间及距上个 tick 的真实间隔。 */
-    uint64_t steady_ms = 0;
+    /** 本 tick 的单调时间、墙钟时间及距上个 tick 的真实间隔。字段名与 ChannelContext 一致。 */
+    uint64_t timestamp_ms = 0;
     uint64_t unix_ms = 0;
     float dt_ms = 0.0f;
 
@@ -198,12 +199,15 @@ struct GlobalContext
 };
 
 typedef void (*GlobalLogicFunc)(GlobalContext *gctx);
+typedef LogicActionResult (*GlobalLogicActionFunc)(GlobalContext *gctx, const LogicAction *action);
 
 #define MAX_GLOBAL_LOGIC_FUNCS 64
 
 GlobalLogicFunc global_logic_get(const char *name);
+GlobalLogicActionFunc global_logic_action_get(const char *name);
 std::vector<std::string> global_logic_names();
 void register_global_logic(const char *name, GlobalLogicFunc func);
+void register_global_logic_action(const char *name, GlobalLogicActionFunc func);
 
 struct GlobalLogicRegistrar
 {
@@ -214,6 +218,17 @@ struct GlobalLogicRegistrar
 };
 
 #define REGISTER_GLOBAL_LOGIC(func) static const GlobalLogicRegistrar _global_logic_reg_##func(#func, func)
+
+struct GlobalLogicActionRegistrar
+{
+    GlobalLogicActionRegistrar(const char *name, GlobalLogicActionFunc func)
+    {
+        register_global_logic_action(name, func);
+    }
+};
+
+#define REGISTER_GLOBAL_LOGIC_ACTION(logic_func, func)                                                           \
+    static const GlobalLogicActionRegistrar _global_logic_action_reg_##func(#logic_func, func)
 
 int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs);
 int global_logic_reload_all(const std::vector<GlobalLogicConfig> &cfgs);

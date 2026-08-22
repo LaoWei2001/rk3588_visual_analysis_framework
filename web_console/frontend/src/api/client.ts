@@ -196,6 +196,7 @@ export interface LogicDef {
   params?: LogicParam[]
   parameters?: Record<string, unknown>                    // 模块 JSON Schema（C++/Web 同源）
   event_types?: EventTypeDef[]                            // 本逻辑可产生的 EventRequest.event_type
+  report_template_ids?: string[]                          // 本 Logic 文件夹明确声明的模板 ID
   report_fields?: ReportField[]                            // C++ EventRequest.fields 只读字段清单
   business_fields?: BusinessField[]                        // 完整业务 JSON 字段目录
   outputs?: LogicOutputDef[]                               // 通道 logic 向全局 logic 公开的同帧变量
@@ -228,13 +229,22 @@ export interface ChannelControlInfo {
   actions: LogicActionDef[]
 }
 
-export interface ChannelControlsResponse {
-  socket_ready: boolean
-  channels: ChannelControlInfo[]
+export interface GlobalLogicControlInfo {
+  instance_id: string
+  enabled: boolean
+  logic: string
+  logic_label: string
+  actions: LogicActionDef[]
 }
 
-export const fetchChannelControls = (name: string) =>
-  api.get<ChannelControlsResponse>(`/apps/${name}/channel-actions`).then(r => r.data)
+export interface LogicControlsResponse {
+  socket_ready: boolean
+  channels: ChannelControlInfo[]
+  globals: GlobalLogicControlInfo[]
+}
+
+export const fetchLogicControls = (name: string) =>
+  api.get<LogicControlsResponse>(`/apps/${name}/logic-actions`).then(r => r.data)
 
 export const sendChannelAction = (
   name: string,
@@ -242,6 +252,16 @@ export const sendChannelAction = (
   action: string,
   payload: Record<string, unknown> = {},
 ) => api.post(`/apps/${name}/channels/${channelId}/actions/${encodeURIComponent(action)}`, { payload }).then(r => r.data)
+
+export const sendGlobalLogicAction = (
+  name: string,
+  instanceId: string,
+  action: string,
+  payload: Record<string, unknown> = {},
+) => api.post(
+  `/apps/${name}/global-logics/${encodeURIComponent(instanceId)}/actions/${encodeURIComponent(action)}`,
+  { payload },
+).then(r => r.data)
 
 // ── 当前程序包的投递连接、契约模板与 OTA 配置 ──
 export interface DeliveryConnection {
@@ -267,7 +287,7 @@ export interface DeliveryAdapterDef {
   transforms: string[]
 }
 export interface ReportContract {
-  id: string
+  id: string                                                // 框架内部键，不在界面或导出模板中呈现
   version: number
   label: string
   description?: string
@@ -288,6 +308,7 @@ export interface ReportContract {
   request?: Record<string, unknown>
   success?: Record<string, unknown>
   origin?: 'package' | 'custom'
+  package_template?: boolean
   revision: string
 }
 export interface OtaConfig {
@@ -301,7 +322,9 @@ export const saveConnections = (name: string, cfg: DeliveryConnectionsConfig) =>
 export const fetchDeliveryAdapters = (name: string) =>
   api.get<{ adapters: DeliveryAdapterDef[] }>(`/apps/${name}/delivery-adapters`).then(r => r.data.adapters)
 export const fetchReportContracts = (name: string) =>
-  api.get<{ contracts: ReportContract[] }>(`/apps/${name}/report-contracts`).then(r => r.data.contracts)
+  api.get<{ contracts: ReportContract[] }>(`/apps/${name}/report-contracts`, {
+    params: { refresh: Date.now() },
+  }).then(r => r.data.contracts)
 export const saveReportContract = (name: string, contract: ReportContract) =>
   api.put<{ ok: boolean; contract: ReportContract }>(
     `/apps/${name}/report-contracts/${encodeURIComponent(contract.id)}`,
@@ -606,7 +629,7 @@ export interface EventRecord {
   media_statuses?: Record<string, { status: string; error?: string }>
   total_bytes?: number
   deliveries: Array<{
-    id?: string; media?: string[]; connection_id?: string; contract_id?: string
+    id?: string; media?: string[]; connection_id?: string; contract_id?: string; contract_label?: string
     contract_revision?: string; status?: string
     attempts?: number; last_error?: string
   }>
@@ -634,26 +657,6 @@ export interface RecordJsonResponse {
 export const fetchRecordJson = (name: string, id: string) =>
   api.get<RecordJsonResponse>(
     `/apps/${encodeURIComponent(name)}/records/${encodeURIComponent(id)}/json`,
-  ).then(r => r.data)
-
-export interface DeliveryHistoryRecord {
-  event_id: string
-  event_type: string
-  snap_time: string
-  channel_id: number | null
-  connection_id: string
-  contract_id: string
-  contract_revision: string
-  status: string
-  attempts: number
-  http_status: number
-  detail: string
-  response: unknown
-  updated_unix_ms: number
-}
-export const fetchDeliveryHistory = (name: string, limit = 500) =>
-  api.get<{ records: DeliveryHistoryRecord[]; count: number }>(
-    `/apps/${name}/delivery-history`, { params: { limit } },
   ).then(r => r.data)
 
 // <img> 无法带 Authorization 头，token 走查询参数（后端 auth_middleware 已放行）

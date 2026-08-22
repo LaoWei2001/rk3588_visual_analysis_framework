@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -23,6 +24,9 @@ REGISTER_LOGIC_ACTION_RE = re.compile(
 REGISTER_GLOBAL_LOGIC_RE = re.compile(
     r"\bREGISTER_GLOBAL_LOGIC\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)"
 )
+REGISTER_GLOBAL_LOGIC_ACTION_RE = re.compile(
+    r"\bREGISTER_GLOBAL_LOGIC_ACTION\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,"
+)
 PARAM_ACCESS_RE = re.compile(
     r'\bparam_(float|int|bool|string|json)\s*\(\s*"([^"]+)"'
 )
@@ -31,6 +35,9 @@ OUTPUT_PUBLISH_RE = re.compile(
 )
 REPORT_EVENT_CALL_RE = re.compile(r"\breport_event\s*\(")
 EVENT_TYPE_LITERAL_RE = re.compile(r'\.event_type\s*=\s*"([^"]+)"')
+EVENT_FIELD_LITERAL_RE = re.compile(
+    r'\bevent_(?:json_)?field\s*\(\s*"([^"]+)"'
+)
 CPP_CODE_SUFFIXES = {".cpp", ".cc", ".cxx", ".h", ".hpp"}
 CPP_SOURCE_SUFFIXES = {".cpp", ".cc", ".cxx"}
 
@@ -47,6 +54,7 @@ SCHEMA_TYPES = {"string", "number", "integer", "boolean", "array", "object"}
 LOGIC_OUTPUT_TYPES = {"string", "number", "integer", "boolean", "json"}
 RELOAD_POLICIES = {"preserve_state", "reset_state", "restart_required"}
 JSON_SAFE_INTEGER_MAX = (1 << 53) - 1
+REPORT_TEMPLATE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def is_finite_json_number(value: Any) -> bool:
@@ -389,6 +397,20 @@ def registered_global_logic_names(module_dir: Path) -> List[str]:
     return names
 
 
+def registered_global_action_logic_names(module_dir: Path) -> List[str]:
+    names: List[str] = []
+    for source in module_cpp_source_files(module_dir):
+        try:
+            names.extend(
+                REGISTER_GLOBAL_LOGIC_ACTION_RE.findall(
+                    source.read_text(encoding="utf-8")
+                )
+            )
+        except OSError as exc:
+            raise ManifestError(f"{source}: cannot read source: {exc}") from exc
+    return names
+
+
 def module_cpp_code_files(module_dir: Path) -> List[Path]:
     return sorted(
         path
@@ -423,6 +445,100 @@ def validate_parameter_accesses(
                 raise ManifestError(
                     f"{source}: param_{accessor}(\"{key}\") does not match Schema type '{spec.get('type')}'"
                 )
+
+
+def validate_report_fields(
+    manifest_path: Path, module_dir: Path, report_fields: Any
+) -> None:
+    require_unique_strings(manifest_path, report_fields, "report_fields", "key")
+    declared = {
+        item["key"] for item in (report_fields or []) if isinstance(item, dict)
+    }
+    for index, item in enumerate(report_fields or []):
+        if item.get("type") not in {"string", "number", "boolean", "json"}:
+            raise ManifestError(
+                f"{manifest_path}: report_fields[{index}].type must be one of "
+                "boolean, json, number, string"
+            )
+        for field in ("label", "help"):
+            if field in item and not isinstance(item[field], str):
+                raise ManifestError(
+                    f"{manifest_path}: report_fields[{index}].{field} must be a string"
+                )
+
+    used = set()
+    for source in module_cpp_code_files(module_dir):
+        try:
+            used.update(EVENT_FIELD_LITERAL_RE.findall(source.read_text(encoding="utf-8")))
+        except OSError as exc:
+            raise ManifestError(f"{source}: cannot read source: {exc}") from exc
+    undeclared = sorted(used - declared)
+    unassigned = sorted(declared - used)
+    if undeclared:
+        raise ManifestError(
+            f"{manifest_path}: C++ assigns undeclared report field(s): "
+            f"{', '.join(undeclared)}"
+        )
+    if unassigned:
+        raise ManifestError(
+            f"{manifest_path}: report_fields not assigned by C++ event_field(): "
+            f"{', '.join(unassigned)}"
+        )
+
+
+def declared_report_template_ids(
+    manifest_path: Path,
+    module_dir: Path,
+    manifest: Dict[str, Any],
+    logic_name: str,
+) -> List[str]:
+    """Resolve only the templates explicitly declared by this Logic module."""
+    entries = manifest.get("report_templates", [])
+    if not isinstance(entries, list):
+        raise ManifestError(f"{manifest_path}: report_templates must be an array")
+    result: List[str] = []
+    seen = set()
+    module_root = module_dir.resolve()
+    for index, relative in enumerate(entries):
+        if not isinstance(relative, str) or not relative.strip():
+            raise ManifestError(
+                f"{manifest_path}: report_templates[{index}] must be a non-empty string"
+            )
+        template_path = (module_dir / relative).resolve()
+        if module_root not in template_path.parents or not template_path.is_file():
+            raise ManifestError(
+                f"{manifest_path}: missing report template {relative}"
+            )
+        template = load_object(template_path)
+        template_id = resolved_report_template_id(template_path, template, logic_name)
+        if template.get("owner_logic") != logic_name:
+            raise ManifestError(
+                f"{template_path}: owner_logic must be {logic_name}"
+            )
+        if template_id in seen:
+            raise ManifestError(
+                f"{manifest_path}: duplicate report template id {template_id}"
+            )
+        seen.add(template_id)
+        result.append(template_id)
+    return result
+
+
+def resolved_report_template_id(
+    template_path: Path, template: Dict[str, Any], logic_name: str
+) -> str:
+    """Return the hidden runtime key; source templates normally omit it."""
+    explicit = template.get("id")
+    template_id = explicit.strip() if isinstance(explicit, str) else ""
+    if not template_id:
+        safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", template_path.stem).strip("._-")
+        if not safe_stem:
+            digest = hashlib.sha256(template_path.name.encode("utf-8")).hexdigest()[:12]
+            safe_stem = f"template_{digest}"
+        template_id = f"{logic_name}.{safe_stem}"
+    if not REPORT_TEMPLATE_ID_RE.fullmatch(template_id):
+        raise ManifestError(f"{template_path}: derived template key is invalid")
+    return template_id
 
 
 def load_channel_manifests(logic_root: Path) -> List[Dict[str, Any]]:
@@ -465,6 +581,11 @@ def load_channel_manifests(logic_root: Path) -> List[Dict[str, Any]]:
                 f"{manifest_path}: REGISTER_LOGIC_ACTION must reference function "
                 f"'{name}' (found: {found})"
             )
+        require_unique_strings(manifest_path, manifest.get("actions"), "actions", "id")
+        if bool(manifest.get("actions")) != bool(action_registrations):
+            raise ManifestError(
+                f"{manifest_path}: actions and REGISTER_LOGIC_ACTION must either both exist or both be absent"
+            )
 
         parameter_schema = validate_parameter_schema(
             manifest_path, manifest.get("parameters")
@@ -475,14 +596,14 @@ def load_channel_manifests(logic_root: Path) -> List[Dict[str, Any]]:
                 "declare parameters.properties only"
             )
         validate_parameter_accesses(manifest_path, module_dir, parameter_schema)
+        manifest["report_template_ids"] = declared_report_template_ids(
+            manifest_path, module_dir, manifest, name,
+        )
         manifest["params"] = web_params_from_schema(parameter_schema)
         validate_event_types(manifest_path, module_dir, manifest.get("event_types"))
         validate_logic_outputs(manifest_path, manifest.get("outputs"))
         validate_output_publications(manifest_path, module_dir, manifest.get("outputs"))
-        require_unique_strings(manifest_path, manifest.get("actions"), "actions", "id")
-        require_unique_strings(
-            manifest_path, manifest.get("report_fields"), "report_fields", "key"
-        )
+        validate_report_fields(manifest_path, module_dir, manifest.get("report_fields"))
         require_unique_strings(
             manifest_path, manifest.get("business_fields"), "business_fields", "path"
         )
@@ -522,6 +643,21 @@ def load_global_manifests(logic_root: Path) -> List[Dict[str, Any]]:
             raise ManifestError(f"{manifest_path}: duplicate global logic function: {name}")
         seen_names.add(name)
 
+        action_registrations = registered_global_action_logic_names(module_dir)
+        if len(action_registrations) > 1 or any(
+            registered_name != name for registered_name in action_registrations
+        ):
+            found = ", ".join(sorted(action_registrations))
+            raise ManifestError(
+                f"{manifest_path}: REGISTER_GLOBAL_LOGIC_ACTION must reference function "
+                f"'{name}' (found: {found})"
+            )
+        require_unique_strings(manifest_path, manifest.get("actions"), "actions", "id")
+        if bool(manifest.get("actions")) != bool(action_registrations):
+            raise ManifestError(
+                f"{manifest_path}: actions and REGISTER_GLOBAL_LOGIC_ACTION must either both exist or both be absent"
+            )
+
         parameter_schema = validate_parameter_schema(
             manifest_path, manifest.get("parameters")
         )
@@ -531,11 +667,12 @@ def load_global_manifests(logic_root: Path) -> List[Dict[str, Any]]:
                 "declare parameters.properties only"
             )
         validate_parameter_accesses(manifest_path, module_dir, parameter_schema)
+        manifest["report_template_ids"] = declared_report_template_ids(
+            manifest_path, module_dir, manifest, name,
+        )
         manifest["params"] = web_params_from_schema(parameter_schema)
         validate_event_types(manifest_path, module_dir, manifest.get("event_types"))
-        require_unique_strings(
-            manifest_path, manifest.get("report_fields"), "report_fields", "key"
-        )
+        validate_report_fields(manifest_path, module_dir, manifest.get("report_fields"))
         require_unique_strings(
             manifest_path, manifest.get("business_fields"), "business_fields", "path"
         )

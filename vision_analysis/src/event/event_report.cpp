@@ -1,9 +1,9 @@
 #include "event_report.h"
 
-#include "../config/config.h"
-#include "../player/display.h"
-#include "../recorder/event_video_recorder.h"
-#include "../third_party/json/cJSON.h"
+#include "config/config.h"
+#include "display/display.h"
+#include "recorder/event_video_recorder.h"
+#include "third_party/json/cJSON.h"
 #include "logic/core/channel_logic.h"
 #include "logic/core/global_logic.h"
 
@@ -1352,7 +1352,7 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
     ctx.frame_id = source_frame_loaded ? source_frame.logic.frame_seq : source_logic->frame_seq;
     ctx.timestamp_ms = source_frame_loaded && source_frame.logic.frame_steady_ms != 0
                            ? source_frame.logic.frame_steady_ms
-                           : (source_logic->frame_steady_ms != 0 ? source_logic->frame_steady_ms : gctx->steady_ms);
+                           : (source_logic->frame_steady_ms != 0 ? source_logic->frame_steady_ms : gctx->timestamp_ms);
     ctx.unix_ms = source_frame_loaded && source_frame.logic.frame_unix_ms != 0
                       ? source_frame.logic.frame_unix_ms
                       : (source_logic->frame_unix_ms != 0 ? source_logic->frame_unix_ms : gctx->unix_ms);

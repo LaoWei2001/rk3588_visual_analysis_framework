@@ -2,14 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import axios from 'axios'
 import {
   fetchApps,
-  fetchChannelControls,
+  fetchLogicControls,
   fetchConfig,
   fetchLogTail,
   loadConfigFile,
   sendChannelAction,
+  sendGlobalLogicAction,
   streamUrl,
   type AppInfo,
-  type ChannelControlsResponse,
+  type LogicControlsResponse,
   type LogicActionDef,
 } from '../api/client'
 import { useAuthStore } from '../store/authStore'
@@ -128,7 +129,7 @@ export default function LiveViewPage() {
   const [videoFullscreen, setVideoFullscreen] = useState(false)
   const [streamLogs, setStreamLogs] = useState<string[]>([])
   const [logConnected, setLogConnected] = useState(false)
-  const [controls, setControls] = useState<ChannelControlsResponse | null>(null)
+  const [controls, setControls] = useState<LogicControlsResponse | null>(null)
   const [actionBusy, setActionBusy] = useState<Record<string, boolean>>({})
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
 
@@ -147,7 +148,29 @@ export default function LiveViewPage() {
   const appName = runningApp?.name ?? ''
   const runningConfig = runningApp?.config ?? ''
   const rtspEnabled = rtspState === 'enabled'
-  const hasActions = controls?.channels.some(channel => channel.actions.length > 0) ?? false
+  const actionTargets = controls ? [
+    ...controls.globals.map(instance => ({
+      key: `global:${instance.instance_id}`,
+      title: '全局逻辑',
+      subtitle: instance.logic_label,
+      enabled: instance.enabled,
+      actions: instance.actions,
+      run: (action: LogicActionDef) => sendGlobalLogicAction(
+        appName, instance.instance_id, action.id, action.payload ?? {},
+      ),
+    })),
+    ...controls.channels.map(channel => ({
+      key: `channel:${channel.channel_id}`,
+      title: `通道 ${channel.channel_id}`,
+      subtitle: channel.logic_label,
+      enabled: channel.enabled,
+      actions: channel.actions,
+      run: (action: LogicActionDef) => sendChannelAction(
+        appName, channel.channel_id, action.id, action.payload ?? {},
+      ),
+    })),
+  ] : []
+  const hasActions = actionTargets.some(target => target.actions.length > 0)
 
   const showToast = (msg: string, type: 'ok' | 'err' = 'ok') => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
@@ -235,20 +258,25 @@ export default function LiveViewPage() {
     }
   }
 
-  const handleAction = async (channelId: number, action: LogicActionDef) => {
+  const handleAction = async (
+    targetKey: string,
+    targetLabel: string,
+    action: LogicActionDef,
+    run: () => Promise<{ message?: string }>,
+  ) => {
     if (!appName) return
     if (action.confirm && !window.confirm(action.confirm)) return
-    const key = `${channelId}:${action.id}`
+    const key = `${targetKey}:${action.id}`
     setActionBusy(previous => ({ ...previous, [key]: true }))
     try {
-      const response = await sendChannelAction(appName, channelId, action.id, action.payload ?? {})
+      const response = await run()
       showToast(
         response?.message
-          ? `通道 ${channelId}：${response.message}`
-          : `通道 ${channelId} 的操作已进入队列`,
+          ? `${targetLabel}：${response.message}`
+          : `${targetLabel}的操作已进入队列`,
       )
     } catch (error) {
-      showToast(`通道 ${channelId} 操作失败：${errMsg(error)}`, 'err')
+      showToast(`${targetLabel}操作失败：${errMsg(error)}`, 'err')
     } finally {
       setActionBusy(previous => ({ ...previous, [key]: false }))
     }
@@ -309,7 +337,7 @@ export default function LiveViewPage() {
     return () => { disposed = true }
   }, [appName, runningConfig])
 
-  // 通道动作定义和控制 socket 状态会在程序刚启动后变化，因此持续刷新。
+  // 通道/全局动作定义和控制 socket 状态会在程序刚启动后变化，因此持续刷新。
   useEffect(() => {
     if (!appName) {
       setControls(null)
@@ -319,7 +347,7 @@ export default function LiveViewPage() {
     let disposed = false
     const loadControls = async () => {
       try {
-        const data = await fetchChannelControls(appName)
+        const data = await fetchLogicControls(appName)
         if (!disposed) setControls(data)
       } catch {
         if (!disposed) setControls(null)
@@ -729,23 +757,28 @@ export default function LiveViewPage() {
                 ) : (
                   <>
                     <div className="live-view-control-grid">
-                      {controls.channels.filter(channel => channel.actions.length > 0).map(channel => (
-                        <div key={channel.channel_id} className="live-view-control-card">
+                      {actionTargets.filter(target => target.actions.length > 0).map(target => (
+                        <div key={target.key} className="live-view-control-card">
                           <div className="live-view-control-title">
-                            <span>通道 {channel.channel_id}</span>
-                            <span>{channel.logic_label}</span>
+                            <span>{target.title}</span>
+                            <span>{target.subtitle}</span>
                           </div>
                           <div className="live-view-control-actions">
-                            {channel.actions.map(action => {
-                              const key = `${channel.channel_id}:${action.id}`
-                              const disabled = !controls.socket_ready || !channel.enabled || !!actionBusy[key]
+                            {target.actions.map(action => {
+                              const key = `${target.key}:${action.id}`
+                              const disabled = !controls.socket_ready || !target.enabled || !!actionBusy[key]
                               return (
                                 <button
                                   key={key}
                                   className={`live-view-action ${action.style ?? 'default'}`}
                                   disabled={disabled}
                                   title={action.help ?? action.id}
-                                  onClick={() => handleAction(channel.channel_id, action)}
+                                  onClick={() => handleAction(
+                                    target.key,
+                                    target.title,
+                                    action,
+                                    () => target.run(action),
+                                  )}
                                 >
                                   {actionBusy[key] ? '处理中…' : (action.label ?? action.id)}
                                 </button>
@@ -755,7 +788,6 @@ export default function LiveViewPage() {
                         </div>
                       ))}
                     </div>
-                    <p className="live-view-control-tip">按钮操作按通道进入队列，并在下一帧通道逻辑执行前处理。</p>
                   </>
                 )}
               </div>

@@ -1,11 +1,12 @@
 #include "event_video_recorder.h"
 
-#include "../event/event_report.h"
-#include "../analyzer/algoProcess.h"
-#include "../analyzer/frame_pipeline.h"
-#include "../config/config.h"
-#include "../core/app_ctrl.h"
-#include "../player/display.h"
+#include "event/event_report.h"
+#include "inference/inference_engine.h"
+#include "pipeline/frame_transform.h"
+#include "config/config.h"
+#include "runtime/app_ctrl.h"
+#include "display/display.h"
+#include "display/display_pipeline.h"
 
 #include <gst/gst.h>
 #include <opencv2/imgcodecs.hpp>
@@ -185,7 +186,7 @@ static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
         if (params.inputW <= 0 || params.inputH <= 0)
             return;
         params.disp_fps = raw.disp_fps;
-        params.infer_fps = algorithm_get_infer_fps(raw.channel_id);
+        params.infer_fps = inference_get_infer_fps(raw.channel_id);
         params.result_frame_id = raw.result_frame_id;
         params.result_age_ms = raw.result_ts_ms && raw.timestamp_ms >= raw.result_ts_ms
                                    ? static_cast<int64_t>(std::min<uint64_t>(raw.timestamp_ms - raw.result_ts_ms, 200))
@@ -212,7 +213,7 @@ static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
     if (params.inputW <= 0 || params.inputH <= 0)
         return;
     params.disp_fps = raw.disp_fps;
-    params.infer_fps = algorithm_get_infer_fps(raw.channel_id);
+    params.infer_fps = inference_get_infer_fps(raw.channel_id);
     params.result_frame_id = raw.result_frame_id;
     params.result_age_ms = raw.result_ts_ms && raw.timestamp_ms >= raw.result_ts_ms
                                ? static_cast<int64_t>(std::min<uint64_t>(raw.timestamp_ms - raw.result_ts_ms, 200))

@@ -30,7 +30,7 @@ def contract(contract_id: str = "logic_demo.http"):
 
 
 class ContractCatalogTest(unittest.TestCase):
-    def test_custom_contract_shadows_package_and_revisions_are_archived(self):
+    def test_package_contract_wins_legacy_custom_shadow_and_revisions_are_archived(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             templates = root / "templates"
@@ -46,10 +46,10 @@ class ContractCatalogTest(unittest.TestCase):
             active, archived = load_contracts(templates, custom, revisions)
 
             selected = active[package["id"]]
-            self.assertEqual(selected["_origin"], "custom")
-            self.assertEqual(selected["version"], 2)
+            self.assertEqual(selected["_origin"], "package")
+            self.assertEqual(selected["version"], 1)
             self.assertIn(contract_revision(package), archived)
-            self.assertIn(selected["_revision"], archived)
+            self.assertIn(contract_revision(override), archived)
             self.assertEqual(len(archived), 2)
             self.assertTrue((revisions / f"{selected['_revision']}.json").is_file())
 
@@ -95,6 +95,24 @@ class MappingAndAdapterTest(unittest.TestCase):
         preview = adapter.preview("", self.EVENT, delivery)
         self.assertEqual(preview["url"], "http://server.example/base/events")
         self.assertEqual(preview["body"]["kind"], "demo")
+
+    def test_http_preview_adds_default_scheme_for_board_ip(self):
+        adapter = HttpAdapter({"base_url": "192.168.2.22:8080", "headers": {}})
+        delivery = {
+            "id": "d1", "request": {"method": "POST", "path": "/events", "encoding": "json"},
+            "mapping": [{"source": "event.type", "target": "kind", "location": "body"}],
+        }
+        preview = adapter.preview("", self.EVENT, delivery)
+        self.assertEqual(preview["url"], "http://192.168.2.22:8080/events")
+
+    def test_http_preview_rejects_non_http_url(self):
+        adapter = HttpAdapter({"base_url": "ftp://server.example", "headers": {}})
+        delivery = {
+            "id": "d1", "request": {"method": "POST", "path": "/events", "encoding": "json"},
+            "mapping": [],
+        }
+        with self.assertRaisesRegex(ValueError, "valid http\\(s\\) URL"):
+            adapter.preview("", self.EVENT, delivery)
 
     def test_dify_preview_uses_body_and_file_inputs(self):
         adapter = DifyWorkflowAdapter({"api_url": "http://dify.example", "api_key": "secret"})

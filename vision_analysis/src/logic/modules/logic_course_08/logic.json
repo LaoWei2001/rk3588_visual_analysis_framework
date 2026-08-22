@@ -1,7 +1,7 @@
 {
     "label": "课程8:如何定时上报图片",
     "report_templates": [
-        "report_templates/http_periodic_snapshot.json"
+        "report_templates/jnu_object_invade.json"
     ],
     "event_types": [
         {
@@ -19,8 +19,57 @@
                 "title": "报警时间间隔",
                 "description": "报警时间间隔",
                 "default": 3.0
+            },
+            "server_event_type": {
+                "type": "string",
+                "title": "服务器事件类型",
+                "description": "objectInvadeDet 的 eventType，例如 4001 消防通道占用、4002 物流门人员入侵、4003 区域人员入侵、4004 污水倾倒检测。",
+                "default": "4001",
+                "x-hot-reload": "preserve_state"
+            },
+            "invade_flag": {
+                "type": "integer",
+                "title": "入侵标志",
+                "description": "objectInvadeDet 的 invadeFlag；1 表示服务器保存本次告警图片。",
+                "minimum": 0,
+                "maximum": 1,
+                "default": 1,
+                "x-hot-reload": "preserve_state"
+            },
+            "yuv_flag": {
+                "type": "string",
+                "title": "图像来源标志",
+                "description": "兼容旧设备协议的 yuvFlag，视频流默认填 video。",
+                "default": "video",
+                "x-hot-reload": "preserve_state"
             }
         }
     },
-    "report_fields": []
+    "report_fields": [
+        {
+            "key": "server_event_type",
+            "type": "string",
+            "label": "服务器事件类型"
+        },
+        {
+            "key": "invade_flag",
+            "type": "number",
+            "label": "入侵标志"
+        },
+        {
+            "key": "yuv_width",
+            "type": "number",
+            "label": "算法图像宽度"
+        },
+        {
+            "key": "yuv_height",
+            "type": "number",
+            "label": "算法图像高度"
+        },
+        {
+            "key": "yuv_flag",
+            "type": "string",
+            "label": "图像来源标志"
+        }
+    ]
 }

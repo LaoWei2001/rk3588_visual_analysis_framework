@@ -4,6 +4,9 @@
 
 #include "logic/core/logic_common.h"
 
+namespace
+{
+
 struct UploadDemoState
 {
     uint64_t upload_time = 0;
@@ -32,11 +35,20 @@ static void logic_course_08(ChannelContext *ctx)
         // printf("==========\n");
         EventRequest request;
         request.event_type = "logic_course_08";
-        // request.message = "定时上报";
+        request.message = "定时上报";
+        request.fields = {
+            event_field("server_event_type", ctx->param_string("server_event_type")),
+            event_field("invade_flag", ctx->param_int("invade_flag")),
+            event_field("yuv_width", inference_get_input_w()),
+            event_field("yuv_height", inference_get_input_h()),
+            event_field("yuv_flag", ctx->param_string("yuv_flag")),
+        };
         const EventReportResult report = report_event(ctx, request);
         if (report.accepted())
             printf("事件已创建: %s\n", report.event_id.c_str());
     }
 }
+
+} // namespace
 
 REGISTER_LOGIC(logic_course_08);

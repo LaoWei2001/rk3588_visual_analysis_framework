@@ -52,7 +52,6 @@ export function graphToConfig(
   const rp = (n: Node) => ({ x: Math.round(n.position.x), y: Math.round(n.position.y) })
   const channelIdByLogicNode = new Map<string, number>()
 
-  let modelCoreIndex = 0
   anchors.forEach((streamNode, idx) => {
     const modelNodes = edges
       .filter(e => e.source === streamNode.id && e.sourceHandle === 'stream-out')
@@ -91,10 +90,9 @@ export function graphToConfig(
         obj_thresh:     data.obj_thresh ?? 0.3,
         nms_thresh:     data.nms_thresh ?? 0.45,
         detect_classes: (data.detect_classes as string[]) ?? [],
-        npu_core:       data.npu_core ?? ((modelCoreIndex + modelIndex) % 3),
+        npu_core:       data.npu_core ?? -1,
       }
     })
-    modelCoreIndex += modelNodes.length
 
     // ── Channel id: use stream's channel_id if set, else fall back to sorted position ──
     const chId = (streamNode.data as Record<string, unknown>).channel_id != null

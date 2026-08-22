@@ -89,7 +89,6 @@ export function configToGraph(
   const REPORT_X  = 940
   const ROW_H     = 360  // leave room for the ROI card above each stream
 
-  let modelCoreIndex = 0
   const channelLogicNodes = new Map<number, string>()
   channels.forEach((ch, idx) => {
     const y      = idx * ROW_H + 60
@@ -136,8 +135,7 @@ export function configToGraph(
     if (hasModel) {
       modelConfigs.forEach((configuredModel, modelIndex) => {
         const modelId = uid('model')
-        const npuCore = configuredModel.npu_core ?? (modelCoreIndex % 3)
-        modelCoreIndex++
+        const npuCore = configuredModel.npu_core === 'auto' ? -1 : (configuredModel.npu_core ?? -1)
         const role = modelIndex === 0 ? 'model' : `model_${modelIndex}`
         nodes.push({
           id: modelId, type: 'model',

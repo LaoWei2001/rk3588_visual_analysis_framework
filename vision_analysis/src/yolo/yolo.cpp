@@ -383,6 +383,7 @@ bool YOLO::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat 
     for (int i = 0; i < io_num_out_; i++)
     {
         memset(&rknn_outputs_cache_[i], 0, sizeof(rknn_output));
+        rknn_outputs_cache_[i].index = i;
         rknn_outputs_cache_[i].want_float = (!is_quant_);
     }
     if (rknn_outputs_get(ctx_, io_num_out_, rknn_outputs_cache_.data(), NULL) < 0)
@@ -427,6 +428,7 @@ bool YOLO::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *perf)
     for (int i = 0; i < io_num_out_; i++)
     {
         memset(&rknn_outputs_cache_[i], 0, sizeof(rknn_output));
+        rknn_outputs_cache_[i].index = i;
         rknn_outputs_cache_[i].want_float = (!is_quant_);
     }
     if (rknn_outputs_get(ctx_, io_num_out_, rknn_outputs_cache_.data(), NULL) < 0)

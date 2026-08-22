@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   apiErrorMessage, fetchDeliveryAdapters, saveReportContract,
-  type DeliveryAdapterDef, type ReportContract, type ReportField,
+  type DeliveryAdapterDef, type DeliveryConnection, type ReportContract, type ReportField,
 } from '../api/client'
 
 type MediaKind = 'annotated_image' | 'raw_image' | 'video'
@@ -12,10 +12,10 @@ interface Props {
   adapter: string
   contract: ReportContract | null
   logicName: string
-  logicLabel: string
   eventTypes: string[]
   reportFields: ReportField[]
-  existingContractIds: string[]
+  connection?: DeliveryConnection
+  deliveryId?: string
   onSaved: (contract: ReportContract) => void
   onDirtyChange?: (dirty: boolean) => void
 }
@@ -58,8 +58,14 @@ const CONSTANT_SOURCE: SourceOption = {
   value: 'constant', label: '固定值', group: '固定值', type: 'string',
 }
 
+const newInternalContractId = (logicName: string): string => {
+  const owner = logicName.replace(/[^A-Za-z0-9._-]/g, '_') || 'contract'
+  const suffix = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+  return `${owner}.custom_${suffix}`
+}
+
 const emptyContract = (adapter: string, logicName: string, eventTypes: string[]): ReportContract => ({
-  id: '',
+  id: newInternalContractId(logicName),
   version: 1,
   label: '',
   description: '',
@@ -75,6 +81,164 @@ const emptyContract = (adapter: string, logicName: string, eventTypes: string[])
 })
 
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
+
+const previewFieldValue = (field: ReportField): unknown => {
+  if (field.type === 'number') return 3
+  if (field.type === 'boolean') return true
+  if (field.type === 'json') return { sample: field.label || field.key }
+  return `<${field.label || field.key}>`
+}
+
+const lookupPath = (root: Record<string, unknown>, path: string): unknown => {
+  let current: unknown = root
+  for (const part of path.split('.').filter(Boolean)) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)
+      || !(part in current)) return undefined
+    current = (current as Record<string, unknown>)[part]
+  }
+  return current
+}
+
+const setPath = (root: Record<string, unknown>, path: string, value: unknown) => {
+  const parts = path.split('.').filter(Boolean)
+  if (parts.length === 0) return
+  let current = root
+  parts.slice(0, -1).forEach(part => {
+    if (!current[part] || typeof current[part] !== 'object' || Array.isArray(current[part])) {
+      current[part] = {}
+    }
+    current = current[part] as Record<string, unknown>
+  })
+  current[parts[parts.length - 1]] = value
+}
+
+const previewBasename = (value: unknown): string => {
+  const text = String(value ?? '').replace(/\\/g, '/')
+  return text.split('/').pop() || text
+}
+
+const coercePreview = (value: unknown, type: string): unknown => {
+  if (!type || value === null || value === undefined) return value
+  if (type === 'string') return String(value)
+  if (type === 'number') {
+    const number = Number(value)
+    if (!Number.isFinite(number)) throw new Error(`${String(value)} 不能转换为数字`)
+    return number
+  }
+  if (type === 'boolean') {
+    if (typeof value === 'boolean') return value
+    const text = String(value).trim().toLowerCase()
+    if (['true', '1', 'yes', 'on'].includes(text)) return true
+    if (['false', '0', 'no', 'off'].includes(text)) return false
+    throw new Error(`${String(value)} 不能转换为布尔值`)
+  }
+  if (type === 'json') return typeof value === 'string' ? JSON.parse(value) : value
+  return value
+}
+
+const transformPreview = (value: unknown, transform: string): unknown => {
+  if (!transform) return value
+  if (transform === 'json_string') return JSON.stringify(value)
+  const filename = previewBasename(value)
+  if (transform === 'base64') return `<Base64 ${filename}>`
+  if (transform === 'data_url') {
+    const mime = filename.endsWith('.mp4') ? 'video/mp4' : 'image/jpeg'
+    return `data:${mime};base64,<Base64 ${filename}>`
+  }
+  if (transform === 'file') return value
+  return value
+}
+
+const maskHeaders = (headers: Record<string, unknown>): Record<string, unknown> => {
+  const secretWords = ['authorization', 'token', 'api-key', 'apikey', 'secret']
+  return Object.fromEntries(Object.entries(headers).map(([key, value]) => [
+    key,
+    secretWords.some(word => key.toLowerCase().includes(word)) ? '***' : value,
+  ]))
+}
+
+const joinHttpUrl = (baseValue: unknown, pathValue: unknown): string => {
+  let base = String(baseValue ?? '').trim()
+  if (!base) base = 'http://<连接地址>'
+  else if (!base.includes('://')) base = `http://${base}`
+  const path = String(pathValue ?? '').trim().replace(/^\/+/, '')
+  return `${base.replace(/\/+$/, '')}/${path}`
+}
+
+function templateRequestPreview(
+  draft: ReportContract,
+  reportFields: ReportField[],
+  eventTypes: string[],
+  connection: DeliveryConnection | undefined,
+  deliveryId: string | undefined,
+): Record<string, unknown> {
+  const now = new Date()
+  const snapTime = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
+  const fields = Object.fromEntries(reportFields.map(field => [field.key, previewFieldValue(field)]))
+  const sourcePool: Record<string, unknown> = {
+    event: {
+      id: 'preview-event', type: eventTypes[0] || 'sample_event', message: '接口映射预览',
+      trigger_unix_ms: now.getTime(), snap_time: snapTime, end_time: snapTime, trigger_count: 1,
+    },
+    source: { channel_id: 0, video_channel_id: 0, parameters: {} },
+    fields,
+    media: {
+      annotated_image: '/preview/annotated.jpg',
+      raw_image: '/preview/raw.jpg',
+      video: '/preview/clip.mp4',
+    },
+  }
+  const parts: Record<'body' | 'query' | 'form' | 'header' | 'file', Record<string, unknown>> = {
+    body: {}, query: {}, form: {}, header: {}, file: {},
+  }
+  draft.mapping.forEach(mapping => {
+    if (!mapping.source || !mapping.target) return
+    let value: unknown
+    if (mapping.source === 'constant') {
+      const type = inferConstantType(mapping)
+      value = parseConstant(mapping.value, type)
+    } else {
+      value = lookupPath(sourcePool, mapping.source)
+      if (value === undefined) value = mapping.required
+        ? `<required: ${mapping.source}>` : `<${mapping.source}>`
+      value = coercePreview(value, mapping.type ?? '')
+    }
+    value = transformPreview(value, mapping.transform ?? '')
+    setPath(parts[mapping.location ?? 'body'], mapping.target, value)
+  })
+
+  if (draft.adapter === 'dify_workflow') {
+    Object.entries(parts.file).forEach(([target, path]) => {
+      setPath(parts.body, target, { file: previewBasename(path) })
+    })
+    let base = String(connection?.api_url ?? '').trim() || 'http://<Dify地址>'
+    base = base.replace(/\/+$/, '').replace(/\/v1\/(files\/upload|workflows\/run)$/, '')
+    return {
+      adapter: 'dify_workflow', method: 'POST',
+      upload_url: `${base}/v1/files/upload`, workflow_url: `${base}/v1/workflows/run`,
+      inputs: parts.body,
+    }
+  }
+
+  const connectionHeaders = connection?.headers && typeof connection.headers === 'object'
+    && !Array.isArray(connection.headers) ? connection.headers as Record<string, unknown> : {}
+  const headers = { ...connectionHeaders, ...parts.header }
+  if (!Object.keys(headers).some(key => key.toLowerCase() === 'x-idempotency-key')) {
+    headers['X-Idempotency-Key'] = `preview-event:${deliveryId || 'delivery-preview'}`
+  }
+  return {
+    adapter: 'http',
+    method: String(draft.request?.method ?? 'POST').toUpperCase(),
+    url: joinHttpUrl(connection?.base_url, draft.request?.path),
+    encoding: String(draft.request?.encoding ?? 'json'),
+    json_part: String(draft.request?.json_part ?? '').trim() || null,
+    headers: maskHeaders(headers),
+    query: parts.query,
+    body: parts.body,
+    form: parts.form,
+    files: Object.fromEntries(Object.entries(parts.file).map(([key, value]) => [key, previewBasename(value)])),
+  }
+}
 
 function inferConstantType(mapping: Mapping): string {
   if (mapping.type) return mapping.type
@@ -109,10 +273,10 @@ function successStatuses(contract: ReportContract): string {
 }
 
 export default function ReportContractEditor({
-  appName, adapter, contract, logicName, logicLabel, eventTypes, reportFields, existingContractIds, onSaved,
-  onDirtyChange,
+  appName, adapter, contract, logicName, eventTypes, reportFields, onSaved,
+  connection, deliveryId, onDirtyChange,
 }: Props) {
-  const editing = contract?.origin === 'custom'
+  const editing = contract !== null
   const [draft, setDraft] = useState<ReportContract>(() =>
     clone(contract ?? emptyContract(adapter, logicName, eventTypes)))
   const [adapters, setAdapters] = useState<DeliveryAdapterDef[]>([])
@@ -249,50 +413,52 @@ export default function ReportContractEditor({
     patchMapping(index, patchValue)
   }
 
+  const normalizedDraft = (incrementVersion: boolean): ReportContract => {
+    const currentId = draft.id.trim()
+    const id = /^[A-Za-z0-9._-]+$/.test(currentId)
+      ? currentId : newInternalContractId(logicName)
+    if (!draft.label.trim()) throw new Error('请填写模板名称')
+    if (draft.mapping.length === 0) throw new Error('请至少增加一条字段映射')
+    const mapping = draft.mapping.map(item => {
+      const result = { ...item }
+      if (result.source === 'constant') {
+        const type = inferConstantType(result)
+        result.type = type
+        result.value = parseConstant(result.value, type)
+      } else {
+        delete result.value
+        if (!result.type) delete result.type
+      }
+      if (!result.transform) delete result.transform
+      if (result.transform !== 'file') delete result.file_mode
+      return result
+    })
+    const normalized: ReportContract = {
+      ...draft,
+      id,
+      version: incrementVersion && draft.revision ? draft.version + 1 : Math.max(1, draft.version || 1),
+      owner_logic: logicName,
+      event_types: eventTypes,
+      label: draft.label.trim(),
+      description: draft.description?.trim() ?? '',
+      mapping,
+    }
+    if (draft.adapter === 'http') {
+      const statuses = successStatuses(draft)
+        .split(',').map(item => Number(item.trim())).filter(Number.isFinite)
+      if (statuses.length === 0) throw new Error('至少填写一个 HTTP 成功状态码')
+      normalized.success = { ...draft.success, http_status: statuses }
+    }
+    return normalized
+  }
+
   const save = async () => {
     setError('')
     setSaving(true)
     try {
-      const id = draft.id.trim()
-      if (!/^[A-Za-z0-9._-]+$/.test(id)) {
-        throw new Error('模板 ID 只能包含字母、数字、点、下划线和短横线')
-      }
-      if (!editing && existingContractIds.includes(id)) {
-        throw new Error('模板 ID 已存在；请更换 ID，或取消后选择现有模板进行编辑')
-      }
-      if (!draft.label.trim()) throw new Error('请填写模板名称')
-      if (draft.mapping.length === 0) throw new Error('请至少增加一条字段映射')
-      const mapping = draft.mapping.map(item => {
-        const result = { ...item }
-        if (result.source === 'constant') {
-          const type = inferConstantType(result)
-          result.type = type
-          result.value = parseConstant(result.value, type)
-        } else {
-          delete result.value
-          if (!result.type) delete result.type
-        }
-        if (!result.transform) delete result.transform
-        if (result.transform !== 'file') delete result.file_mode
-        return result
-      })
-      const normalized: ReportContract = {
-        ...draft,
-        id,
-        version: editing ? draft.version + 1 : 1,
-        owner_logic: logicName,
-        event_types: eventTypes,
-        label: draft.label.trim(),
-        description: draft.description?.trim() ?? '',
-        mapping,
-      }
-      if (draft.adapter === 'http') {
-        const statuses = successStatuses(draft)
-          .split(',').map(item => Number(item.trim())).filter(Number.isFinite)
-        if (statuses.length === 0) throw new Error('至少填写一个 HTTP 成功状态码')
-        normalized.success = { ...draft.success, http_status: statuses }
-      }
+      const normalized = normalizedDraft(true)
       const saved = await saveReportContract(appName, normalized)
+      setDraft(clone(saved))
       clearDirty()
       onSaved(saved)
     } catch (reason) {
@@ -302,32 +468,54 @@ export default function ReportContractEditor({
     }
   }
 
+  const exportJson = () => {
+    setError('')
+    try {
+      const normalized = normalizedDraft(false)
+      const portable: Partial<ReportContract> = { ...normalized }
+      delete portable.id
+      delete portable.origin
+      delete portable.revision
+      delete portable.package_template
+      const blob = new Blob([`${JSON.stringify(portable, null, 2)}\n`], {
+        type: 'application/json;charset=utf-8',
+      })
+      const href = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const filename = normalized.label.replace(/[\\/:*?"<>|]/g, '_').trim() || 'report-template'
+      link.href = href
+      link.download = `${filename}.json`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(href)
+    } catch (reason) {
+      setError(apiErrorMessage(reason))
+    }
+  }
+
   const groups: SourceOption['group'][] = [
     '系统事件', '当前算法', '媒体', '固定值', '模板已有来源',
   ]
+  const requestPreview = useMemo(() => {
+    try {
+      return { value: templateRequestPreview(draft, reportFields, eventTypes, connection, deliveryId) }
+    } catch (reason) {
+      return { error: apiErrorMessage(reason) }
+    }
+  }, [draft, reportFields, eventTypes, connection, deliveryId])
 
   return <div className="report-contract-editor">
     <div className="report-section-title">
-      {editing ? `编辑应用自定义契约：${contract?.label}`
-        : contract ? `基于程序包模板新建：${contract.label}` : '新建接口契约'}
+      {editing ? `编辑模板：${contract?.label}` : '新建接口模板'}
     </div>
-    <div className="report-mapping-help">
-      当前算法：{logicLabel || '未选择'}。算法变量来自该模块的 logic.json.report_fields；
-      实际数值由 C++ EventRequest.fields 在事件触发时提供。程序包模板是只读能力；修改程序包模板时
-      需要填写新的 ID，将其保存为当前应用的自定义契约。
-    </div>
-
     <div className="report-contract-grid">
-      <label className="node-field"><span>模板 ID</span>
-        <input value={draft.id} placeholder="periodic_snapshot_http"
-          onChange={event => patch({ id: event.target.value })} />
-      </label>
       <label className="node-field"><span>模板名称</span>
         <input value={draft.label} placeholder="周期截图服务器"
           onChange={event => patch({ label: event.target.value })} />
       </label>
       <label className="node-field"><span>适配器</span>
-        <select value={draft.adapter} disabled={editing}
+        <select value={draft.adapter} disabled={editing || Boolean(draft.revision)}
           onChange={event => changeAdapter(event.target.value)}>
           {adapters.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
         </select>
@@ -413,9 +601,6 @@ export default function ReportContractEditor({
               try { value = text === '' ? undefined : JSON.parse(text) } catch { /* 保留文本 */ }
               patch({ success: { ...draft.success, equals: value } })
             }} />
-        </div>
-        <div className="report-mapping-help" style={{ marginTop: 4 }}>
-          部分 API 即使业务失败也返回 HTTP 200。填写响应 JSON 中的字段路径和期望值可在状态码之外做额外校验。不需要时空着即可。
         </div>
       </label>
     </div>}
@@ -520,8 +705,15 @@ export default function ReportContractEditor({
     {reportFields.length === 0 && <div className="report-mapping-help">
       当前算法没有声明 report_fields；仍可选择系统字段、完整 fields 对象、媒体和固定值。
     </div>}
+
+    <div className="report-section-title">模板请求实时预览</div>
+    {requestPreview.error
+      ? <div className="report-contract-error">预览失败：{requestPreview.error}</div>
+      : <pre className="report-request-preview">{JSON.stringify(requestPreview.value, null, 2)}</pre>}
+
     {error && <div className="report-contract-error">{error}</div>}
     <div className="report-contract-actions">
+      <button type="button" disabled={saving} onClick={exportJson}>导出 JSON</button>
       <button type="button" disabled={saving} onClick={save}>
         {saving ? '保存中…' : '保存接口模板'}
       </button>

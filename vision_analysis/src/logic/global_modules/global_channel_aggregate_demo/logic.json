@@ -1,7 +1,7 @@
 {
   "label": "示例：多通道变量聚合与上报",
   "report_templates": [
-    "report_templates/http_channel_aggregate.json"
+    "report_templates/http_alarm.json"
   ],
   "event_types": [
     {
@@ -39,13 +39,81 @@
         "x-unit": "毫秒",
         "x-step": 100,
         "x-hot-reload": "preserve_state"
+      },
+      "server_event_type": {
+        "type": "string",
+        "title": "服务器事件类型",
+        "description": "objectInvadeDet 的 eventType，例如 4001、4002、4003、4004。",
+        "default": "4001",
+        "x-hot-reload": "preserve_state"
+      },
+      "invade_flag": {
+        "type": "integer",
+        "title": "入侵标志",
+        "description": "objectInvadeDet 的 invadeFlag；1 表示服务器保存本次告警图片。",
+        "minimum": 0,
+        "maximum": 1,
+        "default": 1,
+        "x-hot-reload": "preserve_state"
+      },
+      "yuv_flag": {
+        "type": "string",
+        "title": "图像来源标志",
+        "description": "兼容旧设备协议的 yuvFlag，视频流默认填 video。",
+        "default": "video",
+        "x-hot-reload": "preserve_state"
       }
     }
   },
   "report_fields": [
-    {"key": "valid_channel_count", "type": "number", "label": "有效通道数"},
-    {"key": "alarm_channel_count", "type": "number", "label": "局部告警通道数"},
-    {"key": "total_count", "type": "number", "label": "目标总数"}
+    {
+      "key": "server_event_type",
+      "type": "string",
+      "label": "服务器事件类型"
+    },
+    {
+      "key": "valid_channel_count",
+      "type": "number",
+      "label": "有效通道数"
+    },
+    {
+      "key": "alarm_channel_count",
+      "type": "number",
+      "label": "局部告警通道数"
+    },
+    {
+      "key": "total_count",
+      "type": "number",
+      "label": "目标总数"
+    },
+    {
+      "key": "invade_flag",
+      "type": "number",
+      "label": "触发开关"
+    },
+    {
+      "key": "yuv_width",
+      "type": "number",
+      "label": "算法图像宽度"
+    },
+    {
+      "key": "yuv_height",
+      "type": "number",
+      "label": "算法图像高度"
+    },
+    {
+      "key": "yuv_flag",
+      "type": "string",
+      "label": "图像来源标志"
+    }
+  ],
+  "actions": [
+    {
+      "id": "reset_report",
+      "label": "重新触发告警",
+      "style": "primary",
+      "help": "清除本全局实例的已上报状态；若聚合条件仍满足，下一个 tick 会再次产生告警。"
+    }
   ],
   "business_fields": []
 }

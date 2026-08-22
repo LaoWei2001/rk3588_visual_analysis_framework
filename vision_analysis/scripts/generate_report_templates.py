@@ -9,7 +9,11 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from generate_logics_catalog import ManifestError, build_catalog
+from generate_logics_catalog import (
+    ManifestError,
+    build_catalog,
+    resolved_report_template_id,
+)
 
 
 ALLOWED_MEDIA = {"annotated_image", "raw_image", "video"}
@@ -203,7 +207,9 @@ def main() -> int:
             if module_dir.resolve() not in path.parents or not path.is_file():
                 raise ManifestError(f"{module_dir}/logic.json: missing report template {relative}")
             declared_module_paths.add(path)
-            sources.append((path, load_json(path)))
+            contract = load_json(path)
+            contract["id"] = resolved_report_template_id(path, contract, str(logic["name"]))
+            sources.append((path, contract))
     all_module_paths = set(args.logic_root.glob("modules/*/report_templates/*.json")) | set(
         args.logic_root.glob("global_modules/*/report_templates/*.json")
     )
@@ -211,7 +217,11 @@ def main() -> int:
     if undeclared:
         raise ManifestError(f"undeclared module report template: {undeclared[0]}")
 
-    sources.extend((path, load_json(path)) for path in template_paths(args.app_dir))
+    for path in template_paths(args.app_dir):
+        contract = load_json(path)
+        owner_logic = str(contract.get("owner_logic", "")).strip()
+        contract["id"] = resolved_report_template_id(path, contract, owner_logic)
+        sources.append((path, contract))
 
     seen = {}
     for path, contract in sources:

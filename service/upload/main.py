@@ -32,7 +32,6 @@ def main() -> None:
         app_dir / "report_templates",
         data_dir / "report_contracts",
         data_dir / "contract_revisions",
-        data_dir / "delivery_history",
     )
     worker = threading.Thread(
         target=forwarder.run,

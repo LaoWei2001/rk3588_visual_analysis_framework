@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from routers import (apps, assets, auth, channel_control, config_io, logs, network_settings,
+from routers import (apps, assets, auth, logic_control, config_io, logs, network_settings,
                      ota_config, process, records, services, snapshot, storage_settings, stream,
                      system_settings, terminal, delivery_config)
 from services.auth_service import get_session
@@ -34,8 +34,8 @@ _LOGO_MIME = {
 
 # Paths that are always public (no auth required)
 _PUBLIC_API = {"/api/auth/login"}
-_PUBLIC_CHANNEL_ACTION = re.compile(
-    r"^/api/apps/[^/]+/channels/\d+/actions/[^/]+$"
+_PUBLIC_LOGIC_ACTION = re.compile(
+    r"^/api/apps/[^/]+/(?:channels/\d+|global-logics/[^/]+)/actions/[^/]+$"
 )
 
 
@@ -101,9 +101,9 @@ app.add_middleware(
 async def auth_middleware(request: Request, call_next):
     """Protect all /api/* endpoints except the public ones."""
     path = request.url.path
-    public_channel_action = (
+    public_logic_action = (
         request.method == "POST"
-        and _PUBLIC_CHANNEL_ACTION.fullmatch(path) is not None
+        and _PUBLIC_LOGIC_ACTION.fullmatch(path) is not None
     )
 
     # Static files, SPA HTML, health check → always pass through
@@ -112,7 +112,7 @@ async def auth_middleware(request: Request, call_next):
         or not path.startswith("/api/")
         or path in _PUBLIC_API
         or path == "/health"
-        or public_channel_action
+        or public_logic_action
     ):
         return await call_next(request)
 
@@ -144,7 +144,7 @@ async def auth_middleware(request: Request, call_next):
 app.include_router(auth.router,      prefix="/api")
 app.include_router(apps.router,      prefix="/api")
 app.include_router(config_io.router, prefix="/api")
-app.include_router(channel_control.router, prefix="/api")
+app.include_router(logic_control.router, prefix="/api")
 app.include_router(assets.router,    prefix="/api")
 app.include_router(process.router,   prefix="/api")
 app.include_router(snapshot.router,  prefix="/api")

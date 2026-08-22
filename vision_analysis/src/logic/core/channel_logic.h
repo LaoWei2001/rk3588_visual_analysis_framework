@@ -3,7 +3,7 @@
  * @brief 通道自定义业务逻辑接口 — C-style
  *
  * 架构说明:
- * - 跟踪器 (Tracker) 已移至 analyzer.cpp 全局执行
+ * - 跟踪器 (Tracker) 已移至 pipeline.cpp 全局执行
  * - 此模块仅用于用户自定义业务扩展
  *
  * 扩展方式 (每种逻辑一个独立模块目录, 自注册):
@@ -20,8 +20,9 @@
  */
 #pragma once
 
-#include "analyzer/algoProcess.h"
+#include "inference/inference_engine.h"
 #include "config/config.h"
+#include "logic_action.h"
 #include "logic_outputs.h"
 #include <cstdint>
 #include <memory>
@@ -31,29 +32,6 @@
 
 /* 前置声明 */
 struct ChannelFrameSnapshot;
-
-/*======================== Web/外部通道动作 ========================*/
-/**
- * Web按钮只传递通用的“动作名 + JSON参数”，具体含义由当前通道logic解释。
- * 动作不会在Socket线程直接执行，而是在该通道下一次logic调用前执行，因此可安全访问
- * ctx->state / frame / results，不会和逐帧业务逻辑并发修改状态。
- */
-struct ChannelAction
-{
-    std::string request_id;
-    std::string name;
-    std::string payload_json = "{}";
-    std::string logic_name; /* 入队时对应的logic，热切换后不误投给另一个logic */
-    uint64_t received_unix_ms = 0;
-};
-
-struct ChannelActionResult
-{
-    // 这次按钮的请求是否被处理
-    bool handled = false;
-    // 对处理结果的文字说明，默认是空字符串
-    std::string message;
-};
 
 /*======================== ROI 区域 (一个通道可配置多个) ========================*/
 /**
@@ -148,7 +126,7 @@ struct ChannelContext;
 class LogicParameterSet;
 typedef void (*ChannelLogicFunc)(struct ChannelContext *ctx);
 /* action 是仅在本次 handler 调用期间有效的只读借用指针；业务代码应先检查非空，不得跨帧保存。 */
-typedef ChannelActionResult (*ChannelActionFunc)(struct ChannelContext *ctx, const ChannelAction *action);
+typedef LogicActionResult (*ChannelLogicActionFunc)(struct ChannelContext *ctx, const LogicAction *action);
 typedef const cv::Mat *(*ChannelFrameGetter)(void *opaque);
 
 struct ChannelContext
@@ -380,13 +358,13 @@ struct LogicEntry
 };
 
 ChannelLogicFunc channel_logic_get(const char *name);
-ChannelActionFunc channel_logic_action_get(const char *name);
+ChannelLogicActionFunc channel_logic_action_get(const char *name);
 /** 返回当前二进制实际注册的通道逻辑名，供 --list-logics 等只读能力探测使用。 */
 std::vector<std::string> channel_logic_names();
 
 /** @brief 注册一个 logic 到分发表 (同名则覆盖)。一般不直接调用, 用 REGISTER_LOGIC 宏。 */
 void register_logic(const char *name, ChannelLogicFunc func);
-void register_logic_action(const char *name, ChannelActionFunc func);
+void register_logic_action(const char *name, ChannelLogicActionFunc func);
 
 /*======================== 自注册辅助 (推荐用法) ========================*/
 /**
@@ -412,7 +390,7 @@ struct LogicRegistrar
 
 struct LogicActionRegistrar
 {
-    LogicActionRegistrar(const char *name, ChannelActionFunc func)
+    LogicActionRegistrar(const char *name, ChannelLogicActionFunc func)
     {
         register_logic_action(name, func);
     }

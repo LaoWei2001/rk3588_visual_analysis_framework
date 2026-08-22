@@ -7,8 +7,9 @@
  */
 
 #include "global_logic.h"
-#include "core/app_ctrl.h"
-#include "core/pause_ctrl.h"
+#include "control/logic_control.h"
+#include "runtime/app_ctrl.h"
+#include "runtime/pause_ctrl.h"
 #include "logic_parameters.h"
 #include <algorithm>
 #include <atomic>
@@ -53,6 +54,14 @@ struct GlobalLogicEntry
 static GlobalLogicEntry g_logic_registry[MAX_GLOBAL_LOGIC_FUNCS];
 static int g_logic_count = 0;
 
+struct GlobalLogicActionEntry
+{
+    const char *name = nullptr;
+    GlobalLogicActionFunc func = nullptr;
+};
+static GlobalLogicActionEntry g_action_registry[MAX_GLOBAL_LOGIC_FUNCS];
+static int g_action_count = 0;
+
 void register_global_logic(const char *name, GlobalLogicFunc func)
 {
     if (!name || !func)
@@ -79,6 +88,35 @@ GlobalLogicFunc global_logic_get(const char *name)
         for (int i = 0; i < g_logic_count; ++i)
             if (g_logic_registry[i].name && strcmp(g_logic_registry[i].name, name) == 0)
                 return g_logic_registry[i].func;
+    return nullptr;
+}
+
+void register_global_logic_action(const char *name, GlobalLogicActionFunc func)
+{
+    if (!name || !func)
+        return;
+    for (int i = 0; i < g_action_count; ++i)
+    {
+        if (g_action_registry[i].name && strcmp(g_action_registry[i].name, name) == 0)
+        {
+            g_action_registry[i].func = func;
+            return;
+        }
+    }
+    if (g_action_count < MAX_GLOBAL_LOGIC_FUNCS)
+    {
+        g_action_registry[g_action_count].name = name;
+        g_action_registry[g_action_count].func = func;
+        ++g_action_count;
+    }
+}
+
+GlobalLogicActionFunc global_logic_action_get(const char *name)
+{
+    if (name)
+        for (int i = 0; i < g_action_count; ++i)
+            if (g_action_registry[i].name && strcmp(g_action_registry[i].name, name) == 0)
+                return g_action_registry[i].func;
     return nullptr;
 }
 
@@ -221,7 +259,7 @@ void *global_logic_thread_func(void *arg)
         t->gctx.config = &t->config;
         t->gctx.state = &t->state;
         t->gctx.logic_parameters = &t->logic_parameters;
-        t->gctx.steady_ms = tick_begin_ms;
+        t->gctx.timestamp_ms = tick_begin_ms;
         t->gctx.unix_ms = tick_unix_ms;
         t->gctx.dt_ms = dt_ms;
         t->gctx.tick_id = t->tick_id++;
@@ -230,6 +268,31 @@ void *global_logic_thread_func(void *arg)
         t->gctx.channel_snapshots = &t->channel_snapshots;
         t->gctx.connected_channel_ids = &t->config.channels;
         t->gctx.updated_channels = &t->updated_channels;
+
+        std::vector<LogicAction> pending_actions;
+        logic_control_take_global(t->config.instance_id, pending_actions);
+        GlobalLogicActionFunc action_fn = global_logic_action_get(t->config.logic.c_str());
+        for (const LogicAction &action : pending_actions)
+        {
+            if (action.logic_name != t->config.logic)
+            {
+                printf("[GlobalAction][%s][%s] drop action=%s request=%s (queued for %s)\n",
+                       t->config.instance_id.c_str(), t->config.logic.c_str(), action.name.c_str(),
+                       action.request_id.c_str(), action.logic_name.c_str());
+                continue;
+            }
+            if (!action_fn)
+            {
+                printf("[GlobalAction][%s][%s] no handler for action=%s request=%s\n",
+                       t->config.instance_id.c_str(), t->config.logic.c_str(), action.name.c_str(),
+                       action.request_id.c_str());
+                continue;
+            }
+            LogicActionResult result = action_fn(&t->gctx, &action);
+            printf("[GlobalAction][%s][%s] action=%s request=%s handled=%d msg=%s\n",
+                   t->config.instance_id.c_str(), t->config.logic.c_str(), action.name.c_str(),
+                   action.request_id.c_str(), result.handled ? 1 : 0, result.message.c_str());
+        }
 
         if (t->func)
             t->func(&t->gctx);

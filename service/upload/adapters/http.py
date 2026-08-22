@@ -2,7 +2,7 @@ import json
 import mimetypes
 import os
 from typing import Any, Dict
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import requests
 
@@ -13,10 +13,22 @@ from .mapping import MISSING, mapped_parts, response_path
 class HttpAdapter(DeliveryAdapter):
     adapter_id = "http"
 
-    def _request(self, event: Dict[str, Any], delivery: Dict[str, Any], preview: bool):
-        base_url = str(self.connection.get("base_url", "")).strip().rstrip("/") + "/"
-        if base_url == "/":
+    @staticmethod
+    def _base_url(value: Any) -> str:
+        value = str(value).strip()
+        if not value:
             raise ValueError("HTTP connection base_url is empty")
+        # 板端常直接填写 IP:port。为旧配置补上默认的 HTTP 协议，同时仍允许
+        # 用户显式选择 HTTPS；其他协议一律拒绝，避免 requests 到发送阶段才报错。
+        if "://" not in value:
+            value = "http://" + value
+        parsed = urlsplit(value)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("HTTP connection base_url must be a valid http(s) URL")
+        return value.rstrip("/") + "/"
+
+    def _request(self, event: Dict[str, Any], delivery: Dict[str, Any], preview: bool):
+        base_url = self._base_url(self.connection.get("base_url", ""))
         request_options = delivery.get("request", {})
         if not isinstance(request_options, dict):
             raise ValueError("contract request must be an object")
