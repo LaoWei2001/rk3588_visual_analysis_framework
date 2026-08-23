@@ -2,9 +2,9 @@
  * @file global_logic.h
  * @brief 跨通道全局算法接口与轮询调度
  *
- * 全局算法每个 tick 接收应用全部通道的一批固定 ChannelLogicSnapshot。Web 画布连线
- * 只是其中一个可选子集；业务既可以遍历连入通道，也可以按 ID 读取或遍历全部通道。
- * 该批次只复制业务变量和元信息，不复制图像，同一函数调用内重复查询不会跨版本。
+ * 全局算法每个 tick 通过 GlobalContext::inputs() 接收一批已经过框架筛选的 ChannelInput。
+ * Web 画布有连线时使用连入通道，否则使用应用全部通道；离线、尚未发布或长期没有
+ * 更新的通道不会进入业务输入。底层仍保留原始快照接口供版本对齐和媒体同步使用。
  *
  * 通道私有状态不是跨模块接口。通道 logic 必须在 logic.json 的 outputs 中声明业务
  * 变量，并通过 ctx->publish_*() 发布；全局算法只依赖这份公开数据契约。
@@ -42,6 +42,116 @@ struct ChannelUpdate
     uint64_t published_steady_ms = 0;
 };
 
+/**
+ * @brief 全局 Logic 的业务输入视图。
+ *
+ * 只有已经发布、当前在线且仍然有效的通道才会由框架放入 inputs()。本类型刻意不暴露
+ * 发布时间和数据年龄；普通跨通道业务只读取公开变量，输入有效性由调度器统一负责。
+ */
+class ChannelInput
+{
+  public:
+    ChannelInput() = default;
+    explicit ChannelInput(const ChannelLogicSnapshot *snapshot) : snapshot_(snapshot) {}
+
+    int channel_id() const
+    {
+        return snapshot_ ? snapshot_->channel_id : -1;
+    }
+
+    int64_t frame_id() const
+    {
+        return snapshot_ ? snapshot_->logic_frame_id : 0;
+    }
+
+    int src_width() const
+    {
+        return snapshot_ ? snapshot_->src_width : 0;
+    }
+
+    int src_height() const
+    {
+        return snapshot_ ? snapshot_->src_height : 0;
+    }
+
+    bool infer_enabled() const
+    {
+        return snapshot_ && snapshot_->infer_enabled;
+    }
+
+    const std::string &logic_name() const
+    {
+        static const std::string empty;
+        return snapshot_ ? snapshot_->logic_name : empty;
+    }
+
+    bool has(const char *key) const
+    {
+        return snapshot_ && snapshot_->outputs && snapshot_->outputs->has(key);
+    }
+
+    bool read_string(const char *key, std::string *out) const
+    {
+        return snapshot_ && snapshot_->outputs && snapshot_->outputs->try_get_string(key, out);
+    }
+
+    bool read_number(const char *key, double *out) const
+    {
+        return snapshot_ && snapshot_->outputs && snapshot_->outputs->try_get_number(key, out);
+    }
+
+    bool read_int(const char *key, int64_t *out) const
+    {
+        return snapshot_ && snapshot_->outputs && snapshot_->outputs->try_get_int(key, out);
+    }
+
+    bool read_bool(const char *key, bool *out) const
+    {
+        return snapshot_ && snapshot_->outputs && snapshot_->outputs->try_get_bool(key, out);
+    }
+
+    bool read_json(const char *key, std::string *out) const
+    {
+        return snapshot_ && snapshot_->outputs && snapshot_->outputs->try_get_json(key, out);
+    }
+
+    /* 与 GlobalContext::param_*() 一致的简洁取值形式。字段缺失或类型不匹配时返回
+     * 调用方给出的默认值；需要区分“缺失”和合法零值时使用上面的 read_*()。 */
+    std::string get_string(const char *key, const std::string &fallback = {}) const
+    {
+        std::string value;
+        return read_string(key, &value) ? value : fallback;
+    }
+
+    double get_number(const char *key, double fallback = 0.0) const
+    {
+        double value = fallback;
+        return read_number(key, &value) ? value : fallback;
+    }
+
+    int64_t get_int(const char *key, int64_t fallback = 0) const
+    {
+        int64_t value = fallback;
+        return read_int(key, &value) ? value : fallback;
+    }
+
+    bool get_bool(const char *key, bool fallback = false) const
+    {
+        bool value = fallback;
+        return read_bool(key, &value) ? value : fallback;
+    }
+
+    std::string get_json(const char *key, const std::string &fallback = {}) const
+    {
+        std::string value;
+        return read_json(key, &value) ? value : fallback;
+    }
+
+  private:
+    const ChannelLogicSnapshot *snapshot_ = nullptr;
+    friend struct GlobalContext;
+};
+
 struct GlobalContext
 {
     /** 本全局 logic 实例配置，实例存活期间稳定。 */
@@ -70,6 +180,7 @@ struct GlobalContext
     const std::vector<ChannelLogicSnapshot> *channel_snapshots = nullptr; /* 应用全部通道 */
     const std::vector<int> *connected_channel_ids = nullptr;              /* Web 画布连入通道 */
     const std::vector<ChannelUpdate> *updated_channels = nullptr;
+    const std::vector<ChannelInput> *ready_inputs = nullptr; /* 框架已完成选择和有效性过滤的业务输入 */
 
     bool has_param(const char *key) const;
     float param_float(const char *key) const;
@@ -88,6 +199,27 @@ struct GlobalContext
         return connected_channel_ids ? connected_channel_ids->size() : 0;
     }
 
+    /**
+     * 全局业务的默认输入入口：有画布连线时返回连入通道，否则返回应用全部通道；
+     * 尚未发布、离线或长时间没有更新的通道已由框架排除。
+     */
+    const std::vector<ChannelInput> &inputs() const
+    {
+        static const std::vector<ChannelInput> empty;
+        return ready_inputs ? *ready_inputs : empty;
+    }
+
+    const ChannelInput *input(int configured_id) const
+    {
+        if (!ready_inputs)
+            return nullptr;
+        for (const auto &item : *ready_inputs)
+            if (item.channel_id() == configured_id)
+                return &item;
+        return nullptr;
+    }
+
+    /* 以下原始快照接口供需要版本、更新时间或媒体一致性的高级逻辑使用。 */
     const ChannelLogicSnapshot *channel_at(std::size_t index) const
     {
         return channel_snapshots && index < channel_snapshots->size() ? &(*channel_snapshots)[index] : nullptr;

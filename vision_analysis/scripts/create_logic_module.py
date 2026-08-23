@@ -44,7 +44,11 @@ static void {name}(GlobalContext *gctx)
     if (!gctx)
         return;
 
-    // 在这里编写跨通道业务逻辑；事件上报使用框架提供的 EventRequest 接口。
+    for (const ChannelInput &channel : gctx->inputs())
+    {{
+        // 这里只处理有效业务输入；离线、未发布和过期通道已由框架排除。
+        (void)channel;
+    }}
 }}
 
 }} // namespace

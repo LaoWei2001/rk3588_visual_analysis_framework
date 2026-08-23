@@ -126,6 +126,10 @@ CMake 编译（包括 `build.sh --debug`）会生成并编译嵌入式能力清�
 4. 在 `global.global_logics[]` 配置实例；参数值放在该实例的
    `logic_parameters` 对象中。
 
+全局业务默认遍历 `gctx->inputs()`。框架会选择画布连入通道（无连线时为全部通道），
+并自动排除尚未发布、离线或长时间没有更新的输入；业务模块不需要计算或配置数据年龄。
+只有确实需要版本对齐或媒体快照的高级逻辑才使用 `channel()` 等原始快照接口。
+
 全局模块清单和参数表会与通道模块一起聚合进 `logics.json`。Web 直接读取当前 App 的
 `global_logics`，不维护全局 logic 硬编码列表。每个全局实例使用稳定 `instance_id`；参数
 热更新遵守 Schema 的 `preserve_state`、`reset_state`、`restart_required`，只影响发生变化的实例。

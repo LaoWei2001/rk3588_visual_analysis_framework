@@ -29,17 +29,6 @@
         "default": false,
         "x-hot-reload": "preserve_state"
       },
-      "max_data_age_ms": {
-        "type": "integer",
-        "title": "通道变量最大年龄",
-        "description": "超过该时间未更新的通道变量不参与本轮计算。",
-        "minimum": 100,
-        "maximum": 60000,
-        "default": 2000,
-        "x-unit": "毫秒",
-        "x-step": 100,
-        "x-hot-reload": "preserve_state"
-      },
       "server_event_type": {
         "type": "string",
         "title": "服务器事件类型",

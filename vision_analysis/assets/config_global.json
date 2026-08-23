@@ -29,8 +29,7 @@
         "poll_interval_ms": 200,
         "logic_parameters": {
           "total_count_threshold": 2,
-          "require_local_alarm": false,
-          "max_data_age_ms": 2000
+          "require_local_alarm": false
         },
         "report_policy": {
           "enabled": true,

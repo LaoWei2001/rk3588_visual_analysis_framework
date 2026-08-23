@@ -36,6 +36,7 @@ struct GlobalLogicThread
     std::vector<unsigned char> channel_observed;
     std::vector<uint64_t> last_publication_seq;
     std::vector<ChannelLogicSnapshot> channel_snapshots;
+    std::vector<ChannelInput> ready_inputs;
     std::vector<ChannelUpdate> updated_channels;
 
     GlobalContext gctx;
@@ -175,6 +176,44 @@ static uint64_t system_now_ms(void)
     return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 }
 
+/* 通道 Logic 由视频帧驱动，而全局 Logic 独立轮询。底层统一淘汰长期没有更新的
+ * “最后一次值”，避免每个业务模块各自计算数据年龄。至少容忍 2 秒；全局轮询本身
+ * 较慢时则容忍 3 个轮询周期。该策略属于运行时健康机制，不是业务参数。 */
+static int64_t automatic_input_timeout_ms(int poll_ms)
+{
+    constexpr int64_t minimum_timeout_ms = 2000;
+    constexpr int64_t tolerated_poll_intervals = 3;
+    return std::max<int64_t>(minimum_timeout_ms, static_cast<int64_t>(poll_ms) * tolerated_poll_intervals);
+}
+
+static const ChannelLogicSnapshot *find_snapshot(const std::vector<ChannelLogicSnapshot> &snapshots,
+                                                 int channel_id)
+{
+    for (const auto &snapshot : snapshots)
+        if (snapshot.channel_id == channel_id)
+            return &snapshot;
+    return nullptr;
+}
+
+static void prepare_ready_inputs(GlobalLogicThread *thread, int64_t timeout_ms)
+{
+    thread->ready_inputs.clear();
+    auto append_if_ready = [&](const ChannelLogicSnapshot *snapshot) {
+        if (snapshot && snapshot->readable(timeout_ms))
+            thread->ready_inputs.emplace_back(snapshot);
+    };
+
+    if (!thread->config.channels.empty())
+    {
+        for (int channel_id : thread->config.channels)
+            append_if_ready(find_snapshot(thread->channel_snapshots, channel_id));
+        return;
+    }
+
+    for (const auto &snapshot : thread->channel_snapshots)
+        append_if_ready(&snapshot);
+}
+
 /*======================== 全局逻辑线程入口 (pthread) ========================*/
 void *global_logic_thread_func(void *arg)
 {
@@ -206,9 +245,11 @@ void *global_logic_thread_func(void *arg)
     t->channel_observed.assign(ch_count, 0);
     t->last_publication_seq.assign(ch_count, 0);
     t->channel_snapshots.reserve(ch_count);
+    t->ready_inputs.reserve(ch_count);
     t->updated_channels.reserve(ch_count);
 
     int poll_ms = std::max(10, t->config.poll_interval_ms);
+    const int64_t input_timeout_ms = automatic_input_timeout_ms(poll_ms);
 
     while (t->running.load())
     {
@@ -255,6 +296,8 @@ void *global_logic_thread_func(void *arg)
             t->channel_snapshots.push_back(std::move(snapshot));
         }
 
+        prepare_ready_inputs(t, input_timeout_ms);
+
         const auto runtime = app_ctrl_get_runtime_snapshot();
         t->gctx.config = &t->config;
         t->gctx.state = &t->state;
@@ -268,6 +311,7 @@ void *global_logic_thread_func(void *arg)
         t->gctx.channel_snapshots = &t->channel_snapshots;
         t->gctx.connected_channel_ids = &t->config.channels;
         t->gctx.updated_channels = &t->updated_channels;
+        t->gctx.ready_inputs = &t->ready_inputs;
 
         std::vector<LogicAction> pending_actions;
         logic_control_take_global(t->config.instance_id, pending_actions);
