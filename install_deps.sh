@@ -99,14 +99,48 @@ APT_BUILD=(
     libblas-dev liblapack-dev
 )
 
+apt_package_is_installed() {
+    # ${Status} 的首字段可能是 hold；只检查实际安装状态，避免把 hold 包误判为缺失。
+    dpkg-query -W -f='${db:Status-Status}\n' "$1" 2>/dev/null \
+        | grep -qx 'installed'
+}
+
+install_missing_apt_packages() {
+    local group_name="$1"
+    shift
+
+    local missing_packages=()
+    local package
+    for package in "$@"; do
+        if ! apt_package_is_installed "$package"; then
+            missing_packages+=("$package")
+        fi
+    done
+
+    if [ "${#missing_packages[@]}" -eq 0 ]; then
+        echo "    ${group_name}已全部安装；保留当前版本。"
+        return
+    fi
+
+    echo "    ${group_name}缺失 ${#missing_packages[@]} 个包：${missing_packages[*]}"
+    # Rockchip BSP 经常 hold 多媒体相关包。只补装缺失项，并禁止 APT 顺带升级
+    # 命令行中已经安装的包，避免 -y 因尝试改变 hold 包而中止整个事务。
+    if ! as_root env DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y --no-upgrade "${missing_packages[@]}"; then
+        echo "[错误] ${group_name}安装失败。脚本不会自动解除 hold 或升级厂家 BSP 包。" >&2
+        echo "       请检查上方 APT 输出、软件源及依赖版本冲突。" >&2
+        return 1
+    fi
+}
+
 install_apt_dependencies() {
     echo ">>> [1/5] 安装 APT 第三方依赖..."
     if ! as_root apt-get update; then
-        echo "    [警告] apt-get update 有源失败；继续使用现有缓存尝试安装。" >&2
+        echo "    [警告] apt-get update 有软件源失败；继续使用已成功更新的索引和现有缓存。" >&2
     fi
-    as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y "${APT_RUNTIME[@]}"
+    install_missing_apt_packages "运行环境" "${APT_RUNTIME[@]}"
     if [ "$WANT_BUILD" = true ]; then
-        as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y "${APT_BUILD[@]}"
+        install_missing_apt_packages "C/C++ 编译环境" "${APT_BUILD[@]}"
     fi
 }
 

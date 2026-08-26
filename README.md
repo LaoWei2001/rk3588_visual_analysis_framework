@@ -242,7 +242,8 @@ bash install_deps.sh
 
 该命令需要在盒子仍能访问 APT、PyPI/npm 镜像时执行，会安装完整第三方运行依赖、
 锁定安装前端依赖并预生成 `web_console/frontend/dist`。RKNN、RGA、MPP 等 Rockchip
-BSP 组件不由该脚本安装。
+BSP 组件不由该脚本安装。APT 阶段只补装缺失包，不升级已经安装或被厂家设为
+`hold` 的 BSP 包；单个无关软件源更新失败时，会使用其他成功更新的索引继续安装。
 
 若需要在 RK3588 板端从源码编译（通常不需要）：
 
