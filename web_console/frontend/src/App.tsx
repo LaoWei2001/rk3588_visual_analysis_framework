@@ -10,6 +10,7 @@ import LoginPage   from './pages/LoginPage'
 import TerminalPage from './pages/TerminalPage'
 import ServicesPage from './pages/ServicesPage'
 import SystemSettingsPage from './pages/SystemSettingsPage'
+import CameraSettingsPage from './pages/CameraSettingsPage'
 import { destroyAllTerminals } from './pages/terminalSession'
 import ErrorBoundary from './components/ErrorBoundary'
 import { useAuthStore } from './store/authStore'
@@ -95,6 +96,10 @@ function AppShell() {
           <span className="nav-icon">◉</span> 系统设置
         </NavLink>
 
+        <NavLink to="/camera-settings" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
+          <span className="nav-icon">◈</span> 摄像头配置
+        </NavLink>
+
         <NavLink to="/terminal" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
           <span className="nav-icon">▤</span> 终端命令行
         </NavLink>
@@ -118,6 +123,7 @@ function AppShell() {
             <Route path="/terminal"        element={<TerminalPage />} />
             <Route path="/services"        element={<ServicesPage />} />
             <Route path="/system-settings" element={<SystemSettingsPage />} />
+            <Route path="/camera-settings" element={<CameraSettingsPage />} />
           </Routes>
         </ErrorBoundary>
       </main>

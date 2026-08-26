@@ -50,8 +50,9 @@ bash install.sh
 ```
 
 默认安装到 `/opt/ai_apps/_console`，生成并启用 `rk3588-console.service`，端口 8080。可在命令前
-设置 `APPS_ROOT`/`INSTALL_DIR` 更改位置。脚本有 Node/npm 时重新构建前端；没有时使用源码目录已有
-的 `frontend/dist`，两者都不存在则失败。
+设置 `APPS_ROOT`/`INSTALL_DIR` 更改位置。普通模式有 Node/npm 时会锁定依赖并重新构建，没有时使用
+源码目录已有的 `frontend/dist`。无公网现场应先在项目根执行过 `install_deps.sh`，再用
+`sudo env OFFLINE=1 bash install.sh`，此时只使用已安装的 Python 包和预构建前端。
 
 Web“上传程序”与 `install_app.sh` 写入同一 App 根，但 Web 接受归档并做路径安全检查。Web 上传时
 会停止全部托管视觉 App，避免替换正在执行的文件。

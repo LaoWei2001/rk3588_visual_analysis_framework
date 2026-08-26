@@ -10,7 +10,7 @@ set -e
 APPS_ROOT="${APPS_ROOT:-/opt/ai_apps}"
 INSTALL_DIR="${INSTALL_DIR:-$APPS_ROOT/_console}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_BIN="$(command -v python3)"
+PYTHON_BIN="$(command -v python3 || true)"
 
 if [ -z "$PYTHON_BIN" ]; then
     echo "[错误] 未找到 python3"
@@ -19,21 +19,37 @@ fi
 
 echo "=== RK3588 Web Console 安装 ==="
 
+# 设为 OFFLINE=1 时只使用 install_deps.sh 已准备好的 Python 环境和预构建 dist，
+# 绝不访问 PyPI/npm；适合现场无公网安装。
+OFFLINE="${OFFLINE:-0}"
+
 # 1. 安装后端
 echo "[1/4] 安装后端..."
 mkdir -p "$INSTALL_DIR/backend"
 cp -r "$SCRIPT_DIR/backend/"* "$INSTALL_DIR/backend/"
 cd "$INSTALL_DIR/backend"
-pip3 install -r requirements.txt --quiet
+if [ "$OFFLINE" = "1" ]; then
+    "$PYTHON_BIN" -m pip install --no-index -r requirements.txt --quiet
+else
+    "$PYTHON_BIN" -m pip install -r requirements.txt --quiet
+fi
 
 # 2. 构建 / 复制前端
 echo "[2/4] 处理前端..."
 mkdir -p "$INSTALL_DIR/frontend"
 
-if command -v node &>/dev/null && command -v npm &>/dev/null; then
+if [ "$OFFLINE" = "1" ]; then
+    if [ ! -f "$SCRIPT_DIR/frontend/dist/index.html" ]; then
+        echo "  [错误] OFFLINE=1 但缺少预构建 frontend/dist/index.html"
+        echo "         请在有公网时先运行项目根目录 install_deps.sh。"
+        exit 1
+    fi
+    cp -r "$SCRIPT_DIR/frontend/dist" "$INSTALL_DIR/frontend/"
+    echo "    离线模式：已复制预构建前端"
+elif command -v node &>/dev/null && command -v npm &>/dev/null; then
     echo "    检测到 Node.js $(node -v)，直接在板端构建..."
     cd "$SCRIPT_DIR/frontend"
-    npm install --silent
+    npm ci --no-audit --no-fund
     npm run build
     cp -r dist "$INSTALL_DIR/frontend/"
     echo "    构建完成"

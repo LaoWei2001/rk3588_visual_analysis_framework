@@ -11,13 +11,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from routers import (apps, assets, auth, logic_control, config_io, logs, network_settings,
+from routers import (apps, assets, auth, camera_settings, logic_control, config_io, logs, network_settings,
                      ota_config, process, records, services, snapshot, storage_settings, stream,
                      system_settings, terminal, delivery_config, video_capture)
 from services.auth_service import get_session
 from services import process_manager as process_manager
 from services import runtime_state
 from services import network_manager
+from services import camera_manager
+from services.camera_web_proxy import camera_web_proxy
 from services.video_capture_manager import capture_manager
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
@@ -48,6 +50,11 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(network_manager.recover_incomplete_transactions)
     except Exception as exc:
         print(f"[Network] 未完成网络事务恢复失败：{exc}")
+    # 摄像头侧仅恢复独立 /32 地址和主机路由，不改默认路由或 NetworkManager 配置。
+    try:
+        await asyncio.to_thread(camera_manager.restore_persisted_configuration)
+    except Exception as exc:
+        print(f"[CameraNetwork] 持久化配置恢复失败：{exc}")
     process_manager.recover_processes()
 
     def restore_runtime() -> None:
@@ -83,6 +90,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # 摄像头 Web 代理仅按需启动；退出时关闭监听和所有透明转发连接。
+        await asyncio.to_thread(camera_web_proxy.stop)
         # 独立素材采集器不依赖浏览器连接，但控制台正常退出时必须发送 EOS，
         # 确保正在写入的单个 MP4 可以正常收尾。
         await asyncio.to_thread(capture_manager.shutdown)
@@ -159,6 +168,7 @@ app.include_router(ota_config.router,    prefix="/api")
 app.include_router(services.router,      prefix="/api")
 app.include_router(storage_settings.router, prefix="/api")
 app.include_router(network_settings.router, prefix="/api")
+app.include_router(camera_settings.router, prefix="/api")
 app.include_router(system_settings.router, prefix="/api")
 app.include_router(video_capture.router, prefix="/api")
 app.include_router(logs.router)      # WebSocket has its own /ws prefix

@@ -240,11 +240,31 @@ GStreamer appsink
 bash install_deps.sh
 ```
 
+该命令需要在盒子仍能访问 APT、PyPI/npm 镜像时执行，会安装完整第三方运行依赖、
+锁定安装前端依赖并预生成 `web_console/frontend/dist`。RKNN、RGA、MPP 等 Rockchip
+BSP 组件不由该脚本安装。
+
 若需要在 RK3588 板端从源码编译（通常不需要）：
 
 ```bash
 bash install_deps.sh --build
 ```
+
+准备完成后可断开公网并做一次只读验收：
+
+```bash
+bash install_deps.sh --check
+# 需要验收板端编译环境时：bash install_deps.sh --check --build
+```
+
+现场首次/更新安装 Web 控制台时使用预构建前端和已安装的 Python 包，不访问公网：
+
+```bash
+sudo env OFFLINE=1 bash web_console/install.sh
+```
+
+`install_deps.sh` 是“联网预配置 + 断网验收”脚本，不包含 deb/wheel/npm 离线安装包；
+因此不能把一台从未准备过的裸机带到无公网现场后再首次执行普通安装模式。
 
 Rockchip RKNN/RGA 的头文件和运行库通常由板卡 BSP、系统镜像或交叉编译环境提供，若没有安装相关的文件，需要参考瑞芯微官方的相关文档进行安装。
 
@@ -282,7 +302,7 @@ cd vision_analysis
 
 ```bash
 cd vision_analysis/dist
-bash setup_python.sh
+OFFLINE=1 bash setup_python.sh  # 已执行根目录 install_deps.sh 的现场盒子
 bash run.sh ./assets/config_6.json
 ```
 
