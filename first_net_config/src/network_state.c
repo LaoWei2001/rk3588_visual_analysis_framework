@@ -564,17 +564,3 @@ bool nmcli_available(void)
 
     return run_cmd_silent(argv) == 0;
 }
-
-bool checkpoint_supported(void)
-{
-    char out[CMD_OUT_SIZE];
-    const char *argv[] = {
-        "nmcli", "device", "help", NULL};
-
-    if (capture_cmd(argv, out, sizeof(out)) != 0)
-    {
-        return false;
-    }
-
-    return strstr(out, "checkpoint") != NULL;
-}

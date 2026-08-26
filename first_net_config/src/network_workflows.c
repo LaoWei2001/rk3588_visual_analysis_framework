@@ -11,6 +11,7 @@
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -42,7 +43,7 @@ void configure_wired_beginner(void)
         snprintf(final_profile, sizeof(final_profile), "nettool-%s", iface);
         if (!build_temp_profile(iface, &temp_profile))
         {
-            printf("无法生成测试连接的唯一 UUID。\n");
+            printf("无法生成唯一的测试连接名称。\n");
             return;
         }
 
@@ -52,7 +53,6 @@ void configure_wired_beginner(void)
                 "type", "ethernet",
                 "ifname", iface,
                 "con-name", temp_profile.name,
-                "connection.uuid", temp_profile.uuid,
                 "autoconnect", "no",
                 NULL};
             if (run_cmd(add) != 0)
@@ -60,6 +60,12 @@ void configure_wired_beginner(void)
                 printf("创建测试用有线网络失败。\n");
                 return;
             }
+        }
+
+        if (!bind_created_profile_uuid(&temp_profile))
+        {
+            printf("无法确认测试用有线网络的唯一标识。\n");
+            return;
         }
 
         memset(&cfg, 0, sizeof(cfg));
@@ -168,23 +174,20 @@ void configure_wired_beginner(void)
 
         printf("\n保存后的网络名称：%s\n", final_profile);
 
-        if (!safe_activate_with_checkpoint(iface, &temp_profile, &cfg))
         {
-            cleanup_temp_profile(&temp_profile);
-            return;
-        }
+            NetworkActivationResult result = safe_activate_with_reconnect(
+                iface, &temp_profile, &cfg, final_profile, true);
 
-        if (!read_yes_no("\n测试通过。是否保存为永久配置并设置开机自动连接？[Y/n]: ", true))
-        {
-            printf("你没有选择保存。测试用网络不会在下次开机时自动使用。\n");
-            return;
-        }
-
-        if (!finalize_profile(&temp_profile, final_profile))
-        {
-            printf("\n[提醒] 新网络测试正常，但保存过程没有完全成功。\n");
-            printf("请先查看当前网络状态，确认无误后再决定是否重启。\n");
-            return;
+            if (result == NETWORK_ACTIVATION_FAILED)
+            {
+                cleanup_temp_profile(&temp_profile);
+                return;
+            }
+            if (result == NETWORK_ACTIVATION_PENDING)
+            {
+                printf("[待确认] 请通过新 IP 重新登录并再次运行本工具。\n");
+                exit(EXIT_SUCCESS);
+            }
         }
 
         printf("\n[完成] 有线网络设置完成。\n");
@@ -212,7 +215,7 @@ void configure_wired(void)
                            sizeof(final_profile));
     if (!build_temp_profile(iface, &temp_profile))
     {
-        printf("无法生成测试连接的唯一 UUID。\n");
+        printf("无法生成唯一的测试连接名称。\n");
         return;
     }
 
@@ -222,7 +225,6 @@ void configure_wired(void)
             "type", "ethernet",
             "ifname", iface,
             "con-name", temp_profile.name,
-            "connection.uuid", temp_profile.uuid,
             "autoconnect", "no",
             NULL};
 
@@ -231,6 +233,12 @@ void configure_wired(void)
             printf("创建测试用有线网络失败。\n");
             return;
         }
+    }
+
+    if (!bind_created_profile_uuid(&temp_profile))
+    {
+        printf("无法确认测试用有线网络的唯一标识。\n");
+        return;
     }
 
     if (configure_ipv4_profile(temp_profile.uuid, &cfg) != 0)
@@ -243,27 +251,20 @@ void configure_wired(void)
     printf("\n测试用网络已经建立，但暂时不会在开机时自动使用。\n");
     printf("保存后的网络名称：%s\n", final_profile);
 
-    if (!safe_activate_with_checkpoint(iface,
-                                       &temp_profile,
-                                       &cfg))
     {
-        cleanup_temp_profile(&temp_profile);
-        return;
-    }
+        NetworkActivationResult result = safe_activate_with_reconnect(
+            iface, &temp_profile, &cfg, final_profile, true);
 
-    if (!read_yes_no("\n自动验收通过。是否正式保存并设为开机自动连接？[Y/n]: ",
-                     true))
-    {
-        printf("你取消了保存。\n");
-        printf("当前可能仍在使用测试网络，但它不会在下次开机时自动使用。\n");
-        return;
-    }
-
-    if (!finalize_profile(&temp_profile, final_profile))
-    {
-        printf("\n[WARN] 网络已经通过测试，但正式保存步骤未完全完成。\n");
-        printf("请先用“查看当前网络状态”确认当前情况，不要直接重启。\n");
-        return;
+        if (result == NETWORK_ACTIVATION_FAILED)
+        {
+            cleanup_temp_profile(&temp_profile);
+            return;
+        }
+        if (result == NETWORK_ACTIVATION_PENDING)
+        {
+            printf("[待确认] 请通过新 IP 重新登录并再次运行本工具。\n");
+            exit(EXIT_SUCCESS);
+        }
     }
 
     show_network_state();
@@ -343,7 +344,7 @@ void configure_wifi(void)
                            sizeof(final_profile));
     if (!build_temp_profile(iface, &temp_profile))
     {
-        printf("无法生成测试连接的唯一 UUID。\n");
+        printf("无法生成唯一的测试连接名称。\n");
         return;
     }
 
@@ -353,7 +354,6 @@ void configure_wifi(void)
             "type", "wifi",
             "ifname", iface,
             "con-name", temp_profile.name,
-            "connection.uuid", temp_profile.uuid,
             "autoconnect", "no",
             "ssid", ssid,
             NULL};
@@ -363,6 +363,12 @@ void configure_wifi(void)
             printf("创建测试用无线网络失败。\n");
             return;
         }
+    }
+
+    if (!bind_created_profile_uuid(&temp_profile))
+    {
+        printf("无法确认测试用无线网络的唯一标识。\n");
+        return;
     }
 
     if (security == 1)
@@ -408,27 +414,20 @@ void configure_wifi(void)
     printf("\n测试用无线网络已经建立：%s\n", temp_profile.name);
     printf("它暂时不会在开机时自动使用，因此测试失败不会影响下次启动。\n");
 
-    if (!safe_activate_with_checkpoint(iface,
-                                       &temp_profile,
-                                       &cfg))
     {
-        cleanup_temp_profile(&temp_profile);
-        return;
-    }
+        NetworkActivationResult result = safe_activate_with_reconnect(
+            iface, &temp_profile, &cfg, final_profile, true);
 
-    if (!read_yes_no("\n自动验收通过。是否正式保存并设为开机自动连接？[Y/n]: ",
-                     true))
-    {
-        printf("你取消了保存。\n");
-        printf("测试用无线网络仍然不会在开机时自动使用。\n");
-        return;
-    }
-
-    if (!finalize_profile(&temp_profile, final_profile))
-    {
-        printf("\n[WARN] 网络已经通过测试，但正式保存步骤未完全完成。\n");
-        printf("请先用“查看当前网络状态”确认当前情况，不要直接重启。\n");
-        return;
+        if (result == NETWORK_ACTIVATION_FAILED)
+        {
+            cleanup_temp_profile(&temp_profile);
+            return;
+        }
+        if (result == NETWORK_ACTIVATION_PENDING)
+        {
+            printf("[待确认] 请通过新 IP 重新登录并再次运行本工具。\n");
+            exit(EXIT_SUCCESS);
+        }
     }
 
     show_network_state();
@@ -579,10 +578,20 @@ void activate_saved_connection_safely(void)
     printf("程序会检查它是否真的在 %s 上启用，以及是否获得了 IP 地址。\n",
            iface);
 
-    if (!safe_activate_with_checkpoint(iface, &profile, &cfg))
     {
-        return;
-    }
+        NetworkActivationResult result = safe_activate_with_reconnect(
+            iface, &profile, &cfg, "", false);
 
-    printf("[完成] 这项网络配置已经通过测试。\n");
+        if (result == NETWORK_ACTIVATION_FAILED)
+        {
+            return;
+        }
+        if (result == NETWORK_ACTIVATION_PENDING)
+        {
+            printf("[待确认] 请通过新 IP 重新登录并再次运行本工具。\n");
+            exit(EXIT_SUCCESS);
+        }
+
+        printf("[完成] 这项网络配置已经通过测试。\n");
+    }
 }

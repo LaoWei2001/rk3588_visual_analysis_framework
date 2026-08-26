@@ -8,9 +8,9 @@
 #define PROFILE_SIZE 160
 #define UUID_SIZE 37
 #define CMD_OUT_SIZE 4096
-#define CHECKPOINT_TIMEOUT_SEC "120"
 #define NMCLI_UP_WAIT_SEC "45"
-#define FALLBACK_ROLLBACK_TIMEOUT_SEC 120
+#define PENDING_CONFIRM_TIMEOUT_SEC 120
+#define ACTIVATION_ROLLBACK_TIMEOUT_SEC 180
 #define IPV4_DAD_TIMEOUT_MS "3000"
 
 typedef struct
@@ -27,5 +27,12 @@ typedef struct
     char name[PROFILE_SIZE];
     char uuid[UUID_SIZE];
 } ConnectionProfile;
+
+typedef enum
+{
+    NETWORK_ACTIVATION_FAILED = 0,
+    NETWORK_ACTIVATION_CONFIRMED,
+    NETWORK_ACTIVATION_PENDING
+} NetworkActivationResult;
 
 #endif

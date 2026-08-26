@@ -8,19 +8,408 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <net/if.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
-static bool g_checkpoint_supported = false;
+#ifndef FIRST_NET_CONFIG_RUNTIME_DIR
+#define FIRST_NET_CONFIG_RUNTIME_DIR "/run/first_net_config"
+#endif
 
-void network_safety_set_checkpoint_supported(bool supported)
+#define PENDING_STATE_MAGIC "FNC-PENDING-v1"
+#define PENDING_STATE_VERSION 1U
+
+typedef enum
 {
-    g_checkpoint_supported = supported;
+    PENDING_STATUS_PREPARING = 1,
+    PENDING_STATUS_AWAITING_CONFIRMATION,
+    PENDING_STATUS_ROLLING_BACK,
+    PENDING_STATUS_ROLLBACK_FAILED,
+    PENDING_STATUS_CONFIRMING,
+    PENDING_STATUS_SAVE_FAILED,
+    PENDING_STATUS_CONFIRMED
+} PendingStatus;
+
+typedef struct
+{
+    char magic[16];
+    uint32_t version;
+    uint32_t struct_size;
+    int32_t status;
+    uint32_t finalize_on_confirmation;
+    int64_t created_at;
+    int64_t deadline;
+    char transaction_id[UUID_SIZE];
+    char iface[IF_NAMESIZE];
+    ConnectionProfile new_profile;
+    ConnectionProfile old_profile;
+    IPv4Config cfg;
+    char final_profile_name[PROFILE_SIZE];
+} PendingNetworkChange;
+
+typedef enum
+{
+    PENDING_READ_ERROR = -1,
+    PENDING_READ_NONE = 0,
+    PENDING_READ_OK = 1
+} PendingReadResult;
+
+static bool rollback_pending_connection(const PendingNetworkChange *state,
+                                        bool verbose);
+
+static bool make_runtime_path(char *out,
+                              size_t out_size,
+                              const char *name)
+{
+    int written = snprintf(out, out_size, "%s/%s",
+                           FIRST_NET_CONFIG_RUNTIME_DIR, name);
+
+    return written >= 0 && (size_t)written < out_size;
+}
+
+static bool ensure_runtime_directory(void)
+{
+    struct stat info;
+
+    if (mkdir(FIRST_NET_CONFIG_RUNTIME_DIR, 0700) != 0 && errno != EEXIST)
+    {
+        return false;
+    }
+
+    if (lstat(FIRST_NET_CONFIG_RUNTIME_DIR, &info) != 0 ||
+        !S_ISDIR(info.st_mode) || info.st_uid != geteuid())
+    {
+        errno = EPERM;
+        return false;
+    }
+
+    if ((info.st_mode & 0777) != 0700 &&
+        chmod(FIRST_NET_CONFIG_RUNTIME_DIR, 0700) != 0)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+static int lock_pending_state(void)
+{
+    char path[PATH_MAX];
+    int fd;
+
+    if (!ensure_runtime_directory() ||
+        !make_runtime_path(path, sizeof(path), "pending.lock"))
+    {
+        return -1;
+    }
+
+    fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0)
+    {
+        return -1;
+    }
+
+    if (flock(fd, LOCK_EX) != 0)
+    {
+        close(fd);
+        return -1;
+    }
+
+    return fd;
+}
+
+static void unlock_pending_state(int fd)
+{
+    if (fd >= 0)
+    {
+        (void)flock(fd, LOCK_UN);
+        close(fd);
+    }
+}
+
+static bool valid_uuid_text_local(const char *uuid)
+{
+    if (!uuid || strnlen(uuid, UUID_SIZE) != UUID_SIZE - 1)
+    {
+        return false;
+    }
+
+    for (size_t i = 0; i < UUID_SIZE - 1; ++i)
+    {
+        bool dash = i == 8 || i == 13 || i == 18 || i == 23;
+        bool hex = (uuid[i] >= '0' && uuid[i] <= '9') ||
+                   (uuid[i] >= 'a' && uuid[i] <= 'f') ||
+                   (uuid[i] >= 'A' && uuid[i] <= 'F');
+
+        if ((dash && uuid[i] != '-') || (!dash && !hex))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool pending_state_is_valid(const PendingNetworkChange *state)
+{
+    if (!state ||
+        memcmp(state->magic, PENDING_STATE_MAGIC,
+               sizeof(PENDING_STATE_MAGIC)) != 0 ||
+        state->version != PENDING_STATE_VERSION ||
+        state->struct_size != sizeof(*state) ||
+        state->status < PENDING_STATUS_PREPARING ||
+        state->status > PENDING_STATUS_CONFIRMED ||
+        state->finalize_on_confirmation > 1U ||
+        !memchr(state->transaction_id, '\0', sizeof(state->transaction_id)) ||
+        !memchr(state->iface, '\0', sizeof(state->iface)) ||
+        !memchr(state->new_profile.name, '\0',
+                sizeof(state->new_profile.name)) ||
+        !memchr(state->new_profile.uuid, '\0',
+                sizeof(state->new_profile.uuid)) ||
+        !memchr(state->old_profile.name, '\0',
+                sizeof(state->old_profile.name)) ||
+        !memchr(state->old_profile.uuid, '\0',
+                sizeof(state->old_profile.uuid)) ||
+        !memchr(state->final_profile_name, '\0',
+                sizeof(state->final_profile_name)) ||
+        !valid_uuid_text_local(state->transaction_id) ||
+        !valid_uuid_text_local(state->new_profile.uuid) ||
+        state->iface[0] == '\0' || state->new_profile.name[0] == '\0')
+    {
+        return false;
+    }
+
+    if (state->old_profile.uuid[0] != '\0' &&
+        !valid_uuid_text_local(state->old_profile.uuid))
+    {
+        return false;
+    }
+
+    if (state->finalize_on_confirmation != 0U &&
+        state->final_profile_name[0] == '\0')
+    {
+        return false;
+    }
+
+    if (state->cfg.is_static && !valid_ipv4(state->cfg.ip))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+static PendingReadResult read_pending_state_locked(PendingNetworkChange *state)
+{
+    char path[PATH_MAX];
+    struct stat info;
+    int fd;
+    size_t used = 0;
+
+    if (!state || !make_runtime_path(path, sizeof(path), "pending.state"))
+    {
+        return PENDING_READ_ERROR;
+    }
+
+    memset(state, 0, sizeof(*state));
+    fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0)
+    {
+        return errno == ENOENT ? PENDING_READ_NONE : PENDING_READ_ERROR;
+    }
+
+    if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) ||
+        info.st_uid != geteuid() || info.st_size != (off_t)sizeof(*state))
+    {
+        close(fd);
+        return PENDING_READ_ERROR;
+    }
+
+    while (used < sizeof(*state))
+    {
+        ssize_t count = read(fd, (char *)state + used,
+                             sizeof(*state) - used);
+
+        if (count < 0 && errno == EINTR)
+        {
+            continue;
+        }
+        if (count <= 0)
+        {
+            close(fd);
+            return PENDING_READ_ERROR;
+        }
+        used += (size_t)count;
+    }
+
+    close(fd);
+    return pending_state_is_valid(state) ? PENDING_READ_OK
+                                         : PENDING_READ_ERROR;
+}
+
+static bool write_all(int fd, const void *data, size_t size)
+{
+    const char *cursor = data;
+
+    while (size > 0)
+    {
+        ssize_t count = write(fd, cursor, size);
+
+        if (count < 0 && errno == EINTR)
+        {
+            continue;
+        }
+        if (count <= 0)
+        {
+            return false;
+        }
+
+        cursor += count;
+        size -= (size_t)count;
+    }
+
+    return true;
+}
+
+static bool write_pending_state_locked(const PendingNetworkChange *state)
+{
+    char path[PATH_MAX];
+    char temporary[PATH_MAX];
+    int fd;
+    int written;
+    bool ok;
+
+    if (!pending_state_is_valid(state) ||
+        !make_runtime_path(path, sizeof(path), "pending.state"))
+    {
+        return false;
+    }
+
+    written = snprintf(temporary, sizeof(temporary),
+                       "%s/pending.tmp.%ld",
+                       FIRST_NET_CONFIG_RUNTIME_DIR, (long)getpid());
+    if (written < 0 || (size_t)written >= sizeof(temporary))
+    {
+        return false;
+    }
+
+    fd = open(temporary,
+              O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW,
+              0600);
+    if (fd < 0)
+    {
+        return false;
+    }
+
+    ok = write_all(fd, state, sizeof(*state)) && fsync(fd) == 0;
+    if (close(fd) != 0)
+    {
+        ok = false;
+    }
+
+    if (ok && rename(temporary, path) == 0)
+    {
+        return true;
+    }
+
+    (void)unlink(temporary);
+    return false;
+}
+
+static bool remove_pending_state_locked(void)
+{
+    char path[PATH_MAX];
+
+    if (!make_runtime_path(path, sizeof(path), "pending.state"))
+    {
+        return false;
+    }
+
+    return unlink(path) == 0 || errno == ENOENT;
+}
+
+static bool create_pending_state(const char *iface,
+                                 const ConnectionProfile *new_profile,
+                                 const ConnectionProfile *old_profile,
+                                 const IPv4Config *cfg,
+                                 const char *final_profile_name,
+                                 bool finalize_on_confirmation,
+                                 PendingNetworkChange *out)
+{
+    PendingNetworkChange existing;
+    PendingReadResult read_result;
+    int lock_fd;
+    time_t now = time(NULL);
+
+    if (!iface || !new_profile || !cfg || !out)
+    {
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+    snprintf(out->magic, sizeof(out->magic), "%s", PENDING_STATE_MAGIC);
+    out->version = PENDING_STATE_VERSION;
+    out->struct_size = sizeof(*out);
+    out->status = PENDING_STATUS_PREPARING;
+    out->finalize_on_confirmation = finalize_on_confirmation ? 1U : 0U;
+    out->created_at = (int64_t)now;
+    out->deadline = (int64_t)now + ACTIVATION_ROLLBACK_TIMEOUT_SEC;
+    snprintf(out->iface, sizeof(out->iface), "%s", iface);
+    out->new_profile = *new_profile;
+    if (old_profile)
+    {
+        out->old_profile = *old_profile;
+    }
+    out->cfg = *cfg;
+    snprintf(out->final_profile_name, sizeof(out->final_profile_name), "%s",
+             final_profile_name ? final_profile_name : "");
+
+    if (!generate_connection_uuid(out->transaction_id,
+                                  sizeof(out->transaction_id)) ||
+        !pending_state_is_valid(out))
+    {
+        return false;
+    }
+
+    lock_fd = lock_pending_state();
+    if (lock_fd < 0)
+    {
+        return false;
+    }
+
+    read_result = read_pending_state_locked(&existing);
+    if (read_result == PENDING_READ_OK &&
+        existing.status == PENDING_STATUS_CONFIRMED)
+    {
+        (void)remove_pending_state_locked();
+        read_result = PENDING_READ_NONE;
+    }
+
+    if (read_result != PENDING_READ_NONE)
+    {
+        unlock_pending_state(lock_fd);
+        printf("[失败] 已存在尚未处理完的网络切换事务。请重新运行工具处理它。\n");
+        return false;
+    }
+
+    if (!write_pending_state_locked(out))
+    {
+        unlock_pending_state(lock_fd);
+        return false;
+    }
+
+    unlock_pending_state(lock_fd);
+    return true;
 }
 
 static int ask_ipv4_mode(void)
@@ -273,233 +662,6 @@ static void redirect_stdio_to_devnull(void)
     }
 }
 
-static void rollback_connection_now(const char *iface,
-                                    const ConnectionProfile *new_profile,
-                                    const ConnectionProfile *old_profile)
-{
-    printf("\n[正在恢复] 正在恢复修改前使用的网络...\n");
-
-    if (new_profile && new_profile->uuid[0] != '\0')
-    {
-        const char *down[] = {
-            "nmcli", "--wait", "15",
-            "connection", "down", "uuid", new_profile->uuid,
-            NULL};
-        run_cmd_silent(down);
-    }
-
-    if (old_profile && old_profile->uuid[0] != '\0')
-    {
-        const char *up_old[] = {
-            "nmcli", "--wait", "30",
-            "connection", "up", "uuid", old_profile->uuid,
-            "ifname", iface,
-            NULL};
-
-        if (run_cmd(up_old) == 0)
-        {
-            printf("[恢复完成] 已重新使用修改前的网络：%s\n", old_profile->name);
-        }
-        else
-        {
-            printf("[提醒] 自动恢复修改前的网络失败：%s\n", old_profile->name);
-            printf("       如果还能通过 USB 或其他网口进入盒子，请查看网络状态并重新选择原来的网络。\n");
-        }
-    }
-    else
-    {
-        printf("[提醒] 修改前这个网口没有正在使用的网络配置，因此没有可自动恢复的旧网络。\n");
-    }
-}
-
-static pid_t start_rollback_watchdog(const char *iface,
-                                     const ConnectionProfile *new_profile,
-                                     const ConnectionProfile *old_profile)
-{
-    pid_t pid = fork();
-
-    if (pid < 0)
-    {
-        perror("fork watchdog");
-        return -1;
-    }
-
-    if (pid == 0)
-    {
-        /*
-         * 脱离 SSH/当前终端。即使 SSH 因切网断开，
-         * 这个子进程也应继续存活并在超时后回滚。
-         */
-        if (setsid() < 0)
-        {
-            _exit(120);
-        }
-
-        signal(SIGHUP, SIG_IGN);
-        signal(SIGPIPE, SIG_IGN);
-        redirect_stdio_to_devnull();
-
-        sleep(FALLBACK_ROLLBACK_TIMEOUT_SEC);
-
-        if (new_profile && new_profile->uuid[0] != '\0')
-        {
-            const char *down[] = {
-                "nmcli", "--wait", "15",
-                "connection", "down", "uuid", new_profile->uuid,
-                NULL};
-            run_cmd_silent(down);
-        }
-
-        if (old_profile && old_profile->uuid[0] != '\0')
-        {
-            const char *up_old[] = {
-                "nmcli", "--wait", "30",
-                "connection", "up", "uuid", old_profile->uuid,
-                "ifname", iface,
-                NULL};
-            run_cmd_silent(up_old);
-        }
-
-        _exit(0);
-    }
-
-    return pid;
-}
-
-static void cancel_rollback_watchdog(pid_t watchdog_pid)
-{
-    if (watchdog_pid <= 0)
-    {
-        return;
-    }
-
-    if (kill(watchdog_pid, SIGTERM) == 0)
-    {
-        (void)waitpid(watchdog_pid, NULL, 0);
-    }
-    else if (errno == ESRCH)
-    {
-        (void)waitpid(watchdog_pid, NULL, WNOHANG);
-    }
-}
-
-static bool safe_activate_with_fallback_watchdog(const char *iface,
-                                                 const ConnectionProfile *profile,
-                                                 const IPv4Config *cfg)
-{
-    ConnectionProfile old_profile = {0};
-    pid_t watchdog_pid;
-
-    if (get_active_connection_uuid(iface,
-                                   old_profile.uuid,
-                                   sizeof(old_profile.uuid)))
-    {
-        (void)get_connection_name(old_profile.uuid,
-                                  old_profile.name,
-                                  sizeof(old_profile.name));
-    }
-
-    printf("\n");
-    printf("============================================================\n");
-    printf("                 开始前请先了解这一步\n");
-    printf("============================================================\n");
-    printf("程序不会马上把新网络永久保存，而是先临时测试。\n");
-    printf("\n");
-    if (old_profile.uuid[0] != '\0')
-    {
-        printf("修改前，%s 正在使用：%s\n", iface, old_profile.name);
-    }
-    else
-    {
-        printf("修改前，%s 没有正在使用的已保存网络。\n", iface);
-    }
-    printf("\n");
-    printf("接下来会发生以下事情：\n");
-    printf("  1. 程序启动自动恢复保护。\n");
-    printf("  2. 临时切换到你刚刚填写的新网络。\n");
-    printf("  3. 如果新网络正常，程序会让你输入 YES 确认。\n");
-    printf("  4. 如果 SSH 因换网而断开，请不要重启盒子，也不要继续修改网络。\n");
-    printf("  5. 等待最多 %d 秒，程序会尝试重新启用修改前的网络。\n",
-           FALLBACK_ROLLBACK_TIMEOUT_SEC);
-    printf("\n");
-    printf("只有你明确输入 YES 后，新网络才会进入后续保存步骤。\n");
-    printf("============================================================\n");
-
-    if (!read_yes_no("现在开始测试新网络吗？[Y/n]: ", true))
-    {
-        return false;
-    }
-
-    watchdog_pid = start_rollback_watchdog(iface,
-                                           profile,
-                                           &old_profile);
-    if (watchdog_pid < 0)
-    {
-        printf("[失败] 无法启动自动恢复保护。为了避免设备失联，本次操作已取消。\n");
-        return false;
-    }
-
-    printf("[安全保护] 自动恢复保护已经启动，进程编号为 %ld。\n",
-           (long)watchdog_pid);
-
-    {
-        const char *up_new[] = {
-            "nmcli", "--wait", NMCLI_UP_WAIT_SEC,
-            "connection", "up", "uuid", profile->uuid,
-            "ifname", iface,
-            NULL};
-
-        if (run_cmd(up_new) != 0)
-        {
-            printf("\n[失败] 新网络没有成功启用，正在恢复修改前的网络。\n");
-            rollback_connection_now(iface,
-                                    profile,
-                                    &old_profile);
-            cancel_rollback_watchdog(watchdog_pid);
-            return false;
-        }
-    }
-
-    if (!validate_new_connection(iface, profile, cfg))
-    {
-        printf("\n[失败] 新网络检查没有通过，正在恢复修改前的网络。\n");
-        rollback_connection_now(iface,
-                                profile,
-                                &old_profile);
-        cancel_rollback_watchdog(watchdog_pid);
-        return false;
-    }
-
-    optional_gateway_ping(cfg);
-
-    printf("\n");
-    printf("============================================================\n");
-    printf("                 新网络基本检查通过\n");
-    printf("============================================================\n");
-    printf("现在请你做最后确认：\n");
-    printf("  - 如果你仍然可以正常操作盒子，说明新网络至少没有让当前管理连接失效。\n");
-    printf("  - 如果你是通过 SSH 操作，而 SSH 已经断开，请不要做任何事。\n");
-    printf("    等待自动恢复保护把网络恢复到修改前的状态。\n");
-    printf("\n");
-    printf("确认新网络正常后，输入 YES 才会继续保存。\n");
-    printf("============================================================\n");
-
-    if (!read_exact_yes("确认新网络可以正常使用请输入 YES；其他输入将恢复原网络: "))
-    {
-        printf("\n没有收到明确的 YES，程序将恢复修改前的网络。\n");
-        rollback_connection_now(iface,
-                                profile,
-                                &old_profile);
-        cancel_rollback_watchdog(watchdog_pid);
-        return false;
-    }
-
-    cancel_rollback_watchdog(watchdog_pid);
-    printf("[安全保护] 已确认新网络正常，自动恢复保护已停止。\n");
-
-    return true;
-}
-
 static bool connection_state_matches(const char *iface,
                                      const ConnectionProfile *profile,
                                      const IPv4Config *cfg)
@@ -528,165 +690,848 @@ static bool connection_state_matches(const char *iface,
            default_route_matches(iface, cfg->gateway);
 }
 
-static bool run_checkpoint_activation(const char *iface,
-                                      const ConnectionProfile *profile,
-                                      const IPv4Config *cfg)
+static int run_network_command(bool verbose, const char *const argv[])
 {
-    int input_pipe[2];
-    pid_t pid;
-    int status = 0;
-    bool state_ready = false;
-    bool confirmed = false;
-    const char *decision = "No\n";
+    return verbose ? run_cmd(argv) : run_cmd_silent(argv);
+}
 
-    if (pipe(input_pipe) != 0)
+static bool rollback_pending_connection(const PendingNetworkChange *state,
+                                        bool verbose)
+{
+    bool restored = true;
+
+    if (verbose)
     {
-        perror("pipe checkpoint");
-        return false;
+        printf("\n[正在恢复] 正在恢复网络切换前的状态...\n");
     }
 
-    pid = fork();
-    if (pid < 0)
+    if (state->old_profile.uuid[0] != '\0' &&
+        strcmp(state->old_profile.uuid, state->new_profile.uuid) != 0)
     {
-        perror("fork checkpoint");
-        close(input_pipe[0]);
-        close(input_pipe[1]);
-        return false;
-    }
-
-    if (pid == 0)
-    {
-        const char *argv[] = {
-            "nmcli",
-            "device",
-            "checkpoint",
-            "--timeout", CHECKPOINT_TIMEOUT_SEC,
-            iface,
-            "--",
-            "nmcli",
-            "--wait", NMCLI_UP_WAIT_SEC,
-            "connection",
-            "up",
-            "uuid", profile->uuid,
-            "ifname", iface,
+        const char *up_old[] = {
+            "nmcli", "--wait", "30",
+            "connection", "up", "uuid", state->old_profile.uuid,
+            "ifname", state->iface,
             NULL};
 
-        close(input_pipe[1]);
-        if (dup2(input_pipe[0], STDIN_FILENO) < 0)
+        restored = run_network_command(verbose, up_old) == 0;
+        if (!restored)
         {
-            _exit(126);
-        }
-        close(input_pipe[0]);
-        execvp(argv[0], (char *const *)argv);
-        _exit(127);
-    }
+            const char *keep_new[] = {
+                "nmcli", "--wait", NMCLI_UP_WAIT_SEC,
+                "connection", "up", "uuid", state->new_profile.uuid,
+                "ifname", state->iface,
+                NULL};
 
-    close(input_pipe[0]);
-
-    /*
-     * nmcli 此时持有 NetworkManager checkpoint，并在内部命令执行后
-     * 等待 Yes/No。父进程先独立检查 UUID、IP 和网关，再决定是否提交。
-     * 如果父进程或 SSH 意外退出，管道关闭且 checkpoint 超时，
-     * NetworkManager 会恢复创建 checkpoint 时的网络状态。
-     */
-    for (int elapsed_ms = 0; elapsed_ms < 60000; elapsed_ms += 500)
-    {
-        struct timespec delay = {0, 500L * 1000L * 1000L};
-        pid_t wait_result = waitpid(pid, &status, WNOHANG);
-
-        if (wait_result == pid)
-        {
-            close(input_pipe[1]);
+            (void)run_network_command(verbose, keep_new);
+            if (verbose)
+            {
+                printf("[失败] 无法重新启用修改前的网络：%s\n",
+                       state->old_profile.name);
+                printf("       为避免同时删除当前可用配置，新的测试连接暂时保留。\n");
+            }
             return false;
         }
-
-        if (connection_state_matches(iface, profile, cfg))
+    }
+    else if (state->old_profile.uuid[0] == '\0')
+    {
+        if (connection_is_active(state->new_profile.uuid))
         {
-            state_ready = true;
-            break;
+            const char *down_new[] = {
+                "nmcli", "--wait", "15",
+                "connection", "down", "uuid", state->new_profile.uuid,
+                NULL};
+
+            restored = run_network_command(verbose, down_new) == 0;
         }
-
-        nanosleep(&delay, NULL);
     }
 
-    if (state_ready && validate_new_connection(iface, profile, cfg))
+    if (state->finalize_on_confirmation != 0U &&
+        strcmp(state->old_profile.uuid, state->new_profile.uuid) != 0)
     {
-        optional_gateway_ping(cfg);
+        const char *remove_new[] = {
+            "nmcli", "connection", "delete", "uuid",
+            state->new_profile.uuid, NULL};
 
-        printf("\n============================================================\n");
-        printf("新网络检查已经通过，但 checkpoint 还没有提交。\n");
-        printf("只有明确输入 YES，NetworkManager 才会保留当前切换。\n");
-        printf("如果 SSH 已经断开，不需要操作；超时后会自动恢复旧网络。\n");
-        printf("============================================================\n");
+        if (run_network_command(verbose, remove_new) != 0)
+        {
+            char resolved[UUID_SIZE] = {0};
 
-        confirmed = read_exact_yes(
-            "确认新网络可以正常使用请输入 YES；其他输入将恢复原网络: ");
+            if (resolve_connection_uuid(state->new_profile.uuid,
+                                        resolved, sizeof(resolved)))
+            {
+                if (verbose)
+                {
+                    printf("[提醒] 原网络已经恢复，但测试连接未能自动删除：%s\n",
+                           state->new_profile.name);
+                }
+                restored = false;
+            }
+        }
     }
 
-    if (confirmed)
+    if (verbose && restored)
     {
-        decision = "Yes\n";
+        if (state->old_profile.uuid[0] != '\0')
+        {
+            printf("[恢复完成] 已重新使用修改前的网络：%s\n",
+                   state->old_profile.name);
+        }
+        else
+        {
+            printf("[恢复完成] 已恢复为修改前未连接的状态。\n");
+        }
+    }
+
+    return restored;
+}
+
+static bool rollback_pending_transaction(const char *transaction_id,
+                                         bool force,
+                                         bool verbose)
+{
+    PendingNetworkChange state;
+    PendingReadResult read_result;
+    int lock_fd = lock_pending_state();
+    bool restored;
+
+    if (lock_fd < 0)
+    {
+        return false;
+    }
+
+    read_result = read_pending_state_locked(&state);
+    if (read_result == PENDING_READ_NONE)
+    {
+        unlock_pending_state(lock_fd);
+        return true;
+    }
+
+    if (read_result != PENDING_READ_OK ||
+        strcmp(state.transaction_id, transaction_id) != 0)
+    {
+        unlock_pending_state(lock_fd);
+        return false;
+    }
+
+    if (state.status >= PENDING_STATUS_CONFIRMING)
+    {
+        unlock_pending_state(lock_fd);
+        return false;
+    }
+
+    if (!force && state.deadline > (int64_t)time(NULL))
+    {
+        unlock_pending_state(lock_fd);
+        return false;
+    }
+
+    state.status = PENDING_STATUS_ROLLING_BACK;
+    (void)write_pending_state_locked(&state);
+    restored = rollback_pending_connection(&state, verbose);
+
+    if (restored)
+    {
+        (void)remove_pending_state_locked();
     }
     else
     {
-        printf("\n新网络未通过完整检查或未收到明确确认，正在请求恢复旧网络。\n");
+        state.status = PENDING_STATUS_ROLLBACK_FAILED;
+        (void)write_pending_state_locked(&state);
     }
 
-    signal(SIGPIPE, SIG_IGN);
-    (void)write(input_pipe[1], decision, strlen(decision));
-    close(input_pipe[1]);
-
-    if (waitpid(pid, &status, 0) < 0)
-    {
-        return false;
-    }
-
-    if (!confirmed || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
-    {
-        return false;
-    }
-
-    return validate_new_connection(iface, profile, cfg);
+    unlock_pending_state(lock_fd);
+    return restored;
 }
 
-bool safe_activate_with_checkpoint(const char *iface,
-                                   const ConnectionProfile *profile,
-                                   const IPv4Config *cfg)
+static void pending_watchdog_loop(const PendingNetworkChange *initial)
 {
-    if (!g_checkpoint_supported)
+    for (;;)
     {
-        return safe_activate_with_fallback_watchdog(iface,
-                                                    profile,
-                                                    cfg);
+        PendingNetworkChange current;
+        PendingReadResult read_result;
+        struct timespec delay = {1, 0};
+        int lock_fd;
+
+        (void)nanosleep(&delay, NULL);
+        lock_fd = lock_pending_state();
+        if (lock_fd < 0)
+        {
+            if ((int64_t)time(NULL) >= initial->deadline)
+            {
+                (void)rollback_pending_connection(initial, false);
+                return;
+            }
+            continue;
+        }
+
+        read_result = read_pending_state_locked(&current);
+        unlock_pending_state(lock_fd);
+
+        if (read_result == PENDING_READ_NONE ||
+            (read_result == PENDING_READ_OK &&
+             strcmp(current.transaction_id, initial->transaction_id) != 0))
+        {
+            return;
+        }
+
+        if (read_result == PENDING_READ_OK)
+        {
+            if (current.status >= PENDING_STATUS_CONFIRMING)
+            {
+                return;
+            }
+
+            if (current.status == PENDING_STATUS_ROLLBACK_FAILED)
+            {
+                return;
+            }
+
+            if (current.deadline > (int64_t)time(NULL))
+            {
+                continue;
+            }
+
+            (void)rollback_pending_transaction(current.transaction_id,
+                                               false, false);
+            return;
+        }
+
+        if ((int64_t)time(NULL) >= initial->deadline)
+        {
+            (void)rollback_pending_connection(initial, false);
+            return;
+        }
+    }
+}
+
+static bool start_forked_pending_watchdog(const PendingNetworkChange *state)
+{
+    int ready_pipe[2];
+    pid_t first_child;
+    int status = 0;
+    char ready = '0';
+
+    if (pipe(ready_pipe) != 0)
+    {
+        return false;
     }
 
-    printf("\n");
+    first_child = fork();
+    if (first_child < 0)
+    {
+        close(ready_pipe[0]);
+        close(ready_pipe[1]);
+        return false;
+    }
+
+    if (first_child == 0)
+    {
+        pid_t daemon_child;
+
+        close(ready_pipe[0]);
+        if (setsid() < 0)
+        {
+            close(ready_pipe[1]);
+            _exit(1);
+        }
+
+        daemon_child = fork();
+        if (daemon_child < 0)
+        {
+            close(ready_pipe[1]);
+            _exit(1);
+        }
+
+        if (daemon_child > 0)
+        {
+            close(ready_pipe[1]);
+            _exit(0);
+        }
+
+        signal(SIGHUP, SIG_IGN);
+        signal(SIGPIPE, SIG_IGN);
+        redirect_stdio_to_devnull();
+
+        ready = '1';
+        (void)write(ready_pipe[1], &ready, 1);
+        close(ready_pipe[1]);
+        pending_watchdog_loop(state);
+        _exit(0);
+    }
+
+    close(ready_pipe[1]);
+    (void)waitpid(first_child, &status, 0);
+
+    {
+        ssize_t count;
+        do
+        {
+            count = read(ready_pipe[0], &ready, 1);
+        } while (count < 0 && errno == EINTR);
+
+        close(ready_pipe[0]);
+        return count == 1 && ready == '1' &&
+               WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    }
+}
+
+int run_pending_network_watchdog(const char *transaction_id)
+{
+    PendingNetworkChange state;
+    int lock_fd;
+
+    if (!valid_uuid_text_local(transaction_id))
+    {
+        return 2;
+    }
+
+    lock_fd = lock_pending_state();
+    if (lock_fd < 0)
+    {
+        return 1;
+    }
+
+    if (read_pending_state_locked(&state) != PENDING_READ_OK ||
+        strcmp(state.transaction_id, transaction_id) != 0)
+    {
+        unlock_pending_state(lock_fd);
+        return 1;
+    }
+
+    unlock_pending_state(lock_fd);
+    signal(SIGHUP, SIG_IGN);
+    signal(SIGPIPE, SIG_IGN);
+    pending_watchdog_loop(&state);
+    return 0;
+}
+
+static bool start_systemd_pending_watchdog(
+    const PendingNetworkChange *state)
+{
+    char executable[PATH_MAX];
+    char unit[128];
+    ssize_t executable_size;
+    int unit_size;
+
+    if (access("/run/systemd/system", F_OK) != 0)
+    {
+        return false;
+    }
+
+    executable_size = readlink("/proc/self/exe", executable,
+                               sizeof(executable) - 1);
+    if (executable_size <= 0)
+    {
+        return false;
+    }
+    executable[executable_size] = '\0';
+
+    unit_size = snprintf(unit, sizeof(unit),
+                         "first-net-config-watchdog-%s",
+                         state->transaction_id);
+    if (unit_size < 0 || (size_t)unit_size >= sizeof(unit))
+    {
+        return false;
+    }
+
+    {
+        const char *start[] = {
+            "systemd-run", "--quiet", "--collect",
+            "--unit", unit,
+            executable, "--watch-pending", state->transaction_id,
+            NULL};
+
+        if (run_cmd_silent(start) != 0)
+        {
+            return false;
+        }
+    }
+
+    for (int attempt = 0; attempt < 10; ++attempt)
+    {
+        const char *active[] = {
+            "systemctl", "is-active", "--quiet", unit, NULL};
+        struct timespec delay = {0, 100L * 1000L * 1000L};
+
+        if (run_cmd_silent(active) == 0)
+        {
+            return true;
+        }
+        (void)nanosleep(&delay, NULL);
+    }
+
+    return false;
+}
+
+static bool start_pending_watchdog(const PendingNetworkChange *state)
+{
+    if (start_systemd_pending_watchdog(state))
+    {
+        return true;
+    }
+
+    return start_forked_pending_watchdog(state);
+}
+
+static bool mark_pending_awaiting(const char *transaction_id)
+{
+    PendingNetworkChange state;
+    int lock_fd = lock_pending_state();
+    bool ok = false;
+
+    if (lock_fd < 0)
+    {
+        return false;
+    }
+
+    if (read_pending_state_locked(&state) == PENDING_READ_OK &&
+        strcmp(state.transaction_id, transaction_id) == 0 &&
+        (state.status == PENDING_STATUS_PREPARING ||
+         state.status == PENDING_STATUS_AWAITING_CONFIRMATION))
+    {
+        state.status = PENDING_STATUS_AWAITING_CONFIRMATION;
+        state.deadline = (int64_t)time(NULL) + PENDING_CONFIRM_TIMEOUT_SEC;
+        ok = write_pending_state_locked(&state);
+    }
+
+    unlock_pending_state(lock_fd);
+    return ok;
+}
+
+static void print_reconnect_command(void)
+{
+    char executable[PATH_MAX];
+    ssize_t size = readlink("/proc/self/exe", executable,
+                            sizeof(executable) - 1);
+
+    if (size > 0)
+    {
+        executable[size] = '\0';
+        printf("  sudo %s\n", executable);
+    }
+    else
+    {
+        printf("  sudo ./first_net_config\n");
+    }
+}
+
+static void print_pending_summary(const PendingNetworkChange *state)
+{
+    int64_t remaining = state->deadline - (int64_t)time(NULL);
+
+    if (remaining < 0)
+    {
+        remaining = 0;
+    }
+
+    printf("\n============================================================\n");
+    printf("                 检测到待确认网络配置\n");
     printf("============================================================\n");
-    printf("接下来会临时切换到新网络进行测试。\n");
-    printf("系统会先保存当前网络状态，然后再尝试使用新网络。\n");
-    printf("如果切换后 SSH 断开并且无法确认，等待一段时间后系统会自动恢复修改前的网络。\n");
-    printf("测试用的新网络暂时不会设置为开机自动使用，因此测试失败不会影响下次启动。\n");
-    printf("\n");
-    printf("程序会先完成 UUID、IP 和网关检查，再要求你输入 YES。\n");
-    printf("只有检查通过并明确确认后才会提交；否则恢复修改前的网络。\n");
+    printf("网卡       : %s\n", state->iface);
+    printf("测试连接   : %s\n", state->new_profile.name);
+    if (state->cfg.is_static)
+    {
+        printf("新 IP      : %s/%d\n", state->cfg.ip, state->cfg.prefix);
+    }
+    else
+    {
+        printf("新 IP      : DHCP 自动获取\n");
+    }
+    if (state->finalize_on_confirmation != 0U)
+    {
+        printf("正式名称   : %s\n", state->final_profile_name);
+    }
+    printf("剩余时间   : %lld 秒\n", (long long)remaining);
+    printf("事务编号   : %s\n", state->transaction_id);
+    printf("============================================================\n");
+}
+
+static bool complete_pending_save(PendingNetworkChange *state)
+{
+    bool saved;
+    int lock_fd = lock_pending_state();
+
+    if (lock_fd < 0)
+    {
+        printf("[严重提醒] 无法更新待确认事务状态，请不要立即重启设备。\n");
+        return false;
+    }
+
+    {
+        PendingNetworkChange current;
+
+        if (read_pending_state_locked(&current) != PENDING_READ_OK ||
+            strcmp(current.transaction_id, state->transaction_id) != 0 ||
+            (current.status != PENDING_STATUS_CONFIRMING &&
+             current.status != PENDING_STATUS_SAVE_FAILED))
+        {
+            unlock_pending_state(lock_fd);
+            return false;
+        }
+
+        current.status = PENDING_STATUS_CONFIRMING;
+        current.deadline = 0;
+        if (!write_pending_state_locked(&current))
+        {
+            unlock_pending_state(lock_fd);
+            printf("[严重提醒] 无法锁定正式保存状态，请不要立即重启设备。\n");
+            return false;
+        }
+
+        *state = current;
+        saved = current.finalize_on_confirmation == 0U ||
+                finalize_profile(&current.new_profile,
+                                 current.final_profile_name);
+
+        current.status = saved ? PENDING_STATUS_CONFIRMED
+                               : PENDING_STATUS_SAVE_FAILED;
+        current.deadline = 0;
+        if (!write_pending_state_locked(&current))
+        {
+            unlock_pending_state(lock_fd);
+            printf("[严重提醒] 无法持久记录确认结果，请不要立即重启设备。\n");
+            return false;
+        }
+
+        *state = current;
+        if (saved)
+        {
+            (void)remove_pending_state_locked();
+        }
+    }
+
+    unlock_pending_state(lock_fd);
+
+    if (!saved)
+    {
+        printf("\n[提醒] 已停止自动回退，但正式保存尚未完成。\n");
+        printf("请保持设备运行并再次启动本工具，程序会继续完成保存。\n");
+        return false;
+    }
+
+    printf("\n[完成] 新网络已经确认，自动回退保护已取消。\n");
+    return true;
+}
+
+static bool confirm_pending_transaction(const char *transaction_id)
+{
+    PendingNetworkChange state;
+    int lock_fd;
+
+    lock_fd = lock_pending_state();
+    if (lock_fd < 0)
+    {
+        return false;
+    }
+
+    if (read_pending_state_locked(&state) != PENDING_READ_OK ||
+        strcmp(state.transaction_id, transaction_id) != 0 ||
+        state.status != PENDING_STATUS_AWAITING_CONFIRMATION)
+    {
+        unlock_pending_state(lock_fd);
+        return false;
+    }
+
+    if (state.deadline <= (int64_t)time(NULL))
+    {
+        unlock_pending_state(lock_fd);
+        printf("[失败] 确认期限已经结束，不能再保留新配置。\n");
+        (void)rollback_pending_transaction(transaction_id, true, true);
+        return false;
+    }
+
+    if (!connection_state_matches(state.iface,
+                                  &state.new_profile,
+                                  &state.cfg))
+    {
+        unlock_pending_state(lock_fd);
+        printf("[失败] 当前活动网络与待确认配置不一致，拒绝提交。\n");
+        return false;
+    }
+
+    state.status = PENDING_STATUS_CONFIRMING;
+    state.deadline = 0;
+    if (!write_pending_state_locked(&state))
+    {
+        unlock_pending_state(lock_fd);
+        printf("[失败] 无法安全停止自动回退，本次确认未提交。\n");
+        return false;
+    }
+
+    unlock_pending_state(lock_fd);
+    return complete_pending_save(&state);
+}
+
+typedef enum
+{
+    PENDING_PROMPT_LEFT_PENDING = 0,
+    PENDING_PROMPT_CONFIRMED,
+    PENDING_PROMPT_ROLLED_BACK
+} PendingPromptResult;
+
+static PendingPromptResult prompt_pending_decision(
+    const PendingNetworkChange *state)
+{
+    char decision[32];
+
+    print_pending_summary(state);
+    printf("如果这是切换后的新 SSH 会话，说明新 IP 已经能够管理设备。\n");
+    printf("输入 YES：正式保留并保存新配置。\n");
+    printf("输入 ROLLBACK：立即恢复修改前的网络。\n");
+    printf("直接退出或输入其他内容：保持待确认，超时后自动恢复。\n\n");
+
+    read_line("请选择（YES/ROLLBACK）: ", decision, sizeof(decision));
+    trim_space(decision);
+
+    if (strcmp(decision, "YES") == 0)
+    {
+        return confirm_pending_transaction(state->transaction_id)
+                   ? PENDING_PROMPT_CONFIRMED
+                   : PENDING_PROMPT_LEFT_PENDING;
+    }
+
+    if (strcmp(decision, "ROLLBACK") == 0)
+    {
+        return rollback_pending_transaction(state->transaction_id,
+                                            true, true)
+                   ? PENDING_PROMPT_ROLLED_BACK
+                   : PENDING_PROMPT_LEFT_PENDING;
+    }
+
+    printf("\n[待确认] 没有提交新配置，自动回退倒计时仍在运行。\n");
+    return PENDING_PROMPT_LEFT_PENDING;
+}
+
+static bool resume_confirmed_save(PendingNetworkChange *state)
+{
+    printf("[继续保存] 这项网络已经由你确认，正在继续完成正式保存。\n");
+    return complete_pending_save(state);
+}
+
+bool handle_pending_network_change(void)
+{
+    PendingNetworkChange state;
+    PendingReadResult read_result;
+    int lock_fd = lock_pending_state();
+
+    if (lock_fd < 0)
+    {
+        printf("[提醒] 无法检查跨会话网络事务；为了安全，暂不允许修改网络。\n");
+        return true;
+    }
+
+    read_result = read_pending_state_locked(&state);
+    unlock_pending_state(lock_fd);
+
+    if (read_result == PENDING_READ_NONE)
+    {
+        return false;
+    }
+
+    if (read_result != PENDING_READ_OK)
+    {
+        printf("[失败] 待确认网络事务文件损坏，不能安全开始新的网络修改。\n");
+        printf("请通过本地终端检查目录：%s\n",
+               FIRST_NET_CONFIG_RUNTIME_DIR);
+        return true;
+    }
+
+    if (state.status == PENDING_STATUS_CONFIRMED)
+    {
+        lock_fd = lock_pending_state();
+        if (lock_fd >= 0)
+        {
+            (void)remove_pending_state_locked();
+            unlock_pending_state(lock_fd);
+        }
+        printf("[完成] 上一次网络切换已经确认并保存。\n");
+        return true;
+    }
+
+    if (state.status == PENDING_STATUS_CONFIRMING ||
+        state.status == PENDING_STATUS_SAVE_FAILED)
+    {
+        (void)resume_confirmed_save(&state);
+        return true;
+    }
+
+    if (state.status == PENDING_STATUS_ROLLING_BACK ||
+        state.status == PENDING_STATUS_ROLLBACK_FAILED ||
+        state.deadline <= (int64_t)time(NULL))
+    {
+        printf("[安全保护] 待确认配置已经超时或上次恢复未完成，正在恢复旧网络。\n");
+        (void)rollback_pending_transaction(state.transaction_id,
+                                           true, true);
+        return true;
+    }
+
+    if (state.status == PENDING_STATUS_PREPARING)
+    {
+        if (connection_state_matches(state.iface,
+                                     &state.new_profile,
+                                     &state.cfg) &&
+            validate_new_connection(state.iface,
+                                    &state.new_profile,
+                                    &state.cfg) &&
+            mark_pending_awaiting(state.transaction_id))
+        {
+            lock_fd = lock_pending_state();
+            if (lock_fd >= 0 &&
+                read_pending_state_locked(&state) == PENDING_READ_OK)
+            {
+                unlock_pending_state(lock_fd);
+                (void)prompt_pending_decision(&state);
+                return true;
+            }
+            unlock_pending_state(lock_fd);
+        }
+
+        printf("[安全保护] 网络切换仍在进行或尚未通过本机检查。\n");
+        printf("请稍后再次运行本工具；超时后程序会自动恢复旧网络。\n");
+        return true;
+    }
+
+    (void)prompt_pending_decision(&state);
+    return true;
+}
+
+NetworkActivationResult safe_activate_with_reconnect(
+    const char *iface,
+    const ConnectionProfile *profile,
+    const IPv4Config *cfg,
+    const char *final_profile_name,
+    bool finalize_on_confirmation)
+{
+    ConnectionProfile old_profile = {0};
+    PendingNetworkChange state;
+    PendingPromptResult decision;
+
+    if (get_active_connection_uuid(iface,
+                                   old_profile.uuid,
+                                   sizeof(old_profile.uuid)))
+    {
+        (void)get_connection_name(old_profile.uuid,
+                                  old_profile.name,
+                                  sizeof(old_profile.name));
+    }
+
+    printf("\n============================================================\n");
+    printf("                 安全切换与跨会话确认\n");
+    printf("============================================================\n");
+    if (old_profile.uuid[0] != '\0')
+    {
+        printf("修改前，%s 正在使用：%s\n", iface, old_profile.name);
+    }
+    else
+    {
+        printf("修改前，%s 没有正在使用的已保存网络。\n", iface);
+    }
+    printf("程序会临时启用新配置并启动独立的自动回退保护。\n");
+    printf("如果当前 SSH 因 IP 切换断开，请使用新 IP 重新登录，\n");
+    printf("然后在 %d 秒内再次运行本工具；它会优先显示待确认配置。\n",
+           PENDING_CONFIRM_TIMEOUT_SEC);
+    if (cfg->is_static)
+    {
+        printf("重新连接地址：%s\n", cfg->ip);
+    }
+    printf("重新登录后运行：\n");
+    print_reconnect_command();
+    printf("没有输入 YES 确认时，程序仍会自动恢复修改前的网络。\n");
     printf("============================================================\n");
 
     if (!read_yes_no("现在开始测试新网络吗？[Y/n]: ", true))
     {
-        return false;
+        return NETWORK_ACTIVATION_FAILED;
+    }
+
+    if (!create_pending_state(iface, profile, &old_profile, cfg,
+                              final_profile_name,
+                              finalize_on_confirmation, &state))
+    {
+        printf("[失败] 无法建立持久化回退事务。为了避免设备失联，本次操作已取消。\n");
+        return NETWORK_ACTIVATION_FAILED;
+    }
+
+    if (!start_pending_watchdog(&state))
+    {
+        int lock_fd = lock_pending_state();
+        if (lock_fd >= 0)
+        {
+            (void)remove_pending_state_locked();
+            unlock_pending_state(lock_fd);
+        }
+        printf("[失败] 无法启动独立的自动回退进程，本次操作已取消。\n");
+        return NETWORK_ACTIVATION_FAILED;
+    }
+
+    printf("[安全保护] 自动回退进程已脱离当前 SSH 会话运行。\n");
+
+    {
+        const char *up_new[] = {
+            "nmcli", "--wait", NMCLI_UP_WAIT_SEC,
+            "connection", "up", "uuid", profile->uuid,
+            "ifname", iface,
+            NULL};
+
+        if (run_cmd(up_new) != 0)
+        {
+            bool restored;
+
+            printf("\n[失败] 新网络没有成功启用，正在恢复修改前的网络。\n");
+            restored = rollback_pending_transaction(state.transaction_id,
+                                                    true, true);
+            return restored ? NETWORK_ACTIVATION_FAILED
+                            : NETWORK_ACTIVATION_PENDING;
+        }
+    }
+
+    if (!validate_new_connection(iface, profile, cfg))
+    {
+        bool restored;
+
+        printf("\n[失败] 新网络检查没有通过，正在恢复修改前的网络。\n");
+        restored = rollback_pending_transaction(state.transaction_id,
+                                                true, true);
+        return restored ? NETWORK_ACTIVATION_FAILED
+                        : NETWORK_ACTIVATION_PENDING;
+    }
+
+    optional_gateway_ping(cfg);
+
+    if (!mark_pending_awaiting(state.transaction_id))
+    {
+        bool restored;
+
+        printf("[提醒] 无法将事务标记为待确认，正在恢复修改前的网络。\n");
+        restored = rollback_pending_transaction(state.transaction_id,
+                                                true, true);
+        return restored ? NETWORK_ACTIVATION_FAILED
+                        : NETWORK_ACTIVATION_PENDING;
     }
 
     {
-        bool ok = run_checkpoint_activation(iface, profile, cfg);
-
-        if (!ok)
+        int lock_fd = lock_pending_state();
+        if (lock_fd < 0 ||
+            read_pending_state_locked(&state) != PENDING_READ_OK)
         {
-            printf("\n[失败] 新网络没有通过检查或没有被确认。\n");
-            printf("NetworkManager 将恢复 checkpoint 创建前的网络状态。\n");
+            unlock_pending_state(lock_fd);
+            return NETWORK_ACTIVATION_PENDING;
         }
-
-        return ok;
+        unlock_pending_state(lock_fd);
     }
+
+    decision = prompt_pending_decision(&state);
+    if (decision == PENDING_PROMPT_CONFIRMED)
+    {
+        return NETWORK_ACTIVATION_CONFIRMED;
+    }
+    if (decision == PENDING_PROMPT_ROLLED_BACK)
+    {
+        return NETWORK_ACTIVATION_FAILED;
+    }
+
+    return NETWORK_ACTIVATION_PENDING;
 }
 
 static void make_backup_name(const char *final_name,
@@ -891,13 +1736,90 @@ void ask_final_profile_name(const char *iface,
 
 bool build_temp_profile(const char *iface, ConnectionProfile *out)
 {
-    if (!out || !generate_connection_uuid(out->uuid, sizeof(out->uuid)))
+    char nonce[UUID_SIZE];
+    int written;
+
+    if (!iface || iface[0] == '\0' || !out)
     {
         return false;
     }
 
-    snprintf(out->name, sizeof(out->name),
-             "nettool-test-%s-%ld",
-             iface, (long)getpid());
+    memset(out, 0, sizeof(*out));
+    if (!generate_connection_uuid(nonce, sizeof(nonce)))
+    {
+        return false;
+    }
+
+    /*
+     * 不把这个 UUID 写入 connection.uuid。旧版 nmcli 会把它当作对不可变
+     * 属性的修改并拒绝创建。这里只把随机值用于连接名称，确保之后可以无歧义
+     * 地读取由 NetworkManager 自己生成的真实 UUID。
+     */
+    written = snprintf(out->name, sizeof(out->name),
+                       "nettool-test-%s-%s", iface, nonce);
+    if (written < 0 || (size_t)written >= sizeof(out->name))
+    {
+        memset(out, 0, sizeof(*out));
+        return false;
+    }
+
     return true;
+}
+
+bool bind_created_profile_uuid(ConnectionProfile *profile)
+{
+    char generated_uuid[UUID_SIZE] = {0};
+    int matches;
+
+    if (!profile || profile->name[0] == '\0')
+    {
+        return false;
+    }
+
+    matches = find_connection_uuid_by_name(profile->name,
+                                           generated_uuid,
+                                           sizeof(generated_uuid));
+    if (matches == 1)
+    {
+        snprintf(profile->uuid, sizeof(profile->uuid), "%s", generated_uuid);
+        return true;
+    }
+
+    profile->uuid[0] = '\0';
+    if (matches > 1)
+    {
+        printf("[失败] 测试连接名称出现重复，无法安全确认新连接的 UUID：%s\n",
+               profile->name);
+        printf("        为避免误删其他连接，程序不会按名称自动清理。\n");
+        return false;
+    }
+
+    if (matches == 0)
+    {
+        printf("[失败] NetworkManager 已返回创建成功，但没有找到测试连接：%s\n",
+               profile->name);
+    }
+    else
+    {
+        printf("[失败] 无法读取 NetworkManager 为测试连接生成的 UUID：%s\n",
+               profile->name);
+    }
+
+    /*
+     * 名称包含本次生成的完整随机值。在 UUID 无法读取时，只能使用这个唯一名称
+     * 回收可能已经创建的 profile，避免留下 autoconnect=no 的垃圾配置。
+     */
+    {
+        const char *remove[] = {
+            "nmcli", "connection", "delete", "id", profile->name, NULL};
+
+        printf("正在按唯一名称清理未确认的测试连接...\n");
+        if (run_cmd(remove) != 0)
+        {
+            printf("[提醒] 自动清理未成功，请检查是否残留连接：%s\n",
+                   profile->name);
+        }
+    }
+
+    return false;
 }

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(first_net_config VERSION 1.5 LANGUAGES C)
+project(first_net_config VERSION 1.6 LANGUAGES C)
 
 add_executable(first_net_config
     main.c

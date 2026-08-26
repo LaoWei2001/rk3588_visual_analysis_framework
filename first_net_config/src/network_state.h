@@ -20,6 +20,5 @@ void show_devices(void);
 void show_network_state(void);
 void scan_wifi(void);
 bool nmcli_available(void);
-bool checkpoint_supported(void);
 
 #endif

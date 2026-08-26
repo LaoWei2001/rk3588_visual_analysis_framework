@@ -7,13 +7,14 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 
 static void print_menu(void)
 {
     printf("\n");
     printf("====================================================\n");
-    printf("                 网络配置工具 v1.5\n");
+    printf("                 网络配置工具 v1.6\n");
     printf("====================================================\n");
     printf("1. 查看网卡状态\n");
     printf("2. 配置有线网络\n");
@@ -29,9 +30,22 @@ static void print_menu(void)
     printf("====================================================\n");
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
-    bool checkpoint_is_supported;
+    if (argc == 3 && strcmp(argv[1], "--watch-pending") == 0)
+    {
+        if (geteuid() != 0)
+        {
+            return 1;
+        }
+        return run_pending_network_watchdog(argv[2]);
+    }
+
+    if (argc != 1)
+    {
+        fprintf(stderr, "用法：%s\n", argv[0]);
+        return 2;
+    }
 
     if (geteuid() != 0)
     {
@@ -49,18 +63,12 @@ int main(void)
         return 1;
     }
 
-    checkpoint_is_supported = checkpoint_supported();
-    network_safety_set_checkpoint_supported(checkpoint_is_supported);
+    if (handle_pending_network_change())
+    {
+        return 0;
+    }
 
-    if (checkpoint_is_supported)
-    {
-        printf("[安全保护] 本机支持系统自带的网络恢复功能。\n");
-    }
-    else
-    {
-        printf("[安全保护] 本机系统没有自带的网络恢复功能。\n");
-        printf("[安全保护] 程序将使用独立的定时恢复保护；如果换网后失联，会尝试恢复修改前的网络。\n");
-    }
+    printf("[安全保护] 网络切换带有可跨 SSH 会话确认的自动恢复保护。\n");
 
     for (;;)
     {
