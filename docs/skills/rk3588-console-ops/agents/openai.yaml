@@ -1,0 +1,4 @@
+interface:
+  display_name: "RK3588 Web 与上报运维"
+  short_description: "使用开发并排查 Web、事件投递、部署、OTA 与系统服务"
+  default_prompt: "Use $rk3588-console-ops to operate, develop, deploy, or troubleshoot this project's current Web and reporting stack."

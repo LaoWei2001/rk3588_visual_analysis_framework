@@ -1,0 +1,4 @@
+interface:
+  display_name: "RK3588 Logic 功能开发向导"
+  short_description: "通过 Codex 或 Claude 在隔离副本内仅生成并回写通道或全局 Logic"
+  default_prompt: "Use $rk3588-feature-wizard to clarify the feature briefly, implement it in an isolated copy, and write back only channel or global Logic module files."

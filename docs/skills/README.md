@@ -1,113 +1,36 @@
-# RK3588 视觉系统 · 开发/运维知识库索引
+# RK3588 框架 Skill 索引
 
-> 文档角色：专题知识库索引。项目级导航请先从 [docs 文档总入口](../README.md) 开始；本页负责把已经确定的任务继续路由到具体 Skill 或参考文档。
+每个子目录都是独立 Skill。大模型应先读匹配任务的 `SKILL.md`，只在需要时加载它直接链接的参考页；开发者也按同一路径阅读，避免维护两套互相漂移的说明。
 
-这个文件夹是给**后续二次开发**用的参考资料，既可以**直接提供给大模型**当上下文，也可以**给人读**。里面有**四个 Skill**：都以 `SKILL.md` 为任务入口；还有一份**源码模块说明** `rk3588-src-modules/`，从其中的 `README.md` 看起。
+| Skill | 适用任务 | 主要参考内容 |
+|---|---|---|
+| [`rk3588-feature-wizard`](rk3588-feature-wizard/SKILL.md) | 用 Codex/Claude 简短确认后，只在 Logic 白名单内自动开发 | 隔离副本、无提示权限、写回守卫、平台矩阵、精简提问 |
+| [`build-rk3588-vision-app`](build-rk3588-vision-app/SKILL.md) | 从需求拆解到实现、校验、打包和交付 | 需求合同、验收、提示词模板 |
+| [`rk3588-channel-logic`](rk3588-channel-logic/SKILL.md) | 单通道逐帧业务、参数、ROI、绘制、输出和按钮 | `ChannelContext`、manifest、Action、现有示例 |
+| [`rk3588-global-logic`](rk3588-global-logic/SKILL.md) | 跨通道聚合、周期轮询、全局 Action 与上报 | `GlobalContext`、当前聚合示例 |
+| [`rk3588-console-ops`](rk3588-console-ops/SKILL.md) | Web 使用/开发、事件投递、OTA、systemd 和排错 | 用户手册、上报、服务部署、前端后端 |
+| [`rk3588-src-modules`](rk3588-src-modules/SKILL.md) | 引擎架构、配置、数据流、线程和模块边界 | 架构、配置、源码模块地图 |
 
-**先分清四个 Skill 的边界：**
+## 组合使用
 
-| Skill                      | 管什么                        | 一句话                         |
-|:-------------------------- | -------------------------- | --------------------------- |
-| **`build-rk3588-vision-app`** | 从自然语言需求到实现和验收的总控流程 | 不确定要改哪一层，或要完整开发一个视觉应用时先用它 |
-| **`rk3588-channel-logic`** | 写 C++ 检测/报警逻辑(`logic_xxx`) | "当检测到 X 就做 Y" 这类**画面规则**都归它 |
-| **`rk3588-console-ops`**   | 部署、网页控制台(前后端)、后台服务、运维、调试   | Web、服务、部署和排障类任务归它           |
-| **`rk3588-global-logic`**  | 写**跨通道 / 周期性**的全局逻辑(`global_xxx`) | "通道 A 有人且通道 B 缺货就报警"这类跨路规则 |
+- 不知道该选哪个 Skill：从仓库根目录运行 `./develop_feature`；向导会选择可用的 Codex/Claude，但只会实施能完全放在通道/全局 Logic 模块目录内的功能。
+- 新增“单通道检测并上报”：先用 `build-rk3588-vision-app` 定边界，再读 `rk3588-channel-logic` 和 `rk3588-console-ops` 的上报参考。
+- 新增“多通道组合告警”：使用 `rk3588-global-logic`，并让上游通道通过 `outputs`/`publish_*()` 提供契约。
+- 修改引擎公共 API 或配置：使用 `rk3588-src-modules`，再回看所有受影响的业务 Skill。
+- 只操作设备和 Web：使用 `rk3588-console-ops`，不要加载 C++ 细节。
 
-> 另有 **`rk3588-src-modules/`**：C++ 端 config/core/capturer/analyzer/yolo/logic/control/event/recorder/player 等模块，以及外部投递服务边界的深档；想理解或改底层实现时看它。
+## 共同硬规则
 
----
+1. 先查当前源码和生成清单，不凭旧文档补接口。
+2. 不手改打包生成的 App 根目录 `logics.json` 或 `report_templates/`。
+3. Logic 不做阻塞网络上传；统一走 `report_event()` 和投递服务。
+4. 通道私有状态放 `ctx->state`，全局实例状态放 `gctx->state`；不使用无保护的可变全局或 `static` 业务状态。
+5. 当前不存在的模块不得写入配置或作为可运行示例。
+6. 若源码和本目录冲突，以源码为准，并在同一改动中修复文档。
 
-## 我要做 XXX → 看哪里(路由表)
+## 关于保留的旧辅助脚本
 
-### 从自然语言需求开始
-
-| 我要… | 去看 |
-|---|---|
-| 描述业务现象，让大模型完成需求拆解、实现、静态验证和交付检查 | `build-rk3588-vision-app/SKILL.md` |
-| 先把模型、标签、ROI、状态机、告警媒体和性能要求写成可核对契约 | `build-rk3588-vision-app/references/requirement-contract.md` |
-| 开发完成后做功能、媒体、性能和文档验收 | `build-rk3588-vision-app/references/acceptance-checklist.md` |
-
-### 写检测 / 报警逻辑(channel logic)
-
-| 我要…                        | 去看                                                       |
-| -------------------------- | -------------------------------------------------------- |
-| 第一次从报警判断一路做到 HTTP/Dify 远端成功 | `../报警事件与上报开发指南.md`（人类快速上手 + 大模型提示词 + 完整验收） |
-| 把"检测到 X 就报警/上报"做成一个逻辑      | `rk3588-channel-logic/SKILL.md`(总览 + 骨架 + 接线 + 验证 + 坑)   |
-| 照着已有的逻辑改，或者参考某个逻辑的编写方式     | `rk3588-channel-logic/references/examples/`(一函数一文件,挑最像的) |
-| 查 `ctx` 有哪些字段、辅助函数、绘制、跨帧状态 | `…/references/channelcontext-api.md`                     |
-| 搞懂 logic 的命名/注册（函数名·单参数注册·logics.json 的关系）、网页怎么认出逻辑、名字是怎样生成的 | `…/references/logic-naming-and-registration.md` |
-| 给逻辑加一个网页能改的参数(半径/秒数/阈值)    | `…/references/adding-config-parameter.md`（模块 Schema + `ctx->param_*()` + Web 热重载） |
-| 给实时画面增加自定义按钮、理解按钮到 C++ 的动作链路 | `…/references/custom-button-actions.md`（声明、队列、handler、payload、排错） |
-| 第一次跑通上报，或让 logic 提交标准事件并由画布选择 adapter/Profile | `…/references/upload-and-wiring.md`（最小闭环 + 开发契约） |
-| 搞懂运行时(9 类主线程、额外后台线程、时序、帧与框同帧、坐标系)  | `…/references/vision_analysis_系统说明文档.md` + `…_架构图.md`        |
-
-### 部署 / 网页控制台 / 后台服务 / 运维 / 调试
-
-| 我要…                                             | 去看                                                          |
-| ----------------------------------------------- | ----------------------------------------------------------- |
-| 部署到一台新板子、装依赖、编译打包、装程序包                          | `rk3588-console-ops/SKILL.md`(一、二节)                         |
-| 知道网页每个功能对应哪个后端路由、落盘到哪                           | `rk3588-console-ops/SKILL.md`(三节)                           |
-| **给控制台前端加页面/功能**(React 架构、加接口、WebSocket、改动如何生效) | `…/references/web-console-frontend.md`                      |
-| 加/管后台微服务(上报、OTA)、服务配置、systemd 单元                | `…/references/services-upload-and-ota.md`                   |
-| 后台服务起不来(CHDIR / 路径失效)、网页↔命令行如何配合                | `…/references/services-upload-and-ota.md` §7 + `SKILL.md` 四 |
-| 网页打不开、OTA 没换模型、USB ROI 偏移等已知运维问题                | `rk3588-console-ops/SKILL.md`(四节速查)                         |
-| **不知道怎么查 / "改了不生效" / 要系统定位**                    | `…/references/debugging-playbook.md`                        |
-
-### 跨通道 / 周期性全局逻辑
-
-| 我要… | 去看 |
-|---|---|
-| 聚合多个通道的状态或做跨路联动 | `rk3588-global-logic/SKILL.md`（边界、快照、状态、注册和验证） |
-| 在独立线程中做周期巡检 | `rk3588-global-logic/SKILL.md`（`poll_interval_ms` 与 `GlobalContext`） |
-| 从全局规则触发图片或视频告警 | 看 `rk3588-global-logic/SKILL.md` 的统一 `report_event(gctx, request)` 与画布接线 |
-
-> 拿不准归哪个领域时先用 `build-rk3588-vision-app`；已经明确时，单通道逐业务帧规则看 `rk3588-channel-logic`，多通道聚合或独立周期轮询看 `rk3588-global-logic`，其余 Web、服务、部署和排障问题看 `rk3588-console-ops`。
-
----
-
-## 目录地图
-
-```
-docs/skills/
-├── README.md  ← 你在这
-│
-├── build-rk3588-vision-app/              自然语言需求→契约→实现→静态验证→验收
-│   ├── SKILL.md                          总控流程与领域路由
-│   ├── scripts/                          安全脚手架、模块校验和文档审计
-│   └── references/                       需求契约与交付验收清单
-│
-├── rk3588-channel-logic/                 写检测/报警逻辑(通道 logic)
-│   ├── SKILL.md                          总览:需求拆解→骨架→接线三件套→验证→坑
-│   └── references/
-│       ├── channelcontext-api.md         ctx 字段 / 辅助函数 / 绘制 / 跨帧状态
-│       ├── logic-naming-and-registration.md  逻辑命名/注册四名关系 + 网页如何识别 + 失配后果
-│       ├── adding-config-parameter.md    加可调参数(代码+热重载+网页可配)
-│       ├── custom-button-actions.md      Web 自定义按钮(action 声明→Socket→logic handler)
-│       ├── upload-and-wiring.md          report_event + report_policy + 画布接线
-│       ├── vision_analysis_系统说明文档.md 运行时架构(文字详解)
-│       ├── vision_analysis_架构图.md      架构图
-│       └── examples/                     当前源码示例和明确标注的业务代码模式
-│
-├── rk3588-global-logic/                  写跨通道 / 周期性全局逻辑(global_xxx)
-│   ├── SKILL.md
-│   └── references/two-channel-canvas-demo.md  类型化通道变量→双路聚合→统一告警
-│
-├── rk3588-console-ops/                   部署 / 控制台 / 服务 / 运维 / 调试
-│   ├── SKILL.md                          总览:系统组成、部署、网页功能表、运维速查、文件地图
-│   └── references/
-│       ├── services-upload-and-ota.md    两个微服务 + systemd 启停配合(网页↔板端)
-│       ├── web-console-frontend.md       前端二次开发(架构、加页面/接口、生效流程、坑)
-│       └── debugging-playbook.md         调试方法论 + "改了不生效"自查 + 终端实战案例
-│
-└── rk3588-src-modules/                   C++ 端各源码模块深档(src/ 蒸馏)
-    ├── README.md                         模块地图 + 端到端数据流 + 全局约定 + 扩展路由
-    └── {runtime,config,core,capturer,analyzer,yolo,logic,control,event,recorder,player,third_party,uploader}.md
-```
-
----
-
-## 怎么用
-
-- **给大模型**：完整需求优先提供 `build-rk3588-vision-app/SKILL.md`，让它按任务路由并完整读取对应领域 Skill；单一明确任务也可直接提供领域 Skill。
-- **给人**：新开发者先看总入口；已经明确任务后，从上面的路由表进入。`SKILL.md` 是流程和清单，`references/` 是需要深入时才读的专题。
-- **保持它长青**：新增一个正式 `logic_xxx` 后，照 `examples/` 的格式补一篇，并同步总入口的当前模块表；新踩的坑补进 `debugging-playbook.md`，前端/后端新约定补进对应 reference。
+`build-rk3588-vision-app/scripts/` 下三个 Python 文件创建于 2026-08-14，本次按用户要求未修改。
+`validate_logic.py` 会错误拒绝当前已支持的全局 Action，另外两个也没有覆盖完整的当前契约；具体见
+[旧辅助脚本边界](build-rk3588-vision-app/references/legacy-scripts.md)。它们不得单独作为验收依据，当前
+权威校验命令写在各 `SKILL.md` 中。

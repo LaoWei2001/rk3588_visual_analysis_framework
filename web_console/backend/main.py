@@ -13,11 +13,12 @@ from fastapi.staticfiles import StaticFiles
 
 from routers import (apps, assets, auth, logic_control, config_io, logs, network_settings,
                      ota_config, process, records, services, snapshot, storage_settings, stream,
-                     system_settings, terminal, delivery_config)
+                     system_settings, terminal, delivery_config, video_capture)
 from services.auth_service import get_session
 from services import process_manager as process_manager
 from services import runtime_state
 from services import network_manager
+from services.video_capture_manager import capture_manager
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
@@ -82,6 +83,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # 独立素材采集器不依赖浏览器连接，但控制台正常退出时必须发送 EOS，
+        # 确保正在写入的单个 MP4 可以正常收尾。
+        await asyncio.to_thread(capture_manager.shutdown)
         storage_task.cancel()
         with suppress(asyncio.CancelledError):
             await storage_task
@@ -156,6 +160,7 @@ app.include_router(services.router,      prefix="/api")
 app.include_router(storage_settings.router, prefix="/api")
 app.include_router(network_settings.router, prefix="/api")
 app.include_router(system_settings.router, prefix="/api")
+app.include_router(video_capture.router, prefix="/api")
 app.include_router(logs.router)      # WebSocket has its own /ws prefix
 app.include_router(terminal.router)  # WebSocket terminal
 

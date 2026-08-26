@@ -1,0 +1,4 @@
+interface:
+  display_name: "RK3588 引擎源码架构"
+  short_description: "理解并核验引擎模块、管线、配置、线程、生命周期与热重载边界"
+  default_prompt: "Use $rk3588-src-modules to analyze or extend this engine-level behavior against the current C++ source and configuration contract."

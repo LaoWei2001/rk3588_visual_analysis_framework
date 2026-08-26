@@ -1,124 +1,113 @@
 ---
 name: rk3588-console-ops
 description: >-
-  Operate, deploy, and troubleshoot the RK3588 vision system's **web console**,
-  **deployment pipeline**, and **background services** (NOT for writing channel
-  logic — that's the rk3588-channel-logic skill). Use this skill whenever the
-  task is about: 部署到一台新 RK3588 板子 / installing dependencies (apt/node/pip)
-  / build.sh / install_app.sh / 上传或删除程序包 / the web console (FastAPI 后端 +
-  React 编辑器，rk3588-console.service) / 启停后台服务 (ota_agent / unified_upload,
-  systemd, systemctl, journalctl) / 服务起不来报错 (CHDIR, Failed at step, unit
-  路径失效) / 服务配置 (config.yaml / ota_config.json) / OTA 升级服务 / 统一事件发件箱 /
-  USB ROI 偏移 / 改了 C++/控制台代码不生效怎么重新部署. Trigger on any deploy/ops/console
-  question for this project, even if phrased casually ("板子上服务起不来", "怎么把程序
-  装上去", "网页打不开"). Do NOT use for writing/editing logic_xxx detection rules.
+  Use, develop, deploy, or troubleshoot this project's RK3588 Web console,
+  application packages, local event outbox, HTTP or Dify delivery, OTA service,
+  live view, systemd services, logs, records, settings, and terminal. Use when a
+  task crosses C++ event creation and Python delivery, and verify paths and API
+  behavior against the current Web and service source rather than legacy config files.
 ---
 
-# RK3588 控制台 / 部署 / 运维
+# RK3588 Web、上报、部署与运维
 
-> 文档角色：Web、部署、后台服务、运维和排障的任务入口。上级导航：[docs 文档总入口](../../README.md) · [开发/运维知识库索引](../README.md)。
+本 Skill 覆盖当前 Web 控制台、程序包生命周期、事件发件箱、统一上传、OTA 和设备运维。通道/全局
+业务规则本身分别由
+[`rk3588-channel-logic`](../rk3588-channel-logic/SKILL.md) 和
+[`rk3588-global-logic`](../rk3588-global-logic/SKILL.md) 负责。
 
-把这套 RK3588 视觉系统部署起来、用网页控制台管起来、出问题能定位。**写检测/报警逻辑不归这——那是 `rk3588-channel-logic` skill。**
+## 当前部署组成
 
-## 一、系统由哪些部分组成（谁管谁，先建立全貌）
-
+```text
+/opt/ai_apps/
+├── _console/                         FastAPI + React 构建产物
+├── <App>/                            一个 build.sh 程序包
+│   ├── vision_analysis
+│   ├── assets/*.json, *.rknn, ...
+│   ├── logics.json
+│   ├── report_templates/
+│   └── services/{upload,model_update}/
+└── .data/<App>/                      Web 管理的持久运行数据
+    ├── event_store/
+    ├── connections.yaml
+    ├── report_contracts/
+    ├── contract_revisions/
+    └── ota_config.json
 ```
-板子 (/opt/ai_apps/ 是控制台的"程序根")
-├── _console/                     Web 控制台本体（FastAPI 后端 + React 前端）
-│      └ systemd: rk3588-console.service（User=root，:8080）
-├── <App1>/  <App2>/ ...          每个"程序包"(build.sh 产物 install 进来的)
-│   ├── vision_analysis           C++ 推理二进制 ← process_manager 通过 systemd-run transient unit 启停
-│   ├── assets/  (config.json, *.rknn, labels/videos 等)
-│   └── services/                 两个 Python 微服务代码与初始配置（随包带）
-│       ├── model_update/ ota_agent.py + ota_config.json   ← systemd: ota_agent.service
-│       └── upload/       main.py + config.yaml + contracts/ ← systemd: unified_upload.service
-├── .data/<App1>/                 Web 管理的可变数据（覆盖/重装同名 App 时保留）
-│   ├── event_store/<event_id>/   三份 JSON 状态 + 图片/视频
-│   ├── upload_config.yaml
-│   ├── contracts/
-│   └── ota_config.json
-└── 上报服务扫描所绑定 App 的 .data/<App>/event_store/，当前不使用 Redis
-```
 
-**三种进程、三套托管方式**（容易混，记牢）：
-| 进程 | 谁托管 | 怎么启停 |
-|------|--------|---------|
-| C++ 推理二进制 | 控制台 `process_manager`（`systemd-run` transient unit） | 网页「程序管理」▶启动/■停止 |
-| Web 控制台自身 | systemd `rk3588-console.service` | `systemctl` / `web_console/install.sh` / `stop.sh` |
-| 两个 Python 微服务 | systemd `ota_agent` / `unified_upload` | 网页「后台服务」面板 或 命令行 `systemctl`（同一套单元） |
+进程归属：
 
-> 后台服务的启停机制、网页↔板端怎么配合、板端直接启停命令、CHDIR 排错——全在 **`references/services-upload-and-ota.md`**（含微服务架构、§4 systemd 与 Web 面板、§5 板端操作）。涉及后台服务的问题先读它。
+| 进程 | 当前管理方式 |
+|---|---|
+| `vision_analysis` | Web 通过 `systemd-run` 创建每 App 独立命名的 transient service；全系统只允许运行一个视觉 App |
+| Web 控制台 | `rk3588-console.service` |
+| 统一上传 | `unified_upload.service`，由 Web 绑定当前运行 App |
+| 模型 OTA | `ota_agent.service`，由 Web 绑定当前运行 App 和配置文件 |
 
-## 二、部署一台新板子（标准流程）
+## 先判断任务落点
+
+- 操作页面、编辑配置、实时画面：读[Web 用户手册](references/web-console-user-guide.md)。
+- 新增或排查上报链路：读[事件与上报开发](references/event-reporting.md)。
+- 构建、安装、systemd、OTA：读[服务与部署](references/services-and-deployment.md)。
+- 修改 React/FastAPI：读[Web 二次开发](references/web-console-development.md)。
+- 现网故障：读[排障手册](references/troubleshooting.md)。
+
+## 端到端工作顺序
+
+1. 在源码侧运行 logic catalog 与配置校验，确认程序包能力真实存在。
+2. 用 `vision_analysis/build.sh my_app`（`my_app` 替换为单层包名）生成完整包；`--debug` 仅快速编译二进制，不打包。
+3. 用 `install_app.sh` 或 Web“上传程序”安装包，再选择实际配置与部署/调试模式启动。
+4. 在画布保存配置；若有投递，在“应用集成”先配置连接和接口契约，再把上报节点连到 logic。
+5. 先验证 logic 的 `EventReportResult`，再查 `.data/<App>/event_store`，最后查上传服务日志和远端。
+6. 实时预览、Action、记录页和服务页都以当前唯一运行 App 为准。
+
+## 不可混淆的边界
+
+- `report_event()` 只进入本地异步持久化链路，不直接发 HTTP/Dify。
+- `accepted()` 不代表文件已经落盘，更不代表远端成功。
+- 连接参数当前写入 `connections.yaml`；不存在旧文档中的 `upload_config.yaml`/`config.yaml` 运行契约。
+- 接口模板在 App `report_templates/`，用户新建模板在 `.data/<App>/report_contracts/`。
+- 全部 delivery 成功后事件目录会删除；“事件投递”页是 outbox，不是成功历史库。
+- Web“部署”模式会把所选配置的 `global.enable_display` 写为 0，“调试”模式写为 1。
+- 实时画面要求运行配置启用 RTSP 且 codec 为 H264/AVC；它不是逐通道 MJPEG。
+- SOP 编辑器仍会生成 `logic_path_sop`，但当前 C++ 未注册该模块，不能作为可运行能力。
+
+## 修改后的验证
+
+Web 后端：
 
 ```bash
-# 0. 装依赖（apt + Node + pip 一键；国内网络已适配：Node 走 npmmirror tarball、apt backports 404 容错）
-bash install_deps.sh              # 运行时依赖；加 --build 再装板端从源码编译 C++ 的 -dev 包
-
-# 1. 编译 C++ + 打包（产出 dist/：二进制 + assets + libs + services + deploy.sh 等）
-cd vision_analysis && ./build.sh dist
-
-# 2. 把程序包装进控制台（复制 dist → /opt/ai_apps/dist/，重名会问覆盖/改名）
-sudo ./install_app.sh dist        # 之后该 App 在网页「程序管理」就能看到
-
-# 3. 部署 Web 控制台（→ /opt/ai_apps/_console，装并起 rk3588-console.service）
-cd ../web_console && bash install.sh
-#    访问 http://板子IP:8080（SSH 账号密码登录）
-
-# 4. 起后台服务（任选其一）
-#    a) 先在网页启动视觉程序，再到「后台服务」点启动；服务会自动绑定当前视觉 App
-#       需要恢复上次运行状态时，在启动按钮旁勾选「开机自启」
-#    b) 命令行一键：在 dist 目录 bash deploy.sh ./assets/config.json
+cd web_console/backend
+python3 -m pytest
 ```
 
-**改了东西后怎么重新生效**（高频）：
-- 改了 **C++**（逻辑/上报/ROI 等源码）→ 必须 `./build.sh dist && sudo ./install_app.sh dist`，再在网页重启该程序。
-- 改了 **控制台代码**（后端路由/前端）→ `cd web_console && bash install.sh` 重部署（会重 build 前端 + 重启 rk3588-console）。
-- 改了 **某 App 的 config.json/服务配置** → 网页保存即可；config.json 由 C++ 热重载，内嵌的 ROI 也会重建；服务配置写入 `.data/<App>/`，Python 服务只在启动时读取，要重启对应后台服务。
+Web 前端：
 
-## 三、网页控制台能干什么（功能 → 后端路由 → 落盘位置）
+```bash
+cd web_console/frontend
+npm run build
+```
 
-| 网页功能 | 后端路由 | 落到哪 |
-|---------|---------|--------|
-| 程序列表/启停 | `apps.py` / `process.py`(process_manager) | systemd transient unit；App 根目录 `run.pid` / `run.config` |
-| 实时画面/抓拍 | `stream.py` / `snapshot.py` | MJPEG/图片响应，不额外落盘 |
-| **上传/删除程序包** | `apps.py`(`POST /apps/upload`,`DELETE /apps/{name}`) | `/opt/ai_apps/<App>/` |
-| 配置编辑器（画布）保存 | `config_io.py` | `<App>/assets/config.json` |
-| ROI 绘制 | `config_io.py` 配置保存 | 当前配置文件中的 `channels[].roi_zones[]` |
-| 「服务配置」页面 | `upload_config.py` / `ota_config.py` | `.data/<App>/upload_config.yaml`、`contracts/`、`ota_config.json` |
-| 「后台服务」面板（装/启停/健康/日志） | `services.py` | systemd 单元 + `systemctl`/`journalctl` |
-| 「系统设置」页面 | `storage_settings.py` / `network_settings.py` / `system_settings.py` | 系统网络、存储和设备设置（以各路由校验及服务实现为准） |
-| 登录（SSH 账号） | `auth.py`(PAM) | — |
+上传服务：
 
-## 四、常见运维问题（速查：现象 → 原因 → 修）
+```bash
+cd service/upload
+python3 -m pytest
+```
 
-> 下面是**已知症状的速查**。遇到没列出的问题、或要系统地定位（各部分日志在哪、前端/后端/板端二分法、"改了不生效"自查清单、以及 Web 终端 xterm/PTY/输入法/HTTPS 的完整实战案例），看 **`references/debugging-playbook.md`**。
+涉及 C++/manifest 时还必须运行：
 
-- **后台服务起不来 `CHDIR ... No such file or directory` / `Failed at step CHDIR`**：单元里的 `WorkingDirectory` 指向的目录不存在。多为**残留旧单元**（如旧的 `deploy.sh` 装的，指向已删的 `/userdata/.../dist/...`）或该 App 没带 `services/`。**网页「后台服务」面板会自动把这种单元标成「⚠ 路径失效」**，选当前 App 点「🔧 修复并启动」即可——后端强制重写单元指向 `/opt/ai_apps/<App>/services/...` 并直接启动，不用手动 rm。命令行核对：`systemctl cat ota_agent | grep WorkingDirectory` → `ls -ld 那个路径`。详见 `references/services-upload-and-ota.md` §7。
-- **USB 摄像头 ROI 偏移、且不同 max_fps 视野不同**：USB 帧率绑分辨率（fps 档→不同分辨率+不同视野），ROI 抓帧分辨率与推理实际跑的对不上。修：视频流节点把「采集分辨率」设成**固定值**（方案B，与 fps 解耦），重画 ROI。
-- **改了 ROI 不生效**：当前 C++ 只从运行配置的 `channels[].roi_zones[]` 加载，并支持热更新。先确认网页保存的是正在运行的配置文件；再查配置监控是否因通道数量、顺序或 id 改变而拒绝整次热重载。
-- **OTA 升级后模型没换上 / 推理还是旧模型**：`target_config=active` 时先核对 App 根目录 `run.config`；显式文件名模式则必须等于 C++ 实际运行配置。指令中的通道 `id` 和 `model_id` 必须分别匹配 `channels[].id` 与对应的 `models[].id`。
-- **`apt update` 报 `bullseye-backports ... 404`**：失效的第三方源。`install_deps.sh` 已用 `|| true` 容错不致命；要根治就注释掉 `/etc/apt/sources.list` 里那行。
-- **国内装 Node 失败/超时**：`install_deps.sh` 已优先用 npmmirror 预编译 tarball；手动可 `npm config set registry https://registry.npmmirror.com`。
-- **网页改了配置但服务/程序行为没变**：分清谁热重载——config.json 的普通字段及内嵌 ROI 由 C++ 热重载；`.data/<App>/upload_config.yaml`、`contracts/`、`ota_config.json` 要重启对应后台服务。
-- **网页打不开**：`systemctl status rk3588-console`；`journalctl -u rk3588-console -n 50`。aarch64 上 `uvicorn[standard]` 偶发要编译，失败可退精简 `uvicorn fastapi`。
+```bash
+cd vision_analysis
+python3 scripts/generate_logics_catalog.py --check
+```
 
-## 五、关键文件 / 脚本地图
+仓库当前没有提交预编译二进制；仅在已经用当前源码得到 `./vision_analysis` 后再运行：
 
-| 路径 | 作用 |
-|------|------|
-| `install_deps.sh`（仓库根） | apt + Node + pip 一键装依赖（`--build` 加编译依赖） |
-| `vision_analysis/build.sh` | 编译 C++ + 打包 dist（含 services/、生成 run.sh/deploy.sh/setup_python.sh） |
-| `vision_analysis/install_app.sh` | 把 dist 复制进 `/opt/ai_apps/<名>/` 让控制台识别 |
-| `web_console/install.sh` | 部署控制台（后端+前端→`/opt/ai_apps/_console`，装并起 `rk3588-console.service`） |
-| `web_console/stop.sh` | 停控制台（`systemctl stop rk3588-console`；`--disable` 取消自启） |
-| `dist/deploy.sh`（build 产物） | 交互式生成并注册 `vision_app`/`ota_agent`/`unified_upload` 三个 systemd 单元 |
-| `web_console/backend/routers/` | 控制台后端各路由（见上表） |
-| `web_console/rk3588-console.service` | 控制台 systemd 单元模板 |
+```bash
+./vision_analysis --validate-config ./assets/config_6.json
+```
 
-## 六、二次开发指引
-- **控制台前端加页面/功能**（React 架构、目录职责、端到端加页面/接口、WebSocket 用法、改动如何生效、坑）：见 **`references/web-console-frontend.md`**。
-- **加后台微服务 / 加服务配置路由 / 加后台服务面板项**：见 `references/services-upload-and-ota.md` §6。
-- **控制台后端加功能**：在 `web_console/backend/routers/` 加路由，`main.py` 注册（`/api` 前缀，鉴权由全局中间件覆盖；WebSocket 路由自带 `/ws` 前缀）；前端配套见上条。
-- **改部署/依赖**：动 `install_deps.sh` / `build.sh`（打包逻辑）/ `install_app.sh`。
-- **出问题怎么定位**：见 **`references/debugging-playbook.md`**（含"改了不生效"自查 + 二分定位法 + 终端案例）。
+`config_6.json` 只是仓库现存示例；验收具体应用时应换成实际运行配置。
+
+测试环境缺少板端 systemd、GStreamer、摄像头或 RKNN 时，应明确区分“静态/单元测试通过”和“板端
+实机链路通过”，不能用前者替代后者。

@@ -1,0 +1,4 @@
+interface:
+  display_name: "RK3588 全局逻辑开发"
+  short_description: "开发并核验跨通道聚合、全局状态、按钮、事件上报与运行语义"
+  default_prompt: "Use $rk3588-global-logic to implement or review this cross-channel rule against the current scheduler and data contracts."

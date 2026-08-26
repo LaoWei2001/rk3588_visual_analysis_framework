@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""Launch the repository's interactive feature-development wizard."""
+
+from pathlib import Path
+import runpy
+import sys
+
+
+ENTRYPOINT = (
+    Path(__file__).resolve().parent
+    / "docs"
+    / "skills"
+    / "rk3588-feature-wizard"
+    / "scripts"
+    / "start_wizard.py"
+)
+
+if not ENTRYPOINT.is_file():
+    print(f"错误：找不到开发向导：{ENTRYPOINT}", file=sys.stderr)
+    raise SystemExit(1)
+
+runpy.run_path(str(ENTRYPOINT), run_name="__main__")

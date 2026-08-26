@@ -1,42 +1,110 @@
-# 视觉应用验收清单
+# 验收清单
 
-## 源码与清单
+## 目录
 
-- [ ] 模块目录、函数名、注册宏和配置中的 ID 完全一致。
-- [ ] `logic.json` 不手写 `name`；`event_types` 必须存在（无事件时为 `[]`）；参数 Schema 禁止未知字段并给出类型、默认值和范围。
-- [ ] C++ 使用的参数、outputs、action、事件类型和上报字段均有清单声明。
-- [ ] 模型类别名来自当前 App 的 `labels.txt` 或用户明确提供的契约。
-- [ ] 没有修改生成后的 `logics.json` 作为源码真源。
-- [ ] `generate_logics_catalog.py --check` 和 `validate_logic.py` 通过。
+- [所有改动](#所有改动)
+- [Logic 与清单](#logic-与清单)
+- [配置和热重载](#配置和热重载)
+- [事件与投递](#事件与投递)
+- [Web](#web)
+- [板端验收](#板端验收)
+- [交付声明](#交付声明)
 
-## 正确性与状态
+## 所有改动
 
-- [ ] 正例达到阈值时只产生期望次数的事件。
-- [ ] 反例、低置信度、ROI 外目标不会触发。
-- [ ] 暂时漏检、track_id 变化、离开、恢复、冷却和重启行为符合需求契约。
-- [ ] 无结果、空帧、断流或陈旧跨通道快照不会误报或崩溃。
-- [ ] 多通道/多实例状态互不串扰，没有可变业务 `static`。
-- [ ] 模型坐标、源图坐标和显示坐标没有混用。
+- [ ] 通过 `develop_feature` 实施时，全部变更只位于 `vision_analysis/src/logic/modules/**` 或
+      `vision_analysis/src/logic/global_modules/**`；出现任何其他路径时整批拒绝回写。
+- [ ] 白名单内没有符号链接、子模块或特殊文件。
+- [ ] `git status --short` 中没有意外文件；没有覆盖用户已有改动。
+- [ ] 新名称可在当前源码、配置或需求中找到依据。
+- [ ] 没有引用 `src/analyzer`、`src/core`、`src/player` 等已删除目录。
+- [ ] 没有引用当前未注册的 Logic。
+- [ ] 生成物没有被当作源码手改。
+- [ ] 非隔离向导任务的公共行为变化已同步对应 Skill/reference；隔离向导只报告后续文档任务，不越界编辑。
 
-## 显示、媒体与上报
+## Logic 与清单
 
-- [ ] 实时叠加位置、颜色、层级和文字可读；不遮挡关键区域。
-- [ ] 图片和视频采用契约要求的未叠加/叠加模式，前后录时长正确；没有把当前模型输入尺寸的 `raw.jpg` 误称为源分辨率抓拍。
-- [ ] 事件类型和动态字段与 `logic.json` 完全一致。
-- [ ] 本地 `accepted()`、媒体就绪、delivery 成功和远端回执分别验证，没有混称“上报成功”。
-- [ ] 网络中断期间记录在容量/磁盘水位允许范围内保留，恢复后由上传服务重试；测试时间跨度和事件量覆盖现场要求。
+- [ ] 通道模块位于 `src/logic/modules/<name>/`；全局模块位于 `global_modules/<name>/`。
+- [ ] 模块至少包含 C++ 源和 `logic.json`。
+- [ ] `REGISTER_LOGIC`/`REGISTER_GLOBAL_LOGIC` 的函数名就是外部 ID。
+- [ ] 源 `logic.json` 不写 `name`。
+- [ ] `parameters` 是 `type=object`、`additionalProperties=false`，每个属性有类型匹配的默认值。
+- [ ] 每个 `param_*()` 字面量 key 与 Schema 类型一致。
+- [ ] `actions` 与对应 Action 注册宏同时存在或同时不存在。
+- [ ] `outputs` 与每个 `publish_*()` 的 key/type 对齐。
+- [ ] `event_types` 始终存在；使用 `report_event()` 时不为空且 ID 与 C++ 一致。
+- [ ] `report_fields` 与 `event_field()`/`event_json_field()` 对齐。
 
-## 实时性能
+权威静态检查：
 
-- [ ] logic 内没有直接网络请求、sleep、阻塞磁盘 I/O、图片编码或视频编码；事件只调用统一 `report_event()`。
-- [ ] 单帧扫描没有不必要的全帧 clone、重复掩码转换或循环内高成本初始化。
-- [ ] 绘制只提交轻量 `draw_*` 指令；耗时媒体工作交给引擎异步链路。
-- [ ] 在目标通道数和分辨率下分别记录推理 FPS、显示 FPS、CPU、内存和温度。
-- [ ] 功能关闭时开销接近原路径，其他 logic 的旧调用方式和行为保持兼容。
+```bash
+cd vision_analysis
+python3 scripts/generate_logics_catalog.py --check
+```
 
-## 交付
+## 配置和热重载
 
-- [ ] 说明修改文件、配置键、事件/字段契约和用户需要的画布接线。
-- [ ] 说明已运行与未运行的检查；未获授权时没有构建、部署、启停服务或修改运行配置。
-- [ ] 新公共接口已同步源码模块文档；`audit_docs.py` 通过。
-- [ ] 所有保守假设和仍需现场确认的阈值/素材都明确列出。
+- [ ] 配置根包含 `global` 对象和 `channels` 数组。
+- [ ] `stream.src_type` 明确为 `rtsp`、`file` 或 `usb`。
+- [ ] 模型只在 `channels[].models[]`，同通道模型 ID 唯一。
+- [ ] ROI 只在 `channels[].roi_zones[]`，坐标为 0–1。
+- [ ] 模块参数只在对应实例的 `logic_parameters`。
+- [ ] 参数热重载策略与状态语义一致。
+- [ ] 没有把通道拓扑、显示尺寸/布局或 RTSP 输出设置误当成可热更新字段。
+- [ ] 有可执行文件时对实际配置运行 `./vision_analysis --validate-config ./assets/config_6.json`（示例文件名按应用替换）。
+
+## 事件与投递
+
+- [ ] Logic 不执行 HTTP/Dify、不读取凭据、不编码 Base64。
+- [ ] `EventRequest` 每次调用独立构造；合并模式有明确依据。
+- [ ] 全局视频 delivery 配置有效 `media_source_channel_id`。
+- [ ] delivery 保存 `connection_id`、`contract_id`、`contract_revision` 和 `media`。
+- [ ] 模块模板已在模块 `logic.json.report_templates` 声明。
+- [ ] 模板 `owner_logic`、`event_types`、字段、媒体和 Adapter 能力对齐。
+
+模板聚合检查会写临时输出：
+
+```bash
+cd vision_analysis
+tmp_dir="$(mktemp -d)"
+python3 scripts/generate_report_templates.py \
+  --logic-root src/logic \
+  --app-dir report_templates \
+  --adapter-catalog ../service/upload/adapters/catalog.json \
+  --output "$tmp_dir/report_templates"
+rm -rf -- "$tmp_dir"
+```
+
+投递服务有改动时运行其现有测试；不要宣称未运行的远端联调成功。
+
+## Web
+
+- [ ] API 调用集中在 `web_console/frontend/src/api/client.ts`。
+- [ ] 新 HTTP 路由在 `backend/main.py` 注册；鉴权例外是明确设计而非遗漏。
+- [ ] WebSocket 自行校验查询参数中的 token。
+- [ ] 配置编辑同时维护 `configToGraph.ts` 与 `graphToConfig.ts` 的往返一致性。
+- [ ] 前端改动至少执行 `npm run build`；后端改动执行相关 pytest。
+- [ ] 浏览器预览场景检查 `enable_rtsp` 与 H264 编码要求。
+
+## 板端验收
+
+按功能选择，不要求用主机模拟硬件结论：
+
+- [ ] 构建/打包来自当前源码，二进制、`logics.json` 和 `report_templates/` 同版。
+- [ ] 真实 RTSP/USB/文件源能够启动、断流恢复符合预期。
+- [ ] 画面、ROI、Action、热重载和日志观察点符合需求合同。
+- [ ] 事件目录的三份 JSON、媒体终态和 delivery 状态符合预期。
+- [ ] 远端联调检查请求预览、HTTP 状态/业务成功条件和幂等。
+- [ ] GPIO、NPU、RGA、编码器等硬件路径只在 RK3588 上给出最终结论。
+
+## 交付声明
+
+最终说明必须区分：
+
+- 已静态验证；
+- 已构建；
+- 已运行单元/集成测试；
+- 已在 RK3588 真实设备验证；
+- 未验证或需要部署者提供的外部条件。
+
+不要把“代码看起来正确”“事件已接受”或“HTTP 请求已入队”写成端到端成功。

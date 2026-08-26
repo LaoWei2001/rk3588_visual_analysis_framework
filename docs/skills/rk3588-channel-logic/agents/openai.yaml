@@ -1,0 +1,4 @@
+interface:
+  display_name: "RK3588 通道逻辑开发"
+  short_description: "开发并核验单通道检测、ROI、状态、按钮与上报逻辑"
+  default_prompt: "Use $rk3588-channel-logic to implement or review this per-channel business rule against the current framework source."

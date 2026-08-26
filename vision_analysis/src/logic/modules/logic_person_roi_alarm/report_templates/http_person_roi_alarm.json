@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "label": "HTTP 人员警戒区图片报警",
+  "description": "通用 HTTP JSON 投递模板：上传人员警戒区报警字段和标注图片 Base64。连接地址与认证由应用集成配置提供；远端路径和字段名可按实际接口契约调整。",
+  "owner_logic": "logic_person_roi_alarm",
+  "event_types": [
+    "person_roi_alarm"
+  ],
+  "adapter": "http",
+  "media": [
+    "annotated_image"
+  ],
+  "request": {
+    "method": "POST",
+    "path": "/api/events",
+    "encoding": "json"
+  },
+  "mapping": [
+    {
+      "source": "event.id",
+      "target": "eventId",
+      "location": "body",
+      "required": true
+    },
+    {
+      "source": "event.type",
+      "target": "eventType",
+      "location": "body",
+      "required": true
+    },
+    {
+      "source": "event.message",
+      "target": "message",
+      "location": "body",
+      "required": true
+    },
+    {
+      "source": "event.snap_time",
+      "target": "snapTime",
+      "location": "body",
+      "required": true
+    },
+    {
+      "source": "source.channel_id",
+      "target": "channelId",
+      "location": "body",
+      "type": "number",
+      "required": true
+    },
+    {
+      "source": "fields.roi_name",
+      "target": "roiName",
+      "location": "body",
+      "required": true
+    },
+    {
+      "source": "fields.target_label",
+      "target": "targetLabel",
+      "location": "body",
+      "required": true
+    },
+    {
+      "source": "fields.target_count",
+      "target": "targetCount",
+      "location": "body",
+      "type": "number",
+      "required": true
+    },
+    {
+      "source": "fields.dwell_seconds",
+      "target": "dwellSeconds",
+      "location": "body",
+      "type": "number",
+      "required": true
+    },
+    {
+      "source": "media.annotated_image",
+      "target": "annotatedImage",
+      "location": "body",
+      "transform": "base64",
+      "required": true
+    }
+  ],
+  "success": {
+    "http_status": [
+      200,
+      201,
+      202,
+      204
+    ]
+  }
+}

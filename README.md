@@ -1,5 +1,8 @@
 # RK3588 可扩展多路视觉分析引擎与管理平台
 
+> 当前开发、配置和运维契约以 [docs 文档入口](docs/README.md) 为准；该入口已按提交
+> `6bd2b94dbbdd8787753b90d1527a6882e3a70aa2`（2026-08-23）核对，并同时面向大模型与二次开发者。
+
 本项目是一个运行于 RK3588 边缘设备的可扩展多路视觉分析引擎并配备可视化的web程序管理界面，具有多路视频采集、RKNN 推理、目标跟踪、利用推理结果进行自定义的算法编排等功能。主要解决了过去视觉算法开发中遇到的如下问题：
 - 多路视频流在性能受限的边缘端难以同时进行高性能的采集和分析。
 - 算法复用性和可拓展性差，过去的算法中视频流和逻辑是绑定的，若要改变某个视频通道的逻辑需要将前一个逻辑删除，若算法耦合性高，则改动较大。但利用本项目的低耦合设计可将任意算法逻辑绑定至任意视频源类型（RTSP，USB，视频文件）的任意视频通道。
@@ -12,9 +15,29 @@
 项目仓库配有演示基本功能的demo便于二次开发者了解利用引擎基本功能构建自己视觉分析应用的过程。    
 > 若第一次接触本项目, 强烈建议通过教程的程序实例来初步理解视觉程序的构建方式。   
 
+如果希望由大模型从需求访谈一直完成到代码和验证，请先安装并登录 Codex CLI 或 Claude Code，然后在
+仓库根目录运行：
+
+```bash
+./develop_feature
+```
+
+原生 Windows 使用 `develop_feature.cmd` 或 `py .\develop_feature`。启动器只支持 Codex CLI 与 Claude
+Code：仅检测到一个时直接使用，两个都可用时先让用户选择，也可通过 `--agent codex` 或
+`--agent claude` 指定。随后自动检测当前系统、WSL、架构、RK3588 设备树和关键工具；第一题确认开发
+宿主及默认 RK3588 部署目标，用户通常只需回答“是”，不正确时回答“否 + 简短纠正”。业务需求通常
+只问 2–3 轮、最多 4 轮；向导先核对源码，再把相关细节合成具体方案供用户用“是/否”确认，不会逐项
+盘问硬件和合同字段。需求完整后只生成通道/全局 Logic：代理在一次性隔离副本中自动执行，原仓库只允许
+回写 `vision_analysis/src/logic/modules/**` 和 `vision_analysis/src/logic/global_modules/**`；任何其他改动
+都会让整批结果被拒绝，
+且不需要手动运行 `/permissions`。需要 Web、服务、配置或引擎改动的需求只报告边界，不会实施。
+`--confirm-before-code` 会在写代码前等待确认，`--plan-only` 只生成合同和计划，`--check` 检查两个
+代理及 Skill 是否可用。适配边界见
+[Codex 与 Claude Code 适配](docs/skills/rk3588-feature-wizard/references/agent-adapters.md)。
+
 第一次开发报警、图片/视频或 HTTP/Dify 上报功能，请从
-[报警事件与上报开发指南](docs/报警事件与上报开发指南.md) 开始；该文档同时提供快速上手流程
-和可直接交给大模型的开发提示词。
+[事件与上报开发](docs/skills/rk3588-console-ops/references/event-reporting.md) 开始；可直接交给大模型的
+任务模板见[提示词模板](docs/skills/build-rk3588-vision-app/references/prompt-recipes.md)。
 
 事件投递采用“Logic 字段声明 + 随程序包发布的接口契约 + 应用级连接 + 版本化投递绑定”模型。
 算法 Logic 只产生标准事件和动态 `fields`；远端字段名、媒体、请求格式和成功条件由 Logic 目录的
@@ -47,7 +70,7 @@
 - 单通道多模型组合推理，结果按同一帧合并；
 - RKNN NPU 多核心分配、RGA 图像转换和 DMA-BUF 零拷贝优先路径
 - 充分压榨npu算力，可以实现多路推理时npu的3个核心占用率均在95%以上
-- 每通道独立 FPS、队列深度、阈值、类别过滤和跟踪参数；
+- 每通道独立 FPS、模型阈值、类别过滤和跟踪参数；任务队列深度当前来自全局 `queue_size`；
 - SORT风格目标跟踪及稳定 `track_id`；
 - 推理通道和无模型传统 CV 通道可同时运行。
 
@@ -67,7 +90,7 @@
 - HDMI/GTK 窗格显示；
 - 内置 RTSP 服务，可流式输出与本地显示一致的拼接画面；
 - ROI、检测框、姿态、分割和自定义绘制统一渲染；
-- 带标注图片、原始图片与原始分辨率事件视频；
+- 带标注图片、原始图片与事件视频（`none` 保持源分辨率，`custom`/`all` 按实时显示窗格渲染）；
 - 事件前后视频环形缓冲和异步 MP4 编码；
 - 本地持久化事件发件箱，断网时保留并自动重试；
 - `http` 与 `dify_workflow` Adapter，支持可复用接口契约、图片、视频和纯数据事件；
@@ -127,21 +150,22 @@ flowchart LR
 
 ```text
 GStreamer appsink
-  → videoOutHandle
-  → 事件视频源帧缓存
-  → 每通道 FPS 节流
-  → RGA 将视频帧转换为模型输入尺寸
-  ├─ 无模型通道：同步执行传统 CV logic
-  └─ 推理通道：任务队列 → RKNN worker → 同帧结果分发
+  → pipeline_submit_frame()
+  ├─ 按录像自身 FPS → 事件视频源帧缓存
+  └─ 每通道业务 max_fps 节流
+       ├─ 无推理通道：按需惰性取帧 → 同步执行传统 CV logic
+       ├─ 最新源帧 → HDMI/有客户端的 RTSP 预览队列
+       └─ 推理通道：任务队列 → RKNN worker → 同帧结果分发
        → tracker
        → 构造 ChannelContext
        → 执行动作处理器
        → 执行当前 logic_xxx
        → 原子写回 frame / results / state / draw commands
-       → 显示、事件媒体、录像和跨通道快照
+       → 显示叠加、事件图片和跨通道快照
 ```
 
-业务 logic 和事件媒体路径使用严格匹配的同帧图像与结果；实时预览优先显示最新解码帧，并使用最近结果进行叠加，以降低观看延迟。
+业务发布与事件图片通过版本检查保持帧/结果一致；事件视频走独立源帧环形缓冲；实时预览优先显示
+最新解码帧，并使用最近结果进行叠加，以降低观看延迟。
 
 ## 仓库结构
 
@@ -152,19 +176,22 @@ GStreamer appsink
 │   ├── scripts/                 # logic 清单生成与一致性校验
 │   ├── src/
 │   │   ├── capturer/            # GStreamer RTSP/File/USB 采集与重连
-│   │   ├── analyzer/            # 帧入口、推理调度、跟踪和结果分发
-│   │   ├── yolo/                # RKNN 模型实现与多模型组合
+│   │   ├── pipeline/            # 帧入口、结果分发与业务调用
+│   │   ├── inference/           # 推理任务、模型实例与热换
+│   │   ├── tracking/            # 每通道目标跟踪
 │   │   ├── logic/core/          # ChannelContext、注册表、参数和全局逻辑
 │   │   ├── logic/modules/       # 可扩展业务逻辑模块
-│   │   ├── player/              # HDMI 显示、叠加和 RTSP 输出
+│   │   ├── logic/global_modules/ # 可扩展全局逻辑模块
+│   │   ├── display/             # HDMI 显示与统一叠加
+│   │   ├── rtsp/                # 拼接画面 RTSP 输出
 │   │   ├── event/               # 标准事件与媒体发件箱生产端
 │   │   ├── recorder/            # 事件前后视频
 │   │   ├── control/             # Web/外部通道动作控制
 │   │   ├── config/              # 配置解析、校验和热重载字段
-│   │   └── core/                # 全局控制块与运行时基础能力
-│   ├── tests/                   # C++ 单元测试
+│   │   ├── runtime/             # APP_CTRL、快照与运行状态
+│   │   └── yolo/                # RKNN 模型实现与后处理
 │   ├── CMakeLists.txt
-│   └── build.sh                 # 编译、打包和部署脚本生成
+│   └── build.sh                 # 编译、打包和运行脚本生成
 ├── web_console/
 │   ├── frontend/                # React、TypeScript、XYFlow、Zustand
 │   ├── backend/                 # FastAPI 管理 API 与 WebSocket
@@ -173,6 +200,8 @@ GStreamer appsink
 │   ├── upload/                  # 可靠事件上传服务
 │   └── model_update/            # 模型 OTA 服务
 ├── docs/                        # 开发、运维和模块文档
+├── develop_feature              # Codex/Claude 隔离式 Logic 需求澄清与自动开发入口
+├── develop_feature.cmd          # 原生 Windows 的同一向导入口
 ├── install_deps.sh              # RK3588 依赖安装
 └── LICENSE                      # GPL-3.0
 ```
@@ -224,7 +253,7 @@ Rockchip RKNN/RGA 的头文件和运行库通常由板卡 BSP、系统镜像或�
 ```bash
 cd vision_analysis
 ./build.sh --debug
-./vision_analysis ./assets/config_xx.json
+./vision_analysis ./assets/config_6.json
 ```
 
 `--debug` 只生成可执行文件，不创建完整应用包。请根据设备修改视频源、模型和标签路径。
@@ -247,24 +276,18 @@ cd vision_analysis
 - `assets/` 模型、标签和配置；
 - `logics.json` Web 能力清单；
 - `services/upload` 和 `services/model_update`；
-- `run.sh`、`deploy.sh`、`stop.sh`、`setup_python.sh`。
+- `report_templates/`、`run.sh` 和 `setup_python.sh`。
 
 前台运行发布包：
 
 ```bash
 cd vision_analysis/dist
 bash setup_python.sh
-bash run.sh ./assets/config_sop.json
+bash run.sh ./assets/config_6.json
 ```
 
-注册为 systemd 服务：
-
-```bash
-cd vision_analysis/dist
-bash deploy.sh ./assets/config_sop.json
-```
-
-`deploy.sh` 会交互式选择是否启动视觉主程序、模型 OTA 和统一上传服务。
+`run.sh` 会把所选配置的 `global.enable_display` 改为 1。生产托管请把完整包安装到 Web 控制台；
+当前 `build.sh` 不生成历史文档中的 `deploy.sh`/`stop.sh`。
 
 ### 5. 安装 Web 管理平台
 
@@ -288,7 +311,8 @@ sudo ./install_app.sh dist
 
 ## 配置示例
 
-配置不使用版本号字段。模型只允许写在 `channels[].models[]`，ROI 只允许写在
+配置没有根级版本号契约；OTA 模型版本只写在 `channels[].models[].version`。模型只允许写在
+`channels[].models[]`，ROI 只允许写在
 `channels[].roi_zones[]`，录像设置只保存在 `report_policy`；`stream.src_type` 必须显式指定。
 Web 画布中 ROI 节点直接连接视频流节点，表示它归属于该视频通道；ROI 与模型推理和
 后处理算法解耦，即使通道没有配置模型，仍可保存、显示并通过 `ChannelContext` 读取。
@@ -303,9 +327,7 @@ Web 画布中 ROI 节点直接连接视频流节点，表示它归属于该视�
     "tile_cols": 1,
     "tile_rows": 1,
     "max_fps": 25,
-    "queue_size": 1,
-    "obj_thresh": 0.3,
-    "nms_thresh": 0.45
+    "queue_size": 1
   },
   "channels": [
     {
@@ -353,7 +375,7 @@ Web 画布中 ROI 节点直接连接视频流节点，表示它归属于该视�
 只校验配置而不启动视频、NPU 和后台线程：
 
 ```bash
-./vision_analysis --validate-config assets/config_sop.json
+./vision_analysis --validate-config ./assets/config_6.json
 ```
 
 ## 开发新的通道逻辑
@@ -388,6 +410,7 @@ REGISTER_LOGIC(logic_people_count);
 ```json
 {
   "label": "人员计数",
+  "event_types": [],
   "parameters": {
     "type": "object",
     "additionalProperties": false,
@@ -419,13 +442,15 @@ REGISTER_LOGIC(logic_people_count);
 
 | Logic ID | 作用 |
 |---|---|
-| `logic_path_sop` | SOP 路径、顺序、停留、分支、环路和耗时合规检测 |
-| `logic_upload_teach` | Web 按钮触发的标准事件示例 |
-| `logic_periodic_snapshot_demo` | 周期截图与参数热重载演示 |
-| `logic_save_frame_pair` | 保存原始分辨率帧和模型输入帧 |
+| `logic_course_01` … `logic_course_10` | 课程示例；09/10 当前仍是空骨架 |
+| `logic_course_gpio` | 检测结果驱动 GPIO |
 | `logic_default` | 可删除的空白逻辑示例 |
-| `logic_course_01` | 文字叠加课程示例 |
-| `logic_course_02` | `ChannelContext` 使用课程示例 |
+| `logic_dify` | Dify 周期截图与自定义变量 |
+| `logic_global_input_demo` | 向全局 logic 发布类型化变量 |
+| `logic_relay` | Action 控制继电器 |
+
+当前未注册 `logic_path_sop`、`logic_upload_teach`、`logic_periodic_snapshot_demo` 或
+`logic_save_frame_pair`。Web 仍有 SOP 节点并会生成缺失的 `logic_path_sop`，不能作为可运行配置。
 
 通道可以不配置 `logic`。此时仍会执行视频、模型、跟踪和通用绘制管线，但不会调用业务后处理模块。
 
@@ -467,7 +492,8 @@ if (!report.accepted())
 ```
 
 媒体类型、叠加方式、视频前后时间窗、接收端和字段映射由 Web 保存的 `report_policy` 决定。
-`report.accepted()` 表示本地事件已创建或合并；失败时通过 `status/detail` 精确定位。
+`report.accepted()` 只表示创建/合并请求已进入本地持久化队列，不表示已经落盘或远端成功；失败时
+通过 `status/detail` 精确定位。
 
 事件链路：
 
@@ -482,13 +508,13 @@ channel logic / global logic
 ```
 
 全局逻辑使用同一个 `EventRequest` 与 `report_event(gctx, request)`。全局事件图片会把连入该全局
-逻辑的全部通道按 `disp_width`、`disp_height`、`tile_rows`、`tile_cols` 拼接；图片叠加仍由
-`image_overlay` 决定。`request.source_channel_id` 只动态选择事件来源标识和单通道事件视频，省略时
-使用上报节点的默认通道。Web 画布以“通道逻辑 → 全局逻辑 → 上报配置”连线生成输入通道和统一
+逻辑的全部连入通道按全局显示尺寸和网格规则拼接；图片叠加仍由 `image_overlay` 决定。
+`request.source_channel_id` 动态选择事件身份和图片回退来源；事件视频固定使用全局节点的
+`media_source_channel_id`。Web 画布以“通道逻辑 → 全局逻辑 → 上报配置”连线生成输入通道和统一
 上报策略。
 
-事件目录按写入者拆分：C++ 维护 `event.json` 和 `media_state.json`，上传服务独占
-`delivery_state.json`，避免两个进程并发覆盖同一份状态。
+事件目录按写入者拆分：C++ 维护 `event.json` 和 `media_state.json`，并初始化
+`delivery_state.json`；此后上传服务独占 delivery 状态，避免两个进程并发覆盖同一份状态。
 
 默认发件箱上限为 1 GiB，并保留至少 512 MiB 可用磁盘空间。可以通过以下环境变量覆盖：
 
@@ -524,17 +550,18 @@ npm run build
 - 通道 logic 是编译期模块，不是运行时动态加载的 `.so` 插件；
 - Web 图编辑器编排固定的视觉分析角色，暂不支持用户自定义 DAG；
 - 模型类型由 C++ 模型工厂注册，新增类型需要重新编译；
-- 全局 logic 当前仍采用中央注册方式；
-- `logic_path_sop` 是默认业务应用，不是引擎运行所必需的兜底逻辑。
+- 全局 logic 与通道 logic 一样是编译期自注册模块；
+- Web 的 SOP 节点与当前缺失的 `logic_path_sop` 是已知实现缺口。
 
 ## 文档
 
 - [文档总入口](docs/README.md)
-- [二次开发课程大纲](docs/二次开发课程大纲.md)
+- [Skill 与二次开发索引](docs/skills/README.md)
+- [交互式功能开发总入口](docs/skills/rk3588-feature-wizard/SKILL.md)
 - [通道逻辑开发指南](docs/skills/rk3588-channel-logic/SKILL.md)
 - [全局逻辑开发指南](docs/skills/rk3588-global-logic/SKILL.md)
 - [控制台、部署与运维指南](docs/skills/rk3588-console-ops/SKILL.md)
-- [源码模块索引](docs/skills/rk3588-src-modules/README.md)
+- [源码模块索引](docs/skills/rk3588-src-modules/SKILL.md)
 
 如文档与当前实现存在差异，以源码、头文件、模块 `logic.json`、前端序列化和后端路由为准。
 

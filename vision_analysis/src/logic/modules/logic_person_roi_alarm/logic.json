@@ -1,0 +1,69 @@
+{
+    "label": "人员警戒区持续停留报警",
+    "report_templates": [
+        "report_templates/http_person_roi_alarm.json"
+    ],
+    "event_types": [
+        {
+            "id": "person_roi_alarm",
+            "label": "人员警戒区报警",
+            "help": "人员在指定 ROI 内连续停留达到阈值时触发一次报警。"
+        }
+    ],
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "roi_name": {
+                "type": "string",
+                "title": "警戒区名称",
+                "description": "必须与当前通道已配置的命名 ROI 完全一致；为空或找不到时不计时、不报警。",
+                "default": "",
+                "x-placeholder": "例如：警戒区",
+                "x-hot-reload": "reset_state"
+            },
+            "target_label": {
+                "type": "string",
+                "title": "人员标签",
+                "description": "必须与当前检测模型标签文件中的人员类别完全一致。",
+                "default": "person",
+                "x-placeholder": "person",
+                "x-hot-reload": "reset_state"
+            },
+            "dwell_seconds": {
+                "type": "number",
+                "title": "持续停留时间",
+                "description": "ROI 内连续存在目标达到该时长后触发报警。",
+                "minimum": 0.1,
+                "maximum": 3600.0,
+                "default": 3.0,
+                "x-step": 0.1,
+                "x-unit": "秒",
+                "x-hot-reload": "reset_state"
+            }
+        }
+    },
+    "report_fields": [
+        {
+            "key": "roi_name",
+            "type": "string",
+            "label": "警戒区名称"
+        },
+        {
+            "key": "target_label",
+            "type": "string",
+            "label": "目标标签"
+        },
+        {
+            "key": "target_count",
+            "type": "number",
+            "label": "区域内目标数"
+        },
+        {
+            "key": "dwell_seconds",
+            "type": "number",
+            "label": "实际持续时间",
+            "help": "从本轮区域连续有人开始，到事件被本地队列接受时的秒数。"
+        }
+    ]
+}

@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom'
 import AppsPage    from './pages/AppsPage'
 import LiveViewPage from './pages/LiveViewPage'
+import VideoCapturePage from './pages/VideoCapturePage'
 import EditorPage  from './pages/EditorPage'
 import LogsPage    from './pages/LogsPage'
 import RecordsPage from './pages/RecordsPage'
@@ -82,6 +83,10 @@ function AppShell() {
           <span className="nav-icon">▰</span> 实时画面
         </NavLink>
 
+        <NavLink to="/video-capture" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
+          <span className="nav-icon">●</span> 视频采集
+        </NavLink>
+
         <NavLink to="/services" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
           <span className="nav-icon">⚙</span> 系统服务
         </NavLink>
@@ -106,6 +111,7 @@ function AppShell() {
           <Routes>
             <Route path="/"                  element={<AppsPage />} />
             <Route path="/live-view"         element={<LiveViewPage />} />
+            <Route path="/video-capture"     element={<VideoCapturePage />} />
             <Route path="/editor/:appName"   element={<EditorPage />} />
             <Route path="/logs/:appName"     element={<LogsPage />} />
             <Route path="/records/:appName"  element={<RecordsPage />} />
