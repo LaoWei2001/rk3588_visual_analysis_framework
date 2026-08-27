@@ -9,5 +9,8 @@ node_modules
 .claude
 .vscode
 
+# RKNN Runtime 的一次性导入源；项目实际跟踪 vendor/rknn/ 下的锁定副本。
+/librknnrt.so
+
 # 编译后的单元测试二进制（由 tests/**/build.sh 重新生成）
 *_queue_producer_test

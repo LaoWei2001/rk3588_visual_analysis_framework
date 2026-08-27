@@ -15,6 +15,8 @@ bool interface_has_ipv4(const char *ifname, const char *expected_ip);
 bool get_active_connection_uuid(const char *ifname, char *out, size_t out_size);
 bool default_route_matches(const char *ifname, const char *gateway);
 bool choose_ethernet_interface(char *iface, size_t iface_size);
+bool choose_wifi_interface(char *iface, size_t iface_size);
+bool choose_any_network_interface(char *iface, size_t iface_size);
 void ask_interface(char *iface, size_t size, const char *default_iface);
 void show_devices(void);
 void show_network_state(void);

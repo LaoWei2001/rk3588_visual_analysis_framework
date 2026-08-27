@@ -475,6 +475,73 @@ bool choose_ethernet_interface(char *iface, size_t iface_size)
     return true;
 }
 
+static bool choose_nmcli_interface_type(const char *required_type,
+                                        char *iface, size_t iface_size)
+{
+    char out[CMD_OUT_SIZE];
+    char devices[32][IF_NAMESIZE];
+    char states[32][96];
+    int count = 0;
+    const char *argv[] = {
+        "nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device", "status", NULL};
+
+    if (!iface || iface_size == 0 ||
+        capture_cmd(argv, out, sizeof(out)) != 0)
+    {
+        return false;
+    }
+    {
+        char *saveptr = NULL;
+        char *line = strtok_r(out, "\n", &saveptr);
+        while (line && count < 32)
+        {
+            char *type = strchr(line, ':');
+            char *state = type ? strchr(type + 1, ':') : NULL;
+            if (type && state)
+            {
+                *type++ = '\0';
+                *state++ = '\0';
+                if ((strcmp(type, "ethernet") == 0 || strcmp(type, "wifi") == 0) &&
+                    (!required_type || strcmp(type, required_type) == 0) &&
+                    line[0] != '\0')
+                {
+                    snprintf(devices[count], sizeof(devices[count]), "%s", line);
+                    snprintf(states[count], sizeof(states[count]), "%s", state);
+                    ++count;
+                }
+            }
+            line = strtok_r(NULL, "\n", &saveptr);
+        }
+    }
+    if (count == 0)
+    {
+        printf("没有检测到%s网卡。\n",
+               required_type && strcmp(required_type, "wifi") == 0 ? "无线" : "可配置");
+        return false;
+    }
+    printf("\n请选择网卡（程序不预设网卡角色）：\n");
+    for (int index = 0; index < count; ++index)
+    {
+        printf("  %d. %-14s 状态: %s\n", index + 1,
+               devices[index], states[index]);
+    }
+    {
+        int choice = read_int("请选择: ", 1, count);
+        snprintf(iface, iface_size, "%s", devices[choice - 1]);
+    }
+    return true;
+}
+
+bool choose_wifi_interface(char *iface, size_t iface_size)
+{
+    return choose_nmcli_interface_type("wifi", iface, iface_size);
+}
+
+bool choose_any_network_interface(char *iface, size_t iface_size)
+{
+    return choose_nmcli_interface_type(NULL, iface, iface_size);
+}
+
 void ask_interface(char *iface, size_t size, const char *default_iface)
 {
     for (;;)
@@ -538,7 +605,10 @@ void scan_wifi(void)
 {
     char iface[IF_NAMESIZE];
 
-    ask_interface(iface, sizeof(iface), "wlan0");
+    if (!choose_wifi_interface(iface, sizeof(iface)))
+    {
+        return;
+    }
 
     {
         const char *on[] = {

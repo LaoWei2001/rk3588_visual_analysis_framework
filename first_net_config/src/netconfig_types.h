@@ -35,4 +35,17 @@ typedef enum
     NETWORK_ACTIVATION_PENDING
 } NetworkActivationResult;
 
+typedef enum
+{
+    CONFIG_LIFETIME_TEMPORARY = 1,
+    CONFIG_LIFETIME_PERMANENT = 2
+} ConfigLifetime;
+
+typedef enum
+{
+    NETWORK_PROFILE_EXISTING = 0,
+    NETWORK_PROFILE_PERMANENT = 1,
+    NETWORK_PROFILE_TEMPORARY = 2
+} NetworkProfileMode;
+
 #endif

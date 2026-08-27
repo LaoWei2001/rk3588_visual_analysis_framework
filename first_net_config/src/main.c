@@ -4,6 +4,9 @@
 #include "network_safety.h"
 #include "network_state.h"
 #include "network_workflows.h"
+#include "interface_inspector.h"
+#include "factory_restore.h"
+#include "network_cleanup.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -14,18 +17,24 @@ static void print_menu(void)
 {
     printf("\n");
     printf("====================================================\n");
-    printf("                 网络配置工具 v1.6\n");
+    printf("              RK3588 现场网络工具 v2.1\n");
     printf("====================================================\n");
-    printf("1. 查看网卡状态\n");
-    printf("2. 配置有线网络\n");
-    printf("3. 有线网络详细设置\n");
-    printf("4. 配置无线网络\n");
-    printf("5. 查看当前网络信息\n");
-    printf("6. 搜索附近无线网络\n");
-    printf("7. 测试指定地址能否连接\n");
-    printf("8. 查看已保存的网络配置\n");
-    printf("9. 删除已保存的网络配置\n");
-    printf("10. 测试使用已有网络配置\n");
+    printf("1. 查看全部网卡、IP 和网段冲突\n");
+    printf("2. 搜索摄像头并配置所选有线网口\n");
+    printf("3. 配置笔记本直连维护网络\n");
+    printf("4. 配置所选有线网口（向导）\n");
+    printf("5. 配置所选有线网口（详细）\n");
+    printf("6. 配置所选无线网口\n");
+    printf("7. 查看完整 NetworkManager 状态\n");
+    printf("8. 搜索附近无线网络\n");
+    printf("9. 测试指定地址能否连接\n");
+    printf("10. 查看已保存的网络配置\n");
+    printf("11. 安全删除未启用的网络配置\n");
+    printf("12. 测试使用已有网络配置\n");
+    printf("13. 查看初始网络基准及恢复预览\n");
+    printf("14. 保存系统初始网络基准（制镜阶段）\n");
+    printf("15. 恢复系统初始网络配置（永久）\n");
+    printf("16. 清除所有 NetworkManager 连接配置（高风险）\n");
     printf("0. 退出\n");
     printf("====================================================\n");
 }
@@ -75,39 +84,58 @@ int main(int argc, char *argv[])
         int choice;
 
         print_menu();
-        choice = read_int("请选择功能 [0-10]: ", 0, 10);
+        choice = read_int("请选择功能 [0-16]: ", 0, 16);
 
         switch (choice)
         {
         case 1:
-            show_devices();
+            show_interface_overview();
+            show_current_overlap_warnings();
             break;
         case 2:
-            configure_wired_beginner();
+            configure_camera_network();
             break;
         case 3:
-            configure_wired();
+            configure_maintenance_link();
             break;
         case 4:
-            configure_wifi();
+            configure_wired_beginner();
             break;
         case 5:
-            show_network_state();
+            configure_wired();
             break;
         case 6:
-            scan_wifi();
+            configure_wifi();
             break;
         case 7:
-            ping_test();
+            show_network_state();
             break;
         case 8:
-            show_connection_detail();
+            scan_wifi();
             break;
         case 9:
-            delete_connection();
+            ping_test();
             break;
         case 10:
+            show_connection_detail();
+            break;
+        case 11:
+            delete_connection();
+            break;
+        case 12:
             activate_saved_connection_safely();
+            break;
+        case 13:
+            preview_factory_restore();
+            break;
+        case 14:
+            capture_factory_baseline();
+            break;
+        case 15:
+            restore_factory_network();
+            break;
+        case 16:
+            clear_all_network_connections();
             break;
         case 0:
             printf("退出。\n");

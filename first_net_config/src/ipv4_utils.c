@@ -30,7 +30,7 @@ static bool parse_ipv4_canonical(const char *input,
         return false;
     }
 
-    if (!inet_ntop(AF_INET, &addr, output, output_size))
+    if (!inet_ntop(AF_INET, &addr, output, (socklen_t)output_size))
     {
         return false;
     }
@@ -205,7 +205,7 @@ bool is_network_or_broadcast_address(const char *ip,
     uint32_t host;
     uint32_t host_mask;
 
-    if (!valid_ipv4(ip) || prefix < 0 || prefix > 32)
+    if (!valid_ipv4(ip) || prefix < 1 || prefix > 32)
     {
         return true;
     }
@@ -226,4 +226,3 @@ bool is_network_or_broadcast_address(const char *ip,
     return (host & host_mask) == 0 ||
            (host & host_mask) == host_mask;
 }
-

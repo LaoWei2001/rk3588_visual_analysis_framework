@@ -11,7 +11,8 @@
 # 摄像头管理、视频预览/录像和已构建的 Web 控制台均不再依赖公网；--check 可在
 # 断网现场重复执行。它不是自带 deb/wheel/npm 包的“离线安装包”。
 #
-# 不在本脚本职责内：Rockchip BSP 自带的 RKNN、RGA、MPP 及其 GStreamer 插件。
+# 不在本脚本职责内：Rockchip BSP 的 RKNPU 内核驱动、RGA、MPP 及其 GStreamer 插件。
+# 用户态 librknnrt.so 已由 vision_analysis/vendor/rknn/ 固定并随应用包发布。
 # ============================================================================
 set -Eeuo pipefail
 
@@ -66,7 +67,7 @@ as_root() {
 echo "============================================================"
 echo "  RK3588 第三方环境配置  (项目根: $PROJ)"
 echo "  模式: $([ "$CHECK_ONLY" = true ] && echo '只检查' || echo '安装并检查')$([ "$WANT_BUILD" = true ] && echo ' + C/C++ 编译环境' || true)"
-echo "  Rockchip RKNN/RGA/MPP: 使用厂家系统，不由本脚本安装"
+echo "  Rockchip RKNPU驱动/RGA/MPP: 使用厂家系统；librknnrt.so 由应用包固定"
 echo "============================================================"
 
 APT_RUNTIME=(
@@ -434,4 +435,4 @@ else
     echo "  仅在需要重新部署 Web 控制台时，才运行："
     echo "    sudo env OFFLINE=1 bash web_console/install.sh"
 fi
-echo "  说明：Rockchip RKNN/RGA/MPP 由厂家系统提供，不属于本脚本的安装和验收范围。"
+echo "  说明：Rockchip RKNPU内核驱动/RGA/MPP 由厂家系统提供；librknnrt.so 由应用包固定。"

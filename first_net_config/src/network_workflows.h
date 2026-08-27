@@ -4,10 +4,11 @@
 void configure_wired_beginner(void);
 void configure_wired(void);
 void configure_wifi(void);
+void configure_camera_network(void);
+void configure_maintenance_link(void);
 void ping_test(void);
 void show_connection_detail(void);
 void delete_connection(void);
 void activate_saved_connection_safely(void);
 
 #endif
-

@@ -154,6 +154,36 @@ bool read_exact_yes(const char *prompt)
     return strcmp(buf, "YES") == 0;
 }
 
+bool read_exact_word(const char *prompt, const char *expected)
+{
+    char buf[64];
+
+    if (!expected)
+    {
+        return false;
+    }
+
+    printf("%s", prompt);
+    fflush(stdout);
+    if (!fgets(buf, sizeof(buf), stdin))
+    {
+        return false;
+    }
+
+    trim_newline(buf);
+    trim_space(buf);
+    return strcmp(buf, expected) == 0;
+}
+
+ConfigLifetime read_config_lifetime(void)
+{
+    printf("\n请选择本次配置的保存方式（必须明确选择）：\n");
+    printf("  1. 临时配置：不写入磁盘；重启或 NetworkManager 重启后消失\n");
+    printf("  2. 永久配置：保存到系统；重启后自动恢复\n");
+
+    return (ConfigLifetime)read_int("请选择 [1-2]: ", 1, 2);
+}
+
 void read_password(const char *prompt, char *buf, size_t size)
 {
     struct termios oldt;
@@ -186,4 +216,3 @@ void read_password(const char *prompt, char *buf, size_t size)
 
     printf("\n");
 }
-

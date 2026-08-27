@@ -17,6 +17,64 @@ PROJECT_DIR=$(cd "$(dirname "$0")"; pwd)
 REPO_ROOT=$(dirname "$PROJECT_DIR")
 TARGET="vision_analysis"
 
+# --- 项目锁定的 RKNN 用户态 Runtime ---
+# 正式编译与打包都只使用此目录，禁止从构建机的 ldconfig/sysroot 随机选择同名库。
+RKNN_VENDOR_VERSION="2.4.2a2"
+RKNN_VENDOR_ROOT="$PROJECT_DIR/vendor/rknn/$RKNN_VENDOR_VERSION"
+RKNN_VENDOR_LIB="$RKNN_VENDOR_ROOT/lib/aarch64/librknnrt.so"
+RKNN_VENDOR_MANIFEST="$RKNN_VENDOR_ROOT/RUNTIME_MANIFEST.txt"
+RKNN_VENDOR_SHA256="bf50d51705ae433013927a13520ae781b534fdb1481c47bdddbc726f63ed4970"
+
+verify_vendor_rknn() {
+    local version_line
+
+    if [ ! -f "$RKNN_VENDOR_ROOT/SHA256SUMS" ]; then
+        echo "[ERROR] 缺少 RKNN 校验清单: $RKNN_VENDOR_ROOT/SHA256SUMS"
+        exit 1
+    fi
+    if ! (cd "$RKNN_VENDOR_ROOT" && sha256sum -c SHA256SUMS); then
+        echo "[ERROR] 项目锁定的 RKNN SDK 校验失败，拒绝使用系统库继续构建。"
+        exit 1
+    fi
+    if ! LC_ALL=C readelf -h "$RKNN_VENDOR_LIB" | grep -q 'Machine:.*AArch64'; then
+        echo "[ERROR] RKNN Runtime 不是 AArch64 ELF: $RKNN_VENDOR_LIB"
+        exit 1
+    fi
+    if ! LC_ALL=C readelf -d "$RKNN_VENDOR_LIB" | grep -q 'Library soname: \[librknnrt.so\]'; then
+        echo "[ERROR] RKNN Runtime SONAME 不是 librknnrt.so: $RKNN_VENDOR_LIB"
+        exit 1
+    fi
+
+    version_line=$(strings "$RKNN_VENDOR_LIB" | grep -F -m1 'librknnrt version:' || true)
+    case "$version_line" in
+        *"librknnrt version: $RKNN_VENDOR_VERSION "*) ;;
+        *)
+            echo "[ERROR] RKNN Runtime 版本不符合锁定值 $RKNN_VENDOR_VERSION"
+            echo "        检测结果: ${version_line:-未找到版本信息}"
+            exit 1
+            ;;
+    esac
+
+    echo "  RKNN Runtime: $version_line"
+    echo "  RKNN SHA-256: $RKNN_VENDOR_SHA256"
+}
+
+bundle_vendor_rknn() {
+    local destination="$1"
+    local packaged_sha256
+
+    mkdir -p "$destination"
+    cp -L "$RKNN_VENDOR_LIB" "$destination/librknnrt.so"
+    cp "$RKNN_VENDOR_MANIFEST" "$destination/librknnrt.manifest"
+
+    packaged_sha256=$(sha256sum "$destination/librknnrt.so" | awk '{print $1}')
+    if [ "$packaged_sha256" != "$RKNN_VENDOR_SHA256" ]; then
+        echo "[ERROR] 打包后的 librknnrt.so 校验失败: $packaged_sha256"
+        exit 1
+    fi
+    echo "  固定: RKNN Runtime $RKNN_VENDOR_VERSION -> libs/librknnrt.so"
+}
+
 # --- 默认配置 ---
 OUT_NAME=""          # 输出目录名, 由命令行传入 (--debug 模式无需指定)
 MODE=""              # 编译模式, 启动时按 CPU 架构自动识别 (onboard / docker)
@@ -98,12 +156,16 @@ echo "  项目目录 : $PROJECT_DIR"
 echo "  输出目录 : $DIST_DIR"
 echo "  清理构建 : $CLEAN_BUILD"
 echo "  Strip    : $DO_STRIP"
+echo "  RKNN     : $RKNN_VENDOR_VERSION (项目锁定)"
 if [ "$MODE" = "docker" ]; then
     echo "  Docker镜像: $IMAGE_NAME"
 else
     echo "  打包动态库: $BUNDLE_LIBS"
 fi
 echo "========================================================"
+
+echo ">>> [preflight] 校验项目锁定的 RKNN SDK..."
+verify_vendor_rknn
 
 # --- 编译前准备 ---
 cd "$PROJECT_DIR"
@@ -139,6 +201,7 @@ if [ "$MODE" = "docker" ]; then
         -e DO_STRIP="$DO_STRIP" \
         -e BUNDLE_LIBS="$BUNDLE_LIBS" \
         -e BUILD_TYPE="$BUILD_TYPE" \
+        -e RKNN_VENDOR_VERSION="$RKNN_VENDOR_VERSION" \
         -e DIST_NAME="$OUT_NAME" \
         -e HOST_UID=$(id -u) \
         -e HOST_GID=$(id -g) \
@@ -172,7 +235,10 @@ set(ENV{PKG_CONFIG_LIBDIR} "/sysroot/usr/lib/pkgconfig:/sysroot/usr/share/pkgcon
 set(ENV{PKG_CONFIG_SYSROOT_DIR} "/sysroot")
 CROSS_EOF
 mkdir -p build && cd build
-cmake .. -DCROSS_CMAKE_FILE=/workspace/cross.cmake -DCMAKE_BUILD_TYPE=${BUILD_TYPE:-Release}
+cmake .. \
+    -DCROSS_CMAKE_FILE=/workspace/cross.cmake \
+    -DCMAKE_BUILD_TYPE=${BUILD_TYPE:-Release} \
+    -DRKNN_VENDOR_ROOT=/workspace/vendor/rknn/${RKNN_VENDOR_VERSION}
 echo "  [make] 开始编译..."
 make -j$(nproc)
 cd ..
@@ -186,7 +252,7 @@ fi
 
 if [ "$BUNDLE_LIBS" = "true" ]; then
     echo "  [readelf] 提取系统动态库依赖..."
-    libs=$(aarch64-linux-gnu-readelf -d build/$TARGET | grep "NEEDED" | sed -r 's/.*\[(.*)\].*/\1/' | grep -vE "^(ld-linux|libc\.so|libm\.so|libdl\.so|librt\.so|libpthread\.so|libstdc\+\+\.so)")
+    libs=$(aarch64-linux-gnu-readelf -d build/$TARGET | grep "NEEDED" | sed -r 's/.*\[(.*)\].*/\1/' | grep -vE "^(ld-linux|libc\.so|libm\.so|libdl\.so|librt\.so|libpthread\.so|libstdc\+\+\.so|librknnrt\.so$)")
     for lib in $libs; do
         lib_path=$(find /sysroot -name "$lib" -print -quit 2>/dev/null)
         if [ -n "$lib_path" ]; then
@@ -207,7 +273,9 @@ DOCKER_CMD
 elif [ "$MODE" = "onboard" ]; then
     echo ">>> [1/4] 开始板端原生编译..."
     mkdir -p build && cd build
-    cmake .. -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+    cmake .. \
+        -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+        -DRKNN_VENDOR_ROOT="$RKNN_VENDOR_ROOT"
     make -j$(nproc)
     cd "$PROJECT_DIR"
     
@@ -221,7 +289,7 @@ elif [ "$MODE" = "onboard" ]; then
     
     if [ "$BUNDLE_LIBS" = "true" ]; then
         echo "  [readelf] 提取动态库依赖..."
-        libs=$(readelf -d "build/$TARGET" | grep "NEEDED" | sed -r 's/.*\[(.*)\].*/\1/' | grep -vE "^(ld-linux|libc\.so|libm\.so|libdl\.so|librt\.so|libpthread\.so|libstdc\+\+\.so)")
+        libs=$(readelf -d "build/$TARGET" | grep "NEEDED" | sed -r 's/.*\[(.*)\].*/\1/' | grep -vE "^(ld-linux|libc\.so|libm\.so|libdl\.so|librt\.so|libpthread\.so|libstdc\+\+\.so|librknnrt\.so$)")
         for lib in $libs; do
             lib_path=$(ldconfig -p 2>/dev/null | grep "^\s*${lib}" | awk '{print $NF}' | head -1)
             [ -z "$lib_path" ] && lib_path=$(find /usr/lib /usr/local/lib -name "$lib" -print -quit 2>/dev/null)
@@ -238,6 +306,15 @@ fi
 if [ ! -f "$DIST_DIR/$TARGET" ]; then
     echo "[ERROR] 构建失败，未找到产物 $TARGET。"
     exit 1
+fi
+
+if ! LC_ALL=C readelf -d "$DIST_DIR/$TARGET" | grep -Fq '[$ORIGIN/libs]'; then
+    echo "[ERROR] 构建产物缺少 RUNPATH=\$ORIGIN/libs，无法保证优先加载包内依赖。"
+    exit 1
+fi
+
+if [ "$BUNDLE_LIBS" = "true" ]; then
+    bundle_vendor_rknn "$DIST_DIR/libs"
 fi
 
 # --- debug 仅编译模式: 到此结束, 跳过后续所有打包步骤 ---

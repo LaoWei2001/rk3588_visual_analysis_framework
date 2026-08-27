@@ -5,6 +5,7 @@
 #include "command_runner.h"
 #include "ipv4_utils.h"
 #include "network_state.h"
+#include "interface_inspector.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -26,8 +27,8 @@
 #define FIRST_NET_CONFIG_RUNTIME_DIR "/run/first_net_config"
 #endif
 
-#define PENDING_STATE_MAGIC "FNC-PENDING-v1"
-#define PENDING_STATE_VERSION 1U
+#define PENDING_STATE_MAGIC "FNC-PENDING-v2"
+#define PENDING_STATE_VERSION 2U
 
 typedef enum
 {
@@ -46,7 +47,7 @@ typedef struct
     uint32_t version;
     uint32_t struct_size;
     int32_t status;
-    uint32_t finalize_on_confirmation;
+    uint32_t profile_mode;
     int64_t created_at;
     int64_t deadline;
     char transaction_id[UUID_SIZE];
@@ -169,7 +170,7 @@ static bool pending_state_is_valid(const PendingNetworkChange *state)
         state->struct_size != sizeof(*state) ||
         state->status < PENDING_STATUS_PREPARING ||
         state->status > PENDING_STATUS_CONFIRMED ||
-        state->finalize_on_confirmation > 1U ||
+        state->profile_mode > NETWORK_PROFILE_TEMPORARY ||
         !memchr(state->transaction_id, '\0', sizeof(state->transaction_id)) ||
         !memchr(state->iface, '\0', sizeof(state->iface)) ||
         !memchr(state->new_profile.name, '\0',
@@ -195,7 +196,7 @@ static bool pending_state_is_valid(const PendingNetworkChange *state)
         return false;
     }
 
-    if (state->finalize_on_confirmation != 0U &&
+    if (state->profile_mode == NETWORK_PROFILE_PERMANENT &&
         state->final_profile_name[0] == '\0')
     {
         return false;
@@ -343,7 +344,7 @@ static bool create_pending_state(const char *iface,
                                  const ConnectionProfile *old_profile,
                                  const IPv4Config *cfg,
                                  const char *final_profile_name,
-                                 bool finalize_on_confirmation,
+                                 NetworkProfileMode profile_mode,
                                  PendingNetworkChange *out)
 {
     PendingNetworkChange existing;
@@ -361,7 +362,7 @@ static bool create_pending_state(const char *iface,
     out->version = PENDING_STATE_VERSION;
     out->struct_size = sizeof(*out);
     out->status = PENDING_STATUS_PREPARING;
-    out->finalize_on_confirmation = finalize_on_confirmation ? 1U : 0U;
+    out->profile_mode = (uint32_t)profile_mode;
     out->created_at = (int64_t)now;
     out->deadline = (int64_t)now + ACTIVATION_ROLLBACK_TIMEOUT_SEC;
     snprintf(out->iface, sizeof(out->iface), "%s", iface);
@@ -746,7 +747,7 @@ static bool rollback_pending_connection(const PendingNetworkChange *state,
         }
     }
 
-    if (state->finalize_on_confirmation != 0U &&
+    if (state->profile_mode != NETWORK_PROFILE_EXISTING &&
         strcmp(state->old_profile.uuid, state->new_profile.uuid) != 0)
     {
         const char *remove_new[] = {
@@ -1138,10 +1139,16 @@ static void print_pending_summary(const PendingNetworkChange *state)
     {
         printf("新 IP      : DHCP 自动获取\n");
     }
-    if (state->finalize_on_confirmation != 0U)
+    if (state->profile_mode == NETWORK_PROFILE_PERMANENT)
     {
         printf("正式名称   : %s\n", state->final_profile_name);
     }
+    printf("保存方式   : %s\n",
+           state->profile_mode == NETWORK_PROFILE_PERMANENT
+               ? "永久（重启后保留）"
+               : state->profile_mode == NETWORK_PROFILE_TEMPORARY
+                     ? "临时（重启后消失）"
+                     : "已有连接测试");
     printf("剩余时间   : %lld 秒\n", (long long)remaining);
     printf("事务编号   : %s\n", state->transaction_id);
     printf("============================================================\n");
@@ -1180,7 +1187,7 @@ static bool complete_pending_save(PendingNetworkChange *state)
         }
 
         *state = current;
-        saved = current.finalize_on_confirmation == 0U ||
+        saved = current.profile_mode != NETWORK_PROFILE_PERMANENT ||
                 finalize_profile(&current.new_profile,
                                  current.final_profile_name);
 
@@ -1401,7 +1408,7 @@ NetworkActivationResult safe_activate_with_reconnect(
     const ConnectionProfile *profile,
     const IPv4Config *cfg,
     const char *final_profile_name,
-    bool finalize_on_confirmation)
+    NetworkProfileMode profile_mode)
 {
     ConnectionProfile old_profile = {0};
     PendingNetworkChange state;
@@ -1440,14 +1447,30 @@ NetworkActivationResult safe_activate_with_reconnect(
     printf("没有输入 YES 确认时，程序仍会自动恢复修改前的网络。\n");
     printf("============================================================\n");
 
-    if (!read_yes_no("现在开始测试新网络吗？[Y/n]: ", true))
+    if (profile_mode == NETWORK_PROFILE_PERMANENT)
+    {
+        printf("保存方式：永久配置，确认后重启仍会保留。\n");
+        if (!read_exact_word("确认永久应用请输入 PERMANENT: ", "PERMANENT"))
+        {
+            return NETWORK_ACTIVATION_FAILED;
+        }
+    }
+    else if (profile_mode == NETWORK_PROFILE_TEMPORARY)
+    {
+        printf("保存方式：临时配置，重启或 NetworkManager 重启后消失。\n");
+        if (!read_exact_word("确认临时应用请输入 TEMPORARY: ", "TEMPORARY"))
+        {
+            return NETWORK_ACTIVATION_FAILED;
+        }
+    }
+    else if (!read_exact_word("确认测试已有连接请输入 TEST: ", "TEST"))
     {
         return NETWORK_ACTIVATION_FAILED;
     }
 
     if (!create_pending_state(iface, profile, &old_profile, cfg,
                               final_profile_name,
-                              finalize_on_confirmation, &state))
+                              profile_mode, &state))
     {
         printf("[失败] 无法建立持久化回退事务。为了避免设备失联，本次操作已取消。\n");
         return NETWORK_ACTIVATION_FAILED;
@@ -1498,6 +1521,8 @@ NetworkActivationResult safe_activate_with_reconnect(
     }
 
     optional_gateway_ping(cfg);
+    printf("\n========== 切换后的全接口网段检查 ==========\n");
+    (void)show_current_overlap_warnings();
 
     if (!mark_pending_awaiting(state.transaction_id))
     {

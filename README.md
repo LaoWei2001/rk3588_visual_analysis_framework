@@ -227,7 +227,7 @@ GStreamer appsink
   开发者在载板为RK3588的 EAI-BOX-3000 边缘计算盒子上进行项目的开发与验证。
 - RK3588 / AArch64 Linux；
 - Debian、Ubuntu、Armbian 或兼容发行版；
-- 可用的 Rockchip RKNN Runtime 和 RGA；
+- 可用的 Rockchip RKNPU 内核驱动和 RGA；RKNN 用户态 Runtime 已由项目固定；
 - GStreamer 1.x；
 - 带 `freetype` 模块的 OpenCV；
 - 构建 Web 前端时需要 Node.js 18+。
@@ -241,8 +241,9 @@ bash install_deps.sh
 ```
 
 该命令需要在盒子仍能访问 APT、PyPI/npm 镜像时执行，会安装完整第三方运行依赖、
-锁定安装前端依赖并预生成 `web_console/frontend/dist`。RKNN、RGA、MPP 等 Rockchip
-BSP 组件不由该脚本安装。APT 阶段只补装缺失包，不升级已经安装或被厂家设为
+锁定安装前端依赖并预生成 `web_console/frontend/dist`。RKNPU 内核驱动、RGA、MPP 等
+Rockchip BSP 组件不由该脚本安装；用户态 `librknnrt.so` 和 `rknn_api.h` 已固定在
+`vision_analysis/vendor/rknn/`。APT 阶段只补装缺失包，不升级已经安装或被厂家设为
 `hold` 的 BSP 包；单个无关软件源更新失败时，会使用其他成功更新的索引继续安装。
 
 若需要在 RK3588 板端从源码编译（通常不需要）：
@@ -267,7 +268,21 @@ sudo env OFFLINE=1 bash web_console/install.sh
 `install_deps.sh` 是“联网预配置 + 断网验收”脚本，不包含 deb/wheel/npm 离线安装包；
 因此不能把一台从未准备过的裸机带到无公网现场后再首次执行普通安装模式。
 
-Rockchip RKNN/RGA 的头文件和运行库通常由板卡 BSP、系统镜像或交叉编译环境提供，若没有安装相关的文件，需要参考瑞芯微官方的相关文档进行安装。
+Rockchip RKNPU 内核驱动、RGA/MPP 和硬件 GStreamer 插件仍由板卡 BSP 或系统镜像提供；
+项目不会尝试用应用目录中的 `.so` 替代内核驱动。
+
+### 2.1 固定的 RKNN Runtime
+
+编译和发布统一使用 `vision_analysis/vendor/rknn/2.4.2a2/` 中的 AArch64 Runtime，
+不再根据构建设备的 `ldconfig` 顺序选择 `librknnrt.so`。CMake 和 `build.sh` 都会校验
+头文件及 Runtime 的 SHA-256；文件缺失、被替换、架构或版本不符时构建会直接失败。
+
+当前锁定并在 RK3588 / RKNPU driver v0.9.0 上验证的 Runtime 为：
+
+```text
+librknnrt version: 2.4.2a2 (5fd9678a8f@2026-04-27T15:52:16)
+SHA-256: bf50d51705ae433013927a13520ae781b534fdb1481c47bdddbc726f63ed4970
+```
 
 ### 3. 板端调试构建
 
@@ -278,6 +293,8 @@ cd vision_analysis
 ```
 
 `--debug` 只生成可执行文件，不创建完整应用包。请根据设备修改视频源、模型和标签路径。
+调试构建会使用项目锁定的 RKNN 头文件和 Runtime 进行链接；正式运行及跨设备验证请使用
+完整发布包，以便由包内 `libs/librknnrt.so` 和 `$ORIGIN/libs` 保证运行时版本一致。
 
 ### 4. 构建发布包
 
@@ -294,6 +311,7 @@ cd vision_analysis
 发布目录 `vision_analysis/dist/` 包含：
 
 - `vision_analysis` 可执行程序；
+- `libs/` 动态库，其中 `librknnrt.so` 来自项目锁定版本并带版本清单；
 - `assets/` 模型、标签和配置；
 - `logics.json` Web 能力清单；
 - `services/upload` 和 `services/model_update`；

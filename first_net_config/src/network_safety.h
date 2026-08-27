@@ -12,7 +12,7 @@ NetworkActivationResult safe_activate_with_reconnect(
     const ConnectionProfile *profile,
     const IPv4Config *cfg,
     const char *final_profile_name,
-    bool finalize_on_confirmation);
+    NetworkProfileMode profile_mode);
 bool handle_pending_network_change(void);
 int run_pending_network_watchdog(const char *transaction_id);
 bool finalize_profile(const ConnectionProfile *temp_profile,

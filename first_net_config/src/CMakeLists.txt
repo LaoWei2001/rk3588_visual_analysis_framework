@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(first_net_config VERSION 1.6 LANGUAGES C)
+project(first_net_config VERSION 2.1 LANGUAGES C)
 
 add_executable(first_net_config
     main.c
@@ -10,6 +10,10 @@ add_executable(first_net_config
     network_state.c
     network_safety.c
     network_workflows.c
+    interface_inspector.c
+    camera_discovery.c
+    factory_restore.c
+    network_cleanup.c
 )
 
 target_compile_features(first_net_config PRIVATE c_std_11)

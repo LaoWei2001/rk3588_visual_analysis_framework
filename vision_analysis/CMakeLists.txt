@@ -34,6 +34,56 @@ endif()
 project(vision_analysis LANGUAGES C CXX)
 add_definitions(-Wall -Wpointer-arith -O3 -ffast-math)
 
+# ======================== pinned RKNN Runtime =========================
+# RKNN 的头文件和用户态 Runtime 随源码锁定，避免不同构建机上的
+# /usr/include、ldconfig 或 sysroot 顺序生成内容不同的发布包。
+set(RKNN_VENDOR_VERSION "2.4.2a2")
+set(RKNN_VENDOR_ROOT
+    "${PROJECT_SOURCE_DIR}/vendor/rknn/${RKNN_VENDOR_VERSION}"
+    CACHE PATH "Pinned RKNN Runtime SDK root"
+)
+set(RKNN_API_INCLUDE_DIR "${RKNN_VENDOR_ROOT}/include")
+set(RKNN_API_HEADER "${RKNN_API_INCLUDE_DIR}/rknn_api.h")
+set(RKNN_RT_LIBRARY "${RKNN_VENDOR_ROOT}/lib/aarch64/librknnrt.so")
+set(RKNN_API_HEADER_SHA256
+    "61eedea2dd0fed8e4ee667fef571bf6b07fc87495bb6282d65055f60c61e7079")
+set(RKNN_RT_LIBRARY_SHA256
+    "bf50d51705ae433013927a13520ae781b534fdb1481c47bdddbc726f63ed4970")
+
+foreach(required_file IN ITEMS "${RKNN_API_HEADER}" "${RKNN_RT_LIBRARY}")
+    if(NOT EXISTS "${required_file}")
+        message(FATAL_ERROR
+            "缺少项目锁定的 RKNN SDK 文件: ${required_file}\n"
+            "请恢复 vendor/rknn/${RKNN_VENDOR_VERSION}，禁止回退到系统 RKNN Runtime。")
+    endif()
+endforeach()
+
+file(SHA256 "${RKNN_API_HEADER}" RKNN_API_HEADER_ACTUAL_SHA256)
+if(NOT RKNN_API_HEADER_ACTUAL_SHA256 STREQUAL RKNN_API_HEADER_SHA256)
+    message(FATAL_ERROR
+        "rknn_api.h 校验失败。\n"
+        "期望: ${RKNN_API_HEADER_SHA256}\n"
+        "实际: ${RKNN_API_HEADER_ACTUAL_SHA256}")
+endif()
+
+file(SHA256 "${RKNN_RT_LIBRARY}" RKNN_RT_LIBRARY_ACTUAL_SHA256)
+if(NOT RKNN_RT_LIBRARY_ACTUAL_SHA256 STREQUAL RKNN_RT_LIBRARY_SHA256)
+    message(FATAL_ERROR
+        "librknnrt.so 校验失败。\n"
+        "期望: ${RKNN_RT_LIBRARY_SHA256}\n"
+        "实际: ${RKNN_RT_LIBRARY_ACTUAL_SHA256}")
+endif()
+
+add_library(rknnrt_vendor SHARED IMPORTED GLOBAL)
+set_target_properties(rknnrt_vendor PROPERTIES
+    IMPORTED_LOCATION "${RKNN_RT_LIBRARY}"
+    IMPORTED_SONAME "librknnrt.so"
+    INTERFACE_INCLUDE_DIRECTORIES "${RKNN_API_INCLUDE_DIR}"
+)
+message(STATUS
+    "Pinned RKNN Runtime: ${RKNN_VENDOR_VERSION} (${RKNN_RT_LIBRARY_SHA256})")
+# ======================== pinned RKNN Runtime END =====================
+
 # ======================== third_party helpers =========================
 set(toolkit_root ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party)
 set(common_root  ${toolkit_root})
@@ -87,7 +137,7 @@ set(custom_inc
 
 set(custom_libs
     rga
-    rknnrt
+    rknnrt_vendor
     ${OpenCV_LIBS}
     ${GTK3_LIBRARIES}
     Threads::Threads
@@ -162,3 +212,10 @@ set(cjson_src ${PROJECT_SOURCE_DIR}/src/third_party/json/cJSON.c)
 add_executable(vision_analysis ${dir_srcs} ${api_srcs} ${cjson_src})
 target_include_directories(vision_analysis PRIVATE ${custom_inc} ${api_inc})
 target_link_libraries(vision_analysis ${custom_libs} ${sysLib_list})
+
+# 发布包即使不经过 run.sh 启动，也优先从可执行文件旁的 libs/ 加载依赖。
+# BUILD_WITH_INSTALL_RPATH 避免把构建机上的 vendor 绝对路径写入最终 ELF。
+set_target_properties(vision_analysis PROPERTIES
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "$ORIGIN/libs"
+)
