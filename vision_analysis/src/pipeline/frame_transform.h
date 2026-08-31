@@ -13,11 +13,13 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <mutex>
 #include <opencv2/opencv.hpp>
 #include <rga/RgaApi.h>
 #include <rga/im2d.h>
+#include <vector>
 
 /*======================== RGA 图像描述 ========================*/
 typedef struct
@@ -63,7 +65,8 @@ struct RgaImportedBuffer
  * 同一业务帧的惰性图像容器。
  * - source handle 只保留 DMA-BUF 引用，不主动转换像素；
  * - model_frame()/source_frame() 各自在第一次调用时生成一份 BGR 并缓存；
- * - borrowed_data 仅服务同步解码回调，回调结束前必须 clear_borrowed_source()。
+ * - borrowed_data 仅服务同步解码回调，回调结束前必须 clear_borrowed_source()；
+ * - DMA-BUF 不可用时可用 retain_borrowed_source() 只保留原始字节，延后到 worker 转换。
  */
 class LazyVideoFrame
 {
@@ -74,6 +77,8 @@ class LazyVideoFrame
 
     const cv::Mat *model_frame();
     const cv::Mat *source_frame();
+    /** DMA-BUF 不可用时，只复制原始字节延长生命周期，颜色转换仍延后到 worker。 */
+    bool retain_borrowed_source(size_t byte_count);
     void clear_borrowed_source();
     bool available() const;
     int source_width() const { return source_width_; }
@@ -92,6 +97,7 @@ class LazyVideoFrame
     int model_width_ = 0;
     int model_height_ = 0;
     const void *borrowed_data_ = nullptr;
+    std::vector<unsigned char> owned_source_;
     mutable std::mutex mutex_;
     cv::Mat model_bgr_;
     cv::Mat source_bgr_;

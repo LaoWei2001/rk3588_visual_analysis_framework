@@ -5,6 +5,7 @@
  * 本文件仅负责:
  *   1. 定义跨文件共享的 extern 变量
  *        g_display_queues   — 显示单槽队列（frame_inlet + display_pipeline 共用）
+ *        g_traditional_logic_queues — 非 NPU 逻辑单槽最新帧队列
  *        g_dispatch_running — pipeline_dispatch_worker 退出信号
  *        g_process_mtx   — 同通道 process_channel_results 串行锁
  *   2. 发布不可变 AppRuntimeSnapshot — 配置/ROI 热更新与逐帧 logic 解耦
@@ -19,6 +20,7 @@
  *   channel_pipeline.cpp  — 跟踪器 + process_channel_results + invoke_channel_logic
  *   result_dispatch.cpp   — pipeline_dispatch_worker
  *   display_pipeline.cpp  — display_worker_thread
+ *   traditional_logic_worker.cpp — pipeline_logic_worker
  */
 
 #include <algorithm>
@@ -43,9 +45,11 @@
 /* 声明在 pipeline_internal.h（extern），此处给出唯一定义。 */
 
 DisplayQueue g_display_queues[MAX_CHANNEL_NUM];
+TraditionalLogicQueue g_traditional_logic_queues[MAX_CHANNEL_NUM];
 std::atomic<bool> g_dispatch_running{false};
 pthread_mutex_t g_process_mtx[MAX_CHANNEL_NUM];
 static std::vector<int> g_display_channel_ids;
+static std::vector<int> g_logic_channel_ids;
 static bool g_process_mutexes_initialized = false;
 static bool g_pipeline_initialized = false;
 
@@ -84,6 +88,25 @@ int pipeline_init(void)
     /* 启用分发线程运行标志 */
     g_dispatch_running.store(true);
 
+    /* 每个启用通道都预留一个传统逻辑 worker。通常推理通道的 worker
+     * 始终休眠，但这样运行时 infer_toggle 关闭 NPU 后仍能无缝转入异步 CV，
+     * 不会回退到 appsink 回调同步执行。 */
+    g_logic_channel_ids.clear();
+    for (int channel_id = 0; channel_id < MAX_CHANNEL_NUM; ++channel_id)
+    {
+        TraditionalLogicQueue &queue = g_traditional_logic_queues[channel_id];
+        pthread_mutex_init(&queue.mtx, nullptr);
+        pthread_cond_init(&queue.cv, nullptr);
+        queue.has_task = false;
+        queue.task = TraditionalLogicTask{};
+    }
+    for (const auto &channel : g_pCtrl->config.channels)
+    {
+        if (!channel.enable || channel.id < 0 || channel.id >= MAX_CHANNEL_NUM)
+            continue;
+        g_logic_channel_ids.push_back(channel.id);
+    }
+
     /* 纯分析模式不创建显示线程，也不预留每通道三槽 1080p 帧池。 */
     g_display_channel_ids.clear();
     if (app_ctrl_get_enable_disp() || app_ctrl_get_enable_rtsp())
@@ -109,6 +132,12 @@ void pipeline_request_stop(void)
 {
     g_dispatch_running.store(false);
     inference_request_stop();
+    for (int channel_id : g_logic_channel_ids)
+    {
+        pthread_mutex_lock(&g_traditional_logic_queues[channel_id].mtx);
+        pthread_cond_broadcast(&g_traditional_logic_queues[channel_id].cv);
+        pthread_mutex_unlock(&g_traditional_logic_queues[channel_id].mtx);
+    }
     pipeline_wake_display_threads();
 }
 
@@ -145,7 +174,8 @@ void pipeline_wake_display_threads(void)
 /**
  * @brief 销毁显示队列互斥量 / 条件变量与通道串行锁。
  *
- * 必须在所有 display_worker_thread 与 pipeline_dispatch_worker 退出后调用。
+ * 必须在所有 display_worker_thread、pipeline_dispatch_worker 与 pipeline_logic_worker
+ * 退出后调用。
  */
 void pipeline_destroy_display_queues(void)
 {
@@ -156,6 +186,15 @@ void pipeline_destroy_display_queues(void)
         g_display_queues[channel_id].pool.deinit(); /* 释放三槽帧缓冲 */
     }
     g_display_channel_ids.clear();
+    for (int channel_id = 0; channel_id < MAX_CHANNEL_NUM; ++channel_id)
+    {
+        TraditionalLogicQueue &queue = g_traditional_logic_queues[channel_id];
+        queue.task = TraditionalLogicTask{};
+        queue.has_task = false;
+        pthread_mutex_destroy(&queue.mtx);
+        pthread_cond_destroy(&queue.cv);
+    }
+    g_logic_channel_ids.clear();
     if (g_process_mutexes_initialized)
     {
         for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
@@ -170,6 +209,14 @@ void pipeline_channel_offline(int chnId)
 {
     if (!app_ctrl_has_channel(chnId))
         return;
+
+    /* 先丢弃未消费的旧帧。已被 worker 取走的帧会在 g_process_mtx 上与
+     * 下方状态复位串行，不会在复位之后反向覆盖状态。 */
+    TraditionalLogicQueue &logic_queue = g_traditional_logic_queues[chnId];
+    pthread_mutex_lock(&logic_queue.mtx);
+    logic_queue.task = TraditionalLogicTask{};
+    logic_queue.has_task = false;
+    pthread_mutex_unlock(&logic_queue.mtx);
 
     /* 若告警录像仍在等待 post 窗口，断流/本地文件结束即以最后可用帧截断。 */
     event_video_recorder_channel_offline(chnId);
@@ -212,6 +259,12 @@ void pipeline_channel_online(int chnId)
 {
     if (!app_ctrl_has_channel(chnId))
         return;
+
+    TraditionalLogicQueue &logic_queue = g_traditional_logic_queues[chnId];
+    pthread_mutex_lock(&logic_queue.mtx);
+    logic_queue.task = TraditionalLogicTask{};
+    logic_queue.has_task = false;
+    pthread_mutex_unlock(&logic_queue.mtx);
 
     const auto runtime = app_ctrl_get_runtime_snapshot();
     const ChannelConfig *channel_config = app_ctrl_runtime_channel_config(runtime, chnId);
@@ -308,4 +361,17 @@ int pipeline_get_dispatch_chn_id(int idx)
         count++;
     }
     return -1;
+}
+
+/**
+ * @brief 返回传统逻辑 worker 数量。worker 长期阻塞在条件变量上，无任务时不占 CPU。
+ */
+int pipeline_get_logic_thread_count(void)
+{
+    return static_cast<int>(g_logic_channel_ids.size());
+}
+
+int pipeline_get_logic_chn_id(int idx)
+{
+    return idx >= 0 && idx < static_cast<int>(g_logic_channel_ids.size()) ? g_logic_channel_ids[idx] : -1;
 }

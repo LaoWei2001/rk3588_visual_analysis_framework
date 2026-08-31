@@ -19,15 +19,20 @@
 #include <utility>
 #include <vector>
 
-/* 文本绘制出口: 中英文统一用 freetype 渲染(不再回退 Hershey)。font_scale 沿用 putText 语义
- * 按比例换算成像素高; freetype 不可用时不绘制(已在字体加载处报错)。
- * thickness = 加粗级别(对外即 draw_text 的"粗细"): <=1 普通填充字(默认外观, 与历史一致);
- *   >=2 在填充字基础上再叠一层同色描边把笔画加粗, 数值越大越粗(上限封顶, 防糊成一团)。
- * 始终先填充, 保证是实心清晰字; 不会因 thickness>0 变成空心描边字。 */
+/* 唯一文字绘制出口：普通文字和重影文字共用同一个缓存渲染器。
+ * FreeType 字形、加粗蒙版和重影膨胀蒙版只在缓存未命中时生成；命中时只在文字实际包围框
+ * 内按蒙版着色。缓存为线程局部，因此四路显示可以并行且不需要全局字体锁。 */
 static inline void put_text_auto(cv::Mat &img, const std::string &s, cv::Point org, double font_scale,
-                                 const cv::Scalar &color, int thickness)
+                                 const cv::Scalar &color, int thickness, bool shadow_enabled = false,
+                                 const cv::Scalar &shadow_color = cv::Scalar(0, 0, 0), int shadow_width = 2)
 {
     const int fh = std::max(12, (int)std::lround(font_scale * 30.0));
+    if (draw_text_unicode_cached(img, s, org, fh, color, thickness, shadow_enabled, shadow_color, shadow_width))
+        return;
+
+    /* 缓存构建失败时必须保证文字仍然可见。直接路径只在异常情况下执行，不影响正常缓存性能。 */
+    if (shadow_enabled)
+        draw_text_unicode(img, s, org, fh, shadow_color, std::max(1, std::min(shadow_width, 8)));
     draw_text_unicode(img, s, org, fh, color, /*filled*/ -1);
     if (thickness >= 2)
         draw_text_unicode(img, s, org, fh, color, std::min(thickness - 1, 6));
@@ -516,10 +521,12 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
                 double adapted_font_scale = cmd.font_scale * ((scale_x + scale_y) * 0.5f);
                 adapted_font_scale = std::max(0.3, adapted_font_scale);
 
-                put_text_auto(
-                    screen_roi, cmd.text,
-                    cv::Point(static_cast<int>(cmd.text_pos.x * scale_x), static_cast<int>(cmd.text_pos.y * scale_y)),
-                    adapted_font_scale, cmd.color, cmd.thickness);
+                const cv::Point text_pos(static_cast<int>(cmd.text_pos.x * scale_x),
+                                         static_cast<int>(cmd.text_pos.y * scale_y));
+                const int shadow_width = std::max(
+                    1, static_cast<int>(std::lround(cmd.text_shadow_width * (scale_x + scale_y) * 0.5f)));
+                put_text_auto(screen_roi, cmd.text, text_pos, adapted_font_scale, cmd.color, cmd.thickness,
+                              cmd.text_shadow_enabled, cmd.text_shadow_color, shadow_width);
                 break;
             }
             }

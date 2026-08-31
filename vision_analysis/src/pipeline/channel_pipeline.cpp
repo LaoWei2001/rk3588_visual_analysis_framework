@@ -7,7 +7,7 @@
  *   - invoke_channel_logic(): 构造 ChannelContext, 调用已注册的 logic 函数,
  *     将结果和绘制指令写回共享状态 (持 chn_mtx 原子完成)
  *   - process_channel_results(): ROI 缩放 + tracker + invoke_channel_logic
- *     两条路径: 推理通道 (new_results 非空) / 非推理直通通道
+ *     两条路径: 推理通道 (new_results 非空) / 非推理异步 logic worker
  */
 
 #include <algorithm>
@@ -371,7 +371,7 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
  *   new_results != nullptr  → 推理通道，先过 tracker，再按需执行 logic 并提交结果
  *
  * 调用者需在 g_process_mtx[chnId] 保护下调用，防止两条路径并发
- * （pipeline_submit_frame 非推理直通 / dispatch_worker 推理完成通知 可能同时触发）。
+ * （traditional logic worker / dispatch_worker 推理完成通知可能在开关切换期间同时触发）。
  */
 std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame &raw_frame,
                                                 std::vector<AlgoResult> *new_results, int64_t result_frame_id)

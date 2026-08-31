@@ -1,0 +1,52 @@
+{
+  "label": "行车静止安全帽检测",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "roi_name": { "type": "string", "title": "装卸区域ROI名称", "default": "loading_zone", "x-hot-reload": "reset_state" },
+      "person_labels": { "type": "string", "title": "人员标签", "default": "person", "x-hot-reload": "reset_state" },
+      "helmet_labels": { "type": "string", "title": "安全帽标签", "default": "helmet", "x-hot-reload": "reset_state" },
+      "person_min_score": { "type": "number", "title": "人员最低置信度", "default": 0.4, "minimum": 0.0, "maximum": 1.0, "x-step": 0.05, "x-hot-reload": "preserve_state" },
+      "helmet_min_score": { "type": "number", "title": "安全帽最低置信度", "default": 0.3, "minimum": 0.0, "maximum": 1.0, "x-step": 0.05, "x-hot-reload": "preserve_state" },
+      "head_region_ratio": { "type": "number", "title": "人员头部区域比例", "default": 0.4, "minimum": 0.1, "maximum": 1.0, "x-step": 0.05, "x-hot-reload": "preserve_state" },
+      "match_margin_ratio": { "type": "number", "title": "安全帽匹配扩展比例", "default": 0.12, "minimum": 0.0, "maximum": 0.5, "x-step": 0.02, "x-hot-reload": "preserve_state" },
+      "confirm_sec": { "type": "number", "title": "违规确认时间", "default": 0.5, "minimum": 0.0, "maximum": 30.0, "x-unit": "秒", "x-step": 0.1, "x-hot-reload": "preserve_state" },
+      "clear_sec": { "type": "number", "title": "告警解除时间", "default": 1.0, "minimum": 0.0, "maximum": 30.0, "x-unit": "秒", "x-step": 0.1, "x-hot-reload": "preserve_state" }
+    }
+  },
+  "outputs": [
+    { "key": "helmet_roi_available", "type": "boolean", "label": "安全帽ROI是否有效" },
+    { "key": "helmet_alarm", "type": "boolean", "label": "未戴安全帽告警" },
+    { "key": "helmet_person_count", "type": "integer", "label": "装卸区域人员数" },
+    { "key": "unhelmeted_count", "type": "integer", "label": "未戴安全帽人数" }
+  ],
+  "report_fields": [],
+  "actions": [
+    {
+      "id": "switch_helmet_setting",
+      "label": "切换安全帽参数",
+      "style": "primary",
+      "help": "在置信度、头部区域、匹配扩展和告警时间等核心参数之间循环切换。"
+    },
+    {
+      "id": "helmet_setting_decrease",
+      "label": "当前参数 -",
+      "style": "default",
+      "help": "减小画面中黄色显示的安全帽检测参数。"
+    },
+    {
+      "id": "helmet_setting_increase",
+      "label": "当前参数 +",
+      "style": "default",
+      "help": "增大画面中黄色显示的安全帽检测参数。"
+    },
+    {
+      "id": "reset_helmet_alarm",
+      "label": "复位安全帽告警",
+      "style": "primary",
+      "help": "清除当前安全帽违规确认和延迟解除状态。"
+    }
+  ]
+}

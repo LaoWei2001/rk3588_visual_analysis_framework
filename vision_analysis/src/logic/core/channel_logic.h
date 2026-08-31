@@ -80,6 +80,9 @@ struct DrawCommand
     std::string text;
     cv::Point text_pos;
     double font_scale = 0.6;
+    bool text_shadow_enabled = false;
+    cv::Scalar text_shadow_color = cv::Scalar(0, 0, 0);
+    int text_shadow_width = 2;
 
     cv::Scalar color = cv::Scalar(0, 255, 0);
     int thickness = 2;
@@ -328,12 +331,24 @@ void draw_line(ChannelContext *ctx, const cv::Point &pt1, const cv::Point &pt2,
                const cv::Scalar &color = cv::Scalar(0, 255, 0), int thickness = 2,
                DrawCommand::Target target = DrawCommand::ALL);
 
-/* thickness = 加粗级别: <=1 普通填充字(默认外观); >=2 越大越粗(在填充字上叠同色描边来加粗)。
- * 报警大字想更醒目就调大 thickness, 如 draw_text(ctx,"报警",pos,红,1.0,4)。 */
-/* target 可精确选择 DISPLAY / IMAGE / VIDEO；MEDIA 表示图片+视频，ALL 表示三者。 */
+/* 统一文字绘制接口：
+ * - thickness: <=1 普通填充字；>=2 在填充字上增加同色笔画。
+ * - shadow_enabled: 是否启用深色重影/外描边；打开后由底层缓存一次字形蒙版并膨胀，
+ *   不会把同一段文字重复栅格化两次。
+ * - target: DISPLAY / IMAGE / VIDEO；MEDIA 表示图片+视频，ALL 表示三者。
+ * 报警大字示例: draw_text(ctx,"报警",pos,红,1.0,4)。 */
 void draw_text(ChannelContext *ctx, const char *text, const cv::Point &pos,
                const cv::Scalar &color = cv::Scalar(255, 255, 255), double font_scale = 0.6, int thickness = 1,
-               DrawCommand::Target target = DrawCommand::ALL);
+               DrawCommand::Target target = DrawCommand::ALL, bool shadow_enabled = false,
+               const cv::Scalar &shadow_color = cv::Scalar(0, 0, 0), int shadow_width = 2);
+
+/**
+ * @brief 按单通道 8-bit 蒙版对 display_canvas() 做批量颜色融合。
+ *
+ * 底层使用 OpenCV SIMD/NEON 路径和线程局部复用缓冲，业务模块不应再写
+ * 逐像素 C++ 双层循环。mask 与模型帧尺寸不同时会自动最近邻缩放。
+ */
+bool blend_display_mask(ChannelContext *ctx, const cv::Mat &mask, const cv::Scalar &color, double alpha);
 
 /* 折线: 把一串点连成线; alpha<1 时半透明叠加(可让画面/手透过来, 看着更清楚)。
  * 比逐段 draw_line 更高效(一条指令), 且自交叠处不会因半透明而叠暗。 */

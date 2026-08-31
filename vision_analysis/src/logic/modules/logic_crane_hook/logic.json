@@ -1,0 +1,60 @@
+{
+  "label": "行车吊钩安全圆检测",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "hook_class_id": { "type": "integer", "title": "吊钩类别编号", "description": "标签文件中吊钩类别所在的编号，从0开始。", "default": 0, "minimum": 0, "maximum": 10000, "x-step": 1, "x-hot-reload": "reset_state" },
+      "min_score": { "type": "number", "title": "最低置信度", "default": 0.3, "minimum": 0.0, "maximum": 1.0, "x-step": 0.05, "x-hot-reload": "preserve_state" },
+      "safe_radius": { "type": "integer", "title": "安全圆半径", "default": 150, "minimum": 10, "maximum": 1000, "x-unit": "像素", "x-step": 5, "x-hot-reload": "reset_state" },
+      "confirm_sec": { "type": "number", "title": "圆外持续确认时间", "description": "吊钩连续位于安全圆外达到该时间后进入告警。", "default": 0.5, "minimum": 0.0, "maximum": 60.0, "x-unit": "秒", "x-step": 0.3, "x-hot-reload": "reset_state" },
+      "clear_sec": { "type": "number", "title": "圆内连续安全复位时间", "description": "告警后必须连续位于安全圆内达到该时间，才关闭喇叭并允许下一次上报。", "default": 3.0, "minimum": 0.0, "maximum": 60.0, "x-unit": "秒", "x-step": 0.3, "x-hot-reload": "reset_state" },
+      "lost_tolerance_sec": { "type": "number", "title": "短暂丢失位置保持时间", "description": "短暂漏检期间保留最后位置；告警已经触发时，超过该时间仍保持告警，直到重新看见吊钩并完成圆内复位。", "default": 0.5, "minimum": 0.0, "maximum": 10.0, "x-unit": "秒", "x-step": 0.3, "x-hot-reload": "reset_state" }
+    }
+  },
+  "outputs": [
+    { "key": "hook_visible", "type": "boolean", "label": "吊钩当前是否可见" },
+    { "key": "hook_held_during_loss", "type": "boolean", "label": "是否处于短时丢失保持" },
+    { "key": "hook_alarm", "type": "boolean", "label": "吊钩越界告警" },
+    { "key": "hook_distance", "type": "number", "label": "吊钩中心距离" },
+    { "key": "hook_center_x", "type": "integer", "label": "吊钩中心X" },
+    { "key": "hook_center_y", "type": "integer", "label": "吊钩中心Y" },
+    { "key": "hook_outside_elapsed_sec", "type": "number", "label": "圆外连续时间" },
+    { "key": "hook_safe_elapsed_sec", "type": "number", "label": "圆内连续安全时间" },
+    { "key": "hook_missing_elapsed_sec", "type": "number", "label": "目标连续丢失时间" }
+  ],
+  "report_fields": [],
+  "actions": [
+    {
+      "id": "radius_decrease",
+      "label": "安全圆 -5px",
+      "style": "default",
+      "help": "当前运行实例的安全圆半径减小5像素。"
+    },
+    {
+      "id": "radius_increase",
+      "label": "安全圆 +5px",
+      "style": "default",
+      "help": "当前运行实例的安全圆半径增大5像素。"
+    },
+    {
+      "id": "switch_time_setting",
+      "label": "切换时间阈值",
+      "style": "primary",
+      "help": "在圆外确认、圆内安全复位、目标丢失保持三个时间阈值之间循环切换。"
+    },
+    {
+      "id": "time_decrease",
+      "label": "当前时间 -0.3s",
+      "style": "default",
+      "help": "当前高亮时间阈值减小0.3秒。"
+    },
+    {
+      "id": "time_increase",
+      "label": "当前时间 +0.3s",
+      "style": "default",
+      "help": "当前高亮时间阈值增加0.3秒。"
+    }
+  ]
+}

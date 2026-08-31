@@ -1,0 +1,151 @@
+{
+  "label": "行车安全全局控制器",
+  "report_templates": [
+    "report_templates/http_alarm.json"
+  ],
+  "event_types": [
+    {
+      "id": "crane_hook_outside",
+      "label": "吊钩超出安全圆",
+      "help": "不区分行车运动或静止，吊钩越界确认后触发。"
+    },
+    {
+      "id": "crane_moving_intrusion",
+      "label": "运动期间人员入侵",
+      "help": "行车处于运动状态且投影灯稳定后，人员进入投影区域时触发。"
+    },
+    {
+      "id": "crane_still_no_helmet",
+      "label": "静止期间未戴安全帽",
+      "help": "行车处于静止状态且关灯画面稳定后，检测到未戴安全帽人员时触发。"
+    }
+  ],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "motion_channel_id": {
+        "type": "integer",
+        "title": "运动检测通道ID",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 255,
+        "x-hot-reload": "reset_state"
+      },
+      "hook_channel_id": {
+        "type": "integer",
+        "title": "吊钩检测通道ID",
+        "default": 1,
+        "minimum": 0,
+        "maximum": 255,
+        "x-hot-reload": "reset_state"
+      },
+      "helmet_channel_id": {
+        "type": "integer",
+        "title": "安全帽检测通道ID",
+        "default": 2,
+        "minimum": 0,
+        "maximum": 255,
+        "x-hot-reload": "reset_state"
+      },
+      "intrusion_channel_id": {
+        "type": "integer",
+        "title": "人员入侵通道ID",
+        "default": 3,
+        "minimum": 0,
+        "maximum": 255,
+        "x-hot-reload": "reset_state"
+      },
+      "lamp_settle_sec": {
+        "type": "number",
+        "title": "投影灯切换稳定时间",
+        "description": "开灯或关灯后延迟启用对应人员告警，避免亮度突变误报。",
+        "default": 0.8,
+        "minimum": 0.0,
+        "maximum": 10.0,
+        "x-unit": "秒",
+        "x-step": 0.1,
+        "x-hot-reload": "preserve_state"
+      },
+      "hardware_enabled": {
+        "type": "boolean",
+        "title": "启用现场硬件输出",
+        "description": "调试阈值和ROI时建议关闭，确认后再开启。",
+        "default": false,
+        "x-hot-reload": "preserve_state"
+      },
+      "horn_pin": {
+        "type": "string",
+        "title": "喇叭GPIO",
+        "default": "GPIO6_A0",
+        "x-hot-reload": "preserve_state"
+      },
+      "horn_active_level": {
+        "type": "integer",
+        "title": "喇叭有效电平",
+        "default": 1,
+        "minimum": 0,
+        "maximum": 1,
+        "x-hot-reload": "preserve_state"
+      },
+      "lamp_pin": {
+        "type": "string",
+        "title": "投影灯继电器GPIO",
+        "default": "GPIO6_A2",
+        "x-hot-reload": "preserve_state"
+      },
+      "lamp_active_level": {
+        "type": "integer",
+        "title": "继电器有效电平",
+        "default": 1,
+        "minimum": 0,
+        "maximum": 1,
+        "x-hot-reload": "preserve_state"
+      }
+    }
+  },
+  "report_fields": [
+    { "key": "source_channel_id", "type": "number", "label": "来源通道ID" },
+    { "key": "crane_moving", "type": "boolean", "label": "行车是否运动" },
+    { "key": "roi_available", "type": "boolean", "label": "检测区域是否有效" },
+    { "key": "hook_visible", "type": "boolean", "label": "吊钩是否可见" },
+    { "key": "hook_distance", "type": "number", "label": "吊钩中心距离" },
+    { "key": "hook_center_x", "type": "number", "label": "吊钩中心X" },
+    { "key": "hook_center_y", "type": "number", "label": "吊钩中心Y" },
+    { "key": "person_count", "type": "number", "label": "区域内人数" },
+    { "key": "unhelmeted_count", "type": "number", "label": "未戴安全帽人数" }
+  ],
+  "actions": [
+    {
+      "id": "silence_current_alarm",
+      "label": "当前告警消音",
+      "style": "primary",
+      "help": "立即关闭喇叭；全部有效违规解除后自动重新布防，不影响投影灯。"
+    },
+    {
+      "id": "test_horn",
+      "label": "喇叭测试开关",
+      "style": "default",
+      "help": "按一次开启并持续保持，再按一次关闭并恢复自动告警控制。"
+    },
+    {
+      "id": "test_lamp",
+      "label": "投影灯测试开关",
+      "style": "default",
+      "help": "按一次开启并持续保持，再按一次关闭并恢复自动行车状态控制。"
+    },
+    {
+      "id": "force_outputs_off",
+      "label": "紧急关闭现场输出",
+      "style": "default",
+      "help": "立即关闭喇叭和投影灯并保持锁定，必须点击恢复自动控制才能解除。"
+    },
+    {
+      "id": "resume_automatic",
+      "label": "恢复自动控制",
+      "style": "primary",
+      "help": "解除紧急关闭与消音状态，恢复根据四路算法结果自动控制。"
+    }
+  ],
+  "business_fields": []
+}

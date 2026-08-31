@@ -406,13 +406,18 @@ int inference_process_source(int chnId, void *source_data, int fd, int srcW, int
                     imported ? nullptr : source_data);
                 if (!imported)
                 {
-                    /* 异步 worker 不能借用解码回调指针；无 DMA-BUF 时仅为 CPU 推理兜底立即生成模型图。 */
-                    if (!lazy_frame->model_frame())
+                    /* 异步 worker 不能借用解码回调指针。无 DMA-BUF 时只保留原始字节，
+                     * BGR 转换和缩放仍由 infer worker 延后执行，避免软件解码源阻塞 appsink。 */
+                    size_t source_bytes = 0;
+                    if (srcFmt == RK_FORMAT_YCbCr_420_SP || srcFmt == RK_FORMAT_YCrCb_420_SP)
+                        source_bytes = static_cast<size_t>(srcStrH) * srcStrV * 3U / 2U;
+                    else if (srcFmt == RK_FORMAT_BGR_888 || srcFmt == RK_FORMAT_RGB_888)
+                        source_bytes = static_cast<size_t>(srcStrH) * srcStrV * 3U;
+                    if (!lazy_frame->retain_borrowed_source(source_bytes))
                     {
                         pthread_rwlock_unlock(&g_inference.dispatch_mtx);
                         return -1;
                     }
-                    lazy_frame->clear_borrowed_source();
                 }
 
                 InferenceTask task;

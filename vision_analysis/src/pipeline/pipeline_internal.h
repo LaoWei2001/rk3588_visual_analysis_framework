@@ -9,6 +9,7 @@
  *   channel_pipeline.cpp  — 跟踪器 + invoke_channel_logic + process_channel_results
  *   display_pipeline.cpp  — display_worker_thread
  *   frame_inlet.cpp       — pipeline_submit_frame + FPS 节流 + RGA 转换
+ *   traditional_logic_worker.cpp — 非推理逻辑异步最新帧处理
  *   result_dispatch.cpp   — pipeline_dispatch_worker
  *   pipeline.cpp          — 共享状态定义 + init/deinit + main 查询接口
  */
@@ -233,6 +234,35 @@ struct DisplayQueue
 /* 定义在 pipeline.cpp，frame_inlet 和 display_pipeline 共同访问 */
 extern DisplayQueue g_display_queues[MAX_CHANNEL_NUM];
 
+/*======================== 传统视觉逻辑最新帧队列 ========================*/
+
+/**
+ * @brief 非 NPU 通道的单槽最新帧任务。
+ *
+ * 业务逻辑可以任意调用 OpenCV、display_canvas() 或其他耗时算法，
+ * 但统一在本队列的独立 worker 执行，永远不占用 GStreamer appsink 解码回调。
+ * worker 跟不上时直接覆盖尚未取走的旧帧，保证实时性且不累积延迟。
+ */
+struct TraditionalLogicTask
+{
+    ChannelRawFrame raw_frame;
+    int64_t frame_seq = 0;
+    uint64_t runtime_generation = 0;
+};
+
+struct TraditionalLogicQueue
+{
+    pthread_mutex_t mtx;
+    pthread_cond_t cv;
+    bool has_task = false;
+    TraditionalLogicTask task;
+};
+
+extern TraditionalLogicQueue g_traditional_logic_queues[MAX_CHANNEL_NUM];
+
+/** 锁外发布最新帧；实现在 traditional_logic_worker.cpp。 */
+void traditional_logic_publish(int chn_id, ChannelRawFrame raw_frame, int64_t frame_seq);
+
 /*======================== 分发线程运行标志 (定义在 pipeline.cpp) ========================*/
 
 extern std::atomic<bool> g_dispatch_running;
@@ -240,7 +270,7 @@ extern std::atomic<bool> g_dispatch_running;
 /*======================== 通道结果处理串行锁 (定义在 pipeline.cpp) ========================*/
 /*
  * 防止同一通道的 process_channel_results 被两条路径并发调用：
- *   - 非推理通道：由 pipeline_submit_frame (appsink 回调线程) 直接调用
+ *   - 非推理通道：由 pipeline_logic_worker 异步调用
  *   - 推理通道  ：由 pipeline_dispatch_worker 在 NPU 完成后调用
  * 两条路径对同一通道不应并发，此锁保证串行。
  */

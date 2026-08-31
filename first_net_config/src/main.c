@@ -1,3 +1,20 @@
+/*
+ * Copyright (C) 2026, Sunny_Wei, all rights reserved.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 #define _POSIX_C_SOURCE 200809L
 
 #include "cli_io.h"
@@ -17,7 +34,7 @@ static void print_menu(void)
 {
     printf("\n");
     printf("====================================================\n");
-    printf("              RK3588 现场网络工具 v2.1\n");
+    printf("              RK3588 现场网络配置工具\n");
     printf("====================================================\n");
     printf("1. 查看全部网卡、IP 和网段冲突\n");
     printf("2. 搜索摄像头并配置所选有线网口\n");
@@ -32,7 +49,7 @@ static void print_menu(void)
     printf("11. 安全删除未启用的网络配置\n");
     printf("12. 测试使用已有网络配置\n");
     printf("13. 查看初始网络基准及恢复预览\n");
-    printf("14. 保存系统初始网络基准（制镜阶段）\n");
+    printf("14. 保存系统初始网络基准（制作镜像）\n");
     printf("15. 恢复系统初始网络配置（永久）\n");
     printf("16. 清除所有 NetworkManager 连接配置（高风险）\n");
     printf("0. 退出\n");

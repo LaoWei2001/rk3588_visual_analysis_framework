@@ -1,0 +1,47 @@
+{
+  "label": "行车运动投影区域入侵",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "roi_name": { "type": "string", "title": "投影区域ROI名称", "default": "projection_zone", "x-hot-reload": "reset_state" },
+      "person_labels": { "type": "string", "title": "人员标签", "default": "person", "x-hot-reload": "reset_state" },
+      "min_score": { "type": "number", "title": "人员最低置信度", "default": 0.4, "minimum": 0.0, "maximum": 1.0, "x-step": 0.05, "x-hot-reload": "preserve_state" },
+      "confirm_sec": { "type": "number", "title": "入侵确认时间", "default": 0.3, "minimum": 0.0, "maximum": 30.0, "x-unit": "秒", "x-step": 0.1, "x-hot-reload": "preserve_state" },
+      "clear_sec": { "type": "number", "title": "告警解除时间", "default": 1.0, "minimum": 0.0, "maximum": 30.0, "x-unit": "秒", "x-step": 0.1, "x-hot-reload": "preserve_state" }
+    }
+  },
+  "outputs": [
+    { "key": "intrusion_roi_available", "type": "boolean", "label": "投影区域ROI是否有效" },
+    { "key": "intrusion_alarm", "type": "boolean", "label": "人员入侵告警" },
+    { "key": "intrusion_person_count", "type": "integer", "label": "投影区域人员数" }
+  ],
+  "report_fields": [],
+  "actions": [
+    {
+      "id": "switch_intrusion_setting",
+      "label": "切换入侵参数",
+      "style": "primary",
+      "help": "在人员置信度、入侵确认时间和告警解除时间之间循环切换。"
+    },
+    {
+      "id": "intrusion_setting_decrease",
+      "label": "当前参数 -",
+      "style": "default",
+      "help": "减小画面中黄色显示的入侵检测参数。"
+    },
+    {
+      "id": "intrusion_setting_increase",
+      "label": "当前参数 +",
+      "style": "default",
+      "help": "增大画面中黄色显示的入侵检测参数。"
+    },
+    {
+      "id": "reset_intrusion_alarm",
+      "label": "复位入侵告警",
+      "style": "primary",
+      "help": "清除当前人员入侵确认和延迟解除状态。"
+    }
+  ]
+}

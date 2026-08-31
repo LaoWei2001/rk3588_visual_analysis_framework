@@ -1,0 +1,42 @@
+{
+  "label": "行车运动帧差检测",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "motion_roi_name": { "type": "string", "title": "运动检测ROI名称", "description": "留空使用整幅画面。", "default": "", "x-hot-reload": "reset_state" },
+      "diff_threshold": { "type": "integer", "title": "帧差灰度阈值", "default": 25, "minimum": 1, "maximum": 255, "x-hot-reload": "preserve_state" },
+      "start_ratio": { "type": "number", "title": "进入运动变化比例", "default": 0.18, "minimum": 0.001, "maximum": 1.0, "x-step": 0.01, "x-hot-reload": "preserve_state" },
+      "stop_ratio": { "type": "number", "title": "进入静止变化比例", "default": 0.06, "minimum": 0.0, "maximum": 1.0, "x-step": 0.01, "x-hot-reload": "preserve_state" },
+      "moving_confirm_sec": { "type": "number", "title": "运动确认时间", "default": 0.4, "minimum": 0.0, "maximum": 10.0, "x-unit": "秒", "x-step": 0.1, "x-hot-reload": "preserve_state" },
+      "still_confirm_sec": { "type": "number", "title": "静止确认时间", "default": 2.0, "minimum": 0.0, "maximum": 60.0, "x-unit": "秒", "x-step": 0.5, "x-hot-reload": "preserve_state" }
+    }
+  },
+  "outputs": [
+    { "key": "motion_valid", "type": "boolean", "label": "运动状态是否有效" },
+    { "key": "crane_moving", "type": "boolean", "label": "行车是否运动" },
+    { "key": "motion_change_ratio", "type": "number", "label": "有效变化像素比例" }
+  ],
+  "report_fields": [],
+  "actions": [
+    {
+      "id": "switch_motion_setting",
+      "label": "切换运动参数",
+      "style": "primary",
+      "help": "在帧差灰度阈值、运动/静止变化像素比例和确认时间之间循环切换。"
+    },
+    {
+      "id": "motion_setting_decrease",
+      "label": "当前参数 -",
+      "style": "default",
+      "help": "减小画面中黄色显示的运动检测参数。"
+    },
+    {
+      "id": "motion_setting_increase",
+      "label": "当前参数 +",
+      "style": "default",
+      "help": "增大画面中黄色显示的运动检测参数。"
+    }
+  ]
+}

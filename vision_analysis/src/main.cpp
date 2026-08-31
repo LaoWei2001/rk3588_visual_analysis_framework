@@ -213,6 +213,7 @@ int main(int argc, char **argv)
     bool fd_monitor_started = false;
     std::vector<pthread_t> display_tids;
     std::vector<pthread_t> dispatch_tids;
+    std::vector<pthread_t> logic_tids;
     std::shared_ptr<const AppRuntimeSnapshot> startup_runtime;
 
     raise_fd_limit_or_warn();
@@ -367,6 +368,21 @@ int main(int argc, char **argv)
         }
     }
 
+    for (int i = 0; i < pipeline_get_logic_thread_count(); ++i)
+    {
+        const int channel_id = pipeline_get_logic_chn_id(i);
+        pthread_t tid{};
+        const int ret = pthread_create(&tid, nullptr, pipeline_logic_worker, (void *)(intptr_t)channel_id);
+        if (ret != 0)
+            fprintf(stderr, "[Main] pthread_create logic_worker[channel=%d] failed: %s\n", channel_id,
+                    strerror(ret));
+        else
+        {
+            logic_tids.push_back(tid);
+            printf("[Main] logic_worker[channel=%d] created (tid=%lu)\n", channel_id, (unsigned long)tid);
+        }
+    }
+
     printf("[Main] infer workers managed by inference_init; global logic instances=%d\n",
            global_logic_get_instance_count());
     if (rtsp_streamer_init() != 0)
@@ -443,6 +459,8 @@ cleanup:
     }
 
     /* 先回收仍可能触发 logic/告警的线程，再关闭告警与录像消费者。 */
+    for (pthread_t tid : logic_tids)
+        pthread_join(tid, nullptr);
     for (pthread_t tid : dispatch_tids)
         pthread_join(tid, nullptr);
     for (pthread_t tid : display_tids)

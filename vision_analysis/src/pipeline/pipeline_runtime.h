@@ -4,6 +4,7 @@
  *
  * 线程模型:
  *   pipeline_dispatch_worker — 每推理通道一个, NPU 结果分发 + channel_logic
+ *   pipeline_logic_worker    — 每启用通道一个, 异步执行非 NPU 视觉逻辑
  *   显示线程接口由 display/display_pipeline.h 提供。
  */
 #pragma once
@@ -33,6 +34,9 @@ extern "C"
     /** @brief 结果分发线程 — 等 NPU 完成 → process_channel_results → channel_logic */
     void *pipeline_dispatch_worker(void *arg);
 
+    /** @brief 传统视觉线程 — 只消费最新帧，不阻塞解码回调 */
+    void *pipeline_logic_worker(void *arg);
+
     /*======================== 生命周期接口 ========================*/
 
     /** @brief 初始化分析管线数据结构 (不创建线程).
@@ -48,19 +52,21 @@ extern "C"
     /** @brief 唤醒所有 display 线程 (让它们检查 isRunning 退出). */
     void pipeline_wake_display_threads(void);
 
-    /** @brief 销毁显示队列同步原语 (必须在 display 线程 join 后调用). */
+    /** @brief 销毁显示/传统逻辑队列同步原语 (必须在相关线程 join 后调用). */
     void pipeline_destroy_display_queues(void);
 
     /** @brief 视频帧处理入口，由采集模块的 appsink 回调调用。 */
     int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc);
 
-    /** @brief 获取 display/dispatch 线程数量 (供 main 创建线程) */
+    /** @brief 获取 display/dispatch/logic 线程数量 (供 main 创建线程) */
     int pipeline_get_display_thread_count(void);
     int pipeline_get_dispatch_thread_count(void);
+    int pipeline_get_logic_thread_count(void);
 
-    /** @brief 获取指定索引的 display/dispatch 线程的通道号 (供 main 创建线程) */
+    /** @brief 获取指定索引的 display/dispatch/logic 线程的通道号 */
     int pipeline_get_display_chn_id(int idx);
     int pipeline_get_dispatch_chn_id(int idx);
+    int pipeline_get_logic_chn_id(int idx);
 
     /*======================== 跟踪器接口 ========================*/
     void pipeline_reset_tracker_ids(int chnId);

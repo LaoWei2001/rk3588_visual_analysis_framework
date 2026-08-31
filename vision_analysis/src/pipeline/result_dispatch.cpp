@@ -75,7 +75,7 @@ extern "C" void *pipeline_dispatch_worker(void *arg)
         }
 
         /* 串行化同通道的 process_channel_results 调用
-         * （与 pipeline_submit_frame 非推理直通路径互斥，见 g_process_mtx 注释）*/
+         * （与 traditional logic worker 在推理开关切换期间互斥）*/
         pthread_mutex_lock(&g_process_mtx[chnId]);
         process_channel_results(chnId, raw, &current_results, result_frame_id);
         pthread_mutex_unlock(&g_process_mtx[chnId]);

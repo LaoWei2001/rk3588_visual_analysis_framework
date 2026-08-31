@@ -285,10 +285,32 @@ const cv::Mat *LazyVideoFrame::source_frame()
     return source_bgr_.empty() ? nullptr : &source_bgr_;
 }
 
+bool LazyVideoFrame::retain_borrowed_source(size_t byte_count)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!borrowed_data_ || byte_count == 0)
+        return false;
+    try
+    {
+        const unsigned char *begin = static_cast<const unsigned char *>(borrowed_data_);
+        owned_source_.assign(begin, begin + byte_count);
+        borrowed_data_ = owned_source_.data();
+        return true;
+    }
+    catch (...)
+    {
+        owned_source_.clear();
+        borrowed_data_ = nullptr;
+        return false;
+    }
+}
+
 void LazyVideoFrame::clear_borrowed_source()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    borrowed_data_ = nullptr;
+    /* 只清除外部借用指针。retain_borrowed_source() 生成的数据归本对象所有，
+     * 应保留到该帧离开最新结果/事件快照链路，使延后 source_frame() 仍可用。 */
+    borrowed_data_ = owned_source_.empty() ? nullptr : owned_source_.data();
 }
 
 bool LazyVideoFrame::available() const

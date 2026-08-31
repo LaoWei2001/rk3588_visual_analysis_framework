@@ -9,7 +9,7 @@
  *   2. 只传递稳定的 DMA-BUF 引用；Logic 调用 model_frame()/source_frame() 时才生成 BGR
  *   3. 分流：
  *      - 推理通道(infer_enable 且配置了模型)：inference_process_source → TaskQueue → infer_worker
- *      - 传统算法通道(infer_enable=false)：同步调 process_channel_results（持 g_process_mtx，ctx->results 为空）
+ *      - 传统算法通道(infer_enable=false)：发布最新帧给独立 logic worker
  *      - 显示：不论是否推理，均将最新解码帧推入 g_display_queues（单槽覆盖）
  *
  * 每 5 秒打印一次每通道的 recv/throttle/enq/replace/drop 统计。
@@ -172,7 +172,7 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[ch]);
     }
 
-    /* ---- 构造 ChannelRawFrame（供非推理直通路径 + dispatch 兜底）---- */
+    /* ---- 构造 ChannelRawFrame（供非推理异步路径 + dispatch 兜底）---- */
     ChannelRawFrame raw_frame;
     raw_frame.width = imgDesc.width;
     raw_frame.height = imgDesc.height;
@@ -182,20 +182,46 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
     {
         auto imported = rga_import_src_fd(imgDesc.fd, imgDesc.width, imgDesc.height, imgDesc.horStride,
                                           imgDesc.verStride, fmt_int);
+        const bool has_imported_source = static_cast<bool>(imported);
         raw_frame.lazy_frame = std::make_shared<LazyVideoFrame>(
             ch, std::move(imported), imgDesc.width, imgDesc.height, imgDesc.horStride, imgDesc.verStride, fmt_int,
-            g_pCtrl->inputW, g_pCtrl->inputH, imgData);
+            g_pCtrl->inputW, g_pCtrl->inputH, has_imported_source ? nullptr : imgData);
+        if (!has_imported_source)
+        {
+            /* 无 DMA-BUF 时只保留原始字节，不在回调里做 BGR/缩放。这使文件、USB
+             * 和软件解码源也保持“appsink 只送帧”的底层约束。 */
+            size_t source_bytes = imgDesc.dataSize > 0 ? static_cast<size_t>(imgDesc.dataSize) : 0U;
+            if (source_bytes == 0 && (fmt_int == RK_FORMAT_YCbCr_420_SP || fmt_int == RK_FORMAT_YCrCb_420_SP))
+                source_bytes = static_cast<size_t>(imgDesc.horStride) * imgDesc.verStride * 3U / 2U;
+            else if (source_bytes == 0 && (fmt_int == RK_FORMAT_BGR_888 || fmt_int == RK_FORMAT_RGB_888))
+                source_bytes = static_cast<size_t>(imgDesc.horStride) * imgDesc.verStride * 3U;
+            if (!raw_frame.lazy_frame->retain_borrowed_source(source_bytes))
+                raw_frame.lazy_frame.reset();
+        }
     }
 
-    /* ---- 传统算法通道(infer_enable=false)：节流命中且有帧时同步跑 logic ----
-     * 与推理通道一样按 max_fps 限频；不进 NPU、ctx->results 为空。
-     * Logic 若不调用取帧函数，本路径不会产生任何 BGR 转换。 */
-    if (!infer_enabled && will_process)
+    /* ---- 分析任务优先入队 ----
+     * NPU 与传统 CV 都在预览整帧拷贝之前发布，可与后续显示处理重叠执行。 */
+    if (will_process && infer_enabled)
     {
-        pthread_mutex_lock(&g_process_mtx[ch]);
-        process_channel_results(ch, raw_frame, nullptr, current_frame_seq);
-        pthread_mutex_unlock(&g_process_mtx[ch]);
+        const int enq_ret = inference_process_source(
+            ch, imgData, imgDesc.fd, imgDesc.width, imgDesc.height, fmt_int, imgDesc.horStride, imgDesc.verStride,
+            current_frame_seq, raw_frame.frame_steady_ms, raw_frame.frame_unix_ms);
+        if (enq_ret > 0)
+        {
+            g_feed[ch].enq++;
+            if (enq_ret == 2)
+                g_feed[ch].replace++;
+        }
+        else
+        {
+            g_feed[ch].drop++;
+            if (throttle_period_us > 0)
+                g_feed[ch].next_due_us = steady_now_us() + throttle_period_us / 2ULL;
+        }
     }
+    else if (will_process && raw_frame.lazy_frame)
+        traditional_logic_publish(ch, std::move(raw_frame), current_frame_seq);
 
     /* ---- 推入显示队列（单槽覆盖，始终展示最新解码帧）----
      * HDMI 常开；纯 RTSP 模式只在存在实际客户端时合成，空闲期间不做整帧复制、缩放和叠加绘制。 */
@@ -277,27 +303,6 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
 
     /* ---- 统计 recv ---- */
     g_feed[ch].recv++;
-
-    /* ---- 推理通道：送入 TaskQueue，由 infer_worker 异步执行 ---- */
-    if (will_process && infer_enabled)
-    {
-        const int enq_ret = inference_process_source(
-            ch, imgData, imgDesc.fd, imgDesc.width, imgDesc.height, fmt_int, imgDesc.horStride, imgDesc.verStride,
-            current_frame_seq, raw_frame.frame_steady_ms, raw_frame.frame_unix_ms);
-        if (enq_ret > 0)
-        {
-            g_feed[ch].enq++;
-            if (enq_ret == 2)
-                g_feed[ch].replace++;
-        }
-        else
-        {
-            g_feed[ch].drop++;
-            /* 队列满：小步快追，下次提前允许推理 */
-            if (throttle_period_us > 0)
-                g_feed[ch].next_due_us = steady_now_us() + throttle_period_us / 2ULL;
-        }
-    }
 
     /* ---- 周期性统计日志（每 5 秒一次）---- */
     const uint64_t now_ms = steady_now_ms();
