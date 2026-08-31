@@ -68,7 +68,8 @@ void read_line(const char *prompt, char *buf, size_t size)
     if (!fgets(buf, (int)size, stdin))
     {
         buf[0] = '\0';
-        return;
+        printf("\n输入已结束，程序退出。\n");
+        exit(EXIT_SUCCESS);
     }
 
     trim_newline(buf);
@@ -178,7 +179,7 @@ bool read_exact_word(const char *prompt, const char *expected)
 ConfigLifetime read_config_lifetime(void)
 {
     printf("\n请选择本次配置的保存方式（必须明确选择）：\n");
-    printf("  1. 临时配置：不写入磁盘；重启或 NetworkManager 重启后消失\n");
+    printf("  1. 临时配置：不写入磁盘；设备重启或网络服务重启后消失\n");
     printf("  2. 永久配置：保存到系统；重启后自动恢复\n");
 
     return (ConfigLifetime)read_int("请选择 [1-2]: ", 1, 2);
@@ -203,6 +204,12 @@ void read_password(const char *prompt, char *buf, size_t size)
     if (!fgets(buf, (int)size, stdin))
     {
         buf[0] = '\0';
+        if (tty_ok)
+        {
+            tcsetattr(STDIN_FILENO, TCSAFLUSH, &oldt);
+        }
+        printf("\n输入已结束，程序退出。\n");
+        exit(EXIT_SUCCESS);
     }
     else
     {

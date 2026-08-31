@@ -157,14 +157,6 @@ async def confirm_network_transaction(transaction_id: str, _admin: None = Depend
         raise _http_error(exc, 409)
 
 
-@router.post("/system/network/transactions/{transaction_id}/rollback")
-async def rollback_network_transaction(transaction_id: str, _admin: None = Depends(require_network_admin)):
-    try:
-        return await asyncio.to_thread(network_manager.rollback_transaction, transaction_id)
-    except Exception as exc:
-        raise _http_error(exc, 409)
-
-
 @router.delete("/system/network/connections/{connection_uuid}")
 async def delete_network_connection(connection_uuid: str, _admin: None = Depends(require_network_admin)):
     try:

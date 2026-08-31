@@ -14,6 +14,77 @@ bool valid_ipv4(const char *s)
     return s && inet_pton(AF_INET, s, &addr) == 1;
 }
 
+bool normalize_ipv4_list(const char *input, char *output, size_t output_size,
+                         int max_items)
+{
+    char copy[BUF_SIZE];
+    char *cursor;
+    int count = 0;
+    size_t used = 0;
+
+    if (!input || !output || output_size == 0 || max_items <= 0 ||
+        strlen(input) >= sizeof(copy))
+    {
+        return false;
+    }
+
+    snprintf(copy, sizeof(copy), "%s", input);
+    trim_space(copy);
+    output[0] = '\0';
+    if (copy[0] == '\0')
+    {
+        return true;
+    }
+
+    cursor = copy;
+    while (*cursor)
+    {
+        char *separator = strchr(cursor, ',');
+        char canonical[INET_ADDRSTRLEN];
+        struct in_addr parsed;
+        size_t length;
+
+        if (separator)
+        {
+            *separator = '\0';
+        }
+        trim_space(cursor);
+        if (cursor[0] == '\0' || ++count > max_items ||
+            inet_pton(AF_INET, cursor, &parsed) != 1 ||
+            !inet_ntop(AF_INET, &parsed, canonical,
+                       (socklen_t)sizeof(canonical)))
+        {
+            output[0] = '\0';
+            return false;
+        }
+
+        length = strlen(canonical);
+        if (used + (used ? 1U : 0U) + length + 1U > output_size)
+        {
+            output[0] = '\0';
+            return false;
+        }
+        if (used)
+        {
+            output[used++] = ',';
+        }
+        memcpy(output + used, canonical, length + 1);
+        used += length;
+
+        if (!separator)
+        {
+            break;
+        }
+        cursor = separator + 1;
+        if (*cursor == '\0')
+        {
+            output[0] = '\0';
+            return false;
+        }
+    }
+    return count > 0;
+}
+
 static bool parse_ipv4_canonical(const char *input,
                                  char *output,
                                  size_t output_size)

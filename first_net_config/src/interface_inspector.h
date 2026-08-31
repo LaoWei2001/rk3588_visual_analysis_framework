@@ -10,6 +10,7 @@ bool approve_candidate_network(const char *selected_iface,
                                int prefix);
 bool interface_has_default_route(const char *iface);
 bool interface_is_ssh_path(const char *iface);
+bool interface_is_physical_ethernet(const char *iface);
 bool ipv4_networks_overlap(const char *left_ip, int left_prefix,
                            const char *right_ip, int right_prefix);
 

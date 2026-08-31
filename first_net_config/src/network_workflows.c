@@ -18,6 +18,31 @@
 #include <string.h>
 #include <unistd.h>
 
+static bool valid_wifi_password(const char *password)
+{
+    size_t length = password ? strlen(password) : 0;
+
+    if (length >= 8 && length <= 63)
+    {
+        return true;
+    }
+    if (length == 64)
+    {
+        for (size_t index = 0; index < length; ++index)
+        {
+            char character = password[index];
+            if (!((character >= '0' && character <= '9') ||
+                  (character >= 'a' && character <= 'f') ||
+                  (character >= 'A' && character <= 'F')))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
 static bool recommend_camera_local_ip(const char *camera_ip, int prefix,
                                       char *out, size_t out_size)
 {
@@ -70,15 +95,6 @@ void configure_camera_network(void)
     }
     printf("本次只把 %s 用于摄像头操作；程序没有固定绑定任何网口角色。\n",
            iface);
-    if (interface_is_ssh_path(iface))
-    {
-        printf("[高风险] 当前 SSH 正通过 %s。应用配置可能中断本会话。\n", iface);
-    }
-    if (interface_has_default_route(iface))
-    {
-        printf("[高风险] %s 当前承载默认路由。摄像头配置不会设置新网关，但会替换该口活动连接。\n",
-               iface);
-    }
     if (!choose_or_enter_camera(iface, &camera))
     {
         return;
@@ -183,7 +199,7 @@ void configure_camera_network(void)
             return;
         }
     }
-    snprintf(final_profile, sizeof(final_profile), "camera-%s", iface);
+    snprintf(final_profile, sizeof(final_profile), "摄像头-%s", iface);
     printf("\n摄像头：%s  掩码：%s  网关广播值：%s\n",
            camera.ip, mask, camera.gateway[0] ? camera.gateway : "未广播");
     printf("RK3588：%s/%d  网卡：%s\n", local_ip, camera.prefix, iface);
@@ -231,10 +247,6 @@ void configure_maintenance_link(void)
         return;
     }
     printf("本次选择 %s；程序没有把任何网口固定为维护口。\n", iface);
-    if (interface_is_ssh_path(iface))
-    {
-        printf("[高风险] 当前 SSH 正通过该网口，切换地址后会断开并进入回滚倒计时。\n");
-    }
     for (;;)
     {
         char input[INET_ADDRSTRLEN];
@@ -308,7 +320,7 @@ void configure_maintenance_link(void)
             return;
         }
     }
-    snprintf(final_profile, sizeof(final_profile), "maintenance-%s", iface);
+    snprintf(final_profile, sizeof(final_profile), "直连维护-%s", iface);
     printf("\n维护口不会设置网关或 DNS，也不会成为默认网络出口。\n");
     {
         NetworkActivationResult result = safe_activate_with_reconnect(
@@ -329,7 +341,7 @@ void configure_maintenance_link(void)
     }
     printf("\n笔记本网口请配置为与 %s/%d 同网段、但不重复的地址。\n",
            ip, cfg.prefix);
-    printf("Web Console：http://%s:8080\n", ip);
+    printf("如果设备安装了 Web 平台，可访问：http://%s:8080\n", ip);
     printf("SSH：ssh root@%s\n", ip);
 }
 
@@ -358,12 +370,12 @@ void configure_wired_beginner(void)
     lifetime = read_config_lifetime();
 
     printf("\n请选择 IP 地址的获取方式：\n");
-    printf("  1. 自动获取 IP 地址 IP\n");
+    printf("  1. 自动获取 IP 地址\n");
     printf("  2. 手动填写固定 IP 地址\n");
 
     {
         int mode = read_int("请选择 [1-2]: ", 1, 2);
-        snprintf(final_profile, sizeof(final_profile), "nettool-%s", iface);
+        snprintf(final_profile, sizeof(final_profile), "有线-%s", iface);
         if (!build_temp_profile(iface, &temp_profile))
         {
             printf("无法生成唯一的测试连接名称。\n");
@@ -402,6 +414,7 @@ void configure_wired_beginner(void)
                 "ipv4.addresses", "",
                 "ipv4.gateway", "",
                 "ipv4.dns", "",
+                "ipv4.ignore-auto-dns", "no",
                 "ipv4.dad-timeout", "-1",
                 NULL};
             cfg.is_static = false;
@@ -459,8 +472,19 @@ void configure_wired_beginner(void)
                 break;
             }
 
-            read_line("4) DNS（不知道就直接回车）: ", cfg.dns, sizeof(cfg.dns));
-            trim_space(cfg.dns);
+            for (;;)
+            {
+                char dns_input[BUF_SIZE];
+
+                read_line("4) DNS（不知道就直接回车，最多 4 个）: ",
+                          dns_input, sizeof(dns_input));
+                if (normalize_ipv4_list(dns_input, cfg.dns,
+                                        sizeof(cfg.dns), 4))
+                {
+                    break;
+                }
+                printf("DNS 地址格式不正确，多个地址请用逗号分隔。\n");
+            }
 
             if (!approve_candidate_network(iface, cfg.ip, cfg.prefix))
             {
@@ -485,6 +509,7 @@ void configure_wired_beginner(void)
                     "ipv4.addresses", cidr,
                     "ipv4.gateway", cfg.gateway,
                     "ipv4.dns", cfg.dns,
+                    "ipv4.ignore-auto-dns", "yes",
                     "ipv4.dad-timeout", IPV4_DAD_TIMEOUT_MS,
                     NULL};
                 if (run_cmd(manual) != 0)
@@ -550,9 +575,14 @@ void configure_wired(void)
 
     lifetime = read_config_lifetime();
 
-    ask_final_profile_name(iface,
-                           final_profile,
-                           sizeof(final_profile));
+    {
+        char suggested_name[PROFILE_SIZE];
+
+        snprintf(suggested_name, sizeof(suggested_name), "有线-%s", iface);
+        ask_final_profile_name(suggested_name,
+                               final_profile,
+                               sizeof(final_profile));
+    }
     if (!build_temp_profile(iface, &temp_profile))
     {
         printf("无法生成唯一的测试连接名称。\n");
@@ -662,14 +692,18 @@ void configure_wifi(void)
 
     do
     {
-        read_line("SSID: ", ssid, sizeof(ssid));
+        read_line("无线网络名称: ", ssid, sizeof(ssid));
         trim_space(ssid);
 
         if (ssid[0] == '\0')
         {
-            printf("SSID 不能为空。\n");
+            printf("无线网络名称不能为空。\n");
         }
-    } while (ssid[0] == '\0');
+        else if (strlen(ssid) > 32)
+        {
+            printf("无线网络名称不能超过 32 个字节。\n");
+        }
+    } while (ssid[0] == '\0' || strlen(ssid) > 32);
 
     printf("\n无线网络的密码方式：\n");
     printf("  1. 普通密码方式，常见于家用和现场无线网络\n");
@@ -686,20 +720,25 @@ void configure_wifi(void)
             read_password("Wi-Fi 密码（输入时不显示）: ",
                           password, sizeof(password));
 
-            if (password[0] == '\0')
+            if (!valid_wifi_password(password))
             {
-                printf("密码不能为空。\n");
+                printf("密码需要是 8 到 63 个字符，或 64 位十六进制内容。\n");
             }
-        } while (password[0] == '\0');
+        } while (!valid_wifi_password(password));
     }
     else
     {
         password[0] = '\0';
     }
 
-    ask_final_profile_name(iface,
-                           final_profile,
-                           sizeof(final_profile));
+    {
+        char suggested_name[PROFILE_SIZE];
+
+        snprintf(suggested_name, sizeof(suggested_name), "无线-%s", iface);
+        ask_final_profile_name(suggested_name,
+                               final_profile,
+                               sizeof(final_profile));
+    }
     if (!build_temp_profile(iface, &temp_profile))
     {
         printf("无法生成唯一的测试连接名称。\n");
@@ -757,7 +796,7 @@ void configure_wifi(void)
 
         if (run_cmd(sec) != 0)
         {
-            printf("设置 WPA3/SAE 密码失败。\n");
+            printf("设置 WPA3 密码失败。\n");
             cleanup_temp_profile(&temp_profile);
             return;
         }
@@ -825,150 +864,5 @@ void ping_test(void)
         const char *argv[] = {
             "ping", "-c", "4", target, NULL};
         run_cmd(argv);
-    }
-}
-
-void show_connection_detail(void)
-{
-    char selector[PROFILE_SIZE];
-    char uuid[UUID_SIZE];
-
-    {
-        const char *list[] = {
-            "nmcli", "connection", "show", NULL};
-        run_cmd(list);
-    }
-
-    read_line("请输入要查看的连接名称或 UUID: ",
-              selector, sizeof(selector));
-    trim_space(selector);
-
-    if (selector[0] == '\0')
-    {
-        return;
-    }
-
-    if (!resolve_connection_uuid(selector, uuid, sizeof(uuid)))
-    {
-        printf("找不到唯一连接。若存在重名，请直接输入列表中的 UUID。\n");
-        return;
-    }
-
-    {
-        const char *show[] = {
-            "nmcli", "connection", "show", "uuid", uuid, NULL};
-        run_cmd(show);
-    }
-}
-
-void delete_connection(void)
-{
-    char selector[PROFILE_SIZE];
-    char uuid[UUID_SIZE];
-    char name[PROFILE_SIZE] = {0};
-    char confirm[32];
-
-    {
-        const char *list[] = {
-            "nmcli", "connection", "show", NULL};
-        run_cmd(list);
-    }
-
-    read_line("请输入要删除的连接名称或 UUID: ",
-              selector, sizeof(selector));
-    trim_space(selector);
-
-    if (selector[0] == '\0')
-    {
-        return;
-    }
-
-    if (!resolve_connection_uuid(selector, uuid, sizeof(uuid)))
-    {
-        printf("找不到唯一连接。若存在重名，请直接输入列表中的 UUID。\n");
-        return;
-    }
-
-    (void)get_connection_name(uuid, name, sizeof(name));
-
-    printf("即将删除连接 \"%s\"（UUID: %s）。\n",
-           name[0] ? name : selector, uuid);
-    read_line("确认删除请输入 DELETE；其他输入将取消: ",
-              confirm, sizeof(confirm));
-
-    if (strcmp(confirm, "DELETE") != 0)
-    {
-        printf("已取消。\n");
-        return;
-    }
-
-    if (connection_is_active(uuid))
-    {
-        printf("[拒绝] 该连接当前正在使用。请先安全切换到其他连接，不能直接删除。\n");
-        return;
-    }
-
-    (void)delete_connection_by_uuid(uuid);
-}
-
-void activate_saved_connection_safely(void)
-{
-    char iface[IF_NAMESIZE];
-    char selector[PROFILE_SIZE];
-    ConnectionProfile profile = {0};
-    IPv4Config cfg;
-
-    memset(&cfg, 0, sizeof(cfg));
-
-    printf("\n========== 测试已有网络配置 ==========\n");
-
-    show_devices();
-
-    if (!choose_any_network_interface(iface, sizeof(iface)))
-    {
-        return;
-    }
-
-    {
-        const char *list[] = {
-            "nmcli", "connection", "show", NULL};
-        run_cmd(list);
-    }
-
-    read_line("请输入要测试的网络配置名称或 UUID: ",
-              selector, sizeof(selector));
-    trim_space(selector);
-
-    if (!resolve_connection_uuid(selector,
-                                 profile.uuid,
-                                 sizeof(profile.uuid)))
-    {
-        printf("找不到唯一连接。若存在重名，请直接输入列表中的 UUID。\n");
-        return;
-    }
-
-    (void)get_connection_name(profile.uuid,
-                              profile.name,
-                              sizeof(profile.name));
-
-    printf("\n这个功能不会修改其中的参数，只会临时尝试使用这项网络配置。\n");
-    printf("程序会检查它是否真的在 %s 上启用，以及是否获得了 IP 地址。\n",
-           iface);
-
-    {
-        NetworkActivationResult result = safe_activate_with_reconnect(
-            iface, &profile, &cfg, "", NETWORK_PROFILE_EXISTING);
-
-        if (result == NETWORK_ACTIVATION_FAILED)
-        {
-            return;
-        }
-        if (result == NETWORK_ACTIVATION_PENDING)
-        {
-            printf("[待确认] 请通过新 IP 重新登录并再次运行本工具。\n");
-            exit(EXIT_SUCCESS);
-        }
-
-        printf("[完成] 这项网络配置已经通过测试。\n");
     }
 }

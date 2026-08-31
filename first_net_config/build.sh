@@ -13,7 +13,8 @@ fi
 cmake \
     -S "${project_dir}/src" \
     -B "${build_dir}" \
-    -DCMAKE_BUILD_TYPE="${build_type}"
+    -DCMAKE_BUILD_TYPE="${build_type}" \
+    -DBUILD_TESTING=OFF
 
 cmake --build "${build_dir}" --parallel
 

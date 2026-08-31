@@ -3,6 +3,7 @@
 #include "network_state.h"
 #include "cli_io.h"
 #include "command_runner.h"
+#include "interface_inspector.h"
 #include "netconfig_types.h"
 
 #include <arpa/inet.h>
@@ -15,6 +16,35 @@
 static bool interface_exists(const char *ifname)
 {
     return ifname && if_nametoindex(ifname) != 0;
+}
+
+static const char *friendly_device_state(const char *state)
+{
+    if (!state || state[0] == '\0')
+    {
+        return "未知";
+    }
+    if (strstr(state, "disconnected") != NULL)
+    {
+        return "未连接";
+    }
+    if (strstr(state, "connecting") != NULL)
+    {
+        return "正在连接";
+    }
+    if (strstr(state, "connected") != NULL)
+    {
+        return "已连接";
+    }
+    if (strstr(state, "unavailable") != NULL)
+    {
+        return "暂不可用";
+    }
+    if (strstr(state, "unmanaged") != NULL)
+    {
+        return "未由系统管理";
+    }
+    return state;
 }
 
 static bool valid_uuid_text(const char *uuid)
@@ -345,7 +375,8 @@ bool choose_ethernet_interface(char *iface, size_t iface_size)
                          * TYPE 的值是 ethernet / wifi / loopback ...
                          * STATE 可以是中文或英文，我们只负责显示，不依赖它判断类型。
                          */
-                        if (strcmp(p1 + 1, "ethernet") == 0)
+                        if (strcmp(p1 + 1, "ethernet") == 0 &&
+                            interface_is_physical_ethernet(line))
                         {
                             snprintf(devices[count],
                                      sizeof(devices[count]),
@@ -407,7 +438,8 @@ bool choose_ethernet_interface(char *iface, size_t iface_size)
 
                 trim_space(type);
 
-                if (strcmp(type, "ethernet") != 0)
+                if (strcmp(type, "ethernet") != 0 ||
+                    !interface_is_physical_ethernet(p->if_name))
                 {
                     continue;
                 }
@@ -450,14 +482,18 @@ bool choose_ethernet_interface(char *iface, size_t iface_size)
         return false;
     }
 
-    printf("\n检测到以下有线网口：\n");
+    printf("\n以下只列出可以接网线的物理网口：\n");
+    printf("  [当前远程连接] 表示你现在的 SSH 终端正通过这个网口。\n");
+    printf("  [当前网络出口] 表示设备访问其他网段或互联网时会使用这个网口。\n");
 
     for (int i = 0; i < count; ++i)
     {
-        printf("  %d. %-14s 状态: %s\n",
+        printf("  %d. %-14s 状态: %s%s%s\n",
                i + 1,
                devices[i],
-               states[i]);
+               friendly_device_state(states[i]),
+               interface_is_ssh_path(devices[i]) ? " [当前远程连接]" : "",
+               interface_has_default_route(devices[i]) ? " [当前网络出口]" : "");
     }
 
     {
@@ -471,7 +507,22 @@ bool choose_ethernet_interface(char *iface, size_t iface_size)
                  devices[choice - 1]);
     }
 
-    printf("你选择的网口是：%s\n", iface);
+    printf("\n你选择的网口是：%s\n", iface);
+    if (interface_is_ssh_path(iface))
+    {
+        printf("[重要提醒] 你现在的 SSH 终端正通过 %s 连接。\n", iface);
+        printf("           修改它的 IP 或切换连接后，当前终端可能断开。\n");
+    }
+    if (interface_has_default_route(iface))
+    {
+        printf("[重要提醒] 设备访问其他网段或互联网时会使用 %s。\n", iface);
+        printf("           修改它可能影响设备访问内网服务器或互联网。\n");
+    }
+    if (!interface_is_ssh_path(iface) &&
+        !interface_has_default_route(iface))
+    {
+        printf("[提示] 这个网口目前不承载当前 SSH，也不是当前网络出口。\n");
+    }
     return true;
 }
 
@@ -523,7 +574,7 @@ static bool choose_nmcli_interface_type(const char *required_type,
     for (int index = 0; index < count; ++index)
     {
         printf("  %d. %-14s 状态: %s\n", index + 1,
-               devices[index], states[index]);
+               devices[index], friendly_device_state(states[index]));
     }
     {
         int choice = read_int("请选择: ", 1, count);
@@ -535,11 +586,6 @@ static bool choose_nmcli_interface_type(const char *required_type,
 bool choose_wifi_interface(char *iface, size_t iface_size)
 {
     return choose_nmcli_interface_type("wifi", iface, iface_size);
-}
-
-bool choose_any_network_interface(char *iface, size_t iface_size)
-{
-    return choose_nmcli_interface_type(NULL, iface, iface_size);
 }
 
 void ask_interface(char *iface, size_t size, const char *default_iface)

@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -14,31 +15,6 @@ int run_cmd(const char *const argv[])
 {
     pid_t pid;
     int status = 0;
-
-    printf("\n[执行]");
-    for (int i = 0; argv[i] != NULL; ++i)
-    {
-        /*
-         * 不打印 Wi-Fi PSK 等敏感信息。
-         * 只要前一个参数是 wifi-sec.psk，就隐藏当前参数。
-         */
-        if (i > 0 && strcmp(argv[i - 1], "wifi-sec.psk") == 0)
-        {
-            printf(" ********");
-            continue;
-        }
-
-        if (strpbrk(argv[i], " \t") != NULL)
-        {
-            printf(" \"%s\"", argv[i]);
-        }
-        else
-        {
-            printf(" %s", argv[i]);
-        }
-    }
-    printf("\n");
-    fflush(stdout);
 
     pid = fork();
     if (pid < 0)
@@ -81,6 +57,7 @@ int run_cmd_silent(const char *const argv[])
 
     if (pid == 0)
     {
+        (void)setenv("LC_ALL", "C", 1);
         FILE *devnull = fopen("/dev/null", "w");
         if (devnull)
         {
@@ -136,6 +113,7 @@ int capture_cmd(const char *const argv[], char *out, size_t out_size)
     {
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
+        (void)setenv("LC_ALL", "C", 1);
 
         {
             FILE *devnull = fopen("/dev/null", "w");
@@ -190,4 +168,3 @@ int capture_cmd(const char *const argv[], char *out, size_t out_size)
 
     return -1;
 }
-

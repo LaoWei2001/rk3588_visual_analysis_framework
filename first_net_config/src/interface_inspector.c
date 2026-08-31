@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #define MAX_IPV4_ROWS 128
 
@@ -155,6 +156,128 @@ static bool sys_path_exists(const char *iface, const char *leaf)
     return stat(path, &info) == 0;
 }
 
+static bool interface_has_uevent_value(const char *iface,
+                                       const char *expected)
+{
+    char path[256];
+    char line[128];
+    FILE *handle;
+
+    if (!iface || !expected ||
+        snprintf(path, sizeof(path), "/sys/class/net/%s/uevent", iface) < 0)
+    {
+        return false;
+    }
+    handle = fopen(path, "r");
+    if (!handle)
+    {
+        return false;
+    }
+    while (fgets(line, sizeof(line), handle))
+    {
+        trim_space(line);
+        if (strcmp(line, expected) == 0)
+        {
+            fclose(handle);
+            return true;
+        }
+    }
+    fclose(handle);
+    return false;
+}
+
+static bool interface_uses_ethernet_frames(const char *iface)
+{
+    char path[256];
+    FILE *handle;
+    int type = 0;
+
+    if (!iface ||
+        snprintf(path, sizeof(path), "/sys/class/net/%s/type", iface) < 0)
+    {
+        return false;
+    }
+    handle = fopen(path, "r");
+    if (!handle)
+    {
+        return false;
+    }
+    if (fscanf(handle, "%d", &type) != 1)
+    {
+        fclose(handle);
+        return false;
+    }
+    fclose(handle);
+    return type == 1;
+}
+
+bool interface_is_physical_ethernet(const char *iface)
+{
+    char class_path[256];
+    char target[512];
+    ssize_t target_size;
+
+    if (!iface || iface[0] == '\0' || strcmp(iface, "lo") == 0 ||
+        !interface_uses_ethernet_frames(iface) ||
+        sys_path_exists(iface, "wireless") ||
+        interface_has_uevent_value(iface, "DEVTYPE=gadget") ||
+        snprintf(class_path, sizeof(class_path),
+                 "/sys/class/net/%s", iface) < 0)
+    {
+        return false;
+    }
+    target_size = readlink(class_path, target, sizeof(target) - 1);
+    if (target_size <= 0)
+    {
+        return false;
+    }
+    target[target_size] = '\0';
+
+    /*
+     * dummy、bridge、veth、VLAN 等纯软件接口都位于 virtual/net。
+     * 板载网口及插入 USB 主机口的有线网卡会有真实设备路径。
+     */
+    if (strstr(target, "/virtual/net/") != NULL)
+    {
+        return false;
+    }
+    return sys_path_exists(iface, "device");
+}
+
+static const char *interface_type_text(const char *iface)
+{
+    char class_path[256];
+    char target[512];
+    ssize_t target_size;
+
+    if (sys_path_exists(iface, "wireless") ||
+        interface_has_uevent_value(iface, "DEVTYPE=wlan"))
+    {
+        return "Wi-Fi";
+    }
+    if (interface_is_physical_ethernet(iface))
+    {
+        return "有线";
+    }
+    if (interface_has_uevent_value(iface, "DEVTYPE=gadget"))
+    {
+        return "USB调试";
+    }
+    target_size = snprintf(class_path, sizeof(class_path),
+                           "/sys/class/net/%s", iface) >= 0
+                      ? readlink(class_path, target, sizeof(target) - 1)
+                      : -1;
+    if (target_size > 0)
+    {
+        target[target_size] = '\0';
+        if (strstr(target, "/virtual/net/") != NULL)
+        {
+            return "虚拟";
+        }
+    }
+    return "其他";
+}
+
 bool interface_has_default_route(const char *iface)
 {
     FILE *handle = fopen("/proc/net/route", "r");
@@ -273,12 +396,12 @@ void show_interface_overview(void)
             fclose(handle);
         }
 
-        printf("%-10s 类型:%-6s Link:%-8s MAC:%s%s%s\n",
+        printf("%-10s 类型:%-6s 连接:%-8s MAC:%s%s%s\n",
                entry->if_name,
-               sys_path_exists(entry->if_name, "wireless") ? "Wi-Fi" : "有线",
+               interface_type_text(entry->if_name),
                carrier, mac,
-               interface_has_default_route(entry->if_name) ? " [默认路由]" : "",
-               interface_is_ssh_path(entry->if_name) ? " [当前 SSH]" : "");
+               interface_has_default_route(entry->if_name) ? " [当前网络出口]" : "",
+               interface_is_ssh_path(entry->if_name) ? " [当前远程连接]" : "");
         for (int index = 0; index < count; ++index)
         {
             if (strcmp(rows[index].iface, entry->if_name) == 0)

@@ -6,7 +6,6 @@ import {
   fetchNetworkSettings,
   fetchNetworkTransaction,
   pingNetworkTarget,
-  rollbackNetworkTransaction,
   saveDeviceHostname,
   scanWifiNetworks,
   startNetworkChange,
@@ -18,7 +17,7 @@ import {
 } from '../../api/client'
 
 const err = (e: unknown) => (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || (e instanceof Error ? e.message : String(e))
-const stateText = (value: string) => ({ connected: '已连接', disconnected: '未连接', unavailable: '不可用', unmanaged: '未托管', connecting: '连接中' }[value] || value)
+const stateText = (value: string) => ({ connected: '已连接', disconnected: '未连接', unavailable: '暂不可用', unmanaged: '不能修改', connecting: '正在连接' }[value] || value)
 const transactionText = (value: string) => ({
   scheduled: '等待切换', activating: '正在激活新网络', awaiting_confirmation: '等待确认',
   committing: '正在保存', rolling_back: '正在恢复原网络', confirmed: '已确认保存',
@@ -28,12 +27,29 @@ const transactionText = (value: string) => ({
 type Busy = 'hostname' | 'network' | 'refresh' | 'wifi' | 'profile' | 'ping' | 'transaction' | null
 const NETWORK_ROLLBACK_SECONDS = 60
 
+const prefixToSubnetMask = (value: string | undefined) => {
+  const prefix = Number(value)
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return '255.255.255.0'
+  const bits = `${'1'.repeat(prefix)}${'0'.repeat(32 - prefix)}`
+  return [0, 8, 16, 24].map(offset => parseInt(bits.slice(offset, offset + 8), 2)).join('.')
+}
+
+const subnetMaskToPrefix = (value: string) => {
+  const octets = value.trim().split('.')
+  if (octets.length !== 4 || octets.some(item => !/^\d{1,3}$/.test(item) || Number(item) > 255)) return null
+  const bits = octets.map(item => Number(item).toString(2).padStart(8, '0')).join('')
+  if (!/^1*0*$/.test(bits)) return null
+  const firstZero = bits.indexOf('0')
+  return firstZero === -1 ? 32 : firstZero
+}
+
 export default function NetworkSettingsSection() {
   const [data, setData] = useState<NetworkSettings | null>(null)
   const [hostname, setHostname] = useState('')
   const [device, setDevice] = useState('')
   const [method, setMethod] = useState<'auto' | 'manual'>('auto')
   const [address, setAddress] = useState('')
+  const [subnetMask, setSubnetMask] = useState('255.255.255.0')
   const [gateway, setGateway] = useState('')
   const [dns, setDns] = useState('')
   const [profileName, setProfileName] = useState('')
@@ -70,7 +86,9 @@ export default function NetworkSettingsSection() {
   useEffect(() => {
     if (!selected) return
     setMethod(selected.ipv4_method === 'manual' ? 'manual' : 'auto')
-    setAddress(selected.addresses[0] || '')
+    const [currentAddress = '', currentPrefix] = (selected.addresses[0] || '').split('/', 2)
+    setAddress(currentAddress)
+    setSubnetMask(prefixToSubnetMask(currentPrefix))
     setGateway(selected.gateway || '')
     setDns(selected.dns.join(', '))
     setProfileName(selected.connection || '')
@@ -124,14 +142,14 @@ export default function NetworkSettingsSection() {
     try {
       const value = await scanWifiNetworks(selected.device)
       setWifiNetworks(value.networks)
-      if (!value.networks.length) setMessage({ text: '没有扫描到附近的 Wi-Fi', type: 'err' })
+      if (!value.networks.length) setMessage({ text: '没有找到附近的无线网络', type: 'err' })
     } catch (e) { setMessage({ text: err(e), type: 'err' }) }
     finally { setBusy(null) }
   }
 
   const chooseWifi = (network: WifiNetworkInfo) => {
     setSsid(network.ssid)
-    if (network.ssid !== selected?.ssid) setProfileName(`Wi-Fi ${network.ssid}`)
+    if (network.ssid !== selected?.ssid) setProfileName(`无线 ${network.ssid}`)
     const security = network.security.toUpperCase()
     setWifiSecurity(security === 'OPEN' || security === '--' ? 'open' : security.includes('SAE') || security.includes('WPA3') ? 'sae' : 'wpa-psk')
     setWifiPassword('')
@@ -140,10 +158,18 @@ export default function NetworkSettingsSection() {
   const applyNetwork = async () => {
     if (!selected) return
     if (selected.type === 'wifi' && !ssid.trim()) {
-      setMessage({ text: '请先选择或填写 Wi-Fi SSID', type: 'err' }); return
+      setMessage({ text: '请先选择或填写无线网络名称', type: 'err' }); return
     }
-    const target = method === 'manual' ? address || '未填写' : 'DHCP 自动获取'
-    const warning = `即将在 ${selected.device} 上试用新网络（${target}）。\n试用后需要使用新 IP 地址登录 Web 控制台并确认，${NETWORK_ROLLBACK_SECONDS} 秒内未确认将自动恢复原连接。确定继续？`
+    let requestedAddress = ''
+    if (method === 'manual') {
+      const prefix = subnetMaskToPrefix(subnetMask)
+      if (prefix === null) {
+        setMessage({ text: '子网掩码格式不正确，例如 255.255.255.0', type: 'err' }); return
+      }
+      requestedAddress = `${address.trim()}/${prefix}`
+    }
+    const target = method === 'manual' ? address || '未填写' : '自动获取地址'
+    const warning = `即将在 ${selected.device} 上应用网络设置（${target}）。\n如果 IP 地址改变，请使用新地址重新打开本页面并确认；${NETWORK_ROLLBACK_SECONDS} 秒内没有确认时，系统会自动使用修改前的连接。确定继续？`
     if (!window.confirm(warning)) return
     setBusy('network'); setMessage(null)
     try {
@@ -155,7 +181,7 @@ export default function NetworkSettingsSection() {
         profile_name: selected.type === 'wifi' && !sameWifi && profileName === selected.connection
           ? '' : profileName.trim(),
         method,
-        address,
+        address: requestedAddress,
         gateway,
         dns: dns.split(',').map(item => item.trim()).filter(Boolean),
         ssid: ssid.trim(),
@@ -166,7 +192,7 @@ export default function NetworkSettingsSection() {
       setWifiPassword('')
       setTransaction(value.transaction)
       setClock(Date.now())
-      setMessage({ text: '安全切换已经开始。新网络通过检查后，必须在倒计时结束前确认。', type: 'ok' })
+      setMessage({ text: '正在应用网络设置。连接正常后，请在倒计时结束前确认。', type: 'ok' })
     } catch (e) { setMessage({ text: err(e), type: 'err' }) }
     finally { setBusy(null) }
   }
@@ -178,25 +204,13 @@ export default function NetworkSettingsSection() {
       const value = await confirmNetworkTransaction(transaction.id, baseUrl)
       setTransaction(value)
       const savedText = transaction.kind === 'saved_profile'
-        ? '已确认使用该连接配置。'
+        ? '已确认使用该连接。'
         : transaction.old_uuid
-          ? '新网络已经确认并保存，原连接配置已作为禁用的备份保留。'
+          ? '新网络已经确认并保存，修改前的连接仍保留但不会自动使用。'
           : '新网络已经确认并保存。'
       setMessage({ text: savedText, type: 'ok' })
       await load(true)
     } catch (e) { setMessage({ text: `确认失败：${err(e)}`, type: 'err' }) }
-    finally { setBusy(null) }
-  }
-
-  const rollbackTransaction = async () => {
-    if (!transaction || !window.confirm('确定立即放弃新网络并恢复原连接？')) return
-    setBusy('transaction'); setMessage(null)
-    try {
-      const value = await rollbackNetworkTransaction(transaction.id)
-      setTransaction(value)
-      setMessage({ text: value.status === 'rolled_back' ? '已经恢复原网络。' : value.error || '恢复原网络失败', type: value.status === 'rolled_back' ? 'ok' : 'err' })
-      await load(true)
-    } catch (e) { setMessage({ text: err(e), type: 'err' }) }
     finally { setBusy(null) }
   }
 
@@ -205,22 +219,22 @@ export default function NetworkSettingsSection() {
       ? selected.device
       : data?.interfaces.find(item => item.type === profile.type)?.device
     if (!targetDevice) { setMessage({ text: `没有可用于该连接的${profile.type === 'wifi' ? '无线' : '有线'}网卡`, type: 'err' }); return }
-    if (!window.confirm(`在 ${targetDevice} 上安全启用“${profile.name}”？试用后 ${NETWORK_ROLLBACK_SECONDS} 秒内未确认会恢复当前连接。`)) return
+    if (!window.confirm(`确定在 ${targetDevice} 上使用“${profile.name}”？如果 ${NETWORK_ROLLBACK_SECONDS} 秒内没有确认，系统会自动使用修改前的连接。`)) return
     setBusy('profile'); setMessage(null)
     try {
       const value = await activateNetworkConnection(profile.uuid, targetDevice)
       setTransaction(value.transaction); setClock(Date.now())
-      setMessage({ text: '正在试用已保存的连接，请在检查正常后确认。', type: 'ok' })
+      setMessage({ text: '正在使用所选连接，请在检查正常后确认。', type: 'ok' })
     } catch (e) { setMessage({ text: err(e), type: 'err' }) }
     finally { setBusy(null) }
   }
 
   const removeProfile = async (profile: NetworkConnectionInfo) => {
-    if (!window.confirm(`确定删除连接配置“${profile.name}”？此操作不可恢复。`)) return
+    if (!window.confirm(`确定删除连接“${profile.name}”？删除后需要重新填写才能再次使用。`)) return
     setBusy('profile'); setMessage(null)
     try {
       await deleteNetworkConnection(profile.uuid)
-      setMessage({ text: '连接配置已删除', type: 'ok' }); await load(true)
+      setMessage({ text: '连接已删除', type: 'ok' }); await load(true)
     } catch (e) { setMessage({ text: err(e), type: 'err' }) }
     finally { setBusy(null) }
   }
@@ -236,47 +250,48 @@ export default function NetworkSettingsSection() {
 
   return (
     <div className="settings-section">
-      <div className="settings-section-title"><h3>网络</h3><p>管理有线、Wi-Fi 和连接配置；所有网络切换均带限时确认与自动回滚。</p></div>
+      <div className="settings-section-title"><h3>网络</h3><p>查看当前网络，也可以在后续维护时调整有线或无线连接。</p></div>
       {message && <div className={`device-settings-message ${message.type}`}>{message.text}</div>}
-      {transaction && <TransactionCard transaction={transaction} remaining={remaining} busy={busy === 'transaction'} onConfirm={confirmTransaction} onRollback={rollbackTransaction} />}
+      {transaction && <TransactionCard transaction={transaction} remaining={remaining} busy={busy === 'transaction'} onConfirm={confirmTransaction} />}
       {!data ? <div className="device-settings-state">正在读取网络信息……</div> : <>
         {data.error && <div className="device-settings-message err">{data.error}</div>}
         <section className="device-settings-card">
-          <div className="device-settings-card-head"><div><h4>网络概览</h4><p>管理方式：{data.manager}</p></div><button className="settings-ghost-btn" disabled={busy !== null} onClick={() => void load()}>刷新</button></div>
+          <div className="device-settings-card-head"><div><h4>当前网络</h4><p>选择网卡可以查看或调整它的设置。</p></div><button className="settings-ghost-btn" disabled={busy !== null} onClick={() => void load()}>刷新</button></div>
           <div className="network-interface-list">{data.interfaces.map(item => <InterfaceCard key={item.device} item={item} active={device === item.device} onClick={() => setDevice(item.device)} />)}</div>
         </section>
 
         <section className="device-settings-card">
-          <div className="device-settings-card-head"><div><h4>设备名称</h4><p>局域网和系统日志中用于识别这台盒子。</p></div></div>
-          <div className="settings-form-row"><label><span>Hostname</span><input value={hostname} maxLength={253} onChange={e => setHostname(e.target.value)} /></label><button className="settings-primary-btn" disabled={busy !== null || hostname === data.hostname} onClick={saveHostname}>{busy === 'hostname' ? '保存中……' : '保存设备名'}</button></div>
+          <div className="device-settings-card-head"><div><h4>设备名称</h4><p>用于在局域网和系统记录中识别这台设备。</p></div></div>
+          <div className="settings-form-row"><label><span>名称</span><input value={hostname} maxLength={253} onChange={e => setHostname(e.target.value)} /></label><button className="settings-primary-btn" disabled={busy !== null || hostname === data.hostname} onClick={saveHostname}>{busy === 'hostname' ? '保存中……' : '保存名称'}</button></div>
         </section>
 
         <section className="device-settings-card">
-          <div className="device-settings-card-head"><div><h4>安全配置连接</h4><p>{selected ? `${selected.device} · ${selected.type === 'wifi' ? 'Wi-Fi' : '有线网络'} · ${selected.connection || '尚无活动连接'}` : '请选择网卡'}</p></div>{selected?.type === 'wifi' && <button className="settings-ghost-btn" disabled={busy !== null} onClick={scanWifi}>{busy === 'wifi' ? '扫描中……' : '扫描 Wi-Fi'}</button>}</div>
+          <div className="device-settings-card-head"><div><h4>调整连接</h4><p>{selected ? `${selected.device} · ${selected.type === 'wifi' ? '无线网络' : '有线网络'} · ${selected.connection || '当前没有连接'}` : '请选择网卡'}</p></div>{selected?.type === 'wifi' && <button className="settings-ghost-btn" disabled={busy !== null} onClick={scanWifi}>{busy === 'wifi' ? '扫描中……' : '搜索无线网络'}</button>}</div>
           {wifiNetworks.length > 0 && <div className="wifi-network-list">{wifiNetworks.map(network => <button key={network.ssid} className={ssid === network.ssid ? 'active' : ''} onClick={() => chooseWifi(network)}><span><b>{network.ssid}</b><small>{network.security}</small></span><strong>{network.signal}%</strong></button>)}</div>}
           <div className="network-config-grid">
             <label><span>配置网卡</span><select value={device} onChange={e => setDevice(e.target.value)}>{data.interfaces.map(item => <option key={item.device} value={item.device}>{item.device}（{stateText(item.state)}）</option>)}</select></label>
-            <label><span>保存后的连接名称（可留空）</span><input placeholder={selected?.type === 'wifi' ? '自动使用 Wi-Fi 名称' : `LAN ${selected?.device || ''}`} value={profileName} onChange={e => setProfileName(e.target.value)} /></label>
+            <label><span>连接名称（可留空）</span><input placeholder={selected?.type === 'wifi' ? '默认使用无线网络名称' : `有线 ${selected?.device || ''}`} value={profileName} onChange={e => setProfileName(e.target.value)} /></label>
             {selected?.type === 'wifi' && <>
-              <label><span>Wi-Fi SSID</span><input value={ssid} maxLength={32} onChange={e => setSsid(e.target.value)} /></label>
-              <label><span>安全方式</span><select value={wifiSecurity} onChange={e => setWifiSecurity(e.target.value as 'wpa-psk' | 'sae' | 'open')}><option value="wpa-psk">WPA/WPA2 密码</option><option value="sae">WPA3/SAE</option><option value="open">开放网络</option></select></label>
+              <label><span>无线网络名称</span><input value={ssid} maxLength={32} onChange={e => setSsid(e.target.value)} /></label>
+              <label><span>密码方式</span><select value={wifiSecurity} onChange={e => setWifiSecurity(e.target.value as 'wpa-psk' | 'sae' | 'open')}><option value="wpa-psk">WPA/WPA2</option><option value="sae">WPA3</option><option value="open">无密码</option></select></label>
               {wifiSecurity !== 'open' && <label className="wide"><span>Wi-Fi 密码</span><input type="password" autoComplete="new-password" placeholder={selected.connection_uuid && selected.ssid === ssid ? '留空沿用当前密码，或输入新密码' : '8–63 个字符，不会显示或写入日志'} value={wifiPassword} onChange={e => setWifiPassword(e.target.value)} /></label>}
             </>}
-            <label><span>IPv4 地址模式</span><select value={method} onChange={e => setMethod(e.target.value as 'auto' | 'manual')}><option value="auto">DHCP 自动获取</option><option value="manual">静态 IPv4</option></select></label>
+            <label><span>IP 地址</span><select value={method} onChange={e => setMethod(e.target.value as 'auto' | 'manual')}><option value="auto">自动获取</option><option value="manual">使用固定地址</option></select></label>
             {method === 'manual' && <>
-              <label><span>IP 地址/前缀</span><input placeholder="192.168.1.100/24" value={address} onChange={e => setAddress(e.target.value)} /></label>
+              <label><span>固定 IP 地址</span><input placeholder="192.168.1.100" value={address} onChange={e => setAddress(e.target.value)} /></label>
+              <label><span>子网掩码</span><input placeholder="255.255.255.0" value={subnetMask} onChange={e => setSubnetMask(e.target.value)} /></label>
               <label><span>默认网关（可留空）</span><input placeholder="192.168.1.1" value={gateway} onChange={e => setGateway(e.target.value)} /></label>
               <label className="wide"><span>DNS（逗号分隔，最多 4 个，可留空）</span><input placeholder="223.5.5.5, 119.29.29.29" value={dns} onChange={e => setDns(e.target.value)} /></label>
             </>}
           </div>
-          {!selected?.configurable && <div className="device-settings-note warning">该网卡未由 NetworkManager 托管，不能从网页修改。</div>}
-          <div className="device-settings-note warning">系统先创建临时连接。试用新配置后，需要使用新 IP 地址登录 Web 控制台并回到此页面确认；若 {NETWORK_ROLLBACK_SECONDS} 秒内未确认，系统会自动恢复原连接。</div>
-          <div className="settings-actions"><button className="settings-primary-btn" disabled={busy !== null || !!transaction && ['scheduled', 'activating', 'awaiting_confirmation', 'committing', 'rolling_back'].includes(transaction.status) || !selected?.configurable || !data.config_supported} onClick={applyNetwork}>{busy === 'network' ? '正在准备安全切换……' : '试用新配置'}</button></div>
+          {!selected?.configurable && <div className="device-settings-note warning">系统没有接管这张网卡，当前不能从网页修改。</div>}
+          <div className="device-settings-note warning">应用后如果 IP 地址改变，请使用新地址重新打开本页面并确认。{NETWORK_ROLLBACK_SECONDS} 秒内没有确认时，系统会自动使用修改前的连接。</div>
+          <div className="settings-actions"><button className="settings-primary-btn" disabled={busy !== null || !!transaction && ['scheduled', 'activating', 'awaiting_confirmation', 'committing', 'rolling_back'].includes(transaction.status) || !selected?.configurable || !data.config_supported} onClick={applyNetwork}>{busy === 'network' ? '正在应用……' : '应用设置'}</button></div>
         </section>
 
         <section className="device-settings-card">
-          <div className="device-settings-card-head"><div><h4>已保存的连接</h4><p>连接使用 UUID 管理；当前活动连接不能直接删除。</p></div></div>
-          {!data.connections.length ? <div className="device-settings-state">没有已保存的有线或 Wi-Fi 连接。</div> : <div className="network-profile-list">{data.connections.map(profile => <div key={profile.uuid}><span><b>{profile.name}</b><small>{profile.type === 'wifi' ? `Wi-Fi${profile.ssid ? ` · ${profile.ssid}` : ''} · ${profile.security}` : '有线'} · {profile.ipv4_method === 'manual' ? profile.addresses.join(', ') || '静态地址' : 'DHCP'} · {profile.autoconnect ? '自动连接' : '不自动连接'}</small>{(profile.gateway || profile.dns.length > 0) && <small>网关 {profile.gateway || '未设置'} · DNS {profile.dns.join(', ') || '未设置'}</small>}<small>{profile.uuid}</small></span><em className={profile.active ? 'active' : ''}>{profile.active ? `${profile.device} 使用中` : '未启用'}</em><button className="settings-ghost-btn" disabled={busy !== null || profile.active || !data.config_supported} onClick={() => activateProfile(profile)}>安全启用</button><button className="settings-ghost-btn danger" disabled={busy !== null || profile.active} onClick={() => removeProfile(profile)}>删除</button></div>)}</div>}
+          <div className="device-settings-card-head"><div><h4>已保存的连接</h4><p>正在使用的连接不能直接删除。</p></div></div>
+          {!data.connections.length ? <div className="device-settings-state">没有已保存的有线或无线连接。</div> : <div className="network-profile-list">{data.connections.map(profile => <div key={profile.uuid}><span><b>{profile.name}</b><small>{profile.type === 'wifi' ? `无线网络${profile.ssid ? ` · ${profile.ssid}` : ''}` : '有线网络'} · {profile.ipv4_method === 'manual' ? profile.addresses.join(', ') || '固定地址' : '自动获取地址'} · {profile.autoconnect ? '开机自动使用' : '开机不自动使用'}</small>{(profile.gateway || profile.dns.length > 0) && <small>网关 {profile.gateway || '未设置'} · DNS {profile.dns.join(', ') || '未设置'}</small>}</span><em className={profile.active ? 'active' : ''}>{profile.active ? `${profile.device} 正在使用` : '未使用'}</em><button className="settings-ghost-btn" disabled={busy !== null || profile.active || !data.config_supported} onClick={() => activateProfile(profile)}>使用</button><button className="settings-ghost-btn danger" disabled={busy !== null || profile.active} onClick={() => removeProfile(profile)}>删除</button></div>)}</div>}
         </section>
 
         <section className="device-settings-card">
@@ -288,12 +303,11 @@ export default function NetworkSettingsSection() {
   )
 }
 
-function TransactionCard({ transaction, remaining, busy, onConfirm, onRollback }: {
+function TransactionCard({ transaction, remaining, busy, onConfirm }: {
   transaction: NetworkTransaction
   remaining: number
   busy: boolean
   onConfirm: (baseUrl?: string) => void
-  onRollback: () => void
 }) {
   const waiting = transaction.status === 'awaiting_confirmation'
   const active = ['scheduled', 'activating', 'awaiting_confirmation', 'committing', 'rolling_back'].includes(transaction.status)
@@ -302,15 +316,14 @@ function TransactionCard({ transaction, remaining, busy, onConfirm, onRollback }
   const port = window.location.port ? `:${window.location.port}` : ''
   const targetBase = targetIp ? `${window.location.protocol}//${targetIp}${port}` : ''
   return <section className={`network-transaction-card ${transaction.status}`}>
-    <div><span>网络安全切换</span><strong>{transactionText(transaction.status)}</strong></div>
+    <div><span>正在应用网络设置</span><strong>{transactionText(transaction.status)}</strong></div>
     <p>网卡 {transaction.device} · {transaction.profile_name || '连接配置'}{active && ` · 剩余 ${remaining} 秒`}</p>
     {transaction.target_addresses.length > 0 && <small>新地址：{transaction.target_addresses.join('、')}</small>}
     {transaction.error && <small className="error">{transaction.error}</small>}
     {active && <div className="network-transaction-progress"><span style={{ width: `${Math.max(0, Math.min(100, remaining / NETWORK_ROLLBACK_SECONDS * 100))}%` }} /></div>}
     <div className="settings-actions">
       {waiting && <button className="settings-primary-btn" disabled={busy} onClick={() => onConfirm()}>在当前地址确认</button>}
-      {active && targetBase && targetIp !== currentIp && <button className="settings-primary-btn" disabled={busy} onClick={() => onConfirm(targetBase)}>通过新 IP 检查并确认</button>}
-      {active && <button className="settings-ghost-btn danger" disabled={busy} onClick={onRollback}>立即恢复原网络</button>}
+      {active && targetBase && targetIp !== currentIp && <button className="settings-primary-btn" disabled={busy} onClick={() => onConfirm(targetBase)}>使用新地址确认</button>}
     </div>
   </section>
 }
@@ -318,7 +331,7 @@ function TransactionCard({ transaction, remaining, busy, onConfirm, onRollback }
 function InterfaceCard({ item, active, onClick }: { item: NetworkInterfaceInfo; active: boolean; onClick: () => void }) {
   return <button className={`network-interface-card ${active ? 'active' : ''}`} onClick={onClick}>
     <div><b>{item.device}</b><span className={item.state === 'connected' ? 'connected' : ''}>{stateText(item.state)}</span></div>
-    <p>{item.type === 'wifi' ? `Wi-Fi${item.ssid ? ` · ${item.ssid}` : ''}` : '有线网络'} · {item.connection || '无连接'}</p>
+    <p>{item.type === 'wifi' ? `无线网络${item.ssid ? ` · ${item.ssid}` : ''}` : '有线网络'} · {item.connection || '无连接'}</p>
     <strong>{item.addresses[0] || '未分配 IPv4'}</strong>
     <small>MAC {item.mac || '-'}</small>
   </button>

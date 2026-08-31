@@ -24,6 +24,8 @@
 #include "interface_inspector.h"
 #include "factory_restore.h"
 #include "network_cleanup.h"
+#include "saved_connections.h"
+#include "device_name.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -39,19 +41,18 @@ static void print_menu(void)
     printf("1. 查看全部网卡、IP 和网段冲突\n");
     printf("2. 搜索摄像头并配置所选有线网口\n");
     printf("3. 配置笔记本直连维护网络\n");
-    printf("4. 配置所选有线网口（向导）\n");
-    printf("5. 配置所选有线网口（详细）\n");
-    printf("6. 配置所选无线网口\n");
-    printf("7. 查看完整 NetworkManager 状态\n");
+    printf("4. 设置有线网络（简单）\n");
+    printf("5. 设置有线网络（更多设置）\n");
+    printf("6. 设置无线网络\n");
+    printf("7. 查看详细网络状态\n");
     printf("8. 搜索附近无线网络\n");
     printf("9. 测试指定地址能否连接\n");
-    printf("10. 查看已保存的网络配置\n");
-    printf("11. 安全删除未启用的网络配置\n");
-    printf("12. 测试使用已有网络配置\n");
-    printf("13. 查看初始网络基准及恢复预览\n");
-    printf("14. 保存系统初始网络基准（制作镜像）\n");
-    printf("15. 恢复系统初始网络配置（永久）\n");
-    printf("16. 清除所有 NetworkManager 连接配置（高风险）\n");
+    printf("10. 管理已保存的连接\n");
+    printf("11. 查看或修改设备名称\n");
+    printf("12. 查看初始网络设置和恢复内容\n");
+    printf("13. 保存系统初始网络设置（制作镜像）\n");
+    printf("14. 恢复系统初始网络设置\n");
+    printf("15. 清除所有已保存的连接（高风险）\n");
     printf("0. 退出\n");
     printf("====================================================\n");
 }
@@ -101,7 +102,7 @@ int main(int argc, char *argv[])
         int choice;
 
         print_menu();
-        choice = read_int("请选择功能 [0-16]: ", 0, 16);
+        choice = read_int("请选择功能 [0-15]: ", 0, 15);
 
         switch (choice)
         {
@@ -134,24 +135,21 @@ int main(int argc, char *argv[])
             ping_test();
             break;
         case 10:
-            show_connection_detail();
+            manage_saved_connections();
             break;
         case 11:
-            delete_connection();
+            manage_device_name();
             break;
         case 12:
-            activate_saved_connection_safely();
-            break;
-        case 13:
             preview_factory_restore();
             break;
-        case 14:
+        case 13:
             capture_factory_baseline();
             break;
-        case 15:
+        case 14:
             restore_factory_network();
             break;
-        case 16:
+        case 15:
             clear_all_network_connections();
             break;
         case 0:

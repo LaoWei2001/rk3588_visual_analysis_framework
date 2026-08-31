@@ -549,9 +549,6 @@ export const confirmNetworkTransaction = (id: string, baseUrl = '') => {
   }).then(r => r.data)
 }
 
-export const rollbackNetworkTransaction = (id: string) =>
-  api.post<NetworkTransaction>(`/system/network/transactions/${id}/rollback`).then(r => r.data)
-
 export const deleteNetworkConnection = (uuid: string) =>
   api.delete<{ ok: boolean }>(`/system/network/connections/${uuid}`).then(r => r.data)
 

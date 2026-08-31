@@ -125,7 +125,7 @@ def _values(scope: str, field: str, identifier: str) -> List[str]:
 def _validate_uuid(value: str) -> str:
     clean = value.strip()
     if not _UUID_RE.fullmatch(clean):
-        raise NetworkManagerError("非法的 NetworkManager 连接 UUID")
+        raise NetworkManagerError("连接标识不正确")
     return clean
 
 
@@ -265,7 +265,7 @@ def network_snapshot() -> Dict[str, Any]:
             "hostname": socket.gethostname(), "manager": "unavailable",
             "config_supported": False, "rollback_supported": False,
             "interfaces": [], "connections": [], "pending_transaction": None,
-            "error": f"未找到可用的 NetworkManager/nmcli：{exc}",
+            "error": f"系统网络服务当前不可用：{exc}",
         }
 
     by_uuid = {row["uuid"]: row for row in connections}
@@ -311,13 +311,13 @@ def network_snapshot() -> Dict[str, Any]:
         "config_supported": rollback_supported, "rollback_supported": rollback_supported,
         "interfaces": interfaces, "connections": connections,
         "pending_transaction": _public_transaction(pending) if pending else None,
-        "error": None if rollback_supported else "缺少 systemd-run/systemctl，已禁止不带自动回滚的网络修改",
+        "error": None if rollback_supported else "自动恢复保护当前不可用，因此暂时不能从网页修改网络",
     }
 
 
 def validate_ipv4(method: str, address: str, gateway: str, dns_values: Iterable[str]) -> Dict[str, Any]:
     if method not in ("auto", "manual"):
-        raise NetworkManagerError("IPv4 模式只支持 DHCP(auto) 或静态(manual)")
+        raise NetworkManagerError("IP 地址只能选择自动获取或固定地址")
     if method == "auto":
         return {"method": "auto", "address": "", "gateway": "", "dns": []}
     try:
@@ -335,7 +335,7 @@ def validate_ipv4(method: str, address: str, gateway: str, dns_values: Iterable[
         if len(dns) > 4:
             raise ValueError("DNS 最多填写 4 个")
     except ValueError as exc:
-        raise NetworkManagerError(f"静态 IPv4 参数无效：{exc}") from exc
+        raise NetworkManagerError(f"固定 IP 参数不正确：{exc}") from exc
     return {
         "method": "manual", "address": str(interface),
         "gateway": str(gateway_value) if gateway_value else "", "dns": dns,
@@ -346,11 +346,11 @@ def _assert_device(device: str, expected_type: Optional[str] = None) -> Dict[str
     clean = _validate_device(device)
     row = next((item for item in _device_rows() if item["device"] == clean), None)
     if not row:
-        raise NetworkManagerError(f"网卡 {clean} 不存在或未由 NetworkManager 管理")
+        raise NetworkManagerError(f"网卡 {clean} 不存在，或系统没有接管这张网卡")
     if expected_type and row["type"] != expected_type:
         raise NetworkManagerError(f"网卡 {clean} 不是{expected_type}类型")
     if row["state"] == "unmanaged":
-        raise NetworkManagerError(f"网卡 {clean} 未由 NetworkManager 托管")
+        raise NetworkManagerError(f"系统没有接管网卡 {clean}")
     return row
 
 
@@ -498,7 +498,7 @@ def start_network_change(config: Dict[str, Any]) -> Dict[str, Any]:
 
     with _transaction_lock():
         if _active_transaction():
-            raise NetworkManagerError("已有网络切换正在等待确认，请先确认或回滚")
+            raise NetworkManagerError("已有网络设置正在等待确认，请先确认，或等待系统自动使用修改前的连接")
         old_uuid = _active_uuid(device)
         source_uuid = str(config.get("connection_uuid") or "").strip()
         if source_uuid:
@@ -573,7 +573,7 @@ def start_network_change(config: Dict[str, Any]) -> Dict[str, Any]:
             _configure_ipv4(new_uuid, ipv4_config)
             source_name = _profile_by_uuid(source_uuid)["name"] if source_uuid else ""
             default_name = source_name or (
-                f"Wi-Fi {str(config.get('ssid', '')).strip()}" if kind == "wifi" else f"LAN {device}"
+                f"无线 {str(config.get('ssid', '')).strip()}" if kind == "wifi" else f"有线 {device}"
             )
             requested_name = str(config.get("profile_name") or "").strip() or default_name
             final_name = _unique_profile_name(requested_name, ignored_uuid=source_uuid)
@@ -603,7 +603,7 @@ def start_saved_connection(connection_uuid: str, device: str,
         )
     with _transaction_lock():
         if _active_transaction():
-            raise NetworkManagerError("已有网络切换正在等待确认，请先确认或回滚")
+            raise NetworkManagerError("已有网络设置正在等待确认，请先确认，或等待系统自动使用修改前的连接")
         old_uuid = _active_uuid(device_row["device"])
         state = _new_transaction(
             device_row["device"], old_uuid, profile["uuid"], profile["name"],
@@ -628,7 +628,7 @@ def activate_transaction(transaction_id: str) -> None:
         if result.returncode != 0:
             raise NetworkManagerError((result.stderr or result.stdout or "新连接激活失败").strip())
         if _active_uuid(state["device"]) != state["new_uuid"]:
-            raise NetworkManagerError("NetworkManager 没有切换到新的连接配置")
+            raise NetworkManagerError("系统没有切换到新的连接")
         addresses = _values("device", "IP4.ADDRESS", state["device"])
         if not addresses:
             raise NetworkManagerError("新连接没有获得 IPv4 地址")
@@ -786,7 +786,7 @@ def delete_connection(connection_uuid: str) -> None:
     with _transaction_lock():
         profile = _profile_by_uuid(connection_uuid)
         if profile["active"]:
-            raise NetworkManagerError("不能删除正在使用的连接配置，请先安全切换到其他连接")
+            raise NetworkManagerError("不能删除正在使用的连接，请先使用其他连接")
         active = _active_transaction()
         if active and connection_uuid in (active.get("old_uuid"), active.get("new_uuid")):
             raise NetworkManagerError("该连接正在参与网络切换，不能删除")

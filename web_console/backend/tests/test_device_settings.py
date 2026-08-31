@@ -105,7 +105,7 @@ def test_network_terse_parser_preserves_escaped_colons():
 
 
 def test_static_ipv4_validation_rejects_invalid_address():
-    with pytest.raises(network_manager.NetworkManagerError, match="静态 IPv4 参数无效"):
+    with pytest.raises(network_manager.NetworkManagerError, match="固定 IP 参数不正确"):
         network_manager.validate_ipv4("manual", "999.1.1.1/24", "192.168.1.1", [])
 
 
@@ -121,6 +121,11 @@ def test_static_ipv4_allows_isolated_lan_without_gateway():
 
 def test_network_apply_request_never_contains_shell_command():
     request = network_settings.NetworkApplyRequest(
-        device="eth0", type="ethernet", method="auto", profile_name="LAN eth0",
+        device="eth0", type="ethernet", method="auto", profile_name="有线 eth0",
     )
     assert request.model_dump()["device"] == "eth0"
+
+
+def test_network_router_has_no_manual_restore_operation():
+    paths = {route.path for route in network_settings.router.routes}
+    assert not any(path.endswith("/rollback") for path in paths)

@@ -437,6 +437,7 @@ int configure_ipv4_profile(const char *profile_uuid, IPv4Config *cfg)
             "ipv4.addresses", "",
             "ipv4.gateway", "",
             "ipv4.dns", "",
+            "ipv4.ignore-auto-dns", "no",
             "ipv4.dad-timeout", "-1",
             NULL};
 
@@ -512,9 +513,18 @@ int configure_ipv4_profile(const char *profile_uuid, IPv4Config *cfg)
 
     printf("\n域名服务器用于把网站名或服务器名称转换成 IP 地址。\n");
     printf("如果盒子只使用 IP 地址通信，可以直接回车留空。\n");
-    read_line("DNS（可留空；多个地址用逗号分隔）: ",
-              cfg->dns, sizeof(cfg->dns));
-    trim_space(cfg->dns);
+    for (;;)
+    {
+        char dns_input[BUF_SIZE];
+
+        read_line("DNS（可留空；多个地址用逗号分隔，最多 4 个）: ",
+                  dns_input, sizeof(dns_input));
+        if (normalize_ipv4_list(dns_input, cfg->dns, sizeof(cfg->dns), 4))
+        {
+            break;
+        }
+        printf("DNS 地址格式不正确，请填写 IPv4 地址，多个地址用逗号分隔。\n");
+    }
 
     {
         char cidr[32];
@@ -525,6 +535,7 @@ int configure_ipv4_profile(const char *profile_uuid, IPv4Config *cfg)
             "ipv4.addresses", cidr,
             "ipv4.gateway", cfg->gateway,
             "ipv4.dns", cfg->dns,
+            "ipv4.ignore-auto-dns", "yes",
             "ipv4.dad-timeout", IPV4_DAD_TIMEOUT_MS,
             NULL};
         if (run_cmd(argv) != 0)
@@ -1189,7 +1200,8 @@ static bool complete_pending_save(PendingNetworkChange *state)
         *state = current;
         saved = current.profile_mode != NETWORK_PROFILE_PERMANENT ||
                 finalize_profile(&current.new_profile,
-                                 current.final_profile_name);
+                                 current.final_profile_name,
+                                 &current.old_profile);
 
         current.status = saved ? PENDING_STATUS_CONFIRMED
                                : PENDING_STATUS_SAVE_FAILED;
@@ -1424,7 +1436,7 @@ NetworkActivationResult safe_activate_with_reconnect(
     }
 
     printf("\n============================================================\n");
-    printf("                 安全切换与跨会话确认\n");
+    printf("                   应用网络前的提醒\n");
     printf("============================================================\n");
     if (old_profile.uuid[0] != '\0')
     {
@@ -1434,7 +1446,7 @@ NetworkActivationResult safe_activate_with_reconnect(
     {
         printf("修改前，%s 没有正在使用的已保存网络。\n", iface);
     }
-    printf("程序会临时启用新配置并启动独立的自动回退保护。\n");
+    printf("程序会先使用新设置，并启动独立的自动恢复保护。\n");
     printf("如果当前 SSH 因 IP 切换断开，请使用新 IP 重新登录，\n");
     printf("然后在 %d 秒内再次运行本工具；它会优先显示待确认配置。\n",
            PENDING_CONFIRM_TIMEOUT_SEC);
@@ -1457,14 +1469,15 @@ NetworkActivationResult safe_activate_with_reconnect(
     }
     else if (profile_mode == NETWORK_PROFILE_TEMPORARY)
     {
-        printf("保存方式：临时配置，重启或 NetworkManager 重启后消失。\n");
+        printf("保存方式：临时配置，设备或网络服务重启后消失。\n");
         if (!read_exact_word("确认临时应用请输入 TEMPORARY: ", "TEMPORARY"))
         {
             return NETWORK_ACTIVATION_FAILED;
         }
     }
-    else if (!read_exact_word("确认测试已有连接请输入 TEST: ", "TEST"))
+    else if (!read_yes_no("确定使用这个已保存的连接吗？[y/N]: ", false))
     {
+        printf("已取消。\n");
         return NETWORK_ACTIVATION_FAILED;
     }
 
@@ -1580,7 +1593,8 @@ static void make_backup_name(const char *final_name,
 }
 
 bool finalize_profile(const ConnectionProfile *temp_profile,
-                      const char *final_profile_name)
+                      const char *final_profile_name,
+                      const ConnectionProfile *previous_profile)
 {
     char backup[PROFILE_SIZE] = {0};
     char old_uuid[UUID_SIZE] = {0};
@@ -1696,6 +1710,25 @@ bool finalize_profile(const ConnectionProfile *temp_profile,
         }
     }
 
+    if (previous_profile && previous_profile->uuid[0] != '\0' &&
+        strcmp(previous_profile->uuid, temp_profile->uuid) != 0 &&
+        (!had_old_final || strcmp(previous_profile->uuid, old_uuid) != 0))
+    {
+        const char *disable_previous[] = {
+            "nmcli", "connection", "modify", "uuid",
+            previous_profile->uuid, "connection.autoconnect", "no", NULL};
+
+        if (run_cmd(disable_previous) != 0)
+        {
+            printf("[提醒] 新连接已经保存，但修改前的连接仍可能在开机时自动使用。\n");
+        }
+        else
+        {
+            printf("[保留] 修改前的连接仍然存在，但开机时不再自动使用：%s\n",
+                   previous_profile->name);
+        }
+    }
+
     printf("\n[完成] 新网络已经保存：%s\n", final_profile_name);
     printf("[完成] 新网络已设置为开机自动使用\n");
     printf("[完成] 新网络已设置为较高使用优先级\n");
@@ -1737,25 +1770,48 @@ void cleanup_temp_profile(const ConnectionProfile *temp_profile)
     (void)delete_connection_by_uuid(temp_profile->uuid);
 }
 
-void ask_final_profile_name(const char *iface,
+void ask_final_profile_name(const char *default_name,
                                    char *out,
                                    size_t out_size)
 {
     char prompt[256];
     char def[PROFILE_SIZE];
 
-    snprintf(def, sizeof(def), "nettool-%s", iface);
+    snprintf(def, sizeof(def), "%s",
+             default_name && default_name[0] ? default_name : "网络连接");
 
     snprintf(prompt, sizeof(prompt),
              "正式连接名称（直接回车默认 %s）: ",
              def);
 
-    read_line(prompt, out, out_size);
-    trim_space(out);
-
-    if (out[0] == '\0')
+    for (;;)
     {
-        snprintf(out, out_size, "%s", def);
+        bool valid = true;
+
+        read_line(prompt, out, out_size);
+        trim_space(out);
+        if (out[0] == '\0')
+        {
+            snprintf(out, out_size, "%s", def);
+            return;
+        }
+        if (strlen(out) > 80)
+        {
+            valid = false;
+        }
+        for (const unsigned char *cursor = (const unsigned char *)out;
+             valid && *cursor; ++cursor)
+        {
+            if (*cursor < 0x20 || *cursor == 0x7f)
+            {
+                valid = false;
+            }
+        }
+        if (valid)
+        {
+            return;
+        }
+        printf("连接名称不能为空、不能包含控制字符，并且最多 80 个字节。\n");
     }
 }
 
