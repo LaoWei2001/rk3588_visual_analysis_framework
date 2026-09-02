@@ -31,8 +31,9 @@
 | macOS | `./develop_feature` | 源码、文档及已安装依赖支持的 Python/Web 检查 | Linux 服务、交叉编译和硬件验证另选环境 |
 | 未识别系统 | `--plan-only` 优先 | 只读检查和需求合同 | 确认 shell、工具链和沙箱后才允许自动实现 |
 
-所有平台都先复制当前仓库的已跟踪/未忽略文件到系统临时目录，代理结束后只用 Git 补丁回写两个 Logic
-模块根目录。Codex 在临时目录使用 workspace 沙箱和 `never` 审批，因此不需要手动 `/permissions`。
+所有平台都从当前项目目录复制源码、文档和必要资源到系统临时目录；构建目录、依赖缓存、编辑器状态及
+大体积媒体不复制。代理结束后，启动器只按文件内容快照和 SHA-256 校验回写两个 Logic 模块根目录，
+不读取 `.git`，也不调用 Git。Codex 在临时目录使用 workspace 沙箱和 `never` 审批，因此不需要手动 `/permissions`。
 Claude 由启动器通过非交互 `-p` 和 `--resume` 转发多轮问答，不出现临时目录的 workspace trust
 对话框。其强制 Bash 沙箱适用于 macOS，以及同时装有 `bwrap`、`socat` 的 Linux/WSL2。依赖不齐或位于
 原生 Windows 时不自动开放写入型 Bash，只开放 Logic 路径的 `Edit(path)`（同时覆盖 Edit/Write 文件

@@ -37,7 +37,7 @@ profile 重新扩大本次隔离会话；Codex 自身的登录和会话状态文
 Claude 在 macOS 直接启用强制 Bash 沙箱；Linux/WSL2 只有同时检测到 `bwrap` 和 `socat` 才启用
 `sandbox.enabled=true`、`failIfUnavailable=true`、自动允许沙箱内 Bash，并关闭 unsandboxed escape
 hatch。依赖不齐或位于原生 Windows 时，不自动开放写入型 Bash，只自动允许只读工具和两个模块根目录的
-`Edit(path)`；Claude 的该规则同时约束 Edit 与 Write 文件工具。两端都在临时仓库副本运行，最后由
+`Edit(path)`；Claude 的该规则同时约束 Edit 与 Write 文件工具。两端都在临时项目副本运行，最后由
 [`write_guard.py`](../scripts/write_guard.py) 进行第二层整批拒绝/白名单回写。
 
 Claude 的 `--tools` 还会把可见内置工具收敛到 Read/Glob/Grep、受 `Edit(path)` 约束的 Edit/Write，及
@@ -88,12 +88,12 @@ develop_feature.cmd --agent claude "新增人员区域告警"
 |---|---|
 | `scripts/agent_adapters.py` | `AGENT_DEFINITIONS`、可执行文件探测、无提示权限映射与安全 argv 拼装 |
 | `scripts/start_wizard.py` | 系统环境检测、双代理选择、模型无关启动提示和会话生命周期 |
-| `scripts/write_guard.py` | 当前工作区隔离复制、路径分类、越界整批拒绝和 Logic 白名单补丁回写 |
+| `scripts/write_guard.py` | 当前项目隔离复制、文件哈希、路径分类、越界整批拒绝和 Logic 白名单文件回写 |
 | 仓库根目录 `develop_feature` | 用当前 Python 定位并运行向导，不包含代理或框架知识 |
 | `develop_feature.cmd` | 在原生 Windows 依次尝试 `py -3` 与 `python` |
 
 维护适配器时，只把命令拼装和权限差异放在 `agent_adapters.py`；框架事实继续只维护在各 Skill 参考页。
-新增或改变参数后必须模拟两种代理的命令、测试允许/越界补丁，并在实际安装了对应 CLI 的环境运行
+新增或改变参数后必须模拟两种代理的命令、测试允许/越界文件变化，并在实际安装了对应 CLI 的环境运行
 `--check`。不得通过 shell 字符串拼接启动代理；提示词必须作为单独 argv 传递，避免路径、引号或需求
 文本被 shell 解释。
 

@@ -12,13 +12,14 @@
 ```
 
 原生 Windows 可运行 `develop_feature.cmd` 或 `py .\develop_feature`。启动器只正式适配 Codex CLI 与
-Claude Code：自动探测后选择唯一可用代理，或在两者都可用时请用户选择；也可用 `--agent codex`、
+Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` 或 Git 命令。自动探测后选择唯一可用
+代理，或在两者都可用时请用户选择；也可用 `--agent codex`、
 `--agent claude` 显式指定。选定代理后检测 Windows、WSL2、macOS、Linux、CPU 架构、RK3588 设备树和
 关键工具；第一题只需用“是”或“否 + 简短纠正”确认检测结果和默认 RK3588 部署目标。业务需求通常
 只问 2–3 轮、最多 4 轮；向导先核对源码，再给出合并后的具体方案让用户简短确认，不会要求逐项填写
 硬件和内部合同字段。需求合同完整后，只在通道/全局 Logic 模块中实现并按平台能力验证。需要先确认或
 只生成计划时，分别使用 `--confirm-before-code`、`--plan-only`。自动实现采用硬写入边界：
-代理在一次性副本中无提示执行，原仓库仅回写 `vision_analysis/src/logic/modules/**` 和
+代理在一次性副本中无提示执行，启动器通过文件快照和哈希比较，仅回写 `vision_analysis/src/logic/modules/**` 和
 `vision_analysis/src/logic/global_modules/**`，发现其他改动便整批拒绝；选择和权限差异见
 [`agent-adapters.md`](skills/rk3588-feature-wizard/references/agent-adapters.md)。
 

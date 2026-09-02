@@ -47,7 +47,7 @@ RK3588 部署目标。业务需求通常只问 2–3 轮、最多 4 轮：向导
 使用 `--check` 检查两个代理的可执行文件、版本参数和全部 Skill。
 
 自动开发在一次性隔离副本中进行，不要求用户切换 `/permissions`。原仓库只接受
-`vision_analysis/src/logic/modules/**` 和 `vision_analysis/src/logic/global_modules/**` 的补丁；任何越界
+`vision_analysis/src/logic/modules/**` 和 `vision_analysis/src/logic/global_modules/**` 的文件变化；任何越界
 改动都会让整批结果被拒绝。需要 Web、服务、配置解析或公共引擎修改的需求不由此入口实施。
 直接复制本页后续提示词给模型不具备机械写回保护；要求文件保证时必须使用 `develop_feature`。
 

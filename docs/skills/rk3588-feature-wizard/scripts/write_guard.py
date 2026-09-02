@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Isolate agent edits and promote only approved Logic-module changes."""
+"""Isolate agent edits and promote only approved Logic-module file changes."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
-import subprocess
 import tempfile
 from typing import Mapping, Sequence
 
@@ -19,6 +18,23 @@ ALLOWED_WRITE_ROOTS = (
     PurePosixPath("vision_analysis/src/logic/global_modules"),
 )
 
+# Keep generated dependencies, editor state, and large media out of the disposable
+# copy without consulting Git metadata. The finished workspace is still scanned in
+# full, so an agent-created file under one of these names cannot bypass promotion.
+SOURCE_COPY_EXCLUDED_DIRECTORY_NAMES = frozenset(
+    {
+        ".git",
+        ".claude",
+        ".vscode",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+    }
+)
+SOURCE_COPY_EXCLUDED_SUFFIXES = (".docx", ".mp4", ".tsbuildinfo")
+SOURCE_COPY_EXCLUDED_ROOT_FILES = frozenset({"librknnrt.so"})
+
 
 class WriteBoundaryError(RuntimeError):
     """Raised when an isolated session cannot be created or safely promoted."""
@@ -26,14 +42,14 @@ class WriteBoundaryError(RuntimeError):
 
 @dataclass(frozen=True)
 class PromotionResult:
-    """Result of copying an allowed patch back to the source repository."""
+    """Result of copying allowed file changes back to the source project."""
 
     changed_paths: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class FileState:
-    """Content identity and Git-relevant mode for one regular file."""
+    """Content identity and executable/non-executable mode for a regular file."""
 
     digest: str
     mode: int
@@ -41,79 +57,24 @@ class FileState:
 
 @dataclass(frozen=True)
 class TreeSnapshot:
-    """Launcher-owned view of a workspace, independent of its Git metadata."""
+    """Launcher-owned content view of a project directory."""
 
     files: Mapping[str, FileState]
     allowed_contents: Mapping[str, bytes]
 
 
-def _run(
-    command: Sequence[str],
-    cwd: Path,
-    *,
-    input_bytes: bytes | None = None,
-) -> bytes:
-    environment = dict(os.environ)
-    for key in tuple(environment):
-        if key.startswith("GIT_CONFIG_KEY_") or key.startswith("GIT_CONFIG_VALUE_"):
-            environment.pop(key, None)
-    for key in (
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_COMMON_DIR",
-        "GIT_CONFIG_COUNT",
-        "GIT_DIR",
-        "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_PREFIX",
-        "GIT_WORK_TREE",
-    ):
-        environment.pop(key, None)
-    environment["GIT_CONFIG_GLOBAL"] = os.devnull
-    environment["GIT_CONFIG_NOSYSTEM"] = "1"
-    environment["GIT_OPTIONAL_LOCKS"] = "0"
-    environment["GIT_TERMINAL_PROMPT"] = "0"
-    effective_command = list(command)
-    if effective_command and Path(effective_command[0]).name.lower() in {"git", "git.exe"}:
-        effective_command[1:1] = ("-c", "core.fsmonitor=false")
-    try:
-        result = subprocess.run(
-            effective_command,
-            cwd=cwd,
-            check=False,
-            env=environment,
-            input=input_bytes,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except OSError as exc:
-        raise WriteBoundaryError(f"无法执行 {command[0]}：{exc}") from exc
-    if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", "replace").strip()
-        raise WriteBoundaryError(
-            f"命令失败（{result.returncode}）：{' '.join(command)}"
-            + (f"\n{detail}" if detail else "")
-        )
-    return result.stdout
-
-
-def _git_paths(output: bytes) -> tuple[str, ...]:
-    return tuple(
-        os.fsdecode(item)
-        for item in output.split(b"\0")
-        if item
-    )
-
-
 def _safe_relative_path(value: str) -> PurePosixPath:
     path = PurePosixPath(value)
     if path.is_absolute() or not path.parts or ".." in path.parts:
-        raise WriteBoundaryError(f"Git 返回了不安全的仓库路径：{value!r}")
+        raise WriteBoundaryError(f"检测到不安全的项目相对路径：{value!r}")
     return path
 
 
 def is_allowed_write_path(value: str) -> bool:
-    """Return whether a repository-relative path is below an approved root."""
+    """Return whether a project-relative path is below an approved root."""
     path = _safe_relative_path(value)
+    if ".git" in path.parts:
+        return False
     for root in ALLOWED_WRITE_ROOTS:
         if len(path.parts) > len(root.parts) and path.parts[: len(root.parts)] == root.parts:
             return True
@@ -125,12 +86,11 @@ def allowed_roots_text() -> str:
 
 
 class IsolatedLogicWorkspace:
-    """Run an agent in a disposable repository and promote an allowlisted patch."""
+    """Run an agent in a disposable project copy and promote allowlisted files."""
 
     def __init__(self, source_repo: Path):
         self.source_repo = source_repo.resolve()
         self.path: Path | None = None
-        self.baseline_revision: str | None = None
         self._baseline_snapshot: TreeSnapshot | None = None
         self._temporary: tempfile.TemporaryDirectory[str] | None = None
 
@@ -139,14 +99,12 @@ class IsolatedLogicWorkspace:
         self.path = Path(self._temporary.name) / "repository"
         self.path.mkdir()
         try:
-            self._copy_current_repository()
-            self._initialize_baseline()
+            self._copy_current_project()
             self._baseline_snapshot = self._scan_tree(self.path)
         except Exception:
             self._temporary.cleanup()
             self._temporary = None
             self.path = None
-            self.baseline_revision = None
             self._baseline_snapshot = None
             raise
         return self
@@ -156,76 +114,82 @@ class IsolatedLogicWorkspace:
             self._temporary.cleanup()
         self._temporary = None
         self.path = None
-        self.baseline_revision = None
         self._baseline_snapshot = None
 
-    def _require_workspace(self) -> tuple[Path, str, TreeSnapshot]:
-        if (
-            self.path is None
-            or self.baseline_revision is None
-            or self._baseline_snapshot is None
-        ):
+    def _require_workspace(self) -> tuple[Path, TreeSnapshot]:
+        if self.path is None or self._baseline_snapshot is None:
             raise WriteBoundaryError("隔离工作副本尚未初始化。")
-        return self.path, self.baseline_revision, self._baseline_snapshot
+        return self.path, self._baseline_snapshot
 
-    def _copy_current_repository(self) -> None:
-        assert self.path is not None
-        output = _run(
-            (
-                "git",
-                "ls-files",
-                "--cached",
-                "--others",
-                "--exclude-standard",
-                "-z",
-            ),
-            self.source_repo,
-        )
-        for value in sorted(set(_git_paths(output))):
-            relative = _safe_relative_path(value)
-            self._verify_source_parent_chain(relative)
-            source = self.source_repo.joinpath(*relative.parts)
-            if not source.exists() and not source.is_symlink():
-                continue
-            destination = self.path.joinpath(*relative.parts)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if source.is_symlink():
-                raise WriteBoundaryError(
-                    f"隔离副本拒绝 Git 管理范围内的符号链接：{value}"
-                )
-            elif source.is_file():
-                shutil.copy2(source, destination)
-            else:
-                raise WriteBoundaryError(
-                    f"隔离副本暂不支持 Git 子模块或特殊文件：{value}"
-                )
+    @staticmethod
+    def _source_copy_excluded(relative: PurePosixPath, is_directory: bool) -> bool:
+        if is_allowed_write_path(relative.as_posix()):
+            return False
+        if relative.name == ".git":
+            return True
+        if is_directory and relative.name in SOURCE_COPY_EXCLUDED_DIRECTORY_NAMES:
+            return True
+        if len(relative.parts) == 1 and relative.name in SOURCE_COPY_EXCLUDED_ROOT_FILES:
+            return True
+        if not is_directory and relative.name.endswith(SOURCE_COPY_EXCLUDED_SUFFIXES):
+            return True
+        if not is_directory and relative.name.endswith("_queue_producer_test"):
+            return True
+        return False
 
-    def _initialize_baseline(self) -> None:
+    def _copy_current_project(self) -> None:
+        """Copy project files without requiring or reading any Git metadata."""
         assert self.path is not None
-        _run(("git", "init", "--quiet"), self.path)
-        _run(("git", "config", "core.autocrlf", "false"), self.path)
-        _run(("git", "config", "user.name", "RK3588 Logic Wizard"), self.path)
-        _run(("git", "config", "user.email", "wizard@localhost"), self.path)
-        _run(("git", "config", "commit.gpgsign", "false"), self.path)
-        _run(("git", "add", "--force", "--all"), self.path)
-        _run(
-            (
-                "git",
-                "commit",
-                "--quiet",
-                "--no-verify",
-                "--no-gpg-sign",
-                "-m",
-                "isolated wizard baseline",
-            ),
-            self.path,
-        )
-        self.baseline_revision = _run(
-            ("git", "rev-parse", "HEAD"), self.path
-        ).decode("ascii").strip()
+
+        def copy_directory(directory: Path, parts: tuple[str, ...]) -> None:
+            try:
+                entries = sorted(os.scandir(directory), key=lambda item: item.name)
+            except OSError as exc:
+                raise WriteBoundaryError(f"无法读取项目目录 {directory}：{exc}") from exc
+            for entry in entries:
+                relative_parts = (*parts, entry.name)
+                relative = PurePosixPath(*relative_parts)
+                try:
+                    metadata = entry.stat(follow_symlinks=False)
+                except OSError as exc:
+                    raise WriteBoundaryError(
+                        f"无法检查项目路径 {relative.as_posix()}：{exc}"
+                    ) from exc
+                if stat.S_ISLNK(metadata.st_mode):
+                    if self._source_copy_excluded(
+                        relative,
+                        entry.is_dir(follow_symlinks=False),
+                    ):
+                        continue
+                    raise WriteBoundaryError(
+                        f"隔离副本不允许项目中的符号链接：{relative.as_posix()}"
+                    )
+                if stat.S_ISDIR(metadata.st_mode):
+                    if self._source_copy_excluded(relative, True):
+                        continue
+                    destination = self.path.joinpath(*relative.parts)
+                    destination.mkdir(parents=True, exist_ok=True)
+                    copy_directory(Path(entry.path), relative_parts)
+                    continue
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise WriteBoundaryError(
+                        f"隔离副本不允许项目中的特殊文件：{relative.as_posix()}"
+                    )
+                if self._source_copy_excluded(relative, False):
+                    continue
+                destination = self.path.joinpath(*relative.parts)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    shutil.copy2(entry.path, destination)
+                except OSError as exc:
+                    raise WriteBoundaryError(
+                        f"无法复制项目文件 {relative.as_posix()}：{exc}"
+                    ) from exc
+
+        copy_directory(self.source_repo, ())
 
     def _scan_tree(self, root: Path) -> TreeSnapshot:
-        """Hash every regular file without consulting agent-controlled Git state."""
+        """Hash every regular file in a launcher-controlled project copy."""
         files: dict[str, FileState] = {}
         allowed_contents: dict[str, bytes] = {}
 
@@ -235,10 +199,6 @@ class IsolatedLogicWorkspace:
             except OSError as exc:
                 raise WriteBoundaryError(f"无法扫描隔离副本 {directory}：{exc}") from exc
             for entry in entries:
-                if not parts and entry.name == ".git":
-                    # The agent may use Git for normal work, but promotion never trusts
-                    # or propagates its disposable repository metadata.
-                    continue
                 relative_parts = (*parts, entry.name)
                 relative = PurePosixPath(*relative_parts).as_posix()
                 try:
@@ -268,7 +228,7 @@ class IsolatedLogicWorkspace:
         return TreeSnapshot(files=files, allowed_contents=allowed_contents)
 
     def child_environment(self) -> Mapping[str, str]:
-        workspace, _, _ = self._require_workspace()
+        workspace, _ = self._require_workspace()
         environment = dict(os.environ)
         for key in (
             "OLDPWD",
@@ -294,109 +254,19 @@ class IsolatedLogicWorkspace:
         )
 
     @staticmethod
-    def _write_regular_file(path: Path, content: bytes, mode: int) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content)
-        path.chmod(mode)
-
-    def _build_trusted_patch(
-        self,
-        after: TreeSnapshot,
-        changed_paths: Sequence[str],
-    ) -> bytes:
-        """Create a patch in fresh Git metadata after the agent has exited."""
-        _, _, before = self._require_workspace()
-        assert self._temporary is not None
-        patch_repo = Path(
-            tempfile.mkdtemp(prefix="trusted-patch-", dir=self._temporary.name)
-        )
-
-        for path, content in before.allowed_contents.items():
-            state = before.files[path]
-            self._write_regular_file(patch_repo / path, content, state.mode)
-
-        _run(("git", "init", "--quiet"), patch_repo)
-        _run(("git", "config", "core.autocrlf", "false"), patch_repo)
-        _run(("git", "config", "core.hooksPath", ".git/no-hooks"), patch_repo)
-        _run(("git", "config", "user.name", "RK3588 Logic Wizard"), patch_repo)
-        _run(("git", "config", "user.email", "wizard@localhost"), patch_repo)
-        _run(("git", "config", "commit.gpgsign", "false"), patch_repo)
-        _run(("git", "add", "--force", "--all"), patch_repo)
-        _run(
-            (
-                "git",
-                "commit",
-                "--quiet",
-                "--allow-empty",
-                "--no-verify",
-                "--no-gpg-sign",
-                "-m",
-                "trusted promotion baseline",
-            ),
-            patch_repo,
-        )
-        trusted_baseline = _run(("git", "rev-parse", "HEAD"), patch_repo).decode(
-            "ascii"
-        ).strip()
-
-        for root in ALLOWED_WRITE_ROOTS:
-            target = patch_repo.joinpath(*root.parts)
-            if target.exists():
-                shutil.rmtree(target)
-        for path, content in after.allowed_contents.items():
-            state = after.files[path]
-            self._write_regular_file(patch_repo / path, content, state.mode)
-
-        _run(("git", "add", "--force", "--all"), patch_repo)
-        patch_paths = tuple(
-            sorted(
-                _git_paths(
-                    _run(
-                        (
-                            "git",
-                            "diff",
-                            "--cached",
-                            "--name-only",
-                            "--no-renames",
-                            "-z",
-                            trusted_baseline,
-                        ),
-                        patch_repo,
-                    )
-                )
-            )
-        )
-        if patch_paths != tuple(changed_paths):
-            raise WriteBoundaryError(
-                "可信补丁路径与文件扫描结果不一致，拒绝回写。"
-            )
-        return _run(
-            (
-                "git",
-                "diff",
-                "--cached",
-                "--binary",
-                "--full-index",
-                "--no-renames",
-                trusted_baseline,
-            ),
-            patch_repo,
-        )
-
-    @staticmethod
     def _source_file_state(path: Path) -> FileState | None:
         if not path.exists() and not path.is_symlink():
             return None
         try:
             metadata = path.lstat()
         except OSError as exc:
-            raise WriteBoundaryError(f"无法检查原仓库路径 {path}：{exc}") from exc
+            raise WriteBoundaryError(f"无法检查原项目路径 {path}：{exc}") from exc
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-            raise WriteBoundaryError(f"原仓库目标不是普通文件，拒绝覆盖：{path}")
+            raise WriteBoundaryError(f"原项目目标不是普通文件，拒绝覆盖：{path}")
         try:
             content = path.read_bytes()
         except OSError as exc:
-            raise WriteBoundaryError(f"无法读取原仓库文件 {path}：{exc}") from exc
+            raise WriteBoundaryError(f"无法读取原项目文件 {path}：{exc}") from exc
         mode = 0o755 if metadata.st_mode & 0o111 else 0o644
         return FileState(hashlib.sha256(content).hexdigest(), mode)
 
@@ -409,9 +279,9 @@ class IsolatedLogicWorkspace:
             try:
                 metadata = current.lstat()
             except OSError as exc:
-                raise WriteBoundaryError(f"无法检查原仓库父路径 {current}：{exc}") from exc
+                raise WriteBoundaryError(f"无法检查原项目父路径 {current}：{exc}") from exc
             if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-                raise WriteBoundaryError(f"原仓库父路径不是普通目录，拒绝访问：{current}")
+                raise WriteBoundaryError(f"原项目父路径不是普通目录，拒绝访问：{current}")
 
     def _verify_source_unchanged(
         self,
@@ -424,7 +294,7 @@ class IsolatedLogicWorkspace:
             target = self.source_repo.joinpath(*relative.parts)
             if self._source_file_state(target) != before.files.get(value):
                 raise WriteBoundaryError(
-                    f"原仓库文件在会话期间已被其他进程修改，拒绝覆盖：{value}"
+                    f"原项目文件在会话期间已被其他进程修改，拒绝覆盖：{value}"
                 )
 
     def _verify_applied_result(
@@ -439,9 +309,144 @@ class IsolatedLogicWorkspace:
             if self._source_file_state(target) != after.files.get(value):
                 raise WriteBoundaryError(f"回写后内容校验失败：{value}")
 
+    def _ensure_source_parent_directories(
+        self,
+        relative: PurePosixPath,
+    ) -> tuple[Path, ...]:
+        """Create missing target parents while rejecting links and path redirection."""
+        created: list[Path] = []
+        current = self.source_repo
+        try:
+            for part in relative.parts[:-1]:
+                current /= part
+                if not current.exists() and not current.is_symlink():
+                    try:
+                        current.mkdir()
+                    except FileExistsError:
+                        pass
+                    except OSError as exc:
+                        raise WriteBoundaryError(
+                            f"无法创建回写目录 {current}：{exc}"
+                        ) from exc
+                    else:
+                        created.append(current)
+                try:
+                    metadata = current.lstat()
+                except OSError as exc:
+                    raise WriteBoundaryError(
+                        f"无法检查回写目录 {current}：{exc}"
+                    ) from exc
+                if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(
+                    metadata.st_mode
+                ):
+                    raise WriteBoundaryError(
+                        f"回写父路径不是普通目录，拒绝访问：{current}"
+                    )
+        except Exception:
+            self._cleanup_created_directories(created)
+            raise
+        return tuple(created)
+
+    @staticmethod
+    def _stage_file(target: Path, content: bytes, mode: int) -> Path:
+        descriptor, raw_path = tempfile.mkstemp(
+            prefix=".rk3588-wizard-",
+            suffix=".tmp",
+            dir=str(target.parent),
+        )
+        staged = Path(raw_path)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            staged.chmod(mode)
+        except Exception:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            try:
+                staged.unlink()
+            except OSError:
+                pass
+            raise
+        return staged
+
+    @staticmethod
+    def _cleanup_paths(paths: Sequence[Path]) -> None:
+        for path in paths:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                continue
+
+    @staticmethod
+    def _cleanup_created_directories(paths: Sequence[Path]) -> None:
+        for path in reversed(paths):
+            try:
+                path.rmdir()
+            except OSError:
+                continue
+
+    def _rollback_applied_paths(
+        self,
+        before: TreeSnapshot,
+        applied_paths: Sequence[str],
+    ) -> tuple[str, ...]:
+        failures: list[str] = []
+        for value in reversed(applied_paths):
+            relative = _safe_relative_path(value)
+            target = self.source_repo.joinpath(*relative.parts)
+            staged: Path | None = None
+            try:
+                self._verify_source_parent_chain(relative)
+                previous = before.files.get(value)
+                if previous is None:
+                    if target.exists() or target.is_symlink():
+                        metadata = target.lstat()
+                        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(
+                            metadata.st_mode
+                        ):
+                            raise OSError("目标已变为非普通文件")
+                        target.unlink()
+                else:
+                    staged = self._stage_file(
+                        target,
+                        before.allowed_contents[value],
+                        previous.mode,
+                    )
+                    os.replace(staged, target)
+                    staged = None
+                    target.chmod(previous.mode)
+            except (KeyError, OSError, WriteBoundaryError) as exc:
+                failures.append(f"{value}: {exc}")
+            finally:
+                if staged is not None:
+                    self._cleanup_paths((staged,))
+        return tuple(failures)
+
+    def _prune_deleted_directories(self, value: str) -> None:
+        relative = _safe_relative_path(value)
+        matching_root = next(
+            root
+            for root in ALLOWED_WRITE_ROOTS
+            if relative.parts[: len(root.parts)] == root.parts
+        )
+        stop = self.source_repo.joinpath(*matching_root.parts)
+        current = self.source_repo.joinpath(*relative.parts).parent
+        while current != stop:
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            current = current.parent
+
     def promote(self) -> PromotionResult:
-        """Apply only Logic-module changes to the source repository atomically."""
-        workspace, _, before = self._require_workspace()
+        """Copy only verified Logic-module contents back to the source project."""
+        workspace, before = self._require_workspace()
         after = self._scan_tree(workspace)
         changed_paths = self._changed_paths(before, after)
         outside = [path for path in changed_paths if not is_allowed_write_path(path)]
@@ -454,23 +459,60 @@ class IsolatedLogicWorkspace:
             return PromotionResult(())
 
         self._verify_source_unchanged(before, changed_paths)
-        patch = self._build_trusted_patch(after, changed_paths)
-        if not patch:
-            raise WriteBoundaryError("检测到改动但未能生成可信补丁，拒绝回写。")
+        staged_files: dict[str, Path] = {}
+        created_directories: list[Path] = []
+        applied_paths: list[str] = []
+        try:
+            for value in changed_paths:
+                relative = _safe_relative_path(value)
+                if value not in after.files:
+                    continue
+                created_directories.extend(
+                    self._ensure_source_parent_directories(relative)
+                )
+                target = self.source_repo.joinpath(*relative.parts)
+                staged_files[value] = self._stage_file(
+                    target,
+                    after.allowed_contents[value],
+                    after.files[value].mode,
+                )
 
-        apply_command = (
-            "git",
-            "-c",
-            "core.autocrlf=false",
-            "-c",
-            "core.safecrlf=false",
-            "apply",
-            "--binary",
-            "--whitespace=nowarn",
-            "-",
-        )
-        check_command = (*apply_command[:-1], "--check", "-")
-        _run(check_command, self.source_repo, input_bytes=patch)
-        _run(apply_command, self.source_repo, input_bytes=patch)
-        self._verify_applied_result(after, changed_paths)
+            # Recheck after staging so a concurrent source edit cannot be silently
+            # overwritten merely because staging took time.
+            self._verify_source_unchanged(before, changed_paths)
+            for value in changed_paths:
+                relative = _safe_relative_path(value)
+                target = self.source_repo.joinpath(*relative.parts)
+                expected_before = before.files.get(value)
+                self._verify_source_parent_chain(relative)
+                if self._source_file_state(target) != expected_before:
+                    raise WriteBoundaryError(
+                        f"原项目文件在回写前发生变化，拒绝覆盖：{value}"
+                    )
+                if value in after.files:
+                    os.replace(staged_files[value], target)
+                    applied_paths.append(value)
+                    target.chmod(after.files[value].mode)
+                else:
+                    target.unlink()
+                    applied_paths.append(value)
+            self._verify_applied_result(after, changed_paths)
+        except Exception as exc:
+            rollback_failures = self._rollback_applied_paths(before, applied_paths)
+            self._cleanup_paths(tuple(staged_files.values()))
+            self._cleanup_created_directories(created_directories)
+            if rollback_failures:
+                raise WriteBoundaryError(
+                    f"回写失败且未能完全恢复原内容：{exc}；回滚错误："
+                    + "；".join(rollback_failures)
+                ) from exc
+            if isinstance(exc, WriteBoundaryError):
+                raise
+            raise WriteBoundaryError(f"回写失败，原内容已恢复：{exc}") from exc
+        finally:
+            self._cleanup_paths(tuple(staged_files.values()))
+
+        for value in changed_paths:
+            if value not in after.files:
+                self._prune_deleted_directories(value)
         return PromotionResult(changed_paths)

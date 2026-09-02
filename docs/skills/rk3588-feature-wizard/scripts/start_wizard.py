@@ -29,6 +29,7 @@ from agent_adapters import (  # noqa: E402
     AgentRuntime,
     build_agent_command,
     claude_bash_sandbox_ready,
+    decode_process_output,
     discover_builtin_agents,
     inspect_builtin_agent,
     permission_summary,
@@ -54,7 +55,6 @@ REQUIRED_SUPPORT_FILES = (
     Path("docs/skills/rk3588-feature-wizard/scripts/write_guard.py"),
 )
 TOOL_COMMANDS = {
-    "git": ("git",),
     "rg": ("rg",),
     "bash": ("bash",),
     "cmake": ("cmake",),
@@ -192,7 +192,7 @@ def classify_host(
     return (
         "other",
         f"未专门适配的系统：{system or 'unknown'}",
-        "先使用 plan-only；确认可用 shell、Python、Git、编程代理和目标构建环境后再允许自动实现。",
+        "先使用 plan-only；确认可用 shell、Python、编程代理和目标构建环境后再允许自动实现。",
     )
 
 
@@ -253,11 +253,11 @@ def detect_host_environment() -> HostEnvironment:
 
 
 def repository_root(start: Path) -> Path:
-    """Locate this repository without depending on the caller's cwd."""
+    """Locate this project from its own files without requiring Git metadata."""
     resolved = start.resolve()
     for candidate in (resolved, *resolved.parents):
         if (
-            (candidate / ".git").exists()
+            (candidate / "develop_feature").is_file()
             and (candidate / "vision_analysis" / "src").is_dir()
             and (candidate / "docs" / "skills").is_dir()
         ):
@@ -325,6 +325,7 @@ def build_prompt(
 生成物或任何其他路径；也禁止创建符号链接。这个限制高于其他 Skill 中关于同步 Web、框架或文档的建议。
 如果需求无法完全通过现有公共 API、模块 `logic.json` 和模块内 `report_templates/` 实现，明确说明受限原因
 并停止，不得请求扩大权限或尝试越界。代理运行在一次性隔离副本中；不要查找、访问或修改其他仓库副本。
+当前副本是普通项目目录，不要求 Git；不要初始化 `.git`，也不要把 Git 状态作为实施前提。
 
 权限已经由启动器配置为白名单内自动执行。不要要求用户运行 `/permissions`，不要请求 Full Access、
 danger-full-access、bypassPermissions 或任何权限升级；命令被边界拒绝时，缩小验证范围并如实报告。
@@ -487,7 +488,7 @@ def print_preflight(
     print(host.report_block())
     print("\nLogic 写回保护：")
     print(f"- 白名单：{allowed_roots_text()}")
-    print("- 隔离副本、可信差异扫描、允许补丁和越界整批拒绝：检查通过")
+    print("- 无 Git 文件快照、哈希差异扫描、受控回写和越界整批拒绝：检查通过")
     print("- Codex/Claude：白名单内自动执行，不要求手动切换最高权限")
     if probes["claude"].usable:
         if claude_bash_sandbox_ready(host.kind):
@@ -507,58 +508,39 @@ def verify_write_guard(repo: Path) -> None:
         source = Path(holder) / "source"
         allowed = source / "vision_analysis/src/logic/modules/existing/logic.cpp"
         outside = source / "web_console/app.ts"
+        excluded = source / "node_modules/cached/package.js"
         allowed.parent.mkdir(parents=True)
         outside.parent.mkdir(parents=True)
+        excluded.parent.mkdir(parents=True)
         allowed.write_text("baseline\n", encoding="utf-8")
         outside.write_text("web-baseline\n", encoding="utf-8")
-        commands = (
-            ("git", "init", "--quiet"),
-            ("git", "config", "user.name", "RK3588 Guard Self-test"),
-            ("git", "config", "user.email", "guard@localhost"),
-            ("git", "add", "--all"),
-            ("git", "commit", "--quiet", "--no-gpg-sign", "-m", "baseline"),
-        )
-        for command in commands:
-            result = subprocess.run(
-                command,
-                cwd=source,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                detail = result.stderr.strip() or result.stdout.strip() or "未知错误"
-                raise WriteBoundaryError(f"写回保护自检无法初始化临时 Git：{detail}")
+        excluded.write_text("cache-baseline\n", encoding="utf-8")
 
         with IsolatedLogicWorkspace(source) as isolated:
             assert isolated.path is not None
+            if (isolated.path / "node_modules").exists():
+                raise WriteBoundaryError("隔离副本错误复制了排除的依赖缓存。")
             generated = (
                 isolated.path
                 / "vision_analysis/src/logic/modules/generated/logic.cpp"
             )
             generated.parent.mkdir(parents=True)
             generated.write_text("generated\n", encoding="utf-8")
-            # A disposable commit must not be able to hide the file from promotion.
-            for command in (
-                ("git", "add", "--all"),
-                ("git", "commit", "--quiet", "-m", "agent-side commit"),
-            ):
-                result = subprocess.run(
-                    command,
-                    cwd=isolated.path,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode != 0:
-                    detail = result.stderr.strip() or result.stdout.strip() or "未知错误"
-                    raise WriteBoundaryError(f"写回保护自检无法模拟代理 Git：{detail}")
             promoted = isolated.promote()
             expected = "vision_analysis/src/logic/modules/generated/logic.cpp"
             if promoted.changed_paths != (expected,):
-                raise WriteBoundaryError("允许路径补丁自检结果不一致。")
+                raise WriteBoundaryError("允许路径回写自检结果不一致。")
         if not (source / expected).is_file():
-            raise WriteBoundaryError("允许路径补丁未能回写临时测试仓库。")
+            raise WriteBoundaryError("允许路径文件未能回写临时测试项目。")
+
+        with IsolatedLogicWorkspace(source) as isolated:
+            assert isolated.path is not None
+            (isolated.path / expected).unlink()
+            promoted = isolated.promote()
+            if promoted.changed_paths != (expected,):
+                raise WriteBoundaryError("允许路径删除自检结果不一致。")
+        if (source / expected).exists():
+            raise WriteBoundaryError("允许路径删除未能回写临时测试项目。")
 
         with IsolatedLogicWorkspace(source) as isolated:
             assert isolated.path is not None
@@ -578,6 +560,24 @@ def verify_write_guard(repo: Path) -> None:
                 raise WriteBoundaryError("越界整批拒绝自检失败。")
         if allowed.read_text(encoding="utf-8") != "baseline\n":
             raise WriteBoundaryError("越界批次中的允许路径被错误回写。")
+
+        with IsolatedLogicWorkspace(source) as isolated:
+            assert isolated.path is not None
+            isolated_allowed = (
+                isolated.path
+                / "vision_analysis/src/logic/modules/existing/logic.cpp"
+            )
+            isolated_allowed.write_text("agent-change\n", encoding="utf-8")
+            allowed.write_text("concurrent-change\n", encoding="utf-8")
+            try:
+                isolated.promote()
+            except WriteBoundaryError as exc:
+                if "其他进程修改" not in str(exc):
+                    raise
+            else:
+                raise WriteBoundaryError("原项目并发修改保护自检失败。")
+        if allowed.read_text(encoding="utf-8") != "concurrent-change\n":
+            raise WriteBoundaryError("并发修改内容被错误覆盖。")
 
     with IsolatedLogicWorkspace(repo) as isolated:
         if isolated.promote().changed_paths:
@@ -607,12 +607,13 @@ def validate_isolated_catalog(workspace: Path, environment: dict[str, str]) -> N
         env=environment,
         check=False,
         capture_output=True,
-        text=True,
     )
+    stdout = decode_process_output(result.stdout)
+    stderr = decode_process_output(result.stderr)
     if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or "未知错误"
+        detail = stderr.strip() or stdout.strip() or "未知错误"
         raise WriteBoundaryError(f"Logic manifest 校验失败：\n{detail}")
-    success_output = result.stdout.strip() or result.stderr.strip()
+    success_output = stdout.strip() or stderr.strip()
     if success_output:
         print(success_output)
 
@@ -673,16 +674,17 @@ def run_claude_guided_session(
             env=environment,
             check=False,
             capture_output=True,
-            text=True,
         )
+        stdout = decode_process_output(result.stdout)
+        stderr = decode_process_output(result.stderr)
         if result.returncode != 0:
-            detail = result.stderr.strip() or result.stdout.strip() or "未知错误"
+            detail = stderr.strip() or stdout.strip() or "未知错误"
             print(f"Claude Code 运行失败：{detail}", file=sys.stderr)
             return result.returncode or 2
-        if result.stderr.strip():
-            print(result.stderr.strip(), file=sys.stderr)
+        if stderr.strip():
+            print(stderr.strip(), file=sys.stderr)
         try:
-            state, message = _parse_claude_turn(result.stdout)
+            state, message = _parse_claude_turn(stdout)
         except AdapterError as exc:
             print(f"Claude Code 结果无效：{exc}", file=sys.stderr)
             return 2

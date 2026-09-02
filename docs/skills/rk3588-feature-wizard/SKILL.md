@@ -55,7 +55,7 @@ description: Interactively discover, formalize, implement, and validate a channe
 
 1. 读取 [`../build-rk3588-vision-app/references/requirement-contract.md`](../build-rk3588-vision-app/references/requirement-contract.md)。
 2. 读取 [`references/question-examples.md`](references/question-examples.md)，并把其中的提问格式用于每一轮访谈。
-3. 检查 `git status --short`，记录并保护已有改动。
+3. 直接读取相关文件建立内容基线；本向导不要求或初始化 Git，启动器会用文件哈希保护已有内容。
 4. 根据用户的初始描述，用 `rg` 只读检查相关注册宏、`logic.json`、公共头文件、Web 路由或调用方。
 5. 不向用户询问能够从仓库确定的事实，不把历史文档或不存在的模块当作候选能力。
 6. 在阶段三开始前不得编辑文件、生成代码、安装依赖或执行会改变项目状态的命令。

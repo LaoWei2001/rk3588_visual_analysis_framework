@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import locale
 from pathlib import Path
 import shutil
 import subprocess
@@ -130,13 +131,27 @@ def discover_builtin_agents(
     }
 
 
+def decode_process_output(value: bytes | str | None) -> str:
+    """Decode CLI output deterministically across UTF-8 and Windows locales."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    encodings = ("utf-8", locale.getpreferredencoding(False), "gb18030")
+    for encoding in dict.fromkeys(encodings):
+        try:
+            return value.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return value.decode("utf-8", errors="replace")
+
+
 def run_text_command(executable: str, args: Sequence[str]) -> tuple[int, str]:
     try:
         result = subprocess.run(
             [executable, *args],
             check=False,
             capture_output=True,
-            text=True,
             timeout=PROBE_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as exc:
@@ -145,7 +160,9 @@ def run_text_command(executable: str, args: Sequence[str]) -> tuple[int, str]:
         ) from exc
     except OSError as exc:
         raise AdapterError(f"无法运行 {executable}：{exc}") from exc
-    output = result.stdout.strip() or result.stderr.strip()
+    output = decode_process_output(result.stdout).strip() or decode_process_output(
+        result.stderr
+    ).strip()
     return result.returncode, output
 
 

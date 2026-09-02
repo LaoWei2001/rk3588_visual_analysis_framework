@@ -23,12 +23,14 @@
 ```
 
 原生 Windows 使用 `develop_feature.cmd` 或 `py .\develop_feature`。启动器只支持 Codex CLI 与 Claude
-Code：仅检测到一个时直接使用，两个都可用时先让用户选择，也可通过 `--agent codex` 或
+Code；直接下载并解压项目 ZIP 也可运行，不要求 `.git` 目录或 Git 命令。仅检测到一个代理时直接使用，
+两个都可用时先让用户选择，也可通过 `--agent codex` 或
 `--agent claude` 指定。随后自动检测当前系统、WSL、架构、RK3588 设备树和关键工具；第一题确认开发
 宿主及默认 RK3588 部署目标，用户通常只需回答“是”，不正确时回答“否 + 简短纠正”。业务需求通常
 只问 2–3 轮、最多 4 轮；向导先核对源码，再把相关细节合成具体方案供用户用“是/否”确认，不会逐项
 盘问硬件和合同字段。需求完整后只生成通道/全局 Logic：代理在一次性隔离副本中自动执行，原仓库只允许
-回写 `vision_analysis/src/logic/modules/**` 和 `vision_analysis/src/logic/global_modules/**`；任何其他改动
+回写 `vision_analysis/src/logic/modules/**` 和 `vision_analysis/src/logic/global_modules/**`；回写由文件
+内容快照和 SHA-256 校验保护，任何其他改动
 都会让整批结果被拒绝，
 且不需要手动运行 `/permissions`。需要 Web、服务、配置或引擎改动的需求只报告边界，不会实施。
 `--confirm-before-code` 会在写代码前等待确认，`--plan-only` 只生成合同和计划，`--check` 检查两个
