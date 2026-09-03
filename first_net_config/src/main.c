@@ -20,6 +20,7 @@
 #include "cli_io.h"
 #include "network_safety.h"
 #include "network_state.h"
+#include "network_health.h"
 #include "network_workflows.h"
 #include "interface_inspector.h"
 #include "factory_restore.h"
@@ -53,6 +54,7 @@ static void print_menu(void)
     printf("13. 保存系统初始网络设置（制作镜像）\n");
     printf("14. 恢复系统初始网络设置\n");
     printf("15. 清除所有已保存的连接（高风险）\n");
+    printf("16. 检查并修复 IPv4 默认路由\n");
     printf("0. 退出\n");
     printf("====================================================\n");
 }
@@ -96,13 +98,14 @@ int main(int argc, char *argv[])
     }
 
     printf("[安全保护] 网络切换带有可跨 SSH 会话确认的自动恢复保护。\n");
+    manage_default_route_health(true);
 
     for (;;)
     {
         int choice;
 
         print_menu();
-        choice = read_int("请选择功能 [0-15]: ", 0, 15);
+        choice = read_int("请选择功能 [0-16]: ", 0, 16);
 
         switch (choice)
         {
@@ -151,6 +154,9 @@ int main(int argc, char *argv[])
             break;
         case 15:
             clear_all_network_connections();
+            break;
+        case 16:
+            manage_default_route_health(false);
             break;
         case 0:
             printf("退出。\n");

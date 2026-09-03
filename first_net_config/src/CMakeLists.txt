@@ -10,6 +10,7 @@ add_executable(first_net_config
     ipv4_utils.c
     nmcli_parser.c
     network_state.c
+    network_health.c
     saved_connections.c
     network_safety.c
     network_workflows.c

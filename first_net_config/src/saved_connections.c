@@ -42,6 +42,7 @@ typedef struct
     char addresses[DETAIL_SIZE];
     char gateway[64];
     char dns[DETAIL_SIZE];
+    char effective_dns[DETAIL_SIZE];
     char ssid[BUF_SIZE];
     char security[96];
 } SavedConnection;
@@ -113,6 +114,22 @@ static void read_connection_value(const char *uuid, const char *field,
     replace_newlines(out);
 }
 
+static void read_device_value(const char *device, const char *field,
+                              char *out, size_t out_size)
+{
+    const char *argv[] = {
+        "nmcli", "--escape", "no", "-g", field,
+        "device", "show", device, NULL};
+
+    if (!device || device[0] == '\0' ||
+        capture_cmd(argv, out, out_size) != 0)
+    {
+        out[0] = '\0';
+        return;
+    }
+    replace_newlines(out);
+}
+
 static void load_connection_detail(SavedConnection *connection)
 {
     if (!connection)
@@ -128,6 +145,12 @@ static void load_connection_detail(SavedConnection *connection)
                           connection->gateway, sizeof(connection->gateway));
     read_connection_value(connection->uuid, "ipv4.dns",
                           connection->dns, sizeof(connection->dns));
+    if (connection->active)
+    {
+        read_device_value(connection->device, "IP4.DNS",
+                          connection->effective_dns,
+                          sizeof(connection->effective_dns));
+    }
     if (connection->kind == SAVED_CONNECTION_WIFI)
     {
         read_connection_value(connection->uuid, "802-11-wireless.ssid",
@@ -238,6 +261,19 @@ static void print_connection_card(const SavedConnection *connection, int number)
     }
     printf("     开机自动使用：%s\n",
            connection->autoconnect ? "是" : "否");
+    if (connection->dns[0])
+    {
+        printf("     DNS：%s（手工配置）\n", connection->dns);
+    }
+    else if (connection->effective_dns[0])
+    {
+        printf("     DNS：%s（DHCP/当前有效，未手工配置）\n",
+               connection->effective_dns);
+    }
+    else if (connection->active)
+    {
+        printf("     DNS：[未配置且未获得]\n");
+    }
 }
 
 static void print_selected_detail(const SavedConnection *connection)
@@ -265,9 +301,14 @@ static void print_selected_detail(const SavedConnection *connection)
     {
         printf("网关：%s\n", connection->gateway);
     }
-    if (connection->dns[0])
+    printf("手工 DNS：%s\n",
+           connection->dns[0] ? connection->dns : "未配置");
+    if (connection->active)
     {
-        printf("DNS：%s\n", connection->dns);
+        printf("当前有效 DNS：%s\n",
+               connection->effective_dns[0]
+                   ? connection->effective_dns
+                   : "未获得（域名解析可能失败）");
     }
     printf("开机自动使用：%s\n", connection->autoconnect ? "是" : "否");
     printf("====================================================\n");
@@ -432,6 +473,93 @@ static void remove_saved_connection(const SavedConnection *connection)
     }
 }
 
+static void configure_saved_connection_dns(const SavedConnection *connection)
+{
+    char input[BUF_SIZE];
+    char dns[BUF_SIZE];
+
+    if (!connection)
+    {
+        return;
+    }
+    printf("\n========== 单独补充 DNS ==========\n");
+    printf("连接：%s\n", connection->name);
+    printf("已手工配置：%s\n",
+           connection->dns[0] ? connection->dns : "无");
+    if (connection->active)
+    {
+        printf("当前有效 DNS：%s\n",
+               connection->effective_dns[0] ? connection->effective_dns : "无");
+    }
+    printf("新 DNS 会作为手工地址加入该连接，不会删除 DHCP 提供的 DNS。\n");
+    printf("如果当前没有任何 DNS，可填写现场内网 DNS 或可访问的公共 DNS。\n");
+
+    for (;;)
+    {
+        read_line("请输入 DNS（IPv4，最多 4 个，逗号分隔；回车取消）: ",
+                  input, sizeof(input));
+        trim_space(input);
+        if (input[0] == '\0')
+        {
+            printf("已取消。\n");
+            return;
+        }
+        if (normalize_ipv4_list(input, dns, sizeof(dns), 4))
+        {
+            break;
+        }
+        printf("DNS 格式不正确；例如 10.0.0.53,223.5.5.5。\n");
+    }
+
+    printf("程序解析为：%s\n", dns);
+    if (!read_yes_no("确定保存到这项连接吗？[y/N]: ", false))
+    {
+        printf("已取消。\n");
+        return;
+    }
+    {
+        const char *modify[] = {
+            "nmcli", "connection", "modify", "uuid", connection->uuid,
+            "ipv4.dns", dns,
+            "ipv4.ignore-auto-dns", "no", NULL};
+
+        if (run_cmd(modify) != 0)
+        {
+            printf("[失败] DNS 没有保存成功。\n");
+            return;
+        }
+    }
+    if (!connection->active)
+    {
+        printf("[完成] DNS 已保存，这项连接下次启用时生效。\n");
+        return;
+    }
+    {
+        char effective[DETAIL_SIZE];
+        const char *reapply[] = {
+            "nmcli", "device", "reapply", connection->device, NULL};
+
+        if (run_cmd(reapply) != 0)
+        {
+            printf("[已保存] 当前网卡无法无断线重新应用；"
+                   "重新连接或重启后生效。\n");
+            return;
+        }
+        read_device_value(connection->device, "IP4.DNS",
+                          effective, sizeof(effective));
+        if (effective[0])
+        {
+            printf("[完成] DNS 已无断线应用；当前有效 DNS：%s\n",
+                   effective);
+        }
+        else
+        {
+            printf("[已保存] 系统尚未报告有效 DNS，"
+                   "请重新连接后再检查。\n");
+        }
+    }
+}
+
 void manage_saved_connections(void)
 {
     for (;;)
@@ -476,19 +604,25 @@ void manage_saved_connections(void)
             print_selected_detail(connection);
             if (connection->active)
             {
-                printf("1. 删除这项正在使用的连接（可能立即断网）\n");
+                printf("1. 单独补充/修改 DNS（尽量无断线生效）\n");
+                printf("2. 删除这项正在使用的连接（可能立即断网）\n");
                 printf("0. 返回连接列表\n");
-                action = read_int("请选择操作 [0-1]: ", 0, 1);
+                action = read_int("请选择操作 [0-2]: ", 0, 2);
                 if (action == 1)
+                {
+                    configure_saved_connection_dns(connection);
+                }
+                else if (action == 2)
                 {
                     remove_saved_connection(connection);
                 }
                 break;
             }
             printf("1. 使用这项连接\n");
-            printf("2. 删除这项连接\n");
+            printf("2. 单独补充/修改 DNS\n");
+            printf("3. 删除这项连接\n");
             printf("0. 返回连接列表\n");
-            action = read_int("请选择操作 [0-2]: ", 0, 2);
+            action = read_int("请选择操作 [0-3]: ", 0, 3);
             if (action == 0)
             {
                 break;
@@ -496,6 +630,11 @@ void manage_saved_connections(void)
             if (action == 1)
             {
                 use_saved_connection(connection);
+                break;
+            }
+            if (action == 2)
+            {
+                configure_saved_connection_dns(connection);
                 break;
             }
             remove_saved_connection(connection);
