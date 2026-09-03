@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # RK3588 Web Console 安装脚本
 # 用法：把整个 web_console 文件夹复制到 RK3588，然后在板子上执行此脚本
 #   scp -r web_console root@<板子IP>:~
 #   ssh root@<板子IP> "cd ~/web_console && bash install.sh"
-set -e
+set -Eeuo pipefail
 
 # 可移植安装路径；迁移到其他目录时可执行
 #   APPS_ROOT=/data/ai_apps bash install.sh
@@ -11,6 +11,20 @@ APPS_ROOT="${APPS_ROOT:-/opt/ai_apps}"
 INSTALL_DIR="${INSTALL_DIR:-$APPS_ROOT/_console}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_BIN="$(command -v python3 || true)"
+FRONTEND_BUILD_DIR=""
+DIST_STAGE=""
+
+cleanup() {
+    [ -z "$FRONTEND_BUILD_DIR" ] || rm -rf -- "$FRONTEND_BUILD_DIR"
+    [ -z "$DIST_STAGE" ] || rm -rf -- "$DIST_STAGE"
+}
+trap cleanup EXIT
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[错误] 安装 systemd 服务需要 root 权限。"
+    echo "       请执行: sudo env OFFLINE=1 bash $SCRIPT_DIR/install.sh"
+    exit 1
+fi
 
 if [ -z "$PYTHON_BIN" ]; then
     echo "[错误] 未找到 python3"
@@ -19,43 +33,78 @@ fi
 
 echo "=== RK3588 Web Console 安装 ==="
 
-# 设为 OFFLINE=1 时只使用 install_deps.sh 已准备好的 Python 环境和预构建 dist，
-# 绝不访问 PyPI/npm；适合现场无公网安装。
-OFFLINE="${OFFLINE:-0}"
+# OFFLINE=1 强制只使用已安装的 Python 包和预构建 dist；OFFLINE=0 强制联网重建。
+# 未指定时优先使用已有 dist，避免现场误执行 npm ci 清空离线恢复的 node_modules。
+if [ -z "${OFFLINE+x}" ]; then
+    if [ -f "$SCRIPT_DIR/frontend/dist/index.html" ]; then
+        OFFLINE=1
+        echo "    检测到预构建 frontend/dist，自动采用离线安全模式。"
+    else
+        OFFLINE=0
+        echo "    未检测到预构建 frontend/dist，将联网安装并构建前端。"
+    fi
+fi
+case "$OFFLINE" in
+    0|1) ;;
+    *) echo "[错误] OFFLINE 只能是 0 或 1，当前值: $OFFLINE" >&2; exit 2 ;;
+esac
 
 # 1. 安装后端
 echo "[1/4] 安装后端..."
+rm -rf -- "$INSTALL_DIR/backend"
 mkdir -p "$INSTALL_DIR/backend"
-cp -r "$SCRIPT_DIR/backend/"* "$INSTALL_DIR/backend/"
+cp -a "$SCRIPT_DIR/backend/." "$INSTALL_DIR/backend/"
 cd "$INSTALL_DIR/backend"
+PIP_SYSTEM_ARGS=()
+PIP_INSTALL_HELP="$($PYTHON_BIN -m pip help install 2>/dev/null || true)"
+if grep -q -- '--break-system-packages' <<< "$PIP_INSTALL_HELP"; then
+    PIP_SYSTEM_ARGS+=(--break-system-packages)
+fi
 if [ "$OFFLINE" = "1" ]; then
-    "$PYTHON_BIN" -m pip install --no-index -r requirements.txt --quiet
+    "$PYTHON_BIN" -m pip install "${PIP_SYSTEM_ARGS[@]}" --no-index -r requirements.txt --quiet
 else
-    "$PYTHON_BIN" -m pip install -r requirements.txt --quiet
+    "$PYTHON_BIN" -m pip install "${PIP_SYSTEM_ARGS[@]}" -r requirements.txt --quiet
 fi
 
 # 2. 构建 / 复制前端
 echo "[2/4] 处理前端..."
 mkdir -p "$INSTALL_DIR/frontend"
 
+deploy_frontend_dist() {
+    local source_dist="$1"
+    DIST_STAGE="$(mktemp -d "$INSTALL_DIR/frontend/.dist-install.XXXXXX")"
+    cp -a "$source_dist" "$DIST_STAGE/dist"
+    rm -rf -- "$INSTALL_DIR/frontend/dist"
+    mv "$DIST_STAGE/dist" "$INSTALL_DIR/frontend/dist"
+    rmdir "$DIST_STAGE"
+    DIST_STAGE=""
+}
+
 if [ "$OFFLINE" = "1" ]; then
     if [ ! -f "$SCRIPT_DIR/frontend/dist/index.html" ]; then
         echo "  [错误] OFFLINE=1 但缺少预构建 frontend/dist/index.html"
-        echo "         请在有公网时先运行项目根目录 install_deps.sh。"
+        echo "         请重新运行 offline_install_env_debian/install_offline.sh，或在有公网时运行 install_deps.sh。"
         exit 1
     fi
-    cp -r "$SCRIPT_DIR/frontend/dist" "$INSTALL_DIR/frontend/"
+    deploy_frontend_dist "$SCRIPT_DIR/frontend/dist"
     echo "    离线模式：已复制预构建前端"
 elif command -v node &>/dev/null && command -v npm &>/dev/null; then
-    echo "    检测到 Node.js $(node -v)，直接在板端构建..."
-    cd "$SCRIPT_DIR/frontend"
-    npm ci --no-audit --no-fund
-    npm run build
-    cp -r dist "$INSTALL_DIR/frontend/"
+    echo "    检测到 Node.js $(node -v)，在临时目录构建..."
+    FRONTEND_BUILD_DIR="$(mktemp -d)"
+    (
+        cd "$SCRIPT_DIR/frontend"
+        tar --exclude='./node_modules' --exclude='./dist' --exclude='*.tsbuildinfo' -cf - .
+    ) | tar -xf - -C "$FRONTEND_BUILD_DIR"
+    (
+        cd "$FRONTEND_BUILD_DIR"
+        npm ci --no-audit --no-fund
+        npm run build
+    )
+    deploy_frontend_dist "$FRONTEND_BUILD_DIR/dist"
     echo "    构建完成"
 elif [ -d "$SCRIPT_DIR/frontend/dist" ]; then
     echo "    未找到 Node.js，使用已有的 dist/ 构建产物..."
-    cp -r "$SCRIPT_DIR/frontend/dist" "$INSTALL_DIR/frontend/"
+    deploy_frontend_dist "$SCRIPT_DIR/frontend/dist"
     echo "    前端构建产物已复制"
 else
     echo ""
@@ -66,7 +115,7 @@ else
     echo "      apt-get install -y nodejs"
     echo ""
     echo "    方案 B：在开发机上先构建，再整体复制到板子"
-    echo "      cd frontend && npm install && npm run build"
+    echo "      cd frontend && npm ci && npm run build"
     exit 1
 fi
 

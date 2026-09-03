@@ -254,12 +254,42 @@ Rockchip BSP 组件不由该脚本安装；用户态 `librknnrt.so` 和 `rknn_ap
 bash install_deps.sh --build
 ```
 
+现场设备不能访问 APT、PyPI 或 npm 时，请先在相同发行版、相同版本且有公网的 RK3588
+上生成离线材料。Debian 离线功能和材料都放在 `offline_install_env_debian`：
+
+```bash
+# 有网 RK3588：只打运行环境；需要板端编译时追加 --build
+bash offline_install_env_debian/create_bundle.sh
+
+# 把整个 offline_install_env_debian 随同同版本项目复制到断网 RK3588 后直接执行
+bash offline_install_env_debian/install_offline.sh
+```
+
+离线包包含 deb 完整依赖闭包、ARM64 Python wheels、Node.js、锁定的前端依赖与预构建
+页面，并在安装前校验操作系统、架构、Python ABI、项目输入和全部文件哈希。详细操作及
+Rockchip BSP 边界见 [offline_install_env_debian/README.md](offline_install_env_debian/README.md)。
+成品固定生成到 `offline_install_env_debian/output/bundle`，顶层安装器会自动使用它并识别项目根目录。
+
 准备完成后可断开公网并做一次只读验收：
 
 ```bash
 bash install_deps.sh --check
 # 需要验收板端编译环境时：bash install_deps.sh --check --build
 ```
+
+`--check` 会进行五层只读检测：系统/架构与已验证基线、RKNPU/RGA/MPP/DMA 设备、
+Python/npm/通用动态库、Rockchip GStreamer 硬件插件，以及项目和 `/opt/ai_apps` 中
+实际可执行文件的 ELF 架构、`ldd` 和包内 RKNN Runtime 哈希。检测结果分为：
+
+- `[通过]`：当前检查项符合要求；
+- `[警告]`：可能可以运行，但驱动版本、可选硬件能力或应用包可追溯性尚未完全验证，
+  命令返回值仍为 0；
+- `[失败]`：存在会阻止核心功能运行的问题，命令返回非 0。
+
+检查不会启动摄像头、模型或推理进程，因此静态检查通过后仍应使用现场摄像头、实际
+`.rknn` 模型和 RTSP/录像输出做一次冒烟测试。项目已经验证的平台组合记录在
+`vision_analysis/vendor/rockchip/PLATFORM_COMPATIBILITY.env`；只有完成硬件冒烟测试后
+才应更新该基线。
 
 现场首次/更新安装 Web 控制台时使用预构建前端和已安装的 Python 包，不访问公网：
 

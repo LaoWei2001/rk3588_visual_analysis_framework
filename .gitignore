@@ -6,6 +6,7 @@ dist
 *.tsbuildinfo
 .rknn
 node_modules
+/offline_install_env_debian/output/
 .claude
 .vscode
 

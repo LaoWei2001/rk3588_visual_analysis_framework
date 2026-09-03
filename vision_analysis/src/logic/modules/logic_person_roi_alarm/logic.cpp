@@ -18,6 +18,7 @@ struct PersonRoiAlarmState
     uint64_t last_frame_ms = 0;
     uint64_t last_report_attempt_ms = 0;
     uint64_t last_error_log_ms = 0;
+    uint64_t last_window_error_ms = 0;
 };
 
 void reset_presence(PersonRoiAlarmState &state)
@@ -36,6 +37,40 @@ bool frame_continuity_broken(const PersonRoiAlarmState &state, uint64_t now_ms)
     if (now_ms < state.last_frame_ms)
         return true;
     return now_ms - state.last_frame_ms > CONTINUITY_GAP_MS;
+}
+
+/* 解析 "HH:MM" 为当日分钟数；格式或取值非法返回 -1。 */
+int parse_hhmm(const std::string &text)
+{
+    if (text.size() != 5 || text[2] != ':')
+        return -1;
+    for (const char ch : {text[0], text[1], text[3], text[4]})
+    {
+        if (ch < '0' || ch > '9')
+            return -1;
+    }
+    const int hour = (text[0] - '0') * 10 + (text[1] - '0');
+    const int minute = (text[3] - '0') * 10 + (text[4] - '0');
+    if (hour > 23 || minute > 59)
+        return -1;
+    return hour * 60 + minute;
+}
+
+/* 窗内区间为 [start, end)；start > end 表示跨午夜。调用前保证 start != end。 */
+bool window_contains(int start_min, int end_min, int now_min)
+{
+    if (start_min < end_min)
+        return now_min >= start_min && now_min < end_min;
+    return now_min >= start_min || now_min < end_min;
+}
+
+void log_window_error_periodically(ChannelContext *ctx, PersonRoiAlarmState &state)
+{
+    if (state.last_window_error_ms != 0 && ctx->timestamp_ms - state.last_window_error_ms < ERROR_LOG_INTERVAL_MS)
+        return;
+
+    state.last_window_error_ms = ctx->timestamp_ms;
+    fprintf(stderr, "[logic_person_roi_alarm][ch%02d] time window misconfigured, alarm suppressed\n", ctx->chnId);
 }
 
 void log_report_failure_periodically(ChannelContext *ctx, PersonRoiAlarmState &state, const EventReportResult &report)
@@ -61,6 +96,24 @@ void logic_person_roi_alarm(ChannelContext *ctx)
     if (frame_continuity_broken(state, now_ms))
         reset_presence(state);
     state.last_frame_ms = now_ms;
+
+    if (ctx->param_bool("enable_time_window"))
+    {
+        const FrameTime frame_time = ctx->datetime();
+        const int start_min = parse_hhmm(ctx->param_string("window_start"));
+        const int end_min = parse_hhmm(ctx->param_string("window_end"));
+        if (start_min < 0 || end_min < 0 || start_min == end_min)
+        {
+            log_window_error_periodically(ctx, state);
+            reset_presence(state);
+            return;
+        }
+        if (!window_contains(start_min, end_min, frame_time.hour * 60 + frame_time.minute))
+        {
+            reset_presence(state);
+            return;
+        }
+    }
 
     const std::string roi_name = ctx->param_string("roi_name");
     const std::string target_label = ctx->param_string("target_label");

@@ -40,6 +40,29 @@
                 "x-step": 0.1,
                 "x-unit": "秒",
                 "x-hot-reload": "reset_state"
+            },
+            "enable_time_window": {
+                "type": "boolean",
+                "title": "启用夜间时间窗",
+                "description": "开启后仅在时间窗内计时与报警；窗外清除状态、不报警不绘制。默认关闭，保持全天候报警。",
+                "default": false,
+                "x-hot-reload": "reset_state"
+            },
+            "window_start": {
+                "type": "string",
+                "title": "时间窗开始",
+                "description": "本机时间 HH:MM（24 小时制）。晚于结束时间表示跨午夜（如 18:00 到次日 06:00）；窗内区间为 [开始, 结束)。",
+                "default": "18:00",
+                "x-placeholder": "18:00",
+                "x-hot-reload": "reset_state"
+            },
+            "window_end": {
+                "type": "string",
+                "title": "时间窗结束",
+                "description": "本机时间 HH:MM（24 小时制）。格式非法或与开始时间相同时视为配置错误：不报警，并在日志中每分钟提示一次。",
+                "default": "06:00",
+                "x-placeholder": "06:00",
+                "x-hot-reload": "reset_state"
             }
         }
     },
