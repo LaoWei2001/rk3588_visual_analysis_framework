@@ -105,6 +105,10 @@ Code；直接下载并解压项目 ZIP 也可运行，不要求 `.git` 目录或
 - 应用包上传、安装、启动、停止和状态查看；
 - 支持选择不同配置文件启动；
 - 实时画面、运行日志和待上报记录查看；
+- 独立视频采集页面：RTSP H.264 原码流直接封装 MP4；H.265/H.265+ 通过 RK3588
+  MPP 硬件解码、硬件编码为标准 H.264 MP4，避免不同摄像头的 H.265 封装差异；
+  USB MJPEG/NV12/YUYV 统一以受控码率的软件编码生成高质量 H.264，
+  避免逐帧 MJPEG 文件过大，并正确处理非 16 对齐分辨率和 MJPEG 色彩范围；
 - Web 按钮向指定通道业务逻辑发送动作（需自行编写按钮的功能）
 - 浏览器终端、板级后台服务管理，以及当前应用独立的投递连接、接口契约和 OTA 配置；
 - 配置保存后由 C++ 运行时自动检测并热更新。
@@ -291,11 +295,21 @@ Python/npm/通用动态库、Rockchip GStreamer 硬件插件，以及项目和 `
 `vision_analysis/vendor/rockchip/PLATFORM_COMPATIBILITY.env`；只有完成硬件冒烟测试后
 才应更新该基线。
 
-现场首次/更新安装 Web 控制台时使用预构建前端和已安装的 Python 包，不访问公网：
+联网设备默认从 pip/npm 软件源安装并重新构建 Web 控制台，无需设置环境变量：
+
+```bash
+sudo bash web_console/install.sh
+```
+
+断网设备才显式使用预构建前端和已经由离线环境包安装的 Python 包：
 
 ```bash
 sudo env OFFLINE=1 bash web_console/install.sh
 ```
+
+`web_console/install.sh` 不会根据 `frontend/dist` 是否存在猜测网络状态：未设置
+`OFFLINE` 等同于 `OFFLINE=0`（联网），只有明确传入 `OFFLINE=1` 才会完全禁止
+pip/npm 联网。
 
 `install_deps.sh` 是“联网预配置 + 断网验收”脚本，不包含 deb/wheel/npm 离线安装包；
 因此不能把一台从未准备过的裸机带到无公网现场后再首次执行普通安装模式。

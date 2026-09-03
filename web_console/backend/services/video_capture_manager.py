@@ -1,8 +1,11 @@
 """独立的视频素材采集管理器。
 
-该模块不依赖视觉 App、算法管线或事件发件箱。RTSP 输入直接复用摄像头的
-H264/H265 压缩码流写入单个 MP4；USB 优先把摄像头 MJPEG 原码流直接封装为
-MP4，避免任何色彩转换和二次编码。Web 只负责控制进程和消费低帧率预览。
+该模块不依赖视觉 App、算法管线或事件发件箱。RTSP H264 输入直接复用摄像头
+压缩码流写入 MP4；RTSP H265 输入通过 RK3588 MPP 硬件解码和 H264 硬件编码
+标准化后写入 MP4，避免不同摄像头 H265/H265+ 参数集、时间戳和 hvc1 封装差异。
+USB MJPEG/NV12/YUYV 统一转换为 I420，再以受控码率编码为高质量 H264。USB
+路径保留 x264 软件编码，以正确处理 MJPEG full-range 色彩和非 16 对齐高度，
+同时避免 MJPEG 原帧直存造成文件过大。Web 只负责控制进程和消费低帧率预览。
 """
 from __future__ import annotations
 
@@ -572,6 +575,37 @@ def _mp4_record_tail(codec: str, output_path: Path) -> List[str]:
     ]
 
 
+def _pipeline_error_summary(lines: Iterable[str], fallback: str) -> str:
+    """返回首个真正的管线错误，避免 PAUSE/TEARDOWN 次生错误遮住根因。"""
+    values = [str(line).strip() for line in lines if str(line).strip()]
+    blocks: List[List[str]] = []
+    current: List[str] = []
+    for line in values:
+        is_error_start = line.startswith("ERROR:") or line.startswith("错误：")
+        if is_error_start:
+            if current:
+                blocks.append(current)
+            current = [line]
+        elif current and len(current) < 8:
+            current.append(line)
+    if current:
+        blocks.append(current)
+
+    def is_rtsp_shutdown_noise(block: List[str]) -> bool:
+        text = "\n".join(block)
+        return (
+            "gst_rtspsrc_pause" in text
+            and ("Could not send message" in text or "Received end-of-file" in text)
+        )
+
+    meaningful = [block for block in blocks if not is_rtsp_shutdown_noise(block)]
+    if meaningful:
+        return "；".join(meaningful[0])
+    if blocks:
+        return "；".join(blocks[-1])
+    return "；".join(values[-4:]) if values else fallback
+
+
 def _gst_framerate(value: Any) -> str:
     try:
         fps = float(value)
@@ -611,15 +645,43 @@ def _usb_ingest(source: Dict[str, Any], probe: Dict[str, Any]) -> List[str]:
     return command + ["decodebin", "!"]
 
 
-def _usb_encoder_rates(probe: Dict[str, Any]) -> Tuple[int, int, int]:
-    """按像素量给 USB 素材分配偏质量优先的 VBR 码率。"""
+def _h264_encoder_rates(probe: Dict[str, Any]) -> Tuple[int, int, int]:
+    """按像素量分配高质量 H264 目标码率，同时限制长期文件增长。"""
     width = max(1, int(probe.get("width") or 0))
     height = max(1, int(probe.get("height") or 0))
     fps = min(60.0, max(1.0, float(probe.get("fps") or 25.0)))
-    target = min(20_000_000, max(2_500_000, int(width * height * fps * 0.22)))
-    minimum = max(1_000_000, int(target * 0.5))
-    maximum = min(30_000_000, int(target * 1.5))
+    target = min(20_000_000, max(2_500_000, int(width * height * fps * 0.15)))
+    minimum = max(1_500_000, int(target * 0.6))
+    maximum = min(25_000_000, int(target * 1.25))
     return target, minimum, maximum
+
+
+def _mpp_h264_encoder(probe: Dict[str, Any], profile: str = "main") -> List[str]:
+    fps = min(60.0, max(1.0, float(probe.get("fps") or 25.0)))
+    width = max(1, int(probe.get("width") or 0))
+    height = max(1, int(probe.get("height") or 0))
+    target, minimum, maximum = _h264_encoder_rates(probe)
+    if width > 1920 or height > 1080:
+        level = "5.2" if fps > 30 else "5.1"
+    else:
+        level = "4.2" if fps > 30 else "4.1"
+    return [
+        "mpph264enc", "rc-mode=vbr", f"profile={profile}", f"level={level}",
+        f"bps={target}", f"bps-min={minimum}", f"bps-max={maximum}",
+        "qp-init=24", "qp-min=18", "qp-max=32",
+        f"gop={max(1, int(round(fps)))}", "header-mode=each-idr",
+    ]
+
+
+def _x264_encoder(probe: Dict[str, Any]) -> List[str]:
+    fps = min(60.0, max(1.0, float(probe.get("fps") or 25.0)))
+    target, _, _ = _h264_encoder_rates(probe)
+    return [
+        "x264enc", "pass=cbr", "speed-preset=superfast", "tune=zerolatency",
+        "bframes=0", "qp-min=18", "qp-max=32",
+        f"key-int-max={max(1, int(round(fps)))}",
+        f"bitrate={max(1, target // 1000)}",
+    ]
 
 
 def build_preview_args(source: Dict[str, Any], probe: Dict[str, Any]) -> List[str]:
@@ -642,6 +704,23 @@ def build_record_args(
     if source["source_type"] == "rtsp":
         codec = str(probe["codec"])
         command += _rtsp_ingest(source, probe)
+        if codec == "h265":
+            # 部分摄像头的 H265/H265+ 可以正常解码预览，但其参数集、时间戳或
+            # NAL 排列不能被 GStreamer 1.18 的 h265parse/mp4mux 稳定转换为
+            # hvc1。先用 MPP 解码，再硬件编码成标准 H264；录像和预览复用同一
+            # 次解码，既消除厂商码流差异，也不会把转码负担放到 CPU 上。
+            command += ["!", "mppvideodec", "format=NV12", "!", "tee", "name=capture_decoded"]
+            command += ["capture_decoded.", "!", "queue", "!"]
+            command += _mpp_h264_encoder(probe)
+            command += ["!"]
+            command += _mp4_record_tail("h264", output_path)
+            command += [
+                "capture_decoded.", "!",
+                "queue", "leaky=downstream", "max-size-buffers=2", "max-size-bytes=0", "max-size-time=0", "!",
+            ]
+            command += _jpeg_preview_tail(width, height)
+            return command
+
         command += ["!", "tee", "name=capture_encoded"]
         command += ["capture_encoded.", "!", "queue", "!"]
         command += _mp4_record_tail(codec, output_path)
@@ -653,36 +732,19 @@ def build_record_args(
         command += _jpeg_preview_tail(width, height)
         return command
 
-    pixel_format = str(probe.get("input_format") or "").upper()
-    if pixel_format == "MJPG":
-        fields = [f"width={width}", f"height={height}"]
-        framerate = _gst_framerate(probe.get("fps"))
-        if framerate:
-            fields.append(f"framerate={framerate}")
-        command += [
-            "v4l2src", f"device={source['usb_device']}", "do-timestamp=true", "!",
-            f"image/jpeg,{','.join(fields)}", "!", "jpegparse", "!",
-            "tee", "name=capture_jpeg",
-            "capture_jpeg.", "!", "queue", "!",
-            "avmux_mp4", "!",
-            "filesink", f"location={output_path}", "sync=false",
-            "capture_jpeg.", "!",
-            "queue", "leaky=downstream", "max-size-buffers=2", "max-size-bytes=0", "max-size-time=0", "!",
-            "jpegdec", "!",
-        ]
-        command += _jpeg_preview_tail(width, height)
-        return command
-
-    gop = max(1, int(round(float(probe.get("fps") or 25))))
-    target_bps, _, _ = _usb_encoder_rates(probe)
+    # MJPEG 先用 jpegdec 正确处理 full-range；NV12/YUYV 直接进入 videoconvert。
+    # 两类输入都标准化为紧凑 I420，再由 x264 编码。这里不能使用 mpph264enc：
+    # 部分 UVC 分辨率（例如高度 1080/360）不是 16 对齐，MPP 可能把 stride
+    # 填充区编码成底部绿条，且 MJPEG full-range 还可能产生明显色偏。
+    # 录像与低帧率预览共享一次解码/颜色转换，文件仍比逐帧 MJPEG 小得多。
     command += _usb_ingest(source, probe)
     command += [
         "videoconvert", "!", "video/x-raw,format=I420", "!",
         "tee", "name=capture_raw",
         "capture_raw.", "!", "queue", "!",
-        "x264enc", "speed-preset=superfast", "tune=zerolatency", "bframes=0",
-        f"key-int-max={gop}", f"bitrate={max(1, target_bps // 1000)}", "!",
     ]
+    command += _x264_encoder(probe)
+    command += ["!"]
     command += _mp4_record_tail("h264", output_path)
     command += [
         "capture_raw.", "!",
@@ -717,7 +779,7 @@ class VideoCaptureManager:
         self._max_file_size_bytes = 0
         self._stop_reason: Optional[str] = None
         self._error: Optional[str] = None
-        self._stderr: Deque[str] = deque(maxlen=40)
+        self._stderr: Deque[str] = deque(maxlen=120)
         self._latest_preview_frame: Optional[bytes] = None
         self._preview_sequence = 0
         self._record_done = threading.Event()
@@ -852,8 +914,8 @@ class VideoCaptureManager:
 
     def _recent_pipeline_error(self, fallback: str) -> str:
         with self._lock:
-            lines = list(self._stderr)[-4:]
-        return "；".join(lines) if lines else fallback
+            lines = list(self._stderr)
+        return _pipeline_error_summary(lines, fallback)
 
     @staticmethod
     def _terminate_process(process: subprocess.Popen, graceful: bool, timeout: float = 12.0) -> None:

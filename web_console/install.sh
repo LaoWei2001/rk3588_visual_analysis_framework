@@ -2,7 +2,8 @@
 # RK3588 Web Console 安装脚本
 # 用法：把整个 web_console 文件夹复制到 RK3588，然后在板子上执行此脚本
 #   scp -r web_console root@<板子IP>:~
-#   ssh root@<板子IP> "cd ~/web_console && bash install.sh"
+#   ssh root@<板子IP> "cd ~/web_console && bash install.sh"       # 默认联网安装
+#   ssh root@<板子IP> "cd ~/web_console && OFFLINE=1 bash install.sh"  # 明确离线部署
 set -Eeuo pipefail
 
 # 可移植安装路径；迁移到其他目录时可执行
@@ -22,7 +23,8 @@ trap cleanup EXIT
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "[错误] 安装 systemd 服务需要 root 权限。"
-    echo "       请执行: sudo env OFFLINE=1 bash $SCRIPT_DIR/install.sh"
+    echo "       联网安装请执行: sudo bash $SCRIPT_DIR/install.sh"
+    echo "       离线部署请执行: sudo env OFFLINE=1 bash $SCRIPT_DIR/install.sh"
     exit 1
 fi
 
@@ -33,38 +35,64 @@ fi
 
 echo "=== RK3588 Web Console 安装 ==="
 
-# OFFLINE=1 强制只使用已安装的 Python 包和预构建 dist；OFFLINE=0 强制联网重建。
-# 未指定时优先使用已有 dist，避免现场误执行 npm ci 清空离线恢复的 node_modules。
-if [ -z "${OFFLINE+x}" ]; then
-    if [ -f "$SCRIPT_DIR/frontend/dist/index.html" ]; then
-        OFFLINE=1
-        echo "    检测到预构建 frontend/dist，自动采用离线安全模式。"
-    else
-        OFFLINE=0
-        echo "    未检测到预构建 frontend/dist，将联网安装并构建前端。"
-    fi
-fi
+# 模式必须由用户明确决定：默认始终联网安装；只有 OFFLINE=1 才禁止 pip/npm 联网。
+# frontend/dist 是否存在只代表项目带有预构建产物，绝不能作为网络状态判断依据。
+OFFLINE="${OFFLINE:-0}"
 case "$OFFLINE" in
     0|1) ;;
     *) echo "[错误] OFFLINE 只能是 0 或 1，当前值: $OFFLINE" >&2; exit 2 ;;
 esac
+if [ "$OFFLINE" = "1" ]; then
+    echo "    模式: 离线部署（仅验证已安装的 Python 环境并复制预构建前端）"
+else
+    echo "    模式: 联网安装（使用 pip 软件源和 npm registry 重新安装、构建）"
+fi
 
 # 1. 安装后端
 echo "[1/4] 安装后端..."
-rm -rf -- "$INSTALL_DIR/backend"
-mkdir -p "$INSTALL_DIR/backend"
-cp -a "$SCRIPT_DIR/backend/." "$INSTALL_DIR/backend/"
-cd "$INSTALL_DIR/backend"
 PIP_SYSTEM_ARGS=()
 PIP_INSTALL_HELP="$($PYTHON_BIN -m pip help install 2>/dev/null || true)"
 if grep -q -- '--break-system-packages' <<< "$PIP_INSTALL_HELP"; then
     PIP_SYSTEM_ARGS+=(--break-system-packages)
 fi
 if [ "$OFFLINE" = "1" ]; then
-    "$PYTHON_BIN" -m pip install "${PIP_SYSTEM_ARGS[@]}" --no-index -r requirements.txt --quiet
+    if ! "$PYTHON_BIN" - <<'PY'
+import importlib
+import sys
+
+modules = (
+    "fastapi", "starlette", "uvicorn", "pydantic", "aiofiles", "multipart",
+    "uvloop", "httptools", "watchfiles", "dotenv", "cv2", "pam", "six",
+    "yaml", "requests", "websockets",
+)
+errors = []
+for name in modules:
+    try:
+        importlib.import_module(name)
+    except Exception as exc:
+        errors.append(f"{name}: {exc}")
+if errors:
+    print("\n".join(errors), file=sys.stderr)
+    raise SystemExit(1)
+PY
+    then
+        echo "[错误] 离线 Python 环境不完整。" >&2
+        echo "       请先运行 offline_install_env_debian/install_offline.sh，再重新部署 Web 控制台。" >&2
+        exit 1
+    fi
+    if ! "$PYTHON_BIN" -m pip check; then
+        echo "[错误] 离线 Python 环境存在依赖冲突。" >&2
+        echo "       请先运行 offline_install_env_debian/install_offline.sh 修复环境。" >&2
+        exit 1
+    fi
+    echo "    离线模式：Python 模块和依赖关系检查通过，未执行 pip install。"
 else
-    "$PYTHON_BIN" -m pip install "${PIP_SYSTEM_ARGS[@]}" -r requirements.txt --quiet
+    "$PYTHON_BIN" -m pip install "${PIP_SYSTEM_ARGS[@]}" \
+        -r "$SCRIPT_DIR/backend/requirements.txt" --quiet
 fi
+rm -rf -- "$INSTALL_DIR/backend"
+mkdir -p "$INSTALL_DIR/backend"
+cp -a "$SCRIPT_DIR/backend/." "$INSTALL_DIR/backend/"
 
 # 2. 构建 / 复制前端
 echo "[2/4] 处理前端..."
@@ -88,7 +116,13 @@ if [ "$OFFLINE" = "1" ]; then
     fi
     deploy_frontend_dist "$SCRIPT_DIR/frontend/dist"
     echo "    离线模式：已复制预构建前端"
-elif command -v node &>/dev/null && command -v npm &>/dev/null; then
+else
+    if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
+        echo "  [错误] 联网模式需要 Node.js 和 npm 来执行锁定构建。" >&2
+        echo "         请先在项目根目录运行 install_deps.sh，然后重新执行本脚本。" >&2
+        echo "         如果目标设备没有网络，请明确使用 OFFLINE=1。" >&2
+        exit 1
+    fi
     echo "    检测到 Node.js $(node -v)，在临时目录构建..."
     FRONTEND_BUILD_DIR="$(mktemp -d)"
     (
@@ -102,21 +136,6 @@ elif command -v node &>/dev/null && command -v npm &>/dev/null; then
     )
     deploy_frontend_dist "$FRONTEND_BUILD_DIR/dist"
     echo "    构建完成"
-elif [ -d "$SCRIPT_DIR/frontend/dist" ]; then
-    echo "    未找到 Node.js，使用已有的 dist/ 构建产物..."
-    deploy_frontend_dist "$SCRIPT_DIR/frontend/dist"
-    echo "    前端构建产物已复制"
-else
-    echo ""
-    echo "  [错误] 既没有 Node.js 也没有预构建的 dist/ 目录"
-    echo "  解决方案二选一："
-    echo "    方案 A：在板子上安装 Node.js，然后重新运行此脚本"
-    echo "      curl -fsSL https://deb.nodesource.com/setup_20.x | bash -"
-    echo "      apt-get install -y nodejs"
-    echo ""
-    echo "    方案 B：在开发机上先构建，再整体复制到板子"
-    echo "      cd frontend && npm ci && npm run build"
-    exit 1
 fi
 
 # 可替换的图片文件（不存在也没关系）

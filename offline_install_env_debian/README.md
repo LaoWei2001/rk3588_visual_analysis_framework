@@ -94,6 +94,10 @@ bash /userdata/rk3588_visual_analysis_framework/offline_install_env_debian/insta
 sudo env OFFLINE=1 bash /userdata/rk3588_visual_analysis_framework/web_console/install.sh
 ```
 
+这里必须显式写 `OFFLINE=1`。Web 安装器默认始终采用联网安装模式，不会因为项目中
+存在预构建 `frontend/dist` 就自行切换到离线模式。离线模式只验证离线环境包已经
+安装好的 Python 模块和依赖关系，不会再次执行 `pip install`。
+
 ## 4. 新增项目依赖后
 
 - APT 包：加入 `dependency_manifest.sh` 的 `APT_RUNTIME` 或 `APT_BUILD`；

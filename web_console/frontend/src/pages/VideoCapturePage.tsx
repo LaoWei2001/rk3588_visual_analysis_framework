@@ -285,7 +285,7 @@ export default function VideoCapturePage() {
       <header className="video-capture-header">
         <div>
           <h2>视频采集</h2>
-          <p>从 RTSP 或 USB 原始来源采集单个 MP4，独立于视觉算法和告警录像。</p>
+          <p>从 RTSP 或 USB 视频源采集单个 MP4，独立于视觉算法和告警录像。</p>
         </div>
         <span className={`capture-state-badge ${status.state}`}>
           {status.recording && <i />}{stateText}
@@ -362,7 +362,7 @@ export default function VideoCapturePage() {
                 <input value={rtspUrl} disabled={controlsLocked}
                   placeholder="rtsp://user:password@192.168.1.64/Streaming/Channels/101"
                   onChange={event => setRtspUrl(event.target.value)} />
-                <small>RTSP 的 H264/H265 码流直接写入 MP4，不经过算法或重新编码。</small>
+                <small>H264 原码流直接写入 MP4；H265 由 RK3588 硬件转换为标准 H264，兼容 H265/H265+ 摄像头。</small>
               </div> : <div className="capture-field">
                 <label>USB 视频设备</label>
                 {usbDevices.length > 0 ? <select value={usbDevice} disabled={controlsLocked}
@@ -382,7 +382,7 @@ export default function VideoCapturePage() {
                     {resolutionLabel(resolution)}
                   </option>)}
                 </select>
-                <small>USB 优先将摄像头 MJPEG 原码流直接封装为 MP4，不经过算法、色彩转换或二次编码。</small>
+                <small>USB 的 MJPEG/NV12/YUYV 使用色彩安全的软件 H264 编码，兼顾文件体积、非 16 对齐分辨率和色彩准确性。</small>
               </div>}
               <button className="capture-secondary-button" disabled={!sourceReady || controlsLocked || busy !== ''}
                 onClick={connectPreview}>

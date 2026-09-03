@@ -88,7 +88,61 @@ def test_rtsp_record_pipeline_is_original_stream_to_single_mp4(tmp_path):
     assert "fragment-duration=1000" in args
 
 
-def test_usb_mjpeg_record_pipeline_keeps_original_stream(tmp_path):
+def test_h265_rtsp_record_pipeline_uses_mpp_h264_normalization(tmp_path):
+    url = "rtsp://admin:secret@192.168.10.3/Streaming/Channels/101"
+    source = {"source_type": "rtsp", "rtsp_url": url, "usb_device": ""}
+    probe = {"codec": "h265", "width": 3840, "height": 2160, "fps": 25}
+    output = tmp_path / ".h265-camera.mp4.part"
+
+    args = capture.build_record_args(source, probe, output)
+    rendered = " ".join(args)
+
+    assert "rtph265depay" in args
+    assert "mppvideodec" in args
+    assert "format=NV12" in args
+    assert "name=capture_decoded" in args
+    assert "mpph264enc" in args
+    assert "rc-mode=vbr" in args
+    assert "profile=main" in args
+    assert "level=5.1" in args
+    assert "header-mode=each-idr" in args
+    assert "video/x-h264,stream-format=avc,alignment=au" in args
+    assert "video/x-h265,stream-format=hvc1,alignment=au" not in args
+    assert rendered.count("mp4mux") == 1
+    assert rendered.count("filesink") == 1
+    assert f"location={output}" in args
+
+
+def test_pipeline_error_summary_prefers_root_error_over_rtsp_pause_noise():
+    lines = [
+        "ERROR: from element /GstPipeline:pipeline0/GstMP4Mux:mp4mux0: Could not multiplex stream.",
+        "Additional debug info:",
+        "gstqtmux.c: Buffer has no PTS.",
+        "ERROR: from element /GstPipeline:pipeline0/GstRTSPSrc:rtspsrc0: Could not write to resource.",
+        "Additional debug info:",
+        "gstrtspsrc.c: gst_rtspsrc_pause (): Could not send message. (Received end-of-file)",
+    ]
+
+    result = capture._pipeline_error_summary(lines, "fallback")
+
+    assert "Could not multiplex stream" in result
+    assert "Buffer has no PTS" in result
+    assert "gst_rtspsrc_pause" not in result
+
+
+def test_pipeline_error_summary_keeps_rtsp_error_when_it_is_the_only_error():
+    lines = [
+        "错误：来自组件 /GstPipeline:pipeline0/GstRTSPSrc:rtspsrc0：无法写入资源。",
+        "额外的调试信息：",
+        "gstrtspsrc.c: gst_rtspsrc_pause (): Could not send message. (Received end-of-file)",
+    ]
+
+    result = capture._pipeline_error_summary(lines, "fallback")
+
+    assert "gst_rtspsrc_pause" in result
+
+
+def test_usb_mjpeg_record_pipeline_uses_color_safe_x264(tmp_path):
     source = {
         "source_type": "usb", "rtsp_url": "", "usb_device": "/dev/video3",
         "usb_width": 1280, "usb_height": 720,
@@ -104,12 +158,18 @@ def test_usb_mjpeg_record_pipeline_keeps_original_stream(tmp_path):
     assert "device=/dev/video3" in args
     assert "image/jpeg,width=1280,height=720,framerate=30/1" in args
     assert "jpegparse" in args
-    assert "avmux_mp4" in args
-    assert "jpegdec" in args  # 只位于低帧率 Web 预览分支
+    assert "jpegdec" in args
     assert "mppjpegdec" not in args
+    assert "video/x-raw,format=I420" in args
+    assert "name=capture_raw" in args
+    assert "x264enc" in args
+    assert "pass=cbr" in args
+    assert "speed-preset=superfast" in args
+    assert "qp-min=18" in args
+    assert "qp-max=32" in args
+    assert "avmux_mp4" not in args
     assert "mpph264enc" not in args
-    assert "x264enc" not in args
-    assert rendered.count("avmux_mp4") == 1
+    assert rendered.count("mp4mux") == 1
     assert rendered.count("filesink") == 1
     assert not any("yolo" in value.lower() or "logic" in value.lower() for value in args)
 
@@ -129,6 +189,26 @@ def test_usb_raw_fallback_avoids_mpp_alignment_bug(tmp_path):
     assert "x264enc" in args
     assert "mpph264enc" not in args
     assert "video/x-raw,format=I420" in args
+    assert "video/x-raw,format=NV12,width=640,height=360,framerate=30/1" in args
+
+
+def test_h264_encoder_rates_balance_quality_and_file_size():
+    target_720p, _, maximum_720p = capture._h264_encoder_rates({
+        "width": 1280, "height": 720, "fps": 30,
+    })
+    target_1080p, _, maximum_1080p = capture._h264_encoder_rates({
+        "width": 1920, "height": 1080, "fps": 30,
+    })
+    target_4k, _, maximum_4k = capture._h264_encoder_rates({
+        "width": 3840, "height": 2160, "fps": 30,
+    })
+
+    assert target_720p == 4_147_200
+    assert target_1080p == 9_331_200
+    assert target_4k == 20_000_000
+    assert maximum_720p == 5_184_000
+    assert maximum_1080p == 11_664_000
+    assert maximum_4k == 25_000_000
 
 
 def test_usb_modes_are_parsed_and_best_format_is_selected():
