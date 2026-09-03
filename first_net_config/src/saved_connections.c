@@ -4,6 +4,7 @@
 
 #include "cli_io.h"
 #include "command_runner.h"
+#include "interface_inspector.h"
 #include "ipv4_utils.h"
 #include "netconfig_types.h"
 #include "nmcli_parser.h"
@@ -12,6 +13,7 @@
 
 #include <limits.h>
 #include <net/if.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -367,15 +369,55 @@ static void use_saved_connection(const SavedConnection *connection)
 
 static void remove_saved_connection(const SavedConnection *connection)
 {
-    if (connection->active)
+    bool queried_active;
+    bool active_now;
+    bool ssh_path;
+
+    if (!connection)
     {
-        printf("\n这项连接正在使用，不能删除。请先切换到其他连接。\n");
         return;
+    }
+
+    /* 列表展示后连接状态可能发生变化，删除前必须再查一次。 */
+    queried_active = connection_is_active(connection->uuid);
+    /* 查询失败时 connection_is_active 会返回 false，保留列表中的
+     * active 结果，避免因一次瞬时失败降级为普通确认。 */
+    active_now = connection->active || queried_active;
+    ssh_path = active_now && connection->device[0] != '\0' &&
+               interface_is_ssh_path(connection->device);
+
+    if (active_now)
+    {
+        printf("\n[高风险] “%s”正在使用。\n", connection->name);
+        printf("删除会让 NetworkManager 立即移除该 profile，"
+               "对应网卡可能立即断网。\n");
+        printf("本操作没有超时回滚，恢复时需要重新创建连接。\n");
+        if (ssh_path)
+        {
+            printf("[当前 SSH] 该连接正在承载本次远程会话，"
+                   "确认后 SSH 预计会立即断开。\n");
+            printf("请先确认已有串口、HDMI 或其他可用网络。\n");
+        }
+        if (!read_exact_word(
+                "确认删除正在使用的连接请输入 DELETE ACTIVE: ",
+                "DELETE ACTIVE"))
+        {
+            printf("已取消。\n");
+            return;
+        }
+
+        /* SSH 断开可能向会话进程发送信号，确保 nmcli 能执行完。 */
+        if (signal(SIGHUP, SIG_IGN) == SIG_ERR ||
+            signal(SIGPIPE, SIG_IGN) == SIG_ERR)
+        {
+            printf("[拒绝] 无法启用断线保护，未删除正在使用的连接。\n");
+            return;
+        }
     }
 
     printf("\n即将删除“%s”。删除后需要重新填写才能再次使用。\n",
            connection->name);
-    if (!read_yes_no("确定删除吗？[y/N]: ", false))
+    if (!active_now && !read_yes_no("确定删除吗？[y/N]: ", false))
     {
         printf("已取消。\n");
         return;
@@ -434,9 +476,13 @@ void manage_saved_connections(void)
             print_selected_detail(connection);
             if (connection->active)
             {
-                printf("这项连接正在使用，不能重复使用或直接删除。\n");
+                printf("1. 删除这项正在使用的连接（可能立即断网）\n");
                 printf("0. 返回连接列表\n");
-                (void)read_int("请选择操作 [0]: ", 0, 0);
+                action = read_int("请选择操作 [0-1]: ", 0, 1);
+                if (action == 1)
+                {
+                    remove_saved_connection(connection);
+                }
                 break;
             }
             printf("1. 使用这项连接\n");
