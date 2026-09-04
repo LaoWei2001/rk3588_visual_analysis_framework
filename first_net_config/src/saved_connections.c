@@ -18,11 +18,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define MAX_SAVED_CONNECTIONS 128
 #define CONNECTION_LIST_SIZE 65536
 #define DETAIL_SIZE 1024
 #define SAVED_NAME_SIZE 512
+#define MAX_CONFLICT_INTERFACES 128
+#define CONFLICT_SETTLE_ATTEMPTS 20
+#define CONFLICT_SETTLE_INTERVAL_NS 250000000L
 
 typedef enum
 {
@@ -408,7 +412,7 @@ static void use_saved_connection(const SavedConnection *connection)
     }
 }
 
-static void remove_saved_connection(const SavedConnection *connection)
+static bool remove_saved_connection(const SavedConnection *connection)
 {
     bool queried_active;
     bool active_now;
@@ -416,7 +420,7 @@ static void remove_saved_connection(const SavedConnection *connection)
 
     if (!connection)
     {
-        return;
+        return false;
     }
 
     /* 列表展示后连接状态可能发生变化，删除前必须再查一次。 */
@@ -444,7 +448,7 @@ static void remove_saved_connection(const SavedConnection *connection)
                 "DELETE ACTIVE"))
         {
             printf("已取消。\n");
-            return;
+            return false;
         }
 
         /* SSH 断开可能向会话进程发送信号，确保 nmcli 能执行完。 */
@@ -452,7 +456,7 @@ static void remove_saved_connection(const SavedConnection *connection)
             signal(SIGPIPE, SIG_IGN) == SIG_ERR)
         {
             printf("[拒绝] 无法启用断线保护，未删除正在使用的连接。\n");
-            return;
+            return false;
         }
     }
 
@@ -461,15 +465,211 @@ static void remove_saved_connection(const SavedConnection *connection)
     if (!active_now && !read_yes_no("确定删除吗？[y/N]: ", false))
     {
         printf("已取消。\n");
-        return;
+        return false;
     }
     if (delete_connection_by_uuid(connection->uuid) == 0)
     {
         printf("[完成] 已删除“%s”。\n", connection->name);
+        return true;
     }
-    else
+
+    printf("[失败] 没有删除成功，请稍后重试。\n");
+    return false;
+}
+
+static bool interface_is_conflicting(
+    char interfaces[][IF_NAMESIZE],
+    int count,
+    const char *iface)
+{
+    if (!interfaces || !iface)
     {
-        printf("[失败] 没有删除成功，请稍后重试。\n");
+        return false;
+    }
+    for (int index = 0; index < count; ++index)
+    {
+        if (strcmp(interfaces[index], iface) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool wait_for_deleted_connection_to_settle(
+    const SavedConnection *connection)
+{
+    const struct timespec interval = {
+        .tv_sec = 0,
+        .tv_nsec = CONFLICT_SETTLE_INTERVAL_NS};
+
+    if (!connection || connection->device[0] == '\0')
+    {
+        return false;
+    }
+
+    for (int attempt = 0; attempt < CONFLICT_SETTLE_ATTEMPTS; ++attempt)
+    {
+        char interfaces[MAX_CONFLICT_INTERFACES][IF_NAMESIZE] = {{0}};
+        int interface_count = collect_current_overlap_interfaces(
+            interfaces, MAX_CONFLICT_INTERFACES);
+
+        if (interface_count < 0)
+        {
+            return false;
+        }
+
+        if (!interface_is_conflicting(
+                interfaces, interface_count, connection->device))
+        {
+            /*
+             * nmcli 已经删除 profile，而且旧 IPv4 地址也已从内核消失。
+             * 只有这时才重新输出冲突检查，避免展示删除前的陈旧地址。
+             *
+             * 如果同一网卡自动启用了另一个仍然冲突的 profile，这里会
+             * 等到超时，再由下一轮把真实存在的新冲突显示出来。
+             */
+            return true;
+        }
+
+        if (attempt + 1 < CONFLICT_SETTLE_ATTEMPTS)
+        {
+            (void)nanosleep(&interval, NULL);
+        }
+    }
+
+    return false;
+}
+
+void manage_conflicting_connections(void)
+{
+    for (;;)
+    {
+        char interfaces[MAX_CONFLICT_INTERFACES][IF_NAMESIZE] = {{0}};
+        SavedConnection connections[MAX_SAVED_CONNECTIONS] = {0};
+        int candidates[MAX_SAVED_CONNECTIONS] = {0};
+        int warnings;
+        int interface_count;
+        int connection_count;
+        int candidate_count = 0;
+        bool has_unmanaged = false;
+
+        printf("\n========== IPv4 网段冲突健康检查 ==========\n");
+        warnings = show_current_overlap_warnings();
+        if (warnings <= 0)
+        {
+            return;
+        }
+
+        interface_count = collect_current_overlap_interfaces(
+            interfaces, MAX_CONFLICT_INTERFACES);
+        if (interface_count <= 0)
+        {
+            printf("[失败] 无法确定冲突涉及的网卡，未提供删除操作。\n");
+            return;
+        }
+
+        connection_count = collect_saved_connections(
+            connections, MAX_SAVED_CONNECTIONS);
+        if (connection_count < 0)
+        {
+            printf("[失败] 无法读取冲突网卡正在使用的连接。\n");
+            return;
+        }
+
+        for (int index = 0; index < connection_count; ++index)
+        {
+            if (connections[index].active &&
+                interface_is_conflicting(interfaces, interface_count,
+                                         connections[index].device))
+            {
+                candidates[candidate_count++] = index;
+            }
+        }
+
+        printf("\n冲突涉及的网卡：");
+        for (int index = 0; index < interface_count; ++index)
+        {
+            printf("%s%s", index == 0 ? "" : "、", interfaces[index]);
+        }
+        printf("\n");
+
+        if (candidate_count > 0)
+        {
+            printf("\n可删除的冲突连接：\n");
+            for (int index = 0; index < candidate_count; ++index)
+            {
+                print_connection_card(
+                    &connections[candidates[index]], index + 1);
+            }
+        }
+
+        for (int iface_index = 0;
+             iface_index < interface_count; ++iface_index)
+        {
+            bool represented = false;
+
+            for (int candidate = 0;
+                 candidate < candidate_count; ++candidate)
+            {
+                if (strcmp(
+                        connections[candidates[candidate]].device,
+                        interfaces[iface_index]) == 0)
+                {
+                    represented = true;
+                    break;
+                }
+            }
+            if (!represented)
+            {
+                if (!has_unmanaged)
+                {
+                    printf("\n不能由本工具直接删除的冲突网卡：\n");
+                    has_unmanaged = true;
+                }
+                printf("  - %s：没有找到活动的有线/Wi-Fi "
+                       "NetworkManager 配置，可能是虚拟网卡或手工地址\n",
+                       interfaces[iface_index]);
+            }
+        }
+
+        if (candidate_count == 0)
+        {
+            printf("\n[提醒] 没有找到可安全映射并删除的冲突连接。\n");
+            return;
+        }
+
+        printf("\n删除连接是永久操作，不只是临时断开。\n");
+        printf("请选择确认不再需要的一侧；正在使用或承载 SSH 的连接"
+               "会要求高风险确认。\n");
+        printf("  0. 暂不删除\n");
+
+        {
+            int selected = read_int("请选择要删除的冲突连接: ",
+                                    0, candidate_count);
+            SavedConnection *selected_connection;
+
+            if (selected == 0)
+            {
+                printf("已保留当前连接。\n");
+                return;
+            }
+            selected_connection = &connections[candidates[selected - 1]];
+            if (!remove_saved_connection(selected_connection))
+            {
+                return;
+            }
+
+            printf("正在等待 NetworkManager 清理旧 IP 和路由...\n");
+            if (!wait_for_deleted_connection_to_settle(selected_connection))
+            {
+                printf("[提醒] 等待约 5 秒后，%s 仍参与网段冲突。\n",
+                       selected_connection->device);
+                printf("可能仍有手工 IP 或其他网络状态，下面按实时状态重新检查。\n");
+            }
+        }
+
+        printf("\n正在重新检查剩余网段冲突...\n");
     }
 }
 

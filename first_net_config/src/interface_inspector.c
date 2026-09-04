@@ -450,6 +450,67 @@ int show_current_overlap_warnings(void)
     return warnings;
 }
 
+static void add_unique_interface(char interfaces[][IF_NAMESIZE],
+                                 int capacity,
+                                 int *count,
+                                 const char *iface)
+{
+    size_t length;
+
+    if (!interfaces || !count || !iface || iface[0] == '\0')
+    {
+        return;
+    }
+    for (int index = 0; index < *count; ++index)
+    {
+        if (strcmp(interfaces[index], iface) == 0)
+        {
+            return;
+        }
+    }
+    if (*count >= capacity)
+    {
+        return;
+    }
+    length = strnlen(iface, IF_NAMESIZE);
+    if (length >= IF_NAMESIZE)
+    {
+        return;
+    }
+    memcpy(interfaces[*count], iface, length + 1);
+    ++(*count);
+}
+
+int collect_current_overlap_interfaces(char interfaces[][IF_NAMESIZE],
+                                       int capacity)
+{
+    IPv4Row rows[MAX_IPV4_ROWS];
+    int row_count;
+    int interface_count = 0;
+
+    if (!interfaces || capacity <= 0)
+    {
+        return -1;
+    }
+    row_count = collect_ipv4_rows(rows, MAX_IPV4_ROWS);
+    for (int left = 0; left < row_count; ++left)
+    {
+        for (int right = left + 1; right < row_count; ++right)
+        {
+            if (strcmp(rows[left].iface, rows[right].iface) == 0 ||
+                !ranges_overlap(&rows[left], &rows[right]))
+            {
+                continue;
+            }
+            add_unique_interface(interfaces, capacity, &interface_count,
+                                 rows[left].iface);
+            add_unique_interface(interfaces, capacity, &interface_count,
+                                 rows[right].iface);
+        }
+    }
+    return interface_count;
+}
+
 bool approve_candidate_network(const char *selected_iface,
                                const char *ip,
                                int prefix)

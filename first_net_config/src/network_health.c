@@ -7,6 +7,7 @@
 #include "interface_inspector.h"
 #include "netconfig_types.h"
 #include "network_state.h"
+#include "saved_connections.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -444,4 +445,20 @@ void manage_default_route_health(bool quiet_when_healthy)
     printf("并出现 Destination Host Unreachable。\n");
     printf("============================================================\n");
     repair_route(&routes[broken], &routes[best_usable]);
+}
+
+void manage_network_health(void)
+{
+    printf("\n============================================================\n");
+    printf("                    统一网络健康检查\n");
+    printf("============================================================\n");
+    printf("检查范围：IPv4 默认路由抢占、活动网卡 IPv4 网段冲突。\n");
+
+    printf("\n[1/2] 检查 IPv4 默认路由\n");
+    manage_default_route_health(false);
+
+    printf("\n[2/2] 检查活动网卡 IPv4 网段冲突\n");
+    manage_conflicting_connections();
+
+    printf("\n[完成] 本轮网络健康检查结束。\n");
 }

@@ -54,7 +54,7 @@ static void print_menu(void)
     printf("13. 保存系统初始网络设置（制作镜像）\n");
     printf("14. 恢复系统初始网络设置\n");
     printf("15. 清除所有已保存的连接（高风险）\n");
-    printf("16. 检查并修复 IPv4 默认路由\n");
+    printf("16. 统一网络健康检查与修复\n");
     printf("0. 退出\n");
     printf("====================================================\n");
 }
@@ -156,7 +156,7 @@ int main(int argc, char *argv[])
             clear_all_network_connections();
             break;
         case 16:
-            manage_default_route_health(false);
+            manage_network_health();
             break;
         case 0:
             printf("退出。\n");

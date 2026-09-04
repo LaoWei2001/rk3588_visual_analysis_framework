@@ -2,9 +2,12 @@
 #define FIRST_NET_CONFIG_INTERFACE_INSPECTOR_H
 
 #include <stdbool.h>
+#include <net/if.h>
 
 void show_interface_overview(void);
 int show_current_overlap_warnings(void);
+int collect_current_overlap_interfaces(char interfaces[][IF_NAMESIZE],
+                                       int capacity);
 bool approve_candidate_network(const char *selected_iface,
                                const char *ip,
                                int prefix);

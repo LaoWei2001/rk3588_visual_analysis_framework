@@ -659,6 +659,10 @@ void configure_wifi(void)
     char ssid[BUF_SIZE];
     char password[BUF_SIZE];
     int security;
+    int connection_action;
+    bool preconfigure_only;
+    bool scan_nearby;
+    bool hidden;
     IPv4Config cfg;
     ConfigLifetime lifetime;
 
@@ -671,15 +675,38 @@ void configure_wifi(void)
     {
         return;
     }
-    lifetime = read_config_lifetime();
 
+    printf("\n请选择无线配置完成后的处理方式：\n");
+    printf("  1. 立即连接并测试：适合目标 Wi-Fi 当前就在附近\n");
+    printf("  2. 仅保存，暂不连接：适合提前配置异地 Wi-Fi，进入覆盖范围后自动连接\n");
+    connection_action = read_int("请选择 [1-2]: ", 1, 2);
+    preconfigure_only = connection_action == 2;
+
+    if (preconfigure_only)
+    {
+        lifetime = CONFIG_LIFETIME_PERMANENT;
+        printf("[说明] 离线预配置会永久写入系统，不能选择临时保存。\n");
+        printf("[说明] 当前不会验证无线名称、密码或现场网络参数是否正确。\n");
+    }
+    else
+    {
+        lifetime = read_config_lifetime();
+    }
+
+    scan_nearby = read_yes_no(
+        preconfigure_only
+            ? "是否仍要扫描当前附近的 Wi-Fi？[y/N]: "
+            : "是否扫描附近 Wi-Fi？[Y/n]: ",
+        !preconfigure_only);
+
+    if (!preconfigure_only || scan_nearby)
     {
         const char *on[] = {
             "nmcli", "radio", "wifi", "on", NULL};
         run_cmd(on);
     }
 
-    if (read_yes_no("是否扫描附近 Wi-Fi？[Y/n]: ", true))
+    if (scan_nearby)
     {
         const char *list[] = {
             "nmcli",
@@ -704,6 +731,8 @@ void configure_wifi(void)
             printf("无线网络名称不能超过 32 个字节。\n");
         }
     } while (ssid[0] == '\0' || strlen(ssid) > 32);
+
+    hidden = read_yes_no("这个无线网络是否隐藏名称（SSID）？[y/N]: ", false);
 
     printf("\n无线网络的密码方式：\n");
     printf("  1. 普通密码方式，常见于家用和现场无线网络\n");
@@ -769,6 +798,22 @@ void configure_wifi(void)
         return;
     }
 
+    if (hidden)
+    {
+        const char *hidden_network[] = {
+            "nmcli", "connection", "modify",
+            "uuid", temp_profile.uuid,
+            "802-11-wireless.hidden", "yes",
+            NULL};
+
+        if (run_cmd(hidden_network) != 0)
+        {
+            printf("设置隐藏无线网络失败。\n");
+            cleanup_temp_profile(&temp_profile);
+            return;
+        }
+    }
+
     if (security == 1)
     {
         const char *sec[] = {
@@ -812,6 +857,37 @@ void configure_wifi(void)
     {
         printf("网段检查未通过，本次设置已取消。\n");
         cleanup_temp_profile(&temp_profile);
+        return;
+    }
+
+    if (preconfigure_only)
+    {
+        printf("\n========== 保存异地 Wi-Fi 预配置 ==========\n");
+        printf("无线网卡：%s\n", iface);
+        printf("无线名称：%s%s\n", ssid, hidden ? "（隐藏）" : "");
+        printf("连接名称：%s\n", final_profile);
+        printf("保存后会开启自动连接，并设置较高的自动连接优先级。\n");
+        printf("本次不会尝试连接，因此也无法提前发现名称、密码或固定 IP 填写错误。\n");
+        printf("如果设备届时已经连着其他 Wi-Fi，系统通常不会强制切换；\n");
+        printf("设备启动、无线重新连接或当前 Wi-Fi 断开时会重新选择。\n");
+
+        if (!read_exact_word("确认仅保存供以后自动连接请输入 SAVE: ", "SAVE"))
+        {
+            printf("已取消保存。\n");
+            cleanup_temp_profile(&temp_profile);
+            return;
+        }
+
+        if (!finalize_profile(&temp_profile, final_profile, NULL))
+        {
+            printf("[失败] 无线预配置未能完整保存。\n");
+            cleanup_temp_profile(&temp_profile);
+            return;
+        }
+
+        printf("[完成] 本程序没有主动切换或测试当前网络。\n");
+        printf("[提示] 当 Wi-Fi \"%s\" 可用且无线网卡空闲时，系统会自动连接。\n",
+               ssid);
         return;
     }
 
