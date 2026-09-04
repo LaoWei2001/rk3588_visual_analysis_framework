@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
+#include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <stdbool.h>
@@ -65,6 +66,33 @@ static bool tag_name_matches(const char *start, const char *end,
     }
     length = (size_t)(end - local);
     return strlen(wanted) == length && strncasecmp(local, wanted, length) == 0;
+}
+
+static bool xml_has_element(const char *xml, const char *wanted)
+{
+    const char *cursor = xml;
+
+    if (!xml || !wanted)
+    {
+        return false;
+    }
+    while ((cursor = strchr(cursor, '<')) != NULL)
+    {
+        const char *name = cursor + 1;
+        const char *tag_end = strchr(name, '>');
+
+        if (!tag_end)
+        {
+            return false;
+        }
+        if (*name != '/' && *name != '?' && *name != '!' &&
+            tag_name_matches(name, tag_end, wanted))
+        {
+            return true;
+        }
+        cursor = tag_end + 1;
+    }
+    return false;
 }
 
 static bool xml_value(const char *xml, const char *wanted,
@@ -209,6 +237,22 @@ int parse_camera_discovery_payload(const char *payload, const char *sender_ip,
     char xaddrs[512] = {0};
     char port_text[32] = {0};
 
+    if (!payload || !camera)
+    {
+        return 0;
+    }
+
+    /*
+     * 本机发送的 SADP/ONVIF 探测请求也可能经组播或广播回到 socket。
+     * 请求只有 Probe，真正的发现响应使用 ProbeMatch。不能把请求报文的
+     * 本机源 IP 当成摄像头地址。
+     */
+    if (xml_has_element(payload, "Probe") &&
+        !xml_has_element(payload, "ProbeMatch"))
+    {
+        return 0;
+    }
+
     memset(camera, 0, sizeof(*camera));
     camera->http_port = 80;
     camera->rtsp_port = 554;
@@ -273,6 +317,37 @@ static void merge_camera(DiscoveredCamera *target,
     {
         target->prefix = incoming->prefix;
     }
+}
+
+static bool ipv4_is_local_address(const char *ip)
+{
+    struct ifaddrs *interfaces = NULL;
+    bool found = false;
+
+    if (!valid_ipv4(ip) || getifaddrs(&interfaces) != 0)
+    {
+        return false;
+    }
+    for (struct ifaddrs *item = interfaces;
+         item != NULL; item = item->ifa_next)
+    {
+        char address[INET_ADDRSTRLEN];
+
+        if (!item->ifa_addr || item->ifa_addr->sa_family != AF_INET ||
+            !inet_ntop(AF_INET,
+                       &((struct sockaddr_in *)item->ifa_addr)->sin_addr,
+                       address, (socklen_t)sizeof(address)))
+        {
+            continue;
+        }
+        if (strcmp(address, ip) == 0)
+        {
+            found = true;
+            break;
+        }
+    }
+    freeifaddrs(interfaces);
+    return found;
 }
 
 static int send_probe(int socket_fd, const char *payload,
@@ -385,6 +460,10 @@ int discover_cameras(const char *iface,
         payload[size] = '\0';
         (void)inet_ntop(AF_INET, &sender.sin_addr, sender_ip,
                         (socklen_t)sizeof(sender_ip));
+        if (ipv4_is_local_address(sender_ip))
+        {
+            continue;
+        }
         if (!parse_camera_discovery_payload(payload, sender_ip, &parsed))
         {
             continue;

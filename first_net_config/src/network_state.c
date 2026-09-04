@@ -47,6 +47,75 @@ static const char *friendly_device_state(const char *state)
     return state;
 }
 
+static const char *friendly_network_config_state(const char *state)
+{
+    if (!state || state[0] == '\0')
+    {
+        return "未知";
+    }
+    if (strstr(state, "disconnected") != NULL)
+    {
+        return "未激活";
+    }
+    if (strstr(state, "connecting") != NULL)
+    {
+        return "正在激活";
+    }
+    if (strstr(state, "connected") != NULL)
+    {
+        return "已激活";
+    }
+    if (strstr(state, "unavailable") != NULL)
+    {
+        return "暂不可用";
+    }
+    if (strstr(state, "unmanaged") != NULL)
+    {
+        return "未由系统管理";
+    }
+    return state;
+}
+
+static const char *ethernet_carrier_state(const char *iface)
+{
+    char path[256];
+    char value[16] = {0};
+    FILE *handle;
+    int written;
+
+    if (!iface || iface[0] == '\0')
+    {
+        return "未知";
+    }
+    written = snprintf(path, sizeof(path),
+                       "/sys/class/net/%s/carrier", iface);
+    if (written < 0 || (size_t)written >= sizeof(path))
+    {
+        return "未知";
+    }
+    handle = fopen(path, "r");
+    if (!handle)
+    {
+        return "未知";
+    }
+    if (!fgets(value, sizeof(value), handle))
+    {
+        fclose(handle);
+        return "未知";
+    }
+    fclose(handle);
+
+    if (value[0] == '1')
+    {
+        return "已接通";
+    }
+    if (value[0] == '0')
+    {
+        return "未接通";
+    }
+    return "未知";
+}
+
 static bool valid_uuid_text(const char *uuid)
 {
     if (!uuid || strlen(uuid) != UUID_SIZE - 1)
@@ -483,15 +552,18 @@ bool choose_ethernet_interface(char *iface, size_t iface_size)
     }
 
     printf("\n以下只列出可以接网线的物理网口：\n");
+    printf("  物理链路：网线与交换机、摄像头或其他对端是否真正接通。\n");
+    printf("  网络配置：NetworkManager 是否已经在该网口启用 IP 配置。\n");
     printf("  [当前远程连接] 表示你现在的 SSH 终端正通过这个网口。\n");
     printf("  [当前网络出口] 表示设备访问其他网段或互联网时会使用这个网口。\n");
 
     for (int i = 0; i < count; ++i)
     {
-        printf("  %d. %-14s 状态: %s%s%s\n",
+        printf("  %d. %-14s 物理链路: %s  网络配置: %s%s%s\n",
                i + 1,
                devices[i],
-               friendly_device_state(states[i]),
+               ethernet_carrier_state(devices[i]),
+               friendly_network_config_state(states[i]),
                interface_is_ssh_path(devices[i]) ? " [当前远程连接]" : "",
                interface_has_default_route(devices[i]) ? " [当前网络出口]" : "");
     }
