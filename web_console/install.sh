@@ -2,16 +2,40 @@
 # RK3588 Web Console 安装脚本
 # 用法：把整个 web_console 文件夹复制到 RK3588，然后在板子上执行此脚本
 #   scp -r web_console root@<板子IP>:~
-#   ssh root@<板子IP> "cd ~/web_console && bash install.sh"       # 默认联网安装
-#   ssh root@<板子IP> "cd ~/web_console && OFFLINE=1 bash install.sh"  # 明确离线部署
+#   ssh root@<板子IP> "cd ~/web_console && bash install.sh online"
+#   ssh root@<板子IP> "cd ~/web_console && bash install.sh offline"
 set -Eeuo pipefail
 
+usage() {
+    echo "用法：sudo bash web_console/install.sh <online|offline>"
+    echo "  online   联网安装 Python 依赖，并用 npm 重新构建前端"
+    echo "  offline  使用离线依赖 deb 提供的 Python 环境和预构建前端"
+}
+
+if [ "$#" -ne 1 ]; then
+    echo "[错误] 必须且只能指定一个安装模式。" >&2
+    usage >&2
+    exit 2
+fi
+
+INSTALL_MODE="$1"
+case "$INSTALL_MODE" in
+    online) OFFLINE=0 ;;
+    offline) OFFLINE=1 ;;
+    *)
+        echo "[错误] 安装模式只能是 online 或 offline，当前值: $INSTALL_MODE" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
+
 # 可移植安装路径；迁移到其他目录时可执行
-#   APPS_ROOT=/data/ai_apps bash install.sh
+#   APPS_ROOT=/data/ai_apps bash install.sh online
 APPS_ROOT="${APPS_ROOT:-/opt/ai_apps}"
 INSTALL_DIR="${INSTALL_DIR:-$APPS_ROOT/_console}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_BIN="$(command -v python3 || true)"
+PYTHON_ENV_DIR="${VISION_PYTHON_ENV:-/opt/vision-analysis/python-env}"
+PYTHON_BIN=""
 FRONTEND_BUILD_DIR=""
 DIST_STAGE=""
 
@@ -23,28 +47,27 @@ trap cleanup EXIT
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "[错误] 安装 systemd 服务需要 root 权限。"
-    echo "       联网安装请执行: sudo bash $SCRIPT_DIR/install.sh"
-    echo "       离线部署请执行: sudo env OFFLINE=1 bash $SCRIPT_DIR/install.sh"
-    exit 1
-fi
-
-if [ -z "$PYTHON_BIN" ]; then
-    echo "[错误] 未找到 python3"
+    echo "       联网安装请执行: sudo bash $SCRIPT_DIR/install.sh online"
+    echo "       离线部署请执行: sudo bash $SCRIPT_DIR/install.sh offline"
     exit 1
 fi
 
 echo "=== RK3588 Web Console 安装 ==="
 
-# 模式必须由用户明确决定：默认始终联网安装；只有 OFFLINE=1 才禁止 pip/npm 联网。
+# 模式必须由唯一的位置参数明确决定；offline 会完全禁止 pip/npm 联网。
 # frontend/dist 是否存在只代表项目带有预构建产物，绝不能作为网络状态判断依据。
-OFFLINE="${OFFLINE:-0}"
-case "$OFFLINE" in
-    0|1) ;;
-    *) echo "[错误] OFFLINE 只能是 0 或 1，当前值: $OFFLINE" >&2; exit 2 ;;
-esac
 if [ "$OFFLINE" = "1" ]; then
-    echo "    模式: 离线部署（仅验证已安装的 Python 环境并复制预构建前端）"
+    if [ -x "$PYTHON_ENV_DIR/bin/python3" ]; then
+        PYTHON_BIN="$PYTHON_ENV_DIR/bin/python3"
+    else
+        echo "[错误] 未找到离线 Python 环境: $PYTHON_ENV_DIR" >&2
+        echo "       请先运行 offline_install_env_debian/install_offline.sh。" >&2
+        exit 1
+    fi
+    echo "    模式: 离线部署（使用依赖 deb 提供的 Python 环境和预构建前端）"
 else
+    PYTHON_BIN="$(command -v python3 || true)"
+    [ -n "$PYTHON_BIN" ] || { echo "[错误] 未找到 python3" >&2; exit 1; }
     echo "    模式: 联网安装（使用 pip 软件源和 npm registry 重新安装、构建）"
 fi
 
@@ -109,18 +132,22 @@ deploy_frontend_dist() {
 }
 
 if [ "$OFFLINE" = "1" ]; then
-    if [ ! -f "$SCRIPT_DIR/frontend/dist/index.html" ]; then
-        echo "  [错误] OFFLINE=1 但缺少预构建 frontend/dist/index.html"
-        echo "         请重新运行 offline_install_env_debian/install_offline.sh，或在有公网时运行 install_deps.sh。"
+    OFFLINE_DIST="$SCRIPT_DIR/frontend/dist"
+    if [ ! -f "$OFFLINE_DIST/index.html" ]; then
+        OFFLINE_DIST="/usr/share/vision-analysis/frontend/dist"
+    fi
+    if [ ! -f "$OFFLINE_DIST/index.html" ]; then
+        echo "  [错误] 依赖 deb 中缺少预构建前端。" >&2
+        echo "         请重新生成并安装最新版离线仓库。" >&2
         exit 1
     fi
-    deploy_frontend_dist "$SCRIPT_DIR/frontend/dist"
+    deploy_frontend_dist "$OFFLINE_DIST"
     echo "    离线模式：已复制预构建前端"
 else
     if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
         echo "  [错误] 联网模式需要 Node.js 和 npm 来执行锁定构建。" >&2
         echo "         请先在项目根目录运行 install_deps.sh，然后重新执行本脚本。" >&2
-        echo "         如果目标设备没有网络，请明确使用 OFFLINE=1。" >&2
+        echo "         如果目标设备没有网络，请使用 offline 参数。" >&2
         exit 1
     fi
     echo "    检测到 Node.js $(node -v)，在临时目录构建..."

@@ -2,10 +2,10 @@
 # ============================================================================
 # RK3588 第三方环境一键配置（Debian / Ubuntu / Armbian）
 #
-#   bash install_deps.sh              安装全部运行环境并预构建 Web 前端
-#   bash install_deps.sh --build      再安装板端 C/C++ 编译与开发工具
-#   bash install_deps.sh --check      不联网、不修改系统，只验收运行环境
-#   bash install_deps.sh --check --build   连同编译环境一起验收
+#   bash install_deps.sh              安装运行、C/C++ 编译环境并预构建 Web 前端
+#   bash install_deps.sh --runtime-only    只安装运行环境
+#   bash install_deps.sh --check      不联网、不修改系统，验收默认完整环境
+#   bash install_deps.sh --check --runtime-only   只验收运行环境
 #
 # 正常安装必须在盒子仍能访问 APT、PyPI/npm 镜像时执行。断网设备请先在同版本
 # 有网 Debian RK3588 上运行 offline_install_env_debian/create_bundle.sh；现场直接运行统一安装入口。
@@ -16,7 +16,7 @@
 # ============================================================================
 set -Eeuo pipefail
 
-WANT_BUILD=false
+WANT_BUILD=true
 CHECK_ONLY=false
 
 usage() {
@@ -26,6 +26,7 @@ usage() {
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --build) WANT_BUILD=true ;;
+        --runtime-only) WANT_BUILD=false ;;
         --check) CHECK_ONLY=true ;;
         -h|--help) usage; exit 0 ;;
         *) echo "[错误] 未知参数: $1" >&2; usage >&2; exit 2 ;;
@@ -501,7 +502,7 @@ check_userland_environment() {
         bash curl python3 nmcli nm-online ip ping ethtool
         systemctl systemd-run journalctl timedatectl pgrep
         gst-launch-1.0 gst-inspect-1.0 ffprobe v4l2-ctl
-        node npm dpkg ldd readelf sha256sum
+        dpkg ldd readelf sha256sum
     )
     local missing_commands=()
     local command_name
@@ -537,13 +538,11 @@ check_userland_environment() {
         check_info "检测到 X Server；使用 HDMI 显示时还需确认 DISPLAY/Xauthority。"
     fi
 
-    if node_major_is_supported; then
-        check_pass "Node.js $(node -v) / npm $(npm -v) 满足前端要求。"
-    else
-        check_fail "Node.js 版本必须 >= 18；请重新运行联网或离线依赖安装器。"
+    local check_python="python3"
+    if [ -x /opt/vision-analysis/python-env/bin/python3 ]; then
+        check_python="/opt/vision-analysis/python-env/bin/python3"
     fi
-
-    if python3 - <<'PY'
+    if "$check_python" - <<'PY'
 import importlib
 import sys
 
@@ -564,11 +563,11 @@ if errors:
     raise SystemExit(1)
 PY
     then
-        check_pass "Python $(python3 -c 'import sys; print(sys.version.split()[0])') 核心模块均可导入。"
+        check_pass "Python $($check_python -c 'import sys; print(sys.version.split()[0])') 核心模块均可导入。"
     else
         check_fail "Python 核心模块导入失败；查看上方模块名，并重新安装 requirements。"
     fi
-    if python3 -m pip check; then
+    if "$check_python" -m pip check; then
         check_pass "pip 依赖关系无冲突。"
     else
         check_fail "pip 报告依赖缺失或版本冲突；断网机请重新运行 offline_install_env_debian/install_offline.sh。"
@@ -637,25 +636,12 @@ PY
         check_pass "中文叠字字体可用。"
     fi
 
-    if [ ! -f "$FRONTEND_DIR/dist/index.html" ]; then
+    if [ ! -f "$FRONTEND_DIR/dist/index.html" ] \
+            && [ ! -f /usr/share/vision-analysis/frontend/dist/index.html ]; then
         check_fail "预构建前端 web_console/frontend/dist/index.html"
     else
         check_pass "预构建前端 dist/index.html 存在。"
     fi
-    if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
-        check_fail "前端 node_modules（离线重建缓存）"
-    elif command -v npm >/dev/null 2>&1; then
-        local npm_check_output
-        if ! npm_check_output="$(cd "$FRONTEND_DIR" && npm ls --depth=0 2>&1)"; then
-            check_fail "前端 npm 依赖树与 package-lock.json 不一致"
-            echo "      npm 诊断（仅显示前 12 行）：" >&2
-            printf '%s\n' "$npm_check_output" | sed -n '1,12s/^/        /p' >&2
-            echo "      断网设备请重新运行 offline_install_env_debian/install_offline.sh；不要执行 npm ci/npm install。" >&2
-        else
-            check_pass "前端 node_modules 与 package-lock.json 一致。"
-        fi
-    fi
-
     if [ "$WANT_BUILD" = true ]; then
         local build_errors_before="$CHECK_ERRORS"
         local build_commands=(cmake make gcc g++ pkg-config readelf strip rsync git clang-format)
@@ -862,8 +848,8 @@ else
     [ "$CHECK_WARNINGS" -eq 0 ] \
         || echo "  仍有 $CHECK_WARNINGS 项兼容性警告，请查看上方提示并完成硬件冒烟测试。"
     echo "  到达断网现场后，可运行以下命令复检环境："
-    echo "    bash install_deps.sh --check$([ "$WANT_BUILD" = true ] && echo ' --build' || true)"
+    echo "    bash install_deps.sh --check$([ "$WANT_BUILD" = false ] && echo ' --runtime-only' || true)"
     echo "  仅在需要重新部署 Web 控制台时，才运行："
-    echo "    sudo env OFFLINE=1 bash web_console/install.sh"
+    echo "    sudo bash web_console/install.sh offline"
 fi
 echo "  说明：Rockchip RKNPU内核驱动/RGA/MPP 由厂家系统提供；librknnrt.so 由应用包固定。"

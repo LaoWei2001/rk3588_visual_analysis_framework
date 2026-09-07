@@ -11,7 +11,7 @@ if [[ "${1:-}" == "clean" ]]; then
 fi
 
 cmake \
-    -S "${project_dir}/src" \
+    -S "${project_dir}" \
     -B "${build_dir}" \
     -DCMAKE_BUILD_TYPE="${build_type}"
 

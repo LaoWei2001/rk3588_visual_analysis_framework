@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -25,6 +26,7 @@ from services.data_dir import data_dir, initialize_app_data
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 SYSTEMD_DIR = Path("/etc/systemd/system")
+PYTHON_EXECUTABLE = os.environ.get("VISION_PYTHON", sys.executable)
 
 router = APIRouter()
 
@@ -85,7 +87,7 @@ def _unit_content(key: str, app_dir: Path, config_name: str) -> str:
             f'Environment="ASSETS_DIR={_systemd_env(str(app_dir / "assets"))}"\n'
             f'Environment="CONFIG_FILE={_systemd_env(config_name)}"\n'
             f'Environment="OTA_CONFIG_FILE={_systemd_env(str(ota_config_file))}"\n'
-            f"ExecStart=/usr/bin/python3 -u {_systemd_quote(str(app_dir / 'services/model_update/ota_agent.py'))}\n"
+            f"ExecStart={_systemd_quote(PYTHON_EXECUTABLE)} -u {_systemd_quote(str(app_dir / 'services/model_update/ota_agent.py'))}\n"
             "Restart=always\n"
             "RestartSec=3\n"
             "User=root\n\n"
@@ -105,7 +107,7 @@ def _unit_content(key: str, app_dir: Path, config_name: str) -> str:
         f"WorkingDirectory={app_dir / 'services/upload'}\n"
         f'Environment="UPLOAD_DATA_DIR={_systemd_env(str(upload_data))}"\n'
         f'Environment="EVENT_STORE_DIR={_systemd_env(str(event_store))}"\n'
-        "ExecStart=/usr/bin/python3 -u main.py\n"
+        f"ExecStart={_systemd_quote(PYTHON_EXECUTABLE)} -u main.py\n"
         "Restart=always\n"
         "RestartSec=5\n"
         "User=root\n\n"

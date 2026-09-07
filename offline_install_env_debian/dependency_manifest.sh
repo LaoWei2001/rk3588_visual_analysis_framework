@@ -1,49 +1,63 @@
 #!/usr/bin/env bash
-# 项目第三方依赖的唯一清单。install_deps.sh 与离线包制作脚本共同读取此文件。
-# 这里仅声明数据，不执行安装命令。
+# 离线环境的基础依赖清单。能从已构建 ELF 自动识别的库无需重复填写；
+# 脚本、外部命令和尚未构建的新模块无法可靠推断时，可写入 extra-*-packages.txt。
 
-OFFLINE_DEPENDENCY_SCHEMA=3
+OFFLINE_DEPENDENCY_SCHEMA=6
 DEFAULT_NODE_VERSION="v20.18.0"
 
-# 这些脚本会参与离线包与目标项目的版本校验，避免新安装器调用旧验收/部署逻辑。
-OFFLINE_PROJECT_FILES=(
-    install_deps.sh
-    offline_install_env_debian/dependency_manifest.sh
-    vision_analysis/vendor/rockchip/PLATFORM_COMPATIBILITY.env
-    web_console/install.sh
-)
+# Debian 11 安全仓库结束常规维护后，索引与 pool 文件可能在归档切换期间不同步。
+# 固定到官方 snapshot 可确保同一批安全更新始终能够重新下载。
+DEBIAN_SECURITY_SNAPSHOT="20260901T000000Z"
 
 APT_RUNTIME=(
-    # 下载、证书和 Python 包安装
-    ca-certificates curl gnupg xz-utils
-    python3 python3-pip python3-dev python3-setuptools python3-wheel python3-venv
-    build-essential libffi-dev libssl-dev
+    ca-certificates curl xz-utils
+    python3 python3-venv libc6 libstdc++6
 
-    # Web 控制台实际调用的系统命令
     systemd dbus network-manager wpasupplicant iproute2 iputils-ping ethtool
     procps x11-xserver-utils tzdata
     ffmpeg v4l-utils
 
-    # PAM 登录、GPIO、GTK/OpenCV 运行 ABI 与中文叠字字体
     libpam0g libgpiod2 libgtk-3-0
-    libopencv-dev libopencv-contrib-dev
     fonts-wqy-zenhei
 
-    # GStreamer 核心、RTSP server 以及项目用到的解析/编解码/封装插件
     libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 libgstrtspserver-1.0-0
     gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
     gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
 )
 
 APT_BUILD=(
-    cmake pkg-config binutils rsync git clang-format
-    libgtk-3-dev libgpiod-dev
+    build-essential cmake pkg-config binutils rsync git clang-format
+    python3-dev python3-pip python3-setuptools python3-wheel
+    libffi-dev libssl-dev
+    libgtk-3-dev libgpiod-dev libncurses-dev
     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
     libgstrtspserver-1.0-dev
-    libblas-dev liblapack-dev
+    libopencv-dev libopencv-contrib-dev
 )
 
-# 路径相对于项目根目录。测试夹具中的 requirements.txt 不属于生产环境。
+# 开发机已由 dpkg 管理、但配置的软件源中没有的瑞芯微用户态包。
+# 制包时只对这些本地包使用 dpkg-repack；Debian 官方包始终按 APT 候选版本下载。
+LOCAL_RUNTIME_PACKAGES=(
+    librga2
+    librockchip-mpp1
+    librockchip-vpu0
+    gstreamer1.0-rockchip1
+    libv4l-rkmpp
+)
+
+LOCAL_BUILD_PACKAGES=(
+    librga-dev
+    librockchip-mpp-dev
+)
+
+# 不属于任何 dpkg 包、但需要随空白 Debian 环境安装的固定文件。
+# 格式：项目根目录相对路径|deb 内绝对安装路径
+BUNDLED_RUNTIME_FILES=(
+    "vision_analysis/vendor/rknn/2.4.2a2/lib/aarch64/librknnrt.so|/opt/vision-analysis/rockchip/lib/librknnrt.so"
+    "vision_analysis/vendor/rknn/2.4.2a2/include/rknn_api.h|/opt/vision-analysis/rockchip/include/rknn_api.h"
+)
+
+# 路径相对于项目根目录。新增生产 requirements.txt 后在这里加一项。
 PYTHON_REQUIREMENTS=(
     web_console/backend/requirements.txt
     service/model_update/requirements.txt

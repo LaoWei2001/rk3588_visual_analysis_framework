@@ -1,0 +1,2 @@
+# 每行一个无法自动识别的运行期 APT 包。也可使用：
+# bash offline_install_env_debian/create_bundle.sh --add <包名>

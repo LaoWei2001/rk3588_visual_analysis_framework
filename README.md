@@ -237,7 +237,7 @@ GStreamer appsink
 
 ### 2. 安装依赖
 
-只运行预编译应用包：
+默认安装运行环境、C/C++ 编译环境，并预构建 Web 前端：
 
 ```bash
 bash install_deps.sh
@@ -249,37 +249,39 @@ Rockchip BSP 组件不由该脚本安装；用户态 `librknnrt.so` 和 `rknn_ap
 `vision_analysis/vendor/rknn/`。APT 阶段只补装缺失包，不升级已经安装或被厂家设为
 `hold` 的 BSP 包；单个无关软件源更新失败时，会使用其他成功更新的索引继续安装。
 
-若需要在 RK3588 板端从源码编译（通常不需要）：
+如果目标设备明确只运行预编译应用，可以选择精简环境：
 
 ```bash
-bash install_deps.sh --build
+bash install_deps.sh --runtime-only
 ```
 
-现场设备不能访问 APT、PyPI 或 npm 时，请先在相同发行版、相同版本且有公网的 RK3588
-上生成离线材料。Debian 离线功能和材料都放在 `offline_install_env_debian`：
+现场设备不能访问 APT、PyPI 或 npm 时，在有公网的 ARM64 开发机生成本地 deb 仓库：
 
 ```bash
-# 有网 RK3588：只打运行环境；需要板端编译时追加 --build
+# 有网 ARM64 开发机：默认包含运行环境和板端 C/C++ 编译环境
 bash offline_install_env_debian/create_bundle.sh
 
-# 把整个 offline_install_env_debian 随同同版本项目复制到断网 RK3588 后直接执行
-bash offline_install_env_debian/install_offline.sh
+# 把整个 offline_install_env_debian 复制到断网 RK3588 后一键安装
+sudo bash offline_install_env_debian/install_offline.sh
 ```
 
-离线包包含 deb 完整依赖闭包、ARM64 Python wheels、Node.js、锁定的前端依赖与预构建
-页面，并在安装前校验操作系统、架构、Python ABI、项目输入和全部文件哈希。详细操作及
-Rockchip BSP 边界见 [offline_install_env_debian/README.md](offline_install_env_debian/README.md)。
-成品固定生成到 `offline_install_env_debian/output/bundle`，顶层安装器会自动使用它并识别项目根目录。
+离线材料是一个本地 APT 仓库：系统依赖、隔离 Python 环境和预构建前端都由项目自己的
+deb 元包统一安装。目标机不需要 Node/npm，也不要求提交 `frontend/dist`。仓库不会绑定
+项目源码哈希；Debian 官方包按当前软件源候选版本下载，开发机上由 dpkg 管理、但软件源没有的
+厂家用户态包才会重新封装，项目固定的 RKNN Runtime 也会单独封装。成品固定生成到
+`offline_install_env_debian/output/bundle`。新增依赖和手工补包方法见
+[offline_install_env_debian/README.md](offline_install_env_debian/README.md)。
 
-准备完成后可断开公网并做一次只读验收：
+如需单独排查厂家 BSP、硬件驱动或应用动态库，可运行只读诊断（它不是离线安装步骤，
+诊断失败也不代表 deb 安装失败）：
 
 ```bash
 bash install_deps.sh --check
-# 需要验收板端编译环境时：bash install_deps.sh --check --build
+# 只验收运行环境时：bash install_deps.sh --check --runtime-only
 ```
 
 `--check` 会进行五层只读检测：系统/架构与已验证基线、RKNPU/RGA/MPP/DMA 设备、
-Python/npm/通用动态库、Rockchip GStreamer 硬件插件，以及项目和 `/opt/ai_apps` 中
+Python/通用动态库、Rockchip GStreamer 硬件插件，以及项目和 `/opt/ai_apps` 中
 实际可执行文件的 ELF 架构、`ldd` 和包内 RKNN Runtime 哈希。检测结果分为：
 
 - `[通过]`：当前检查项符合要求；
@@ -295,24 +297,23 @@ Python/npm/通用动态库、Rockchip GStreamer 硬件插件，以及项目和 `
 联网设备默认从 pip/npm 软件源安装并重新构建 Web 控制台，无需设置环境变量：
 
 ```bash
-sudo bash web_console/install.sh
+sudo bash web_console/install.sh online
 ```
 
 断网设备才显式使用预构建前端和已经由离线环境包安装的 Python 包：
 
 ```bash
-sudo env OFFLINE=1 bash web_console/install.sh
+sudo bash web_console/install.sh offline
 ```
 
-`web_console/install.sh` 不会根据 `frontend/dist` 是否存在猜测网络状态：未设置
-`OFFLINE` 等同于 `OFFLINE=0`（联网），只有明确传入 `OFFLINE=1` 才会完全禁止
-pip/npm 联网。
+`web_console/install.sh` 强制要求一个安装模式参数，只接受 `online` 或 `offline`，不会根据
+`frontend/dist` 是否存在猜测网络状态。`offline` 模式会完全禁止 pip/npm 联网。
 
 `install_deps.sh` 是“联网预配置 + 断网验收”脚本，不包含 deb/wheel/npm 离线安装包；
 因此不能把一台从未准备过的裸机带到无公网现场后再首次执行普通安装模式。
 
-Rockchip RKNPU 内核驱动、RGA/MPP 和硬件 GStreamer 插件仍由板卡 BSP 或系统镜像提供；
-项目不会尝试用应用目录中的 `.so` 替代内核驱动。
+目标机仍需使用能正确启动 RK3588 的厂家内核、设备树和固件。离线仓库负责 RGA/MPP、
+Rockchip GStreamer 和 RKNN 等用户态组件，但不会尝试用用户态 `.so` 替代内核驱动。
 
 ### 2.1 固定的 RKNN Runtime
 
