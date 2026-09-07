@@ -411,18 +411,25 @@ cat > "$DIST_DIR/setup_python.sh" << 'SETUP_EOF'
 #!/bin/bash
 set -e
 ABS_PATH=$(cd "$(dirname "$0")"; pwd)
-echo ">>> 初始化 Python 环境 (使用系统级 pip)..."
-PIP_ARGS=()
 if [ "${OFFLINE:-0}" = "1" ]; then
-    PIP_ARGS+=(--no-index)
-    echo ">>> 离线模式：只确认 install_deps.sh 已安装的依赖，不访问 PyPI"
+    PYTHON_BIN="/opt/vision-analysis/python-env/bin/python3"
+    if [ ! -x "$PYTHON_BIN" ]; then
+        echo "[ERROR] 未找到离线 Python 环境；请先运行 offline_install_env_debian/install_offline.sh"
+        exit 1
+    fi
+    echo ">>> 离线模式：使用依赖 deb 提供的 Python 环境"
+    "$PYTHON_BIN" -m pip check
+    echo "[OK] Python 环境可用。"
+    exit 0
 else
+    PYTHON_BIN="python3"
+    echo ">>> 初始化 Python 环境 (使用系统级 pip)..."
     python3 -m pip install --upgrade pip -q || true
 fi
 for req in $(find "$ABS_PATH/services" -name requirements.txt); do
     if [ -f "$req" ]; then
         echo ">>> 安装 $(basename "$(dirname "$req")") 依赖..."
-        python3 -m pip install "${PIP_ARGS[@]}" -r "$req"
+        "$PYTHON_BIN" -m pip install -r "$req"
     fi
 done
 echo "[OK] 环境安装完成。"

@@ -1,0 +1,286 @@
+{
+  "global": {
+    "enable_display": 0,
+    "disp_width": 1280,
+    "disp_height": 1280,
+    "tile_rows": 2,
+    "tile_cols": 2,
+    "max_fps": 25,
+    "queue_size": 1,
+    "channel_threads": 3,
+    "tracker_enable": 1,
+    "tracker_iou_thresh": 0.3,
+    "tracker_max_miss": 30,
+    "tracker_min_hits": 3,
+    "performance_display": 1,
+    "enable_pause_key": 0,
+    "enable_rtsp": 1,
+    "rtsp_codec": "h264",
+    "global_logics": [
+      {
+        "instance_id": "global_globalLogic-1-1787925201418",
+        "enable": true,
+        "logic": "global_crane_safety_controller",
+        "channels": [
+          0,
+          4,
+          5,
+          6
+        ],
+        "poll_interval_ms": 200,
+        "logic_parameters": {
+          "motion_channel_id": 0,
+          "hook_channel_id": 1,
+          "helmet_channel_id": 2,
+          "intrusion_channel_id": 3,
+          "lamp_settle_sec": 0.8,
+          "hardware_enabled": true,
+          "horn_pin": "GPIO6_A0",
+          "horn_active_level": 1,
+          "lamp_pin": "GPIO6_A2",
+          "lamp_active_level": 1
+        },
+        "report_policy": {
+          "enabled": true,
+          "deliveries": [
+            {
+              "id": "delivery_report-2-1787925240286",
+              "enabled": true,
+              "connection_id": "connection_1",
+              "contract_id": "global_crane_safety_controller.http_alarm",
+              "contract_revision": "b12554aa15356b9db1781bcbe86f874f532873f3da0e04322aeeefdf51905375",
+              "media": [
+                "annotated_image",
+                "raw_image"
+              ],
+              "contract_label": "JNU 行车安全拼接图片告警"
+            }
+          ],
+          "parameters": [],
+          "image_overlay": "custom",
+          "video_overlay": "custom",
+          "video_pre_sec": 3,
+          "video_post_sec": 3,
+          "video_fps": 15,
+          "merge_window_sec": 5
+        },
+        "report_parameters": {}
+      }
+    ]
+  },
+  "channels": [
+    {
+      "id": 0,
+      "enable": true,
+      "infer_enable": false,
+      "stream": {
+        "src_type": "rtsp",
+        "url": "rtsp://admin:jndxc301@192.168.2.237/Streaming/Channels/101",
+        "video_enc": "h265"
+      },
+      "models": [],
+      "logic": "logic_crane_motion",
+      "report_policy": {
+        "enabled": false,
+        "deliveries": [],
+        "parameters": []
+      },
+      "report_parameters": {},
+      "logic_parameters": {
+        "motion_roi_name": "",
+        "diff_threshold": 25,
+        "start_ratio": 0.18,
+        "stop_ratio": 0.06,
+        "moving_confirm_sec": 0.4,
+        "still_confirm_sec": 2
+      },
+      "roi_zones": []
+    },
+    {
+      "id": 4,
+      "enable": true,
+      "infer_enable": true,
+      "stream": {
+        "src_type": "rtsp",
+        "url": "rtsp://admin:jndxc301@192.168.2.237/Streaming/Channels/101",
+        "video_enc": "h265"
+      },
+      "models": [
+        {
+          "id": "model_0",
+          "enable": true,
+          "model_type": "yolov8_det",
+          "model_path": "assets/hook.rknn",
+          "label_path": "assets/labels_hook.txt",
+          "version": "",
+          "obj_thresh": 0.2,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 1
+        }
+      ],
+      "logic": "logic_crane_hook",
+      "report_policy": {
+        "enabled": false,
+        "deliveries": [],
+        "parameters": []
+      },
+      "report_parameters": {},
+      "logic_parameters": {
+        "hook_class_id": 0,
+        "min_score": 0.3,
+        "safe_radius": 150,
+        "confirm_sec": 0.5,
+        "clear_sec": 0.5,
+        "lost_tolerance_sec": 0.5
+      },
+      "roi_zones": []
+    },
+    {
+      "id": 5,
+      "enable": true,
+      "infer_enable": true,
+      "stream": {
+        "src_type": "rtsp",
+        "url": "rtsp://admin:jndxc301@192.168.2.237/Streaming/Channels/101",
+        "video_enc": "h265"
+      },
+      "models": [
+        {
+          "id": "model_0",
+          "enable": true,
+          "model_type": "yolov5_seg",
+          "model_path": "assets/yolov5_seg.rknn",
+          "label_path": "assets/labels.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 2
+        }
+      ],
+      "logic": "logic_crane_helmet",
+      "report_policy": {
+        "enabled": false,
+        "deliveries": [],
+        "parameters": []
+      },
+      "report_parameters": {},
+      "logic_parameters": {
+        "roi_name": "loading_zone",
+        "person_labels": "person",
+        "helmet_labels": "helmet",
+        "person_min_score": 0.4,
+        "helmet_min_score": 0.3,
+        "head_region_ratio": 0.4,
+        "match_margin_ratio": 0.12,
+        "confirm_sec": 0.5,
+        "clear_sec": 1
+      },
+      "roi_zones": []
+    },
+    {
+      "id": 6,
+      "enable": true,
+      "infer_enable": true,
+      "stream": {
+        "src_type": "rtsp",
+        "url": "rtsp://admin:jndxc301@192.168.2.237/Streaming/Channels/101",
+        "video_enc": "h265"
+      },
+      "models": [
+        {
+          "id": "model_0",
+          "enable": true,
+          "model_type": "yolov8_det",
+          "model_path": "assets/yolov8n.rknn",
+          "label_path": "assets/labels.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 0
+        }
+      ],
+      "logic": "logic_crane_intrusion",
+      "report_policy": {
+        "enabled": false,
+        "deliveries": [],
+        "parameters": []
+      },
+      "report_parameters": {},
+      "logic_parameters": {
+        "roi_name": "projection_zone",
+        "person_labels": "person",
+        "min_score": 0.4,
+        "confirm_sec": 0.3,
+        "clear_sec": 1
+      },
+      "roi_zones": []
+    }
+  ],
+  "_editor_layout": {
+    "0": {
+      "stream": {
+        "x": -323,
+        "y": 234
+      },
+      "logic": {
+        "x": 150,
+        "y": 237
+      }
+    },
+    "1": {
+      "stream": {
+        "x": -560,
+        "y": 328
+      },
+      "model": {
+        "x": -81,
+        "y": 320
+      },
+      "logic": {
+        "x": 142,
+        "y": 324
+      }
+    },
+    "2": {
+      "stream": {
+        "x": -548,
+        "y": 407
+      },
+      "model": {
+        "x": -78,
+        "y": 408
+      },
+      "logic": {
+        "x": 137,
+        "y": 408
+      }
+    },
+    "3": {
+      "stream": {
+        "x": -567,
+        "y": 497
+      },
+      "model": {
+        "x": -76,
+        "y": 499
+      },
+      "logic": {
+        "x": 133,
+        "y": 498
+      }
+    },
+    "global": {
+      "logic_0": {
+        "x": 433,
+        "y": 250
+      },
+      "report_0_0": {
+        "x": 697,
+        "y": 247
+      }
+    }
+  }
+}

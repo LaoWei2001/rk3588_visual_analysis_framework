@@ -1,0 +1,9 @@
+component=librknnrt.so
+runtime_version=2.4.2a2
+runtime_build=5fd9678a8f@2026-04-27T15:52:16
+architecture=aarch64
+elf_build_id=af33245459a4ab8a8d2a7901197a25156cfa2291
+runtime_sha256=bf50d51705ae433013927a13520ae781b534fdb1481c47bdddbc726f63ed4970
+header_sha256=61eedea2dd0fed8e4ee667fef571bf6b07fc87495bb6282d65055f60c61e7079
+validated_soc=RK3588
+validated_rknpu_driver=v0.9.0
