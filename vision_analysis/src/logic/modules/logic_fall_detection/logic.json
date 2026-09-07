@@ -1,0 +1,377 @@
+{
+  "label": "蒙古包单路落水与走廊跌倒检测",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "hardware_id": {
+        "type": "string",
+        "title": "摄像头硬件编号",
+        "default": "",
+        "x-hot-reload": "preserve_state"
+      },
+      "pose_model_id": {
+        "type": "string",
+        "title": "姿态模型节点ID",
+        "description": "留空时接收本通道全部yolov8_pose结果。",
+        "default": "pose",
+        "x-hot-reload": "reset_state"
+      },
+      "scraper_model_id": {
+        "type": "string",
+        "title": "刮泥机模型节点ID",
+        "description": "留空时接收本通道全部yolov5_seg结果。",
+        "default": "scraper",
+        "x-hot-reload": "reset_state"
+      },
+      "water_roi_name": {
+        "type": "string",
+        "title": "水面ROI名称",
+        "default": "water_surface",
+        "x-hot-reload": "reset_state"
+      },
+      "corridor_roi_name": {
+        "type": "string",
+        "title": "外围走廊ROI名称",
+        "default": "corridor",
+        "x-hot-reload": "reset_state"
+      },
+      "min_person_confidence": {
+        "type": "number",
+        "title": "人员最低置信度",
+        "default": 0.2,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "x-step": 0.01,
+        "x-hot-reload": "preserve_state"
+      },
+      "min_scraper_confidence": {
+        "type": "number",
+        "title": "刮泥机最低置信度",
+        "default": 0.8,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "x-step": 0.01,
+        "x-hot-reload": "preserve_state"
+      },
+      "max_person_scraper_overlap_ratio": {
+        "type": "number",
+        "title": "人员框最大刮泥机重叠率",
+        "default": 0.5,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "x-step": 0.01,
+        "x-hot-reload": "preserve_state"
+      },
+      "water_window_frames": {
+        "type": "integer",
+        "title": "落水判定窗口N",
+        "default": 15,
+        "minimum": 1,
+        "maximum": 600,
+        "x-step": 1,
+        "x-unit": "帧",
+        "x-hot-reload": "reset_state"
+      },
+      "water_confirm_frames": {
+        "type": "integer",
+        "title": "落水确认帧M",
+        "default": 10,
+        "minimum": 1,
+        "maximum": 600,
+        "x-step": 1,
+        "x-unit": "帧",
+        "x-hot-reload": "reset_state"
+      },
+      "water_reset_frames": {
+        "type": "integer",
+        "title": "落水复位连续空帧",
+        "default": 5,
+        "minimum": 1,
+        "maximum": 600,
+        "x-step": 1,
+        "x-unit": "帧",
+        "x-hot-reload": "reset_state"
+      },
+      "keypoint_confidence": {
+        "type": "number",
+        "title": "关键点最低置信度",
+        "default": 0.35,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "x-step": 0.01,
+        "x-hot-reload": "preserve_state"
+      },
+      "track_iou_threshold": {
+        "type": "number",
+        "title": "跟踪匹配IoU阈值",
+        "default": 0.15,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "x-step": 0.01,
+        "x-hot-reload": "reset_state"
+      },
+      "track_center_distance_ratio": {
+        "type": "number",
+        "title": "跟踪中心距离比例",
+        "default": 1.0,
+        "minimum": 0.0,
+        "maximum": 10.0,
+        "x-step": 0.05,
+        "x-hot-reload": "reset_state"
+      },
+      "max_track_missing_frames": {
+        "type": "integer",
+        "title": "跟踪最大丢失帧数",
+        "default": 5,
+        "minimum": 0,
+        "maximum": 120,
+        "x-step": 1,
+        "x-unit": "帧",
+        "x-hot-reload": "reset_state"
+      },
+      "fall_aspect_ratio": {
+        "type": "number",
+        "title": "跌倒宽高比阈值",
+        "default": 1.15,
+        "minimum": 0.1,
+        "maximum": 10.0,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state"
+      },
+      "fall_torso_angle_degrees": {
+        "type": "number",
+        "title": "跌倒躯干角阈值",
+        "default": 55.0,
+        "minimum": 0.0,
+        "maximum": 90.0,
+        "x-step": 1.0,
+        "x-unit": "度",
+        "x-hot-reload": "preserve_state"
+      },
+      "fall_drop_speed": {
+        "type": "number",
+        "title": "跌倒归一化下落速度",
+        "default": 0.6,
+        "minimum": 0.0,
+        "maximum": 20.0,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state"
+      },
+      "fall_window_frames": {
+        "type": "integer",
+        "title": "跌倒判定窗口N",
+        "default": 5,
+        "minimum": 1,
+        "maximum": 120,
+        "x-step": 1,
+        "x-unit": "帧",
+        "x-hot-reload": "reset_state"
+      },
+      "fall_confirm_frames": {
+        "type": "integer",
+        "title": "跌倒确认帧M",
+        "default": 3,
+        "minimum": 1,
+        "maximum": 120,
+        "x-step": 1,
+        "x-unit": "帧",
+        "x-hot-reload": "reset_state"
+      },
+      "fall_reset_frames": {
+        "type": "integer",
+        "title": "跌倒复位连续帧",
+        "default": 5,
+        "minimum": 1,
+        "maximum": 120,
+        "x-step": 1,
+        "x-unit": "帧",
+        "x-hot-reload": "reset_state"
+      },
+      "help_enabled": {
+        "type": "boolean",
+        "title": "启用挥手求救识别",
+        "default": false,
+        "x-hot-reload": "reset_state"
+      },
+      "help_window_frames": {
+        "type": "integer",
+        "title": "求救判定窗口",
+        "default": 10,
+        "minimum": 2,
+        "maximum": 120,
+        "x-step": 1,
+        "x-unit": "帧",
+        "x-hot-reload": "reset_state"
+      },
+      "help_min_raised_frames": {
+        "type": "integer",
+        "title": "求救最少举手帧",
+        "default": 6,
+        "minimum": 1,
+        "maximum": 120,
+        "x-step": 1,
+        "x-unit": "帧",
+        "x-hot-reload": "reset_state"
+      },
+      "help_min_swing_ratio": {
+        "type": "number",
+        "title": "求救最小横向摆幅",
+        "default": 0.18,
+        "minimum": 0.0,
+        "maximum": 2.0,
+        "x-step": 0.01,
+        "x-hot-reload": "reset_state"
+      },
+      "help_min_direction_changes": {
+        "type": "integer",
+        "title": "求救最少变向次数",
+        "default": 2,
+        "minimum": 1,
+        "maximum": 30,
+        "x-step": 1,
+        "x-hot-reload": "reset_state"
+      },
+      "help_reset_frames": {
+        "type": "integer",
+        "title": "求救复位连续帧",
+        "default": 5,
+        "minimum": 1,
+        "maximum": 120,
+        "x-step": 1,
+        "x-unit": "帧",
+        "x-hot-reload": "reset_state"
+      },
+      "show_status": {
+        "type": "boolean",
+        "title": "显示判定状态",
+        "default": true,
+        "x-hot-reload": "preserve_state"
+      }
+    }
+  },
+  "outputs": [
+    {
+      "key": "hardware_id",
+      "type": "string",
+      "label": "摄像头硬件编号"
+    },
+    {
+      "key": "water_roi_available",
+      "type": "boolean",
+      "label": "水面ROI有效"
+    },
+    {
+      "key": "corridor_roi_available",
+      "type": "boolean",
+      "label": "走廊ROI有效"
+    },
+    {
+      "key": "scraper_mask_available",
+      "type": "boolean",
+      "label": "刮泥机掩码可用"
+    },
+    {
+      "key": "raw_person_count",
+      "type": "integer",
+      "label": "姿态人员数"
+    },
+    {
+      "key": "valid_water_person_count",
+      "type": "integer",
+      "label": "有效水中人员数"
+    },
+    {
+      "key": "water_history_hits",
+      "type": "integer",
+      "label": "落水窗口命中数"
+    },
+    {
+      "key": "water_active",
+      "type": "boolean",
+      "label": "落水告警锁存"
+    },
+    {
+      "key": "fall_active",
+      "type": "boolean",
+      "label": "跌倒告警锁存"
+    },
+    {
+      "key": "help_active",
+      "type": "boolean",
+      "label": "求救告警锁存"
+    },
+    {
+      "key": "view_scraper_mask_ratio",
+      "type": "number",
+      "label": "全图刮泥机占比"
+    },
+    {
+      "key": "water_candidate_seq",
+      "type": "integer",
+      "label": "落水候选序号"
+    },
+    {
+      "key": "water_candidate_unix_ms",
+      "type": "integer",
+      "label": "落水候选时间"
+    },
+    {
+      "key": "water_candidate_track_id",
+      "type": "integer",
+      "label": "落水人员跟踪ID"
+    },
+    {
+      "key": "water_evidence_quality",
+      "type": "number",
+      "label": "落水证据质量"
+    },
+    {
+      "key": "water_person_scraper_overlap_ratio",
+      "type": "number",
+      "label": "落水人员刮泥机重叠率"
+    },
+    {
+      "key": "fall_candidate_seq",
+      "type": "integer",
+      "label": "跌倒候选序号"
+    },
+    {
+      "key": "fall_candidate_unix_ms",
+      "type": "integer",
+      "label": "跌倒候选时间"
+    },
+    {
+      "key": "fall_candidate_track_id",
+      "type": "integer",
+      "label": "跌倒人员跟踪ID"
+    },
+    {
+      "key": "fall_evidence_quality",
+      "type": "number",
+      "label": "跌倒证据质量"
+    },
+    {
+      "key": "help_candidate_seq",
+      "type": "integer",
+      "label": "求救候选序号"
+    },
+    {
+      "key": "help_candidate_unix_ms",
+      "type": "integer",
+      "label": "求救候选时间"
+    },
+    {
+      "key": "help_candidate_track_id",
+      "type": "integer",
+      "label": "求救人员跟踪ID"
+    },
+    {
+      "key": "help_evidence_quality",
+      "type": "number",
+      "label": "求救证据质量"
+    }
+  ],
+  "business_fields": []
+}

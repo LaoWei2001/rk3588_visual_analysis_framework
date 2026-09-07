@@ -1,0 +1,6 @@
+#ifndef FIRST_NET_CONFIG_NETWORK_QUALITY_MONITOR_H
+#define FIRST_NET_CONFIG_NETWORK_QUALITY_MONITOR_H
+
+void monitor_active_network_quality(void);
+
+#endif

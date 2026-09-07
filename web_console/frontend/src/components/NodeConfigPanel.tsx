@@ -286,6 +286,21 @@ function StreamForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'
         <NumberField min="0" def={0} value={d.channel_id} onChange={v => set('channel_id', v ?? 0)} />
       </F>
 
+      <F label="通道最大 FPS（空 = 继承全局）">
+        <NumberField
+          allowEmpty
+          integerOnly
+          min={1}
+          step={1}
+          placeholder="继承全局最大 FPS"
+          value={d.max_fps}
+          onChange={v => set('max_fps', v)}
+        />
+      </F>
+      <div className="ncp-hint">
+        限制本通道的推理与后处理频率；清空后使用全局最大 FPS。
+      </div>
+
       <F label="输入类型">
         <select value={srcType} onChange={e => setSrcType(e.target.value)}>
           {!srcType && <option value="" disabled>请选择视频源类型（src_type 必填）…</option>}

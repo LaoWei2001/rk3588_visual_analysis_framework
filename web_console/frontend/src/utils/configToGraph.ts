@@ -13,7 +13,7 @@ import { normalizeRoiPolygon } from './roiPolygon'
 
 // 模型节点字段；通道里除这些(及 stream/logic/上报运行字段)之外的键视为逻辑参数。
 const MODEL_KEYS = new Set([
-  'id', 'enable', 'infer_enable', 'threads', 'max_fps',
+  'id', 'enable', 'infer_enable', 'threads',
   'playback_fps', 'tracker_enable', 'tracker_iou_thresh', 'tracker_max_miss',
   'tracker_min_hits', 'roi_zones', 'models',
 ])
@@ -110,10 +110,12 @@ export function configToGraph(
     // 通道号 (channel_id) 唯一。每个通道使用独立 StreamNode；同一 StreamNode 可连接多个模型。
     // 即使两个通道 URL 相同，也仍然分别创建各自的视频流节点。
     const streamId = uid('stream')
+    const streamData: Record<string, unknown> = { ...stream, channel_id: origId }
+    if (ch.max_fps != null) streamData.max_fps = ch.max_fps
     nodes.push({
       id: streamId, type: 'stream',
       position: pos('stream', STREAM_X, y),
-      data: { ...stream, channel_id: origId },
+      data: streamData,
     })
 
     // ── 通道字段分流：模型字段 → 模型节点；逻辑参数只来自 logic_parameters ──

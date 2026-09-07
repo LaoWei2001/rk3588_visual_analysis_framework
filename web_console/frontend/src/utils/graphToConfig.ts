@@ -53,6 +53,7 @@ export function graphToConfig(
   const channelIdByLogicNode = new Map<string, number>()
 
   anchors.forEach((streamNode, idx) => {
+    const streamData = streamNode.data as Record<string, unknown>
     const modelNodes = edges
       .filter(e => e.source === streamNode.id && e.sourceHandle === 'stream-out')
       .map(e => nodes.find(n => n.id === e.target))
@@ -61,7 +62,7 @@ export function graphToConfig(
     const isModel = modelNodes.length > 0
     const modelDataList = modelNodes.map(n => n.data as Record<string, unknown>)
     const m = modelDataList[0] ?? {}
-    const stream = buildStream(streamNode.data as Record<string, unknown>)
+    const stream = buildStream(streamData)
 
     const directLogicEdge = edges.find(e => e.source === streamNode.id && e.sourceHandle === 'stream-out' &&
       ['logic', 'sop'].includes(String(nodes.find(n => n.id === e.target)?.type ?? '')))
@@ -95,8 +96,8 @@ export function graphToConfig(
     })
 
     // ── Channel id: use stream's channel_id if set, else fall back to sorted position ──
-    const chId = (streamNode.data as Record<string, unknown>).channel_id != null
-      ? Number((streamNode.data as Record<string, unknown>).channel_id)
+    const chId = streamData.channel_id != null
+      ? Number(streamData.channel_id)
       : idx
 
     // ── ROI：直接连接视频流，表示通道级区域配置，与模型/逻辑拓扑解耦。 ──
@@ -223,13 +224,15 @@ export function graphToConfig(
     }
     if (hasLogic) ch.logic_parameters = moduleParameters
 
+    // 通道最大 FPS 属于视频流/通道本身；留空时不写入配置，由 C++ 继承全局 max_fps。
+    if (streamData.max_fps != null) ch.max_fps = streamData.max_fps
+
     // Per-channel tracker overrides (仅 YOLO 通道; 传统通道 m={} 自然跳过)
     if (m.tracker_enable   != null) ch.tracker_enable   = m.tracker_enable
     if (m.tracker_iou_thresh != null) ch.tracker_iou_thresh = m.tracker_iou_thresh
     if (m.tracker_max_miss != null) ch.tracker_max_miss = m.tracker_max_miss
     if (m.tracker_min_hits != null) ch.tracker_min_hits = m.tracker_min_hits
     if (m.threads          != null) ch.threads          = m.threads
-    if (m.max_fps          != null) ch.max_fps          = m.max_fps
 
     // ROI 唯一持久化入口；空数组明确表示本通道没有 ROI。
     ch.roi_zones = zones

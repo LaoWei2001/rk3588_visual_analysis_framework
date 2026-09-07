@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "label": "蒙古包 objectInvadeDet 统一告警",
+  "description": "向 /api/objectInvadeDet 上传统一蒙古包事件、标注图和原始图。连接地址单独配置为 http://<server>:9200。",
+  "owner_logic": "global_mongolian_yurt_event",
+  "event_types": [
+    "mongolian_yurt_event"
+  ],
+  "adapter": "http",
+  "media": [
+    "annotated_image",
+    "raw_image"
+  ],
+  "request": {
+    "method": "POST",
+    "path": "/api/objectInvadeDet",
+    "encoding": "json"
+  },
+  "mapping": [
+    { "source": "fields.hardware_id", "target": "hardwareId", "location": "body", "required": true },
+    { "source": "fields.platform_source", "target": "source", "location": "body", "required": true },
+    { "source": "fields.platform_event_type", "target": "eventType", "location": "body", "required": true },
+    { "source": "fields.det_result", "target": "detResult", "location": "body", "type": "json", "required": true },
+    { "source": "event.snap_time", "target": "snapTime", "location": "body", "required": true },
+    { "source": "event.end_time", "target": "endTime", "location": "body", "required": true },
+    { "source": "media.annotated_image", "target": "base64Data", "location": "body", "transform": "base64", "required": true },
+    { "source": "media.raw_image", "target": "base64DataRaw", "location": "body", "transform": "base64", "required": true },
+    { "source": "fields.invade_flag", "target": "invadeFlag", "location": "body", "type": "number", "required": true }
+  ],
+  "success": {
+    "http_status": [200],
+    "json_path": "code",
+    "equals": 200
+  }
+}

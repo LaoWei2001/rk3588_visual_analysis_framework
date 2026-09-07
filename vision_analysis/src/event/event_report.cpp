@@ -1272,11 +1272,25 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
     ChannelFrameSnapshot source_frame;
     bool source_frame_loaded = false;
 
-    auto capture_exact = [&](int channel_id, ChannelFrameSnapshot *out) -> bool {
+    /*
+     * GlobalContext carries the lightweight snapshots sampled at the beginning of
+     * this global-logic tick.  A channel may publish another frame while the logic
+     * is deciding whether to report (and normally will do so at video frame rate),
+     * so requiring publication_seq equality makes image reporting fail spuriously.
+     *
+     * The frame snapshot API already copies one internally consistent publication
+     * under the channel lock.  Accept that publication when it is the sampled one
+     * or a newer one from the same runtime configuration; still reject offline,
+     * frame-less, stale-generation, or older snapshots.
+     */
+    auto capture_report_frame = [&](int channel_id, ChannelFrameSnapshot *out) -> bool {
         const ChannelLogicSnapshot *expected = gctx->channel(channel_id);
         if (!expected || !app_ctrl_get_channel_frame_snapshot(channel_id, out))
             return false;
-        return out->logic.publication_seq == expected->publication_seq;
+        return out->logic.has_publication && out->logic.has_frame &&
+               out->logic.online_state == CH_ONLINE &&
+               out->logic.config_generation == runtime->generation &&
+               out->logic.publication_seq >= expected->publication_seq;
     };
 
     if (need_image)
@@ -1298,8 +1312,8 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
         for (int channel_id : image_channel_ids)
         {
             ChannelFrameSnapshot snapshot;
-            if (!capture_exact(channel_id, &snapshot))
-                return invalid("global event channel changed before its image snapshot was captured");
+            if (!capture_report_frame(channel_id, &snapshot))
+                return invalid("global event channel has no compatible image snapshot");
 
             ImageJob::Pane pane;
             pane.channel_id = channel_id;
@@ -1328,8 +1342,8 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
 
         if (!source_frame_loaded)
         {
-            if (!capture_exact(source_channel_id, &source_frame))
-                return invalid("global event source channel changed before its image snapshot was captured");
+            if (!capture_report_frame(source_channel_id, &source_frame))
+                return invalid("global event source channel has no compatible image snapshot");
             source_frame_loaded = true;
         }
     }

@@ -73,7 +73,7 @@ export default function ROINode({ id, selected }: NodeProps) {
       if (ew > 0 && eh > 0) {
         usbRes = { width: ew, height: eh }
       } else {
-        // 通道若连接了模型，沿用模型节点上的帧率设置；否则回退全局最大 FPS。
+        // playback_fps 仍来自模型节点兼容数据；通道最大 FPS 则存放在视频流节点。
         const streamOutput = edges.find(e =>
           e.source === toStream.target && e.sourceHandle === 'stream-out' &&
           rf.getNode(e.target)?.type === 'model')
@@ -81,7 +81,7 @@ export default function ROINode({ id, selected }: NodeProps) {
           ? rf.getNode(streamOutput.target)?.data as Record<string, unknown> | undefined
           : undefined
         const playbackFps = Number(anchorData?.playback_fps ?? 0)
-        const maxFps      = Number(anchorData?.max_fps      ?? 0)
+        const maxFps      = Number(streamData?.max_fps      ?? 0)
         const fps = playbackFps > 0 ? playbackFps
                   : maxFps      > 0 ? maxFps
                   : globalMaxFps > 0 ? globalMaxFps

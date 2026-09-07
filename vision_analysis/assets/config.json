@@ -1,0 +1,864 @@
+{
+  "global": {
+    "enable_display": 0,
+    "disp_width": 1920,
+    "disp_height": 1280,
+    "tile_rows": 2,
+    "tile_cols": 2,
+    "max_fps": 25,
+    "queue_size": 1,
+    "channel_threads": 3,
+    "tracker_enable": 1,
+    "tracker_iou_thresh": 0.3,
+    "tracker_max_miss": 30,
+    "tracker_min_hits": 3,
+    "performance_display": 1,
+    "enable_pause_key": 0,
+    "enable_rtsp": 1,
+    "rtsp_codec": "h264",
+    "global_logics": [
+      {
+        "instance_id": "global_globalLogic-49-1788528718153",
+        "enable": true,
+        "logic": "global_mongolian_yurt_event",
+        "channels": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "poll_interval_ms": 200,
+        "logic_parameters": {
+          "fusion_window_seconds": 2,
+          "same_scene_dedup_seconds": 10,
+          "report_retry_seconds": 1,
+          "default_hardware_id": "BOX3000",
+          "platform_source": "JNU",
+          "platform_event_type": "4001",
+          "invade_flag": 1,
+          "radar_enabled": false,
+          "radar_freshness_ms": 2000
+        },
+        "report_policy": {
+          "enabled": true,
+          "deliveries": [
+            {
+              "id": "delivery_report-50-1788528731276",
+              "enabled": true,
+              "connection_id": "connection_1",
+              "contract_id": "global_mongolian_yurt_event.http_mongolian_yurt_event",
+              "contract_revision": "fd8d3fd7fd514ff26248fd67ab26320d999c424862318c6c320b6b5749072bae",
+              "media": [
+                "annotated_image",
+                "raw_image"
+              ],
+              "contract_label": "蒙古包 objectInvadeDet 统一告警"
+            }
+          ],
+          "parameters": [],
+          "image_overlay": "custom",
+          "video_overlay": "custom",
+          "video_pre_sec": 3,
+          "video_post_sec": 3,
+          "video_fps": 15,
+          "merge_window_sec": 5
+        },
+        "report_parameters": {}
+      }
+    ]
+  },
+  "channels": [
+    {
+      "id": 0,
+      "enable": true,
+      "infer_enable": true,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/模拟意外落水3.mp4",
+        "loop": true
+      },
+      "models": [
+        {
+          "id": "scraper",
+          "enable": true,
+          "model_type": "yolov5_seg",
+          "model_path": "assets/scraper_segmenter_yolov5n_seg_i8.rknn",
+          "label_path": "assets/labels_scraper.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 0
+        },
+        {
+          "id": "pose",
+          "enable": true,
+          "model_type": "yolov8_pose",
+          "model_path": "assets/yolov8_pose.rknn",
+          "label_path": "assets/labels.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 0
+        }
+      ],
+      "logic": "logic_fall_detection",
+      "report_policy": {
+        "enabled": false,
+        "deliveries": [],
+        "parameters": []
+      },
+      "report_parameters": {},
+      "logic_parameters": {
+        "hardware_id": "C1",
+        "pose_model_id": "pose",
+        "scraper_model_id": "scraper",
+        "water_roi_name": "water_surface",
+        "corridor_roi_name": "corridor",
+        "min_person_confidence": 0.2,
+        "min_scraper_confidence": 0.8,
+        "max_person_scraper_overlap_ratio": 0.5,
+        "water_window_frames": 15,
+        "water_confirm_frames": 10,
+        "water_reset_frames": 5,
+        "keypoint_confidence": 0.35,
+        "track_iou_threshold": 0.15,
+        "track_center_distance_ratio": 1,
+        "max_track_missing_frames": 5,
+        "fall_aspect_ratio": 1.15,
+        "fall_torso_angle_degrees": 55,
+        "fall_drop_speed": 0.6,
+        "fall_window_frames": 5,
+        "fall_confirm_frames": 3,
+        "fall_reset_frames": 5,
+        "help_enabled": false,
+        "help_window_frames": 10,
+        "help_min_raised_frames": 6,
+        "help_min_swing_ratio": 0.18,
+        "help_min_direction_changes": 2,
+        "help_reset_frames": 5,
+        "show_status": true
+      },
+      "roi_zones": [
+        {
+          "name": "water_surface",
+          "polygon": [
+            [
+              0.25379,
+              0.3229
+            ],
+            [
+              0.06174,
+              0.43603
+            ],
+            [
+              0.00492,
+              0.56128
+            ],
+            [
+              0.00379,
+              0.75118
+            ],
+            [
+              0.0822,
+              0.89663
+            ],
+            [
+              0.1697,
+              0.99764
+            ],
+            [
+              0.92765,
+              0.9936
+            ],
+            [
+              0.99697,
+              0.91886
+            ],
+            [
+              0.99356,
+              0.49663
+            ],
+            [
+              0.72992,
+              0.35926
+            ],
+            [
+              0.44583,
+              0.31077
+            ]
+          ]
+        },
+        {
+          "name": "corridor",
+          "polygon": [
+            [
+              0.00265,
+              0.35118
+            ],
+            [
+              0.00152,
+              0.50875
+            ],
+            [
+              0.0572,
+              0.40976
+            ],
+            [
+              0.24356,
+              0.30067
+            ],
+            [
+              0.43788,
+              0.29057
+            ],
+            [
+              0.7322,
+              0.32896
+            ],
+            [
+              0.98561,
+              0.45623
+            ],
+            [
+              0.99129,
+              0.35118
+            ],
+            [
+              0.58561,
+              0.22189
+            ],
+            [
+              0.3447,
+              0.23199
+            ],
+            [
+              0.10038,
+              0.29865
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "enable": true,
+      "infer_enable": true,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/模拟落水11.mp4",
+        "loop": true
+      },
+      "models": [
+        {
+          "id": "scraper",
+          "enable": true,
+          "model_type": "yolov5_seg",
+          "model_path": "assets/scraper_segmenter_yolov5n_seg_i8.rknn",
+          "label_path": "assets/labels_scraper.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 1
+        },
+        {
+          "id": "pose",
+          "enable": true,
+          "model_type": "yolov8_pose",
+          "model_path": "assets/yolov8_pose.rknn",
+          "label_path": "assets/labels.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 1
+        }
+      ],
+      "logic": "logic_fall_detection",
+      "report_policy": {
+        "enabled": false,
+        "deliveries": [],
+        "parameters": []
+      },
+      "report_parameters": {},
+      "logic_parameters": {
+        "hardware_id": "",
+        "pose_model_id": "pose",
+        "scraper_model_id": "scraper",
+        "water_roi_name": "water_surface",
+        "corridor_roi_name": "corridor",
+        "min_person_confidence": 0.2,
+        "min_scraper_confidence": 0.8,
+        "max_person_scraper_overlap_ratio": 0.5,
+        "water_window_frames": 15,
+        "water_confirm_frames": 10,
+        "water_reset_frames": 5,
+        "keypoint_confidence": 0.35,
+        "track_iou_threshold": 0.15,
+        "track_center_distance_ratio": 1,
+        "max_track_missing_frames": 5,
+        "fall_aspect_ratio": 1.15,
+        "fall_torso_angle_degrees": 55,
+        "fall_drop_speed": 0.6,
+        "fall_window_frames": 5,
+        "fall_confirm_frames": 3,
+        "fall_reset_frames": 5,
+        "help_enabled": false,
+        "help_window_frames": 10,
+        "help_min_raised_frames": 6,
+        "help_min_swing_ratio": 0.18,
+        "help_min_direction_changes": 2,
+        "help_reset_frames": 5,
+        "show_status": true
+      },
+      "roi_zones": [
+        {
+          "name": "water_surface",
+          "polygon": [
+            [
+              0.25379,
+              0.3229
+            ],
+            [
+              0.06174,
+              0.43603
+            ],
+            [
+              0.00492,
+              0.56128
+            ],
+            [
+              0.00379,
+              0.75118
+            ],
+            [
+              0.0822,
+              0.89663
+            ],
+            [
+              0.1697,
+              0.99764
+            ],
+            [
+              0.92765,
+              0.9936
+            ],
+            [
+              0.99697,
+              0.91886
+            ],
+            [
+              0.99356,
+              0.49663
+            ],
+            [
+              0.72992,
+              0.35926
+            ],
+            [
+              0.44583,
+              0.31077
+            ]
+          ]
+        },
+        {
+          "name": "corridor",
+          "polygon": [
+            [
+              0.00265,
+              0.35118
+            ],
+            [
+              0.00152,
+              0.50875
+            ],
+            [
+              0.0572,
+              0.40976
+            ],
+            [
+              0.24356,
+              0.30067
+            ],
+            [
+              0.43788,
+              0.29057
+            ],
+            [
+              0.7322,
+              0.32896
+            ],
+            [
+              0.98561,
+              0.45623
+            ],
+            [
+              0.99129,
+              0.35118
+            ],
+            [
+              0.58561,
+              0.22189
+            ],
+            [
+              0.3447,
+              0.23199
+            ],
+            [
+              0.10038,
+              0.29865
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "enable": true,
+      "infer_enable": true,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/模拟意外落水1.mp4",
+        "loop": true
+      },
+      "models": [
+        {
+          "id": "scraper",
+          "enable": true,
+          "model_type": "yolov5_seg",
+          "model_path": "assets/scraper_segmenter_yolov5n_seg_i8.rknn",
+          "label_path": "assets/labels_scraper.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 2
+        },
+        {
+          "id": "pose",
+          "enable": true,
+          "model_type": "yolov8_pose",
+          "model_path": "assets/yolov8_pose.rknn",
+          "label_path": "assets/labels.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 2
+        }
+      ],
+      "logic": "logic_fall_detection",
+      "report_policy": {
+        "enabled": false,
+        "deliveries": [],
+        "parameters": []
+      },
+      "report_parameters": {},
+      "logic_parameters": {
+        "hardware_id": "",
+        "pose_model_id": "pose",
+        "scraper_model_id": "scraper",
+        "water_roi_name": "water_surface",
+        "corridor_roi_name": "corridor",
+        "min_person_confidence": 0.2,
+        "min_scraper_confidence": 0.8,
+        "max_person_scraper_overlap_ratio": 0.5,
+        "water_window_frames": 15,
+        "water_confirm_frames": 10,
+        "water_reset_frames": 5,
+        "keypoint_confidence": 0.35,
+        "track_iou_threshold": 0.15,
+        "track_center_distance_ratio": 1,
+        "max_track_missing_frames": 5,
+        "fall_aspect_ratio": 1.15,
+        "fall_torso_angle_degrees": 55,
+        "fall_drop_speed": 0.6,
+        "fall_window_frames": 5,
+        "fall_confirm_frames": 3,
+        "fall_reset_frames": 5,
+        "help_enabled": false,
+        "help_window_frames": 10,
+        "help_min_raised_frames": 6,
+        "help_min_swing_ratio": 0.18,
+        "help_min_direction_changes": 2,
+        "help_reset_frames": 5,
+        "show_status": true
+      },
+      "roi_zones": [
+        {
+          "name": "water_surface",
+          "polygon": [
+            [
+              0.25379,
+              0.3229
+            ],
+            [
+              0.06174,
+              0.43603
+            ],
+            [
+              0.00492,
+              0.56128
+            ],
+            [
+              0.00379,
+              0.75118
+            ],
+            [
+              0.0822,
+              0.89663
+            ],
+            [
+              0.1697,
+              0.99764
+            ],
+            [
+              0.92765,
+              0.9936
+            ],
+            [
+              0.99697,
+              0.91886
+            ],
+            [
+              0.99356,
+              0.49663
+            ],
+            [
+              0.72992,
+              0.35926
+            ],
+            [
+              0.44583,
+              0.31077
+            ]
+          ]
+        },
+        {
+          "name": "corridor",
+          "polygon": [
+            [
+              0.00265,
+              0.35118
+            ],
+            [
+              0.00152,
+              0.50875
+            ],
+            [
+              0.0572,
+              0.40976
+            ],
+            [
+              0.24356,
+              0.30067
+            ],
+            [
+              0.43788,
+              0.29057
+            ],
+            [
+              0.7322,
+              0.32896
+            ],
+            [
+              0.98561,
+              0.45623
+            ],
+            [
+              0.99129,
+              0.35118
+            ],
+            [
+              0.58561,
+              0.22189
+            ],
+            [
+              0.3447,
+              0.23199
+            ],
+            [
+              0.10038,
+              0.29865
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "enable": true,
+      "infer_enable": true,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/模拟意外落水3.mp4",
+        "loop": true
+      },
+      "models": [
+        {
+          "id": "scraper",
+          "enable": true,
+          "model_type": "yolov5_seg",
+          "model_path": "assets/scraper_segmenter_yolov5n_seg_i8.rknn",
+          "label_path": "assets/labels_scraper.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 2
+        },
+        {
+          "id": "pose",
+          "enable": true,
+          "model_type": "yolov8_pose",
+          "model_path": "assets/yolov8_pose.rknn",
+          "label_path": "assets/labels.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 1
+        }
+      ],
+      "logic": "logic_fall_detection",
+      "report_policy": {
+        "enabled": false,
+        "deliveries": [],
+        "parameters": []
+      },
+      "report_parameters": {},
+      "logic_parameters": {
+        "hardware_id": "",
+        "pose_model_id": "pose",
+        "scraper_model_id": "scraper",
+        "water_roi_name": "water_surface",
+        "corridor_roi_name": "corridor",
+        "min_person_confidence": 0.2,
+        "min_scraper_confidence": 0.8,
+        "max_person_scraper_overlap_ratio": 0.5,
+        "water_window_frames": 15,
+        "water_confirm_frames": 10,
+        "water_reset_frames": 5,
+        "keypoint_confidence": 0.35,
+        "track_iou_threshold": 0.15,
+        "track_center_distance_ratio": 1,
+        "max_track_missing_frames": 5,
+        "fall_aspect_ratio": 1.15,
+        "fall_torso_angle_degrees": 55,
+        "fall_drop_speed": 0.6,
+        "fall_window_frames": 5,
+        "fall_confirm_frames": 3,
+        "fall_reset_frames": 5,
+        "help_enabled": false,
+        "help_window_frames": 10,
+        "help_min_raised_frames": 6,
+        "help_min_swing_ratio": 0.18,
+        "help_min_direction_changes": 2,
+        "help_reset_frames": 5,
+        "show_status": true
+      },
+      "roi_zones": [
+        {
+          "name": "water_surface",
+          "polygon": [
+            [
+              0.25379,
+              0.3229
+            ],
+            [
+              0.06174,
+              0.43603
+            ],
+            [
+              0.00492,
+              0.56128
+            ],
+            [
+              0.00379,
+              0.75118
+            ],
+            [
+              0.0822,
+              0.89663
+            ],
+            [
+              0.1697,
+              0.99764
+            ],
+            [
+              0.92765,
+              0.9936
+            ],
+            [
+              0.99697,
+              0.91886
+            ],
+            [
+              0.99356,
+              0.49663
+            ],
+            [
+              0.72992,
+              0.35926
+            ],
+            [
+              0.44583,
+              0.31077
+            ]
+          ]
+        },
+        {
+          "name": "corridor",
+          "polygon": [
+            [
+              0.00265,
+              0.35118
+            ],
+            [
+              0.00152,
+              0.50875
+            ],
+            [
+              0.0572,
+              0.40976
+            ],
+            [
+              0.24356,
+              0.30067
+            ],
+            [
+              0.43788,
+              0.29057
+            ],
+            [
+              0.7322,
+              0.32896
+            ],
+            [
+              0.98561,
+              0.45623
+            ],
+            [
+              0.99129,
+              0.35118
+            ],
+            [
+              0.58561,
+              0.22189
+            ],
+            [
+              0.3447,
+              0.23199
+            ],
+            [
+              0.10038,
+              0.29865
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "_editor_layout": {
+    "0": {
+      "stream": {
+        "x": -323,
+        "y": 234
+      },
+      "model": {
+        "x": -48,
+        "y": 230
+      },
+      "model_1": {
+        "x": -49,
+        "y": 324
+      },
+      "roi": {
+        "x": -359,
+        "y": -14
+      },
+      "logic": {
+        "x": 394,
+        "y": 218
+      }
+    },
+    "1": {
+      "stream": {
+        "x": -345,
+        "y": 406
+      },
+      "model": {
+        "x": -70,
+        "y": 402
+      },
+      "model_1": {
+        "x": -71,
+        "y": 495
+      },
+      "roi": {
+        "x": -640,
+        "y": 104
+      },
+      "logic": {
+        "x": 280,
+        "y": 465
+      }
+    },
+    "2": {
+      "stream": {
+        "x": -362,
+        "y": 593
+      },
+      "model": {
+        "x": -87,
+        "y": 590
+      },
+      "model_1": {
+        "x": -88,
+        "y": 683
+      },
+      "roi": {
+        "x": -646,
+        "y": 350
+      },
+      "logic": {
+        "x": 276,
+        "y": 636
+      }
+    },
+    "3": {
+      "stream": {
+        "x": -387,
+        "y": 841
+      },
+      "model": {
+        "x": -85,
+        "y": 806
+      },
+      "model_1": {
+        "x": -86,
+        "y": 899
+      },
+      "roi": {
+        "x": -615,
+        "y": 601
+      },
+      "logic": {
+        "x": 393,
+        "y": 847
+      }
+    },
+    "global": {
+      "logic_0": {
+        "x": 523,
+        "y": 544
+      },
+      "report_0_0": {
+        "x": 811,
+        "y": 545
+      }
+    }
+  }
+}

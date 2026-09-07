@@ -1,0 +1,216 @@
+{
+  "label": "蒙古包多路事件融合",
+  "report_templates": [
+    "report_templates/http_mongolian_yurt_event.json"
+  ],
+  "event_types": [
+    {
+      "id": "mongolian_yurt_event",
+      "label": "蒙古包事件",
+      "help": "融合四路落水、外围走廊跌倒与挥手求救候选后，按统一事件对外上报。"
+    }
+  ],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "fusion_window_seconds": {
+        "type": "number",
+        "title": "多路融合等待时间",
+        "default": 2.0,
+        "minimum": 0.0,
+        "maximum": 30.0,
+        "x-step": 0.1,
+        "x-unit": "秒",
+        "x-hot-reload": "preserve_state"
+      },
+      "same_scene_dedup_seconds": {
+        "type": "number",
+        "title": "同场景滑动去重时间",
+        "default": 10.0,
+        "minimum": 0.0,
+        "maximum": 600.0,
+        "x-step": 0.5,
+        "x-unit": "秒",
+        "x-hot-reload": "preserve_state"
+      },
+      "report_retry_seconds": {
+        "type": "number",
+        "title": "本地入队失败重试间隔",
+        "default": 1.0,
+        "minimum": 0.1,
+        "maximum": 60.0,
+        "x-step": 0.1,
+        "x-unit": "秒",
+        "x-hot-reload": "preserve_state"
+      },
+      "default_hardware_id": {
+        "type": "string",
+        "title": "默认硬件编号",
+        "description": "主证据通道未配置hardware_id时使用。",
+        "default": "BOX3000",
+        "x-hot-reload": "preserve_state"
+      },
+      "platform_source": {
+        "type": "string",
+        "title": "平台来源标识",
+        "default": "JNU",
+        "x-hot-reload": "preserve_state"
+      },
+      "platform_event_type": {
+        "type": "string",
+        "title": "平台事件类型",
+        "default": "4001",
+        "x-hot-reload": "preserve_state"
+      },
+      "invade_flag": {
+        "type": "integer",
+        "title": "平台保存图片标志",
+        "default": 1,
+        "minimum": 0,
+        "maximum": 1,
+        "x-step": 1,
+        "x-hot-reload": "preserve_state"
+      },
+      "radar_enabled": {
+        "type": "boolean",
+        "title": "附加生命雷达数据",
+        "description": "只把新鲜雷达帧附加到告警，不参与视觉事件判定。",
+        "default": false,
+        "x-hot-reload": "preserve_state"
+      },
+      "radar_freshness_ms": {
+        "type": "integer",
+        "title": "雷达数据有效期",
+        "default": 2000,
+        "minimum": 100,
+        "maximum": 60000,
+        "x-step": 100,
+        "x-unit": "毫秒",
+        "x-hot-reload": "preserve_state"
+      }
+    }
+  },
+  "report_fields": [
+    {
+      "key": "hardware_id",
+      "type": "string",
+      "label": "主证据硬件编号"
+    },
+    {
+      "key": "platform_source",
+      "type": "string",
+      "label": "平台来源"
+    },
+    {
+      "key": "platform_event_type",
+      "type": "string",
+      "label": "平台事件类型"
+    },
+    {
+      "key": "det_result",
+      "type": "json",
+      "label": "结构化检测结果"
+    },
+    {
+      "key": "invade_flag",
+      "type": "number",
+      "label": "平台保存图片标志"
+    },
+    {
+      "key": "primary_event_type",
+      "type": "string",
+      "label": "主事件类型"
+    },
+    {
+      "key": "primary_channel_id",
+      "type": "number",
+      "label": "主证据通道"
+    },
+    {
+      "key": "primary_track_id",
+      "type": "number",
+      "label": "主证据人员ID"
+    },
+    {
+      "key": "candidate_count",
+      "type": "number",
+      "label": "融合候选数"
+    },
+    {
+      "key": "incident_types",
+      "type": "json",
+      "label": "事件类型集合"
+    },
+    {
+      "key": "candidate_channels",
+      "type": "json",
+      "label": "候选通道集合"
+    },
+    {
+      "key": "candidates",
+      "type": "json",
+      "label": "融合候选明细"
+    },
+    {
+      "key": "evidence_quality",
+      "type": "number",
+      "label": "主证据质量"
+    },
+    {
+      "key": "view_scraper_mask_ratio",
+      "type": "number",
+      "label": "主证据刮泥机全图占比"
+    },
+    {
+      "key": "person_scraper_overlap_ratio",
+      "type": "number",
+      "label": "主证据人员刮泥机重叠率"
+    },
+    {
+      "key": "radar_available",
+      "type": "boolean",
+      "label": "是否附带新鲜雷达数据"
+    },
+    {
+      "key": "radar_sensor_id",
+      "type": "string",
+      "label": "雷达编号"
+    },
+    {
+      "key": "radar_coordinate_frame",
+      "type": "string",
+      "label": "雷达坐标系"
+    },
+    {
+      "key": "radar_target_count",
+      "type": "number",
+      "label": "雷达目标数"
+    },
+    {
+      "key": "radar_age_ms",
+      "type": "number",
+      "label": "雷达数据年龄"
+    },
+    {
+      "key": "radar_targets",
+      "type": "json",
+      "label": "雷达目标列表"
+    }
+  ],
+  "actions": [
+    {
+      "id": "radar_update",
+      "label": "写入生命雷达帧",
+      "style": "default",
+      "help": "payload需包含targets数组；每个目标至少包含数值x、y、z。"
+    },
+    {
+      "id": "radar_clear",
+      "label": "清空生命雷达",
+      "style": "default",
+      "help": "清除本全局实例缓存的雷达帧。"
+    }
+  ],
+  "business_fields": []
+}
