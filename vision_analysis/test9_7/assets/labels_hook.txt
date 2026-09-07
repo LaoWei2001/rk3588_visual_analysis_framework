@@ -1,2 +1,0 @@
-hook_l
-hook_s
