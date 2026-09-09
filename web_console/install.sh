@@ -9,7 +9,7 @@ set -Eeuo pipefail
 usage() {
     echo "用法：sudo bash web_console/install.sh <online|offline>"
     echo "  online   联网安装 Python 依赖，并用 npm 重新构建前端"
-    echo "  offline  使用离线依赖 deb 提供的 Python 环境和预构建前端"
+    echo "  offline  使用已由离线包配置好的系统 Python 和预构建前端"
 }
 
 if [ "$#" -ne 1 ]; then
@@ -34,8 +34,7 @@ esac
 APPS_ROOT="${APPS_ROOT:-/opt/ai_apps}"
 INSTALL_DIR="${INSTALL_DIR:-$APPS_ROOT/_console}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_ENV_DIR="${VISION_PYTHON_ENV:-/opt/vision-analysis/python-env}"
-PYTHON_BIN=""
+PYTHON_BIN="/usr/bin/python3"
 FRONTEND_BUILD_DIR=""
 DIST_STAGE=""
 
@@ -57,18 +56,15 @@ echo "=== RK3588 Web Console 安装 ==="
 # 模式必须由唯一的位置参数明确决定；offline 会完全禁止 pip/npm 联网。
 # frontend/dist 是否存在只代表项目带有预构建产物，绝不能作为网络状态判断依据。
 if [ "$OFFLINE" = "1" ]; then
-    if [ -x "$PYTHON_ENV_DIR/bin/python3" ]; then
-        PYTHON_BIN="$PYTHON_ENV_DIR/bin/python3"
-    else
-        echo "[错误] 未找到离线 Python 环境: $PYTHON_ENV_DIR" >&2
+    if [ ! -x "$PYTHON_BIN" ]; then
+        echo "[错误] 未找到系统 Python: $PYTHON_BIN" >&2
         echo "       请先运行 offline_install_env_debian/install_offline.sh。" >&2
         exit 1
     fi
-    echo "    模式: 离线部署（使用依赖 deb 提供的 Python 环境和预构建前端）"
+    echo "    模式: 离线部署（使用系统 Python 和预构建前端）"
 else
-    PYTHON_BIN="$(command -v python3 || true)"
-    [ -n "$PYTHON_BIN" ] || { echo "[错误] 未找到 python3" >&2; exit 1; }
-    echo "    模式: 联网安装（使用 pip 软件源和 npm registry 重新安装、构建）"
+    [ -x "$PYTHON_BIN" ] || { echo "[错误] 未找到系统 Python: $PYTHON_BIN" >&2; exit 1; }
+    echo "    模式: 联网安装（向系统 Python 安装缺失依赖，并用 npm 重新构建）"
 fi
 
 # 1. 安装后端
@@ -99,19 +95,20 @@ if errors:
     raise SystemExit(1)
 PY
     then
-        echo "[错误] 离线 Python 环境不完整。" >&2
+        echo "[错误] 系统 Python 环境不完整。" >&2
         echo "       请先运行 offline_install_env_debian/install_offline.sh，再重新部署 Web 控制台。" >&2
         exit 1
     fi
     if ! "$PYTHON_BIN" -m pip check; then
-        echo "[错误] 离线 Python 环境存在依赖冲突。" >&2
+        echo "[错误] 系统 Python 环境存在依赖冲突。" >&2
         echo "       请先运行 offline_install_env_debian/install_offline.sh 修复环境。" >&2
         exit 1
     fi
     echo "    离线模式：Python 模块和依赖关系检查通过，未执行 pip install。"
 else
-    "$PYTHON_BIN" -m pip install "${PIP_SYSTEM_ARGS[@]}" \
+    PIP_ROOT_USER_ACTION=ignore "$PYTHON_BIN" -m pip install "${PIP_SYSTEM_ARGS[@]}" \
         -r "$SCRIPT_DIR/backend/requirements.txt" --quiet
+    "$PYTHON_BIN" -m pip check
 fi
 rm -rf -- "$INSTALL_DIR/backend"
 mkdir -p "$INSTALL_DIR/backend"
@@ -196,6 +193,7 @@ echo "[3/4] 安装 systemd 服务..."
     printf 'WorkingDirectory=%s\n' "$INSTALL_DIR/backend"
     printf 'Environment="APPS_ROOT=%s"\n' "$APPS_ROOT"
     echo 'Environment="BINARY_NAME=vision_analysis"'
+    printf 'Environment="VISION_PYTHON=%s"\n' "$PYTHON_BIN"
     echo "ExecStartPre=-/usr/bin/nm-online -q --timeout=30"
     printf 'ExecStart="%s" -m uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --log-level info\n' "$PYTHON_BIN"
     echo "Restart=always"
@@ -230,3 +228,4 @@ echo ""
 echo "✓ 安装完成！访问地址: http://${LAN_IP}:8080"
 echo "  程序根目录: $APPS_ROOT"
 echo "  控制台目录: $INSTALL_DIR"
+echo "  Python: $PYTHON_BIN（系统环境）"

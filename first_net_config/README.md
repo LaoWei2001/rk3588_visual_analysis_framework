@@ -17,25 +17,51 @@ Web 主要用于查看网络和后续维护；摄像头搜索、笔记本直连�
 
 ## 构建与运行
 
+仓库随附的 `first_net_config` 是在 ARM64 Debian 11 基线上构建的成品。新的 RK3588
+设备即使尚未联网、没有 CMake 和编译器，也可以把整个 `first_net_config` 目录复制过去后
+直接运行：
+
+```bash
+cd first_net_config
+chmod +x first_net_config
+sudo ./first_net_config
+```
+
+修改源码后的开发构建方式为：
+
 ```bash
 cd first_net_config
 ./build.sh
 sudo ./first_net_config
 ```
 
-默认会进入全屏终端界面：方向键选择，`Enter` 确认；在子菜单、输入框或确认框按
+默认会进入全屏终端界面：宽终端采用双列按钮主菜单，操作步骤使用居中的边框弹窗，
+并在弹窗内保留步骤标题、上下文说明、选择高亮和底部操作按钮。方向键选择，`Enter`
+确认；在子菜单、输入框或确认框按
 `Esc` 会取消当前操作或返回上一级，不会跨过中间页面。只有明确标注“返回主菜单”的
 按钮才会直接回到主菜单；主菜单中的“退出程序”才会结束程序。主菜单和子菜单选项、
 确认/取消/清空以及停止监测按钮都支持鼠标点击，列表也支持滚轮浏览。终端窗口
 过小或不支持全屏显示时会自动退回纯文字界面，也可手工强制使用原来的
 纯文字模式：
 
+启动时会随机播放旋转面具、字符显影面具或 `HELLO` 旋转立方体，三种效果均由 ANSI
+直接绘制，按任意键可以跳过。调试时可用环境变量
+`FIRST_NET_CONFIG_INTRO=ghostface|anonymous|cube|none` 固定或关闭动画。
+
 ```bash
 sudo ./first_net_config --plain
 ```
 
-构建需要 CMake、C 编译器和 ncursesw 开发库。运行需要 root 权限、NetworkManager
-和 `nmcli`；修改设备名称时还需要 `hostnamectl`。工具不需要 Web 服务处于运行状态。
+终端界面只使用 Linux/POSIX 自带的 ANSI 转义序列、`termios`、`poll` 和 `ioctl`，不再
+依赖 ncurses。源码构建只需要 CMake 和 C 编译器；运行需要 root 权限、NetworkManager
+和 `nmcli`，修改设备名称时还需要 `hostnamectl`。工具不需要 Web 服务处于运行状态，
+也不需要联网下载终端界面库。
+
+若自行重新编译再复制到新设备，CPU 架构必须一致，且制作机的 glibc 不能高于目标机；
+最稳妥的发布方式是在受支持系统中较老的 glibc 基线上构建。当前随附 ARM64 成品要求
+glibc 2.29 或更高，可用于 Debian 11、Ubuntu 20.04/22.04 等较新的 ARM64 系统。ANSI/termios
+消除的是 ncurses 依赖，
+并不意味着 ARM64 程序也能在 x86 设备上运行。
 
 ## 主要功能
 

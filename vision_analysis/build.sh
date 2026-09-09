@@ -9,6 +9,7 @@
 #   ./build.sh out --no-bundle-libs       # 不打包依赖动态库
 #   ./build.sh out --image <name>         # 指定交叉编译 Docker 镜像名
 #   ./build.sh out --clean                # 清除已有 build/ 后进行全量编译
+#   ./build.sh out --no-root-copy         # 不覆盖源码目录旁的调试版可执行文件
 # ============================================================
 
 set -e
@@ -83,6 +84,7 @@ BUNDLE_LIBS=true
 BUILD_TYPE="Release" # CMake 构建类型; --debug 模式改为 Debug
 DEBUG_ONLY=false     # true=只编译可执行文件, 跳过打包(由命令行的 --debug 选项触发)
 CLEAN_BUILD=false    # true=编译前清除 build/，默认复用构建缓存进行增量编译
+COPY_ROOT_BINARY=true # false=只写入发布目录，供 deb 制包等自动流程使用
 IMAGE_NAME="rk3588_builder:2026_4_30"
 
 # 需要打包的 Python 微服务列表（相对路径:目标名, 路径相对于项目根 common/）
@@ -93,7 +95,7 @@ PYTHON_SERVICES=(
 
 # --- 命令行参数解析 ---
 usage() {
-    echo "用法: ./build.sh <输出目录名> [--debug] [--clean] [--no-strip] [--no-bundle-libs] [--image <name>]"
+    echo "用法: ./build.sh <输出目录名> [--debug] [--clean] [--no-strip] [--no-bundle-libs] [--no-root-copy] [--image <name>]"
     echo "  (编译方式按 CPU 架构自动识别: aarch64->板端原生, x86_64->Docker交叉编译)"
     echo "  <输出目录名>  编译产物文件夹名 (创建于 $PROJECT_DIR 下), 如 dist / release_v8"
     echo "  --debug       只编译可执行文件(Debug构建), 不打包, 产物直接放在 build.sh 同级目录"
@@ -103,6 +105,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --no-strip)        DO_STRIP=false; shift ;;
         --no-bundle-libs)  BUNDLE_LIBS=false; shift ;;
+        --no-root-copy)    COPY_ROOT_BINARY=false; shift ;;
         --image)           IMAGE_NAME="$2"; shift 2 ;;
         -h|--help)         usage; exit 0 ;;
         --debug)           DEBUG_ONLY=true; BUILD_TYPE=Debug; DO_STRIP=false; BUNDLE_LIBS=false; shift ;;
@@ -280,7 +283,9 @@ elif [ "$MODE" = "onboard" ]; then
     cd "$PROJECT_DIR"
     
     cp "build/$TARGET" "$DIST_DIR/"
-    cp "build/$TARGET" "$PROJECT_DIR/$TARGET"
+    if [ "$COPY_ROOT_BINARY" = "true" ]; then
+        cp "build/$TARGET" "$PROJECT_DIR/$TARGET"
+    fi
 
     if [ "$DO_STRIP" = "true" ]; then
         echo "  [strip] 压缩二进制文件体积..."
@@ -411,27 +416,28 @@ cat > "$DIST_DIR/setup_python.sh" << 'SETUP_EOF'
 #!/bin/bash
 set -e
 ABS_PATH=$(cd "$(dirname "$0")"; pwd)
+PYTHON_BIN="/usr/bin/python3"
+[ -x "$PYTHON_BIN" ] || { echo "[ERROR] 未找到系统 Python: $PYTHON_BIN"; exit 1; }
 if [ "${OFFLINE:-0}" = "1" ]; then
-    PYTHON_BIN="/opt/vision-analysis/python-env/bin/python3"
-    if [ ! -x "$PYTHON_BIN" ]; then
-        echo "[ERROR] 未找到离线 Python 环境；请先运行 offline_install_env_debian/install_offline.sh"
-        exit 1
-    fi
-    echo ">>> 离线模式：使用依赖 deb 提供的 Python 环境"
+    echo ">>> 离线模式：使用离线依赖包配置好的系统 Python"
     "$PYTHON_BIN" -m pip check
     echo "[OK] Python 环境可用。"
     exit 0
 else
-    PYTHON_BIN="python3"
-    echo ">>> 初始化 Python 环境 (使用系统级 pip)..."
-    python3 -m pip install --upgrade pip -q || true
+    echo ">>> 初始化系统 Python 环境（已满足版本约束的包会跳过）..."
+fi
+PIP_SYSTEM_ARGS=()
+if "$PYTHON_BIN" -m pip help install 2>/dev/null | grep -q -- '--break-system-packages'; then
+    PIP_SYSTEM_ARGS+=(--break-system-packages)
 fi
 for req in $(find "$ABS_PATH/services" -name requirements.txt); do
     if [ -f "$req" ]; then
         echo ">>> 安装 $(basename "$(dirname "$req")") 依赖..."
-        "$PYTHON_BIN" -m pip install -r "$req"
+        PIP_ROOT_USER_ACTION=ignore "$PYTHON_BIN" -m pip install \
+            "${PIP_SYSTEM_ARGS[@]}" -r "$req"
     fi
 done
+"$PYTHON_BIN" -m pip check
 echo "[OK] 环境安装完成。"
 SETUP_EOF
 chmod +x "$DIST_DIR/setup_python.sh"

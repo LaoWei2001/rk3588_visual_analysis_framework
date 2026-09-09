@@ -2,19 +2,17 @@ cmake_minimum_required(VERSION 3.16)
 
 project(first_net_config VERSION 2.1 LANGUAGES C)
 
-set(CURSES_NEED_WIDE TRUE)
-find_package(Curses REQUIRED)
-
 add_executable(first_net_config
     src/main.c
     src/common/cli_io.c                        # 基础公共组件
     src/common/command_runner.c                # 基础公共组件
-    src/common/terminal_ui.c                   # ncursesw 终端界面
-    src/common/intro_animation.c               # 独立三维启动动画
-    src/common/anonymous_intro.c               # 独立匿名者字符启动页
-    src/common/cube_intro.c                    # 独立三维立方体启动动画
+    src/common/terminal_ui.c                   # ANSI + termios 终端界面
+    src/common/ansi_screen.c                   # 启动动画 ANSI 画布兼容层
+    src/common/intro_animation.c               # 三维旋转面具启动动画
+    src/common/anonymous_intro.c               # 匿名者字符显影启动动画
+    src/common/cube_intro.c                    # 三维旋转立方体启动动画
     src/common/intro_notice.c                  # 启动页版权与许可证声明
-    src/common/startup_intro.c                 # 启动页随机选择器
+    src/common/startup_intro.c                 # 三种 ANSI 启动动画
     src/operations/device_name.c               # 配置操作工作流
     src/common/ipv4_utils.c                    # 基础公共组件
     src/common/nmcli_parser.c                  # 基础公共组件
@@ -33,10 +31,9 @@ add_executable(first_net_config
 
 target_include_directories(first_net_config PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CURSES_INCLUDE_DIRS}
 )
 
-target_link_libraries(first_net_config PRIVATE ${CURSES_LIBRARIES} m)
+target_link_libraries(first_net_config PRIVATE m)
 
 target_compile_features(first_net_config PRIVATE c_std_11)
 

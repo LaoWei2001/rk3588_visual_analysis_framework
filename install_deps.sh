@@ -44,6 +44,7 @@ fi
 # shellcheck source=offline_install_env_debian/dependency_manifest.sh
 source "$DEPENDENCY_MANIFEST"
 NODE_VERSION="${NODE_VERSION:-$DEFAULT_NODE_VERSION}"
+SYSTEM_PYTHON="/usr/bin/python3"
 NODE_TEMP_DIR=""
 
 if [[ ! "$NODE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -127,7 +128,7 @@ node_major_is_supported() {
     command -v node >/dev/null 2>&1 || return 1
     local major
     major="$(node -v 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\).*/\1/p')"
-    [ -n "$major" ] && [ "$major" -ge 18 ]
+    [ -n "$major" ] && [ "$major" -ge "$MIN_NODE_MAJOR" ]
 }
 
 install_node() {
@@ -171,7 +172,7 @@ install_node() {
         exit 1
     fi
 
-    local install_parent="/usr/local/lib/nodejs"
+    local install_parent="$NODE_INSTALL_PARENT"
     local install_root="$install_parent/$package"
     as_root mkdir -p "$install_parent" /usr/local/bin
     as_root tar -xJf "$archive" -C "$install_parent"
@@ -189,14 +190,14 @@ install_node() {
 
 install_python_dependencies() {
     echo ">>> [3/5] 安装全部 Python requirements..."
+    [ -x "$SYSTEM_PYTHON" ] \
+        || { echo "[错误] APT 安装后仍未找到系统 Python: $SYSTEM_PYTHON" >&2; exit 1; }
     local pip_system_args=()
     local pip_install_help
-    pip_install_help="$(python3 -m pip help install 2>/dev/null || true)"
+    pip_install_help="$($SYSTEM_PYTHON -m pip help install 2>/dev/null || true)"
     if grep -q -- '--break-system-packages' <<< "$pip_install_help"; then
         pip_system_args+=(--break-system-packages)
     fi
-    as_root python3 -m pip install "${pip_system_args[@]}" --upgrade pip setuptools wheel
-
     local pip_args=()
     local requirement_relative
     local requirement
@@ -208,7 +209,15 @@ install_python_dependencies() {
         pip_args+=(-r "$requirement")
     done
     # 一次性交给解析器，避免逐文件安装把另一个组件的固定版本静默覆盖。
-    as_root python3 -m pip install "${pip_system_args[@]}" --prefer-binary "${pip_args[@]}"
+    # pip 默认跳过已满足 requirements 版本约束的系统包，只安装缺失项或
+    # 调整不符合约束的版本；联网和离线安装使用同一套系统 Python 语义。
+    as_root env PIP_ROOT_USER_ACTION=ignore "$SYSTEM_PYTHON" -m pip install \
+        "${pip_system_args[@]}" --prefer-binary "${pip_args[@]}"
+    "$SYSTEM_PYTHON" -m pip check
+    if [ -d /opt/vision-analysis/python-env ]; then
+        as_root rm -rf -- /opt/vision-analysis/python-env
+        echo "    已移除旧版项目虚拟环境，统一使用 $SYSTEM_PYTHON。"
+    fi
 }
 
 prepare_frontend() {
@@ -538,10 +547,8 @@ check_userland_environment() {
         check_info "检测到 X Server；使用 HDMI 显示时还需确认 DISPLAY/Xauthority。"
     fi
 
-    local check_python="python3"
-    if [ -x /opt/vision-analysis/python-env/bin/python3 ]; then
-        check_python="/opt/vision-analysis/python-env/bin/python3"
-    fi
+    local check_python="$SYSTEM_PYTHON"
+    [ -x "$check_python" ] || check_python="$(command -v python3 || true)"
     if "$check_python" - <<'PY'
 import importlib
 import sys
@@ -637,14 +644,15 @@ PY
     fi
 
     if [ ! -f "$FRONTEND_DIR/dist/index.html" ] \
-            && [ ! -f /usr/share/vision-analysis/frontend/dist/index.html ]; then
-        check_fail "预构建前端 web_console/frontend/dist/index.html"
+            && [ ! -f /usr/share/vision-analysis/frontend/dist/index.html ] \
+            && [ ! -f /opt/ai_apps/_console/frontend/dist/index.html ]; then
+        check_fail "预构建或已安装的 Web 前端 dist/index.html"
     else
         check_pass "预构建前端 dist/index.html 存在。"
     fi
     if [ "$WANT_BUILD" = true ]; then
         local build_errors_before="$CHECK_ERRORS"
-        local build_commands=(cmake make gcc g++ pkg-config readelf strip rsync git clang-format)
+        local build_commands=(cmake make gcc g++ pkg-config readelf strip rsync git clang-format node npm)
         for command_name in "${build_commands[@]}"; do
             command -v "$command_name" >/dev/null 2>&1 || check_fail "编译命令 $command_name"
         done
@@ -661,6 +669,13 @@ PY
                 || check_fail "C/C++ pkg-config 开发模块"
         fi
         [ -f /usr/include/gpiod.h ] || check_fail "libgpiod 开发头文件"
+        if node_major_is_supported && command -v npm >/dev/null 2>&1; then
+            check_pass "Node.js $(node -v) / npm $(npm -v) 可用于构建前端。"
+        else
+            check_fail "Node.js $MIN_NODE_MAJOR+ 和 npm"
+        fi
+        [ -d "$FRONTEND_DIR/node_modules" ] \
+            || check_fail "前端开发依赖 $FRONTEND_DIR/node_modules"
         local freetype_header
         freetype_header="$(find /usr/include /usr/local/include \
             -path '*/opencv2/freetype.hpp' -print -quit 2>/dev/null || true)"

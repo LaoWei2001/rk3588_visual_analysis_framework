@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# 离线环境的基础依赖清单。能从已构建 ELF 自动识别的库无需重复填写；
+# 环境与 Web 控制台离线包的基础依赖清单。能从已构建 ELF 自动识别的库无需重复填写；
 # 脚本、外部命令和尚未构建的新模块无法可靠推断时，可写入 extra-*-packages.txt。
 
-OFFLINE_DEPENDENCY_SCHEMA=6
+OFFLINE_DEPENDENCY_SCHEMA=11
 DEFAULT_NODE_VERSION="v20.18.0"
+MIN_NODE_MAJOR=18
+NODE_INSTALL_PARENT="/usr/local/lib/nodejs"
 
 # Debian 11 安全仓库结束常规维护后，索引与 pool 文件可能在归档切换期间不同步。
 # 固定到官方 snapshot 可确保同一批安全更新始终能够重新下载。
@@ -11,7 +13,7 @@ DEBIAN_SECURITY_SNAPSHOT="20260901T000000Z"
 
 APT_RUNTIME=(
     ca-certificates curl xz-utils
-    python3 python3-venv libc6 libstdc++6
+    python3 python3-pip python3-setuptools python3-wheel libc6 libstdc++6
 
     systemd dbus network-manager wpasupplicant iproute2 iputils-ping ethtool
     procps x11-xserver-utils tzdata
@@ -27,9 +29,9 @@ APT_RUNTIME=(
 
 APT_BUILD=(
     build-essential cmake pkg-config binutils rsync git clang-format
-    python3-dev python3-pip python3-setuptools python3-wheel
+    python3-dev
     libffi-dev libssl-dev
-    libgtk-3-dev libgpiod-dev libncurses-dev
+    libgtk-3-dev libgpiod-dev
     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
     libgstrtspserver-1.0-dev
     libopencv-dev libopencv-contrib-dev

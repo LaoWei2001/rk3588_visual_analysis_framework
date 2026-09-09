@@ -1,63 +1,89 @@
 # RK3588 可扩展多路视觉分析引擎与管理平台
 
-本项目是一个运行于 RK3588 边缘设备的可扩展多路视觉分析引擎并配备可视化的web程序管理界面，具有多路视频采集、RKNN 推理、目标跟踪、利用推理结果进行自定义的算法编排等功能。主要解决了过去视觉算法开发中遇到的如下问题：
-- 多路视频流在性能受限的边缘端难以同时进行高性能的采集和分析。
-- 算法复用性和可拓展性差，过去的算法中视频流和逻辑是绑定的，若要改变某个视频通道的逻辑需要将前一个逻辑删除，若算法耦合性高，则改动较大。但利用本项目的低耦合设计可将任意算法逻辑绑定至任意视频源类型（RTSP，USB，视频文件）的任意视频通道。
-- 视觉算法逻辑的编写没有一个统一的规则来约束开发者，进而导致代码可读性差，维护难度高。本项目将编写视觉算法常用的变量，如模型推理结果，视频帧，时间戳等变量都封装至一个上下文结构体ChannelContext中供开发者调用。
-- 视觉算法逻辑编写的时候常与底层逻辑（如视频解码，线程调度等）进行交互，导致开发难度高。开发者利用本项目中引擎的低耦合设计来实现视频流分析的时候则只需关注算法逻辑的实现，无需关注底层的设计。
-- 项目维护难，以前修改某个算法参数需要改配置文件的内容，然后重新编译程序。流程繁琐，本项目配有web管理界面，程序的参数可在界面上直接修改。
-- 算法启动流程复杂，本项目配备的可视化界面便于开发者或运维人员将算法应用至选定的视频流，并且能够设定服务器上报之类的与后端通信的相关配置。
-- 调试困难，以前调试视觉算法的时候只能板端接显示屏，远程调试的时候则无法看见画面。本项目配备的web管理界面可观看程序的实时画面输出，并在界面侧边栏显示程序的终端输出。  
+> 让 RK3588 多路视觉算法从“每个项目从零重新搭一遍”，变成可复用、可快捷开发、部署、便于维护的工程平台。
 
-项目仓库配有演示基本功能的demo便于二次开发者了解利用引擎基本功能构建自己视觉分析应用的过程。    
-> 若第一次接触本项目, 强烈建议通过教程的程序实例来初步理解视觉程序的构建方式。   
+本项目是一套面向 RK3588 边缘设备的高性能、多路、可扩展视觉分析引擎，并配备完整的 Web
+可视化管理平台。它将视频采集、RKNN 推理、目标跟踪、业务算法、画面显示、RTSP 推流、
+事件录像和可靠上报组织成统一运行管线，帮助开发者更快地把一个视觉算法原型转化为能够在
+现场长期运行和远程维护的实际应用。
 
-如果希望由大模型从需求访谈一直完成到代码和验证，请先安装并登录 Codex CLI 或 Claude Code，然后在
-仓库根目录运行（正在开发，还在实验阶段）：
+传统视觉项目往往把视频源、模型、业务判断、线程调度和上报代码紧密耦合。需求一变，就需要
+复制工程、修改主流程、重新编译并重新调试。本项目通过 `ChannelContext`、自注册 Logic、
+声明式配置和 Web 编排，将业务算法与底层运行框架分离：同一个 Logic 可以组合到不同视频源和
+不同通道，新业务也可以在不破坏既有模块的情况下持续扩展。
+
+无论是园区安防、工业检测、人员行为分析，还是需要多摄像头、多模型协同的边缘 AI视觉检测
+场景，都可以在这套框架上复用已有的采集、推理、显示、录像、上报和运维能力，把开发重点真正
+放回业务算法本身。
+
+## 为什么选择本项目
+
+- **面向 RK3588 进行深度优化**：统一使用 RKNN NPU、RGA、MPP 和 GStreamer，兼顾多路并发、
+  低延迟预览和边缘设备资源约束；
+- **业务逻辑低耦合**：算法开发者围绕 `ChannelContext` 编写独立 Logic，无需重复处理视频解码、
+  NPU 调度、线程生命周期等底层工作；
+- **任意通道灵活组合**：RTSP、USB 摄像头和视频文件可以按配置绑定不同模型、ROI、Logic 和
+  上报策略，同一模块能够跨项目复用；
+- **不止是推理 Demo**：项目同时覆盖配置、启动、实时画面、日志、录像、断网重试、OTA、
+  网络设置、systemd 服务和离线交付；
+- **降低二次开发门槛**：课程 Logic、模块清单、配置 Schema、开发向导和 Web 画布共同约束
+  开发方式，让新人能够沿着统一规则逐步参与；
+- **适合长期维护**：应用包、运行数据和控制台彼此分离，支持配置热更新、版本化接口契约和
+  可重复的部署流程。
+
+仓库提供从基础绘制、推理结果读取、ROI 判断、跨帧状态、按钮动作到事件上报的课程示例，也包含
+行车安全、人员警戒、跌倒检测、GPIO/继电器等实际业务模块，可作为教学、科研和工程二次开发的
+共同起点。
+
+> 当前主要验证平台是 RK3588/AArch64。内核、设备树和 RKNPU/RGA/MPP 驱动必须来自适配板卡的
+> BSP。离线包不能跨发行版使用：Debian 11、Ubuntu 22.04 等系统必须分别在同版本 ARM64
+> 制作机上生成 bundle。仓库当前记录的完整硬件基线是 Debian 11；Ubuntu 需要重新制包并完成
+> 摄像头、NPU、RGA/MPP、显示和推流冒烟测试后，才能视为已验证平台。
+
+## 从哪里开始
+
+| 目标 | 建议入口 |
+|---|---|
+| 第一次了解系统 | 先阅读下方“系统架构”和“仓库结构”，再完成“快速开始” |
+| 开发一个业务算法 | [通道 Logic 开发指南](docs/skills/rk3588-channel-logic/SKILL.md) |
+| 开发跨通道逻辑 | [全局 Logic 开发指南](docs/skills/rk3588-global-logic/SKILL.md) |
+| 修改引擎、线程或生命周期 | [源码模块索引](docs/skills/rk3588-src-modules/SKILL.md) |
+| 操作 Web、投递、OTA 或排障 | [控制台与运维指南](docs/skills/rk3588-console-ops/SKILL.md) |
+| 首次配置设备网络 | [first_net_config 使用说明](first_net_config/README.md) |
+| 制作断网安装包 | [离线环境与控制台安装](offline_install_env_debian/README.md) |
+| 查阅全部文档 | [文档总入口](docs/README.md) |
+
+仓库中的 `logic_course_01`～`logic_course_10` 是逐步学习 Logic API 的示例。第一次接触项目时，
+建议先运行已有配置，再修改一个示例模块，不要直接从采集、推理或多线程核心开始。
+
+## AI 辅助 Logic 开发（实验功能，未开发完成）
+
+安装并登录 Codex CLI 或 Claude Code 后，可在仓库根目录运行：
 
 ```bash
 ./develop_feature
 ```
 
-原生 Windows 使用 `develop_feature.cmd` 或 `py .\develop_feature`。启动器只支持 Codex CLI 与 Claude
-Code；直接下载并解压项目 ZIP 也可运行，不要求 `.git` 目录或 Git 命令。仅检测到一个代理时直接使用，
-两个都可用时先让用户选择，也可通过 `--agent codex` 或
-`--agent claude` 指定。随后自动检测当前系统、WSL、架构、RK3588 设备树和关键工具；第一题确认开发
-宿主及默认 RK3588 部署目标，用户通常只需回答“是”，不正确时回答“否 + 简短纠正”。业务需求通常
-只问 2–3 轮、最多 4 轮；向导先核对源码，再把相关细节合成具体方案供用户用“是/否”确认，不会逐项
-盘问硬件和合同字段。需求完整后只生成通道/全局 Logic：代理在一次性隔离副本中自动执行，原仓库只允许
-回写 `vision_analysis/src/logic/modules/**` 和 `vision_analysis/src/logic/global_modules/**`；回写由文件
-内容快照和 SHA-256 校验保护，任何其他改动
-都会让整批结果被拒绝，
-且不需要手动运行 `/permissions`。需要 Web、服务、配置或引擎改动的需求只报告边界，不会实施。
-`--confirm-before-code` 会在写代码前等待确认，`--plan-only` 只生成合同和计划，`--check` 检查两个
-代理及 Skill 是否可用。适配边界见
-[Codex 与 Claude Code 适配](docs/skills/rk3588-feature-wizard/references/agent-adapters.md)。
+Windows 可使用 `develop_feature.cmd`。向导只允许回写通道和全局 Logic 目录；涉及 Web、服务、
+配置格式或引擎核心的需求会报告超出边界。常用参数：
 
-第一次开发报警、图片/视频或 HTTP/Dify 上报功能，请从
-[事件与上报开发](docs/skills/rk3588-console-ops/references/event-reporting.md) 开始；可直接交给大模型的
-任务模板见[提示词模板](docs/skills/build-rk3588-vision-app/references/prompt-recipes.md)。
+```bash
+./develop_feature --check
+./develop_feature --plan-only
+./develop_feature --confirm-before-code
+```
 
-事件投递采用“Logic 字段声明 + 随程序包发布的接口契约 + 应用级连接 + 版本化投递绑定”模型。
-算法 Logic 只产生标准事件和动态 `fields`；远端字段名、媒体、请求格式和成功条件由 Logic 目录的
-`report_templates/` 声明并在打包时统一聚合；地址、密钥和 Header 保存到当前应用的持久化连接中。
-画布固定契约 revision，因此积压事件不会因后来修改模板而改变请求语义。只有接入全新交互协议
-或签名算法时才需要新增 Adapter，不应修改算法 Logic 或 C++ 事件核心。
+详细边界见 [AI 开发向导](docs/skills/rk3588-feature-wizard/SKILL.md)。报警、图片/视频及 HTTP/Dify
+上报请先阅读[事件与上报开发](docs/skills/rk3588-console-ops/references/event-reporting.md)。
 
-项目由三层组成：
+## 项目组成
 
-- **视觉分析运行引擎**：C++ 实现的多路视频采集、推理、跟踪、业务逻辑和输出管线；
-- **程序管理平台**：React + FastAPI 实现的可视化配置、程序管理、实时画面、日志、记录、终端和服务控制；
-- **业务应用**：通过 `logic_xxx` 模块和 JSON 配置构建的具体分析方案。
+- **视觉分析运行引擎（底层设施）**：C++ 实现的多路视频采集、推理、跟踪、业务逻辑和输出管线；
+- **程序管理平台（前端）**：React + FastAPI 实现的可视化配置、程序管理、实时画面、日志、记录、终端和服务控制；
+- **业务应用（核心）**：通过 `logic_xxx` 模块和 JSON 配置构建的具体分析方案；
+- **设备工具与部署**：首次网络配置、依赖安装、离线 bundle、GPIO 和继电器测试工具。
 
-> 本项目不是通用的任意DAG（有向无环图）工作流引擎。Web 画布用于编排视频源、模型、ROI、业务逻辑和上报等固定角色，运行时将其转换为稳定的多通道分析管线。
-  
-本项目受到 GNU 计划与自由软件运动的启发，并向所有长期致力于软件自由、知识共享与技术公共化的开发者致敬。如果本项目对你有所帮助，欢迎为仓库点亮一颗⭐。这不仅是对项目的认可，也能帮助更多开发者发现、使用和推广这个项目。我们相信，软件不应只是封闭的工具，也应当成为可以被学习、理解、改进和传播的公共知识。开放源代码的意义，不仅在于可以让任何人出于任何目的使用，修改，发布软件，更在于让技术成果能够接受时间检验、持续演进，并服务更多的人。本项目希望在嵌入式视觉、边缘计算与人工智能应用领域，尽可能提供清晰、透明且可复现的实现，使开发者能够自由地研究代码、改进功能，并将有价值的成果继续传递下去。  
-
-对于本项目中的多路视觉推理引擎的设计，作者认为是目前RK3588上设计多路视觉算法的最优解，相关的设计理念也可以推广到其他载板的需要执行多路视频流，多种视觉算法逻辑的边缘设备上。 
-
-如有任何疑问或建议，欢迎随时联系作者Sunny_Wei。Email：1927096839@qq.com。  
-祝朋友们编程愉快！ Happy coding :-)
+> Web 画布编排的是视频源、模型、ROI、业务逻辑和上报等固定角色，不是任意 DAG 工作流引擎。
 
 ## 核心能力
 
@@ -67,8 +93,9 @@ Code；直接下载并解压项目 ZIP 也可运行，不要求 `.git` 目录或
 - 最多 15 个稳定通道 ID；
 - YOLOv5 检测、YOLOv8 检测、YOLOv8-Pose、YOLOv5-Seg；
 - 单通道多模型组合推理，结果按同一帧合并；
-- RKNN NPU 多核心分配、RGA 图像转换和 DMA-BUF 零拷贝优先路径
-- 充分压榨npu算力，可以实现多路推理时npu的3个核心占用率均在95%以上
+- RKNN NPU 多核心分配、RGA 图像转换和 DMA-BUF 零拷贝优先路径；
+- 支持多路并发推理；在作者验证的多路配置中，3 个 NPU 核心利用率均可达到 95% 以上，
+  实际吞吐量取决于模型、分辨率、视频源、驱动和散热条件；
 - 每通道独立 FPS、模型阈值、类别过滤和跟踪参数；任务队列深度当前来自全局 `queue_size`；
 - SORT风格目标跟踪及稳定 `track_id`；
 - 推理通道和无模型传统 CV 通道可同时运行。
@@ -80,9 +107,9 @@ Code；直接下载并解压项目 ZIP 也可运行，不要求 `.git` 目录或
 - `ChannelContext` 提供帧、推理结果、ROI、时间、状态、参数、绘制和跨通道快照；
 - `logic.json` 统一声明模块参数、Web 动作、上报字段及热重载策略；
 - 每通道拥有独立的 `ctx->state`，同一逻辑可安全复用于多个通道；
-- 支持业务按钮动作、系统级动作和跨通道全局逻辑。
-- 任意逻辑与任意视频通道可自由组合。
-- 新增逻辑时无需变动旧的逻辑的相关代码，且上层通道逻辑与底层（线程调度，视频解码等模块）解耦。
+- 支持业务按钮动作、系统级动作和跨通道全局逻辑；
+- Logic 与视频通道可按配置组合；
+- 新增 Logic 无需修改其他业务模块，并与线程调度、视频解码等底层实现解耦。
 
 ### 显示、录像与事件投递
 
@@ -106,7 +133,7 @@ Code；直接下载并解压项目 ZIP 也可运行，不要求 `.git` 目录或
   MPP 硬件解码、硬件编码为标准 H.264 MP4，避免不同摄像头的 H.265 封装差异；
   USB MJPEG/NV12/YUYV 统一以受控码率的软件编码生成高质量 H.264，
   避免逐帧 MJPEG 文件过大，并正确处理非 16 对齐分辨率和 MJPEG 色彩范围；
-- Web 按钮向指定通道业务逻辑发送动作（需自行编写按钮的功能）
+- Web 按钮向指定通道业务逻辑发送动作（动作处理逻辑由业务模块实现）；
 - 浏览器终端、板级后台服务管理，以及当前应用独立的投递连接、接口契约和 OTA 配置；
 - 配置保存后由 C++ 运行时自动检测并热更新。
 
@@ -174,7 +201,7 @@ GStreamer appsink
 
 ```text
 .
-├── vision_analysis/             # C++ 视觉分析运行引擎与默认应用
+├── vision_analysis/             # C++ 视觉分析引擎、示例业务和应用构建脚本
 │   ├── assets/                  # RKNN 模型、标签和示例配置
 │   ├── scripts/                 # logic 清单生成与一致性校验
 │   ├── src/
@@ -202,10 +229,14 @@ GStreamer appsink
 ├── service/
 │   ├── upload/                  # 可靠事件上传服务
 │   └── model_update/            # 模型 OTA 服务
+├── first_net_config/            # 独立的首次网络配置终端工具（C + ANSI/termios）
+├── offline_install_env_debian/  # Debian/Ubuntu 同发行版离线仓库制作与安装
+├── gpio_test/                   # GPIO 独立测试工具
+├── relay_test/                  # 继电器独立测试工具
 ├── docs/                        # 开发、运维和模块文档
 ├── develop_feature              # Codex/Claude 隔离式 Logic 需求澄清与自动开发入口
 ├── develop_feature.cmd          # 原生 Windows 的同一向导入口
-├── install_deps.sh              # RK3588 依赖安装
+├── install_deps.sh              # 联网安装或只读检查第三方环境
 └── LICENSE                      # GPL-3.0
 ```
 
@@ -227,7 +258,9 @@ GStreamer appsink
 ## 快速开始
 
 ### 1. 环境要求
-  开发者在载板为RK3588的 EAI-BOX-3000 边缘计算盒子上进行项目的开发与验证。
+
+项目主要在搭载 RK3588 的 EAI-BOX-3000 边缘计算盒子上开发和验证：
+
 - RK3588 / AArch64 Linux；
 - Debian、Ubuntu、Armbian 或兼容发行版；
 - 可用的 Rockchip RKNPU 内核驱动和 RGA；RKNN 用户态 Runtime 已由项目固定；
@@ -235,9 +268,21 @@ GStreamer appsink
 - 带 `freetype` 模块的 OpenCV；
 - 构建 Web 前端时需要 Node.js 18+。
 
+“可以运行脚本”不等于“发行版之间二进制兼容”。尤其是离线仓库中的 FFmpeg、OpenCV、Python
+和 systemd 软件包具有精确版本关系，必须遵守：
+
+```text
+制作机发行版 + 版本 + 架构 = 目标机发行版 + 版本 + 架构
+```
+
+例如 Debian 11 bundle 只能用于 Debian 11 ARM64，Ubuntu 22.04 bundle 必须在 Ubuntu 22.04
+ARM64 制作。不要把 Debian bundle 强制安装到 Ubuntu，也不要通过降级系统库解决冲突。
+硬件验证基线见
+[平台兼容矩阵](docs/skills/rk3588-feature-wizard/references/platform-matrix.md)。
+
 ### 2. 安装依赖
 
-默认安装运行环境、C/C++ 编译环境，并预构建 Web 前端：
+设备可以联网时，默认安装运行环境、C/C++ 编译环境，并预构建 Web 前端：
 
 ```bash
 bash install_deps.sh
@@ -248,6 +293,8 @@ bash install_deps.sh
 Rockchip BSP 组件不由该脚本安装；用户态 `librknnrt.so` 和 `rknn_api.h` 已固定在
 `vision_analysis/vendor/rknn/`。APT 阶段只补装缺失包，不升级已经安装或被厂家设为
 `hold` 的 BSP 包；单个无关软件源更新失败时，会使用其他成功更新的索引继续安装。
+Python requirements 直接安装到系统 `/usr/bin/python3`，不会创建项目虚拟环境；已满足
+版本约束的模块会由 pip 跳过。这与默认完整离线包采用相同的解释器和依赖规则。
 
 如果目标设备明确只运行预编译应用，可以选择精简环境：
 
@@ -255,21 +302,35 @@ Rockchip BSP 组件不由该脚本安装；用户态 `librknnrt.so` 和 `rknn_ap
 bash install_deps.sh --runtime-only
 ```
 
-现场设备不能访问 APT、PyPI 或 npm 时，在有公网的 ARM64 开发机生成本地 deb 仓库：
+现场设备不能访问 APT、PyPI 或 npm 时，在系统版本完全相同且可以联网的 ARM64 制作机上
+生成环境与 Web 控制台安装包：
 
 ```bash
-# 有网 ARM64 开发机：默认包含运行环境和板端 C/C++ 编译环境
+# 制作机必须和目标机使用相同发行版及版本
 bash offline_install_env_debian/create_bundle.sh
 
-# 把整个 offline_install_env_debian 复制到断网 RK3588 后一键安装
-sudo bash offline_install_env_debian/install_offline.sh
+# 把 output/full-bundle 复制到断网 RK3588，然后在包目录内一键安装
+cd /userdata/full-bundle
+sudo bash install_offline.sh
 ```
 
-离线材料是一个本地 APT 仓库：系统依赖、隔离 Python 环境和预构建前端都由项目自己的
-deb 元包统一安装。目标机不需要 Node/npm，也不要求提交 `frontend/dist`。仓库不会绑定
-项目源码哈希；Debian 官方包按当前软件源候选版本下载，开发机上由 dpkg 管理、但软件源没有的
-厂家用户态包才会重新封装，项目固定的 RKNN Runtime 也会单独封装。成品固定生成到
-`offline_install_env_debian/output/bundle`。新增依赖和手工补包方法见
+制包脚本会在制作机临时编译当前 C++ 程序以检测运行依赖，并构建前端，然后把系统依赖、
+系统 Python requirements、Web 控制台和 Rockchip 用户态组件组成一个本地 APT 仓库。临时编译的
+C++ 程序不会装入目标机的程序列表。目标机只需在所选 bundle 目录内运行
+`install_offline.sh`，安装完成后可直接访问 `http://<RK3588-IP>:8080`，无需再执行
+`web_console/install.sh` 或手工安装依赖。默认完整包也包含源码、板端 C/C++ 编译环境、
+ARM64 Node.js/npm 和前端 `node_modules`，源码入口为
+`/userdata/rk3588_visual_analysis_framework`；目标机可以直接编译主程序和重新构建前端。
+程序仍需由用户之后明确安装，或通过 Web 上传。
+
+联网 `install_deps.sh` 和离线安装现在使用同一套系统 `/usr/bin/python3`；pip 对已经满足
+requirements 约束的包会跳过，只补装缺失项或调整不兼容版本。两条路径都会核验模块导入和
+依赖关系。仓库不会绑定项目源码哈希；发行版
+软件包按制作机对应的软件源解析，开发机上由 dpkg 管理、但软件源没有的厂家用户态包才会重新
+封装，项目固定的 RKNN Runtime 也会单独封装。完整包生成到
+`offline_install_env_debian/output/full-bundle`，精简包生成到
+`offline_install_env_debian/output/runtime-only-bundle`。升级时重新制包并再次运行安装脚本即可；新增依赖和
+手工补包方法见
 [offline_install_env_debian/README.md](offline_install_env_debian/README.md)。
 
 如需单独排查厂家 BSP、硬件驱动或应用动态库，可运行只读诊断（它不是离线安装步骤，
@@ -300,14 +361,15 @@ Python/通用动态库、Rockchip GStreamer 硬件插件，以及项目和 `/opt
 sudo bash web_console/install.sh online
 ```
 
-断网设备才显式使用预构建前端和已经由离线环境包安装的 Python 包：
+如果只想从源码单独部署 Web 控制台，断网设备才使用 `offline` 模式：
 
 ```bash
 sudo bash web_console/install.sh offline
 ```
 
 `web_console/install.sh` 强制要求一个安装模式参数，只接受 `online` 或 `offline`，不会根据
-`frontend/dist` 是否存在猜测网络状态。`offline` 模式会完全禁止 pip/npm 联网。
+`frontend/dist` 是否存在猜测网络状态。`offline` 模式会完全禁止 pip/npm 联网。使用上面的
+离线环境与控制台安装包时，这一步已经由 `vision-analysis` deb 完成，不要重复执行。
 
 `install_deps.sh` 是“联网预配置 + 断网验收”脚本，不包含 deb/wheel/npm 离线安装包；
 因此不能把一台从未准备过的裸机带到无公网现场后再首次执行普通安装模式。
@@ -376,7 +438,7 @@ bash run.sh ./assets/config_6.json
 
 ```bash
 cd web_console
-sudo bash install.sh
+sudo bash install.sh online
 ```
 
 安装完成后访问：
@@ -391,6 +453,39 @@ http://<RK3588-IP>:8080
 cd vision_analysis
 sudo ./install_app.sh dist
 ```
+
+离线环境包不会自动执行这一步，也不会预装名为 `vision_analysis` 的程序。Web 程序列表只显示
+用户明确上传或安装到 `/opt/ai_apps` 的应用。
+
+### 6. 首次网络配置工具
+
+`first_net_config` 是独立的 C/ANSI 终端工具，用于首次设置有线、Wi-Fi、设备名称、路由优先级，
+以及检查网络冲突。它直接管理 NetworkManager，不依赖 Web 控制台：
+
+```bash
+cd first_net_config
+sudo ./first_net_config
+```
+
+全屏界面使用 ANSI 转义序列和 Linux/POSIX 自带的 termios，不依赖 ncurses；源码构建只需要
+CMake 和 C 编译器。仓库随附 ARM64 成品（要求 glibc 2.29 或更高），可以在 RK3588 离线状态
+先完成网络配置，再运行联网依赖安装；修改源码后才需要执行 `./build.sh`。完整功能、SSH
+切换网络的回滚方式及高风险操作边界见
+[first_net_config/README.md](first_net_config/README.md)。
+
+## 新成员开发路径
+
+建议按下面顺序熟悉项目，不要一开始就修改采集、推理和多线程核心：
+
+1. 在独立测试设备上完成依赖安装、编译、发布包安装、启动、日志查看和删除。
+2. 修改一个 `logic_course_xx` 示例，理解 `ChannelContext`、配置参数和绘制接口。
+3. 独立新增一个小型通道 Logic，并完成配置校验和板端冒烟测试。
+4. 根据个人方向进入 Web 前端、FastAPI 后端、设备工具或 C++ 引擎模块。
+5. 最后学习离线制包、系统服务、网络修改和发布回滚。
+
+对每次改动至少要求：能够编译、相关检查通过、异常路径验证、测试设备冒烟测试、文档同步更新，
+并由另一名开发者完成代码审查。涉及密码、SSH、网络清理、systemd、文件删除和线程生命周期的
+改动不得直接在生产设备上练习。
 
 ## 配置示例
 
@@ -523,17 +618,23 @@ REGISTER_LOGIC(logic_people_count);
 
 ## 内置通道逻辑
 
-| Logic ID | 作用 |
+| Logic ID/分组 | 作用 |
 |---|---|
-| `logic_course_01` … `logic_course_10` | 课程示例；09/10 当前仍是空骨架 |
+| `logic_course_01` … `logic_course_10` | 从绘制、上下文、推理结果、ROI、状态、按钮到事件上报的课程示例 |
 | `logic_course_gpio` | 检测结果驱动 GPIO |
 | `logic_default` | 可删除的空白逻辑示例 |
 | `logic_dify` | Dify 周期截图与自定义变量 |
 | `logic_global_input_demo` | 向全局 logic 发布类型化变量 |
+| `logic_person_roi_alarm` | 人员警戒区持续停留报警 |
+| `logic_fall_detection` | 单路落水与走廊跌倒检测 |
+| `logic_crane_motion`、`logic_crane_hook` | 行车运动和吊钩状态检测 |
+| `logic_crane_intrusion`、`logic_crane_helmet` | 行车投影区域入侵和静止安全帽检测 |
 | `logic_relay` | Action 控制继电器 |
 
-当前未注册 `logic_path_sop`、`logic_upload_teach`、`logic_periodic_snapshot_demo` 或
-`logic_save_frame_pair`。Web 仍有 SOP 节点并会生成缺失的 `logic_path_sop`，不能作为可运行配置。
+当前全局 Logic 包括 `global_default`、`global_channel_aggregate_demo`、
+`global_crane_safety_controller` 和 `global_mongolian_yurt_event`。
+
+当前未注册 `logic_path_sop`。Web 仍有 SOP 节点并会生成这个缺失的 Logic ID，不能作为可运行配置。
 
 通道可以不配置 `logic`。此时仍会执行视频、模型、跟踪和通用绘制管线，但不会调用业务后处理模块。
 
@@ -624,9 +725,28 @@ python3 scripts/generate_logics_catalog.py --check
 
 ```bash
 cd web_console/frontend
-npm install
+npm ci
 npm run build
 ```
+
+运行 Web 后端测试：
+
+```bash
+cd web_console/backend
+python3 -m pytest -q tests
+```
+
+修改安装脚本后检查 Shell 语法：
+
+```bash
+bash -n install_deps.sh \
+  offline_install_env_debian/create_bundle.sh \
+  offline_install_env_debian/templates/install_offline.sh \
+  vision_analysis/build.sh
+```
+
+测试通过只说明软件层面的静态行为符合预期。涉及摄像头、NPU、RGA/MPP、GPIO、显示、RTSP 或
+系统网络的修改，仍须在独立 RK3588 测试设备上进行硬件冒烟测试。
 
 ## 项目边界
 
@@ -639,6 +759,8 @@ npm run build
 ## 文档
 
 - [文档总入口](docs/README.md)
+- [首次网络配置工具](first_net_config/README.md)
+- [离线环境与 Web 控制台安装](offline_install_env_debian/README.md)
 - [Skill 与二次开发索引](docs/skills/README.md)
 - [交互式功能开发总入口](docs/skills/rk3588-feature-wizard/SKILL.md)
 - [通道逻辑开发指南](docs/skills/rk3588-channel-logic/SKILL.md)
@@ -648,6 +770,25 @@ npm run build
 
 如文档与当前实现存在差异，以源码、头文件、模块 `logic.json`、前端序列化和后端路由为准。
 
+维护 README 时避免记录未经复测的性能结论；发行版、驱动、RKNN Runtime、模型或配置契约变化后，
+必须同步更新兼容性说明和对应模块文档。
+
+## 项目愿景
+
+本项目受到 GNU 计划与自由软件运动的启发。我们相信，软件不应只是一个无法理解和修改的封闭工具，
+也应当成为可以学习、验证、改进和继续传播的公共知识。开源的价值不仅是公开代码，更是让工程经验
+能够被后来者继承，让不同开发者在清晰的规则和可复现的实现上继续创造。
+
+我们希望这套框架能够为 RK3588 及其他边缘计算平台上的多路视觉应用提供一种可靠的工程思路：
+底层能力集中建设，业务模块独立演进，配置和运行状态可视化，部署过程可以复现，现场问题能够定位。
+如果它能让一个算法更快落地、让一位新人更容易理解系统，或者让一个团队少重复搭建一次基础设施，
+这个项目就实现了它的意义。
+
+如果本项目对你的学习、研究或工程实践有所帮助，欢迎 Star、Fork、提交 Issue 或参与改进，让更多
+开发者能够发现、使用并共同完善它。
+
 ## License
 
-本项目致敬GNU计划，基于 [GNU General Public License v3.0](LICENSE) 开源。
+本项目受到 GNU 计划与自由软件运动的启发，基于
+[GNU General Public License v3.0](LICENSE) 开源。问题与建议可联系 Sunny_Wei：
+1927096839@qq.com。

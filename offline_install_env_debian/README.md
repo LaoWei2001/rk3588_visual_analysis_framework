@@ -1,123 +1,205 @@
-# RK3588 一键离线依赖仓库
+# RK3588 环境与 Web 控制台一键离线安装包
 
-目标只有一个：在有网 ARM64 开发机生成项目需要的 `.deb`，复制到新设备后一条命令安装。
-离线包不再绑定项目源码哈希，不要求现场项目与制包时逐文件一致，也不会把硬件诊断当成安装失败。
+这里生成的是可以在新 RK3588 设备上一键安装的环境仓库。用户只需要运行一次安装脚本；
+Web 控制台、systemd 服务、系统 Python 依赖、Rockchip 用户态库，以及默认的项目源码、
+C/C++ 编译环境、Node.js/npm 和前端 `node_modules` 都会一起安装，但不会向 Web 程序列表
+预装任何 C++ 程序。
 
-## 目录和产物
+## 用户只需要这两条命令
 
-```text
-offline_install_env_debian/
-├── create_bundle.sh              # 开发机生成新版仓库
-├── detect_apt_dependencies.sh    # 查看当前能自动识别的 APT 依赖
-├── install_offline.sh            # 新设备唯一安装入口
-├── dependency_manifest.sh        # 基础依赖及 requirements 位置
-├── extra-runtime-packages.txt    # 手工补充的运行依赖
-├── extra-build-packages.txt      # 手工补充的编译依赖
-└── output/bundle/apt/            # 生成的本地 APT 仓库
-```
-
-仓库中除 Debian/Ubuntu 原始软件包外，还会自动生成：
-
-- `vision-analysis-deps_*.deb`：项目运行环境元包；
-- `vision-analysis-python-deps_*.deb`：由生产 requirements 生成的隔离 Python 环境；
-- `vision-analysis-frontend-assets_*.deb`：预构建的前端 `dist`；
-- `vision-analysis-rockchip-files_*.deb`：项目固定的 RKNN Runtime 和头文件；
-- 默认生成 `vision-analysis-build-deps_*.deb`，让新设备能够直接编译项目。
-
-`dist` 和 `node_modules` 都不需要提交 Git。制包脚本在开发机按锁文件准备前端依赖
-（已有完整 `node_modules` 时会直接复用）并执行 `npm run build`，只把最终 `dist`
-放入前端资源 deb；新设备不安装 Node/npm。
-
-## 生成离线仓库
-
-在有网 ARM64 开发机运行：
+在能够联网、且系统版本与目标机一致的 ARM64 开发机生成安装包：
 
 ```bash
 cd /userdata/rk3588_visual_analysis_framework
 bash offline_install_env_debian/create_bundle.sh
 ```
 
-制作机需要已经安装 `dpkg-repack`，并且当前 APT 软件源可正常下载与目标 Debian
-版本相同的 arm64 软件包。Debian 11 安全更新使用 `dependency_manifest.sh` 中固定的 Debian
-官方 snapshot 日期，避免发行版归档时出现索引存在但 deb 已从镜像移走的问题。脚本会按
-“空 dpkg 状态”解析完整依赖闭包：Debian 官方包一律下载统一索引的候选版本；只有软件源中
-不存在、但开发机已安装的瑞芯微厂商包才会重新封装。
-这样不会再把开发机上的旧版 `systemd` 等官方包与新版软件源混装。
-
-默认包含运行环境和 C/C++ 编译环境。只有明确不需要在目标机编译时才使用精简模式：
+把生成的 `output/full-bundle` 目录复制到新设备，然后进入安装包目录安装：
 
 ```bash
+cd /userdata/full-bundle
+sudo bash install_offline.sh
+```
+
+安装完成后直接访问：
+
+```text
+http://<RK3588-IP>:8080
+```
+
+无需再运行 `web_console/install.sh`，也无需手工执行 pip/npm 安装依赖。安装器会在目标机上
+实际运行一次前端构建作为验收。安装完成后的程序列表为空；需要运行的程序由用户之后通过
+Web 上传，或使用 `vision_analysis/install_app.sh` 明确安装。
+
+## 安装了什么
+
+本地 APT 仓库中的核心软件包是：
+
+- `vision-analysis_*.deb`：Web 控制台前后端和 systemd 服务，不包含默认 C++ 程序；
+- `vision-analysis-deps_*.deb`：项目运行依赖元包；
+- `vision-analysis-build-deps_*.deb`：默认安装的 C/C++ 与前端开发环境元包；
+- `vision-analysis-source_*.deb`：含前端 `node_modules`、可直接修改和编译的完整项目源码；
+- `vision-analysis-node-toolchain_*.deb`：固定版本的 ARM64 Node.js/npm；
+- `vision-analysis-python-deps_*.deb`：向系统 `/usr/bin/python3` 安装项目 requirements；
+- `vision-analysis-rockchip-files_*.deb`：项目固定的 RKNN Runtime 和头文件；
+- Debian 官方依赖以及开发机上由 dpkg 管理的必要 Rockchip 厂商包。
+
+完整源码中包含 `first_net_config/`，需要时可在目标机自行编译。bundle 根目录不再额外放置
+预编译的 `first_net_config`，避免源码和独立二进制重复交付。
+
+这些内部软件包由安装器统一选择，不需要用户逐个安装；`install_offline.sh` 会一次完成
+全部安装。
+
+主要安装路径：
+
+```text
+/opt/ai_apps/_console                     Web 控制台
+/opt/ai_apps/.data                        运行数据
+/usr/bin/python3                          Python 解释器（系统环境）
+/usr/local/lib/nodejs/node-v*/            离线 Node.js/npm 工具链
+/opt/vision-analysis/rockchip             固定的 Rockchip 用户态文件
+/lib/systemd/system/rk3588-console.service Web 控制台服务
+/userdata/rk3588_visual_analysis_framework 源码固定入口
+```
+
+源码实际保存在带 deb 版本号的目录，例如：
+
+```text
+/userdata/rk3588_visual_analysis_framework-2.0.20260908010130
+```
+
+固定入口 `/userdata/rk3588_visual_analysis_framework` 是指向最新版的符号链接。在板端修改过的
+旧版本源码目录不会在升级时被删除或覆盖；如果这个固定入口原本就是用户自己的真实目录，安装器
+也不会覆盖它，而会在安装结束时显示新版源码的实际目录。
+
+完整包安装后可以在目标机编译，编译结果仍需由用户明确上传或安装：
+
+```bash
+cd /userdata/rk3588_visual_analysis_framework/vision_analysis
+./build.sh dist
+sudo ./install_app.sh dist
+
+cd /userdata/rk3588_visual_analysis_framework/web_console/frontend
+npm run build
+```
+
+在全新设备上，`npm` 会指向随包工具链；如果系统原本已有 Node.js 18+ 和 npm，则保留现有
+命令。无论哪种情况，随包工具链的固定入口都保留在 BUNDLE_INFO 记录的目录中。
+
+程序列表中的所有程序均按同一套规则启动、覆盖和删除，没有软件包来源标签或特殊限制。
+
+## 制包过程
+
+`create_bundle.sh` 会自动完成：
+
+1. 在制作机临时编译当前 C++ 主程序，用于检查源码和识别 ELF 依赖；
+2. 从新生成的 ELF、脚本和依赖清单检测 APT 依赖；
+3. 下载完整的离线 APT 依赖闭包；
+4. 下载 Python wheels，并生成安装到系统 Python 的依赖包；
+5. 构建 React 前端，并封装 ARM64 Node.js/npm 工具链；
+6. 生成不含默认 C++ 程序的 Web 控制台 deb，以及携带 `node_modules` 的源码 deb；
+7. 生成依赖元包和本地 APT 索引；
+8. 在空 dpkg 状态下验证依赖能够闭合，然后原子替换上一版仓库。
+
+制作机需要安装 `dpkg-repack`，APT、PyPI 和 npm 源需要可用。已有且与锁文件一致的
+`node_modules` 会直接复用。两种策略使用不同目录，互不覆盖：
+
+```text
+offline_install_env_debian/output/full-bundle
+offline_install_env_debian/output/runtime-only-bundle
+```
+
+生成失败时不会破坏上一版仓库。`output/`、`frontend/dist/` 和 `node_modules/` 都是生成物，
+不需要提交 GitHub；发布时只需压缩或复制所需的 `full-bundle` 或
+`runtime-only-bundle` 目录。
+
+默认安装包包含源码和编译环境。如果目标机只需要运行用户另外提供的预编译程序，可以在
+制包时选择精简模式：
+
+```bash
+# 制作机
 bash offline_install_env_debian/create_bundle.sh --runtime-only
+
+# 目标机
+cd /userdata/runtime-only-bundle
+sudo bash install_offline.sh
 ```
 
-成功产物固定在 `offline_install_env_debian/output/bundle`。生成过程使用临时目录，失败不会
-破坏上一版仓库。
+精简模式仍包含运行环境和 Web 控制台，但不安装源码、编译器、CMake、开发头文件、Node.js
+工具链和 `node_modules`。两种模式都不会预装默认程序；完整包可在板端重新构建前端，精简包
+只使用制作机已经构建并放入控制台 deb 的前端。
 
-## 新设备一键安装
+`runtime-only-bundle` 只用于确认无需编译、且现有 Debian 软件包状态完整的运行设备。新设备、
+厂家镜像中预装过开发包的设备、曾安装过编译环境的设备，以及任何需要在板端编译源码的设备，
+都应使用默认的 `full-bundle`。精简包不会携带 `libopencv-dev` 等开发依赖，也不会尝试修复设备
+原有的残缺开发包依赖链。
 
-把整个 `offline_install_env_debian` 复制到新设备，然后运行：
+目标机始终在所选安装包目录内运行相同命令，不需要重复填写 `--runtime-only`。安装器会读取
+同目录的 `BUNDLE_INFO`，自动判断这是完整包还是精简包：
 
 ```bash
-sudo bash offline_install_env_debian/install_offline.sh
+sudo bash install_offline.sh
 ```
 
-默认命令已经安装编译环境。只有仓库使用 `--runtime-only` 制作时，安装才相应使用：
+## 升级、修复与卸载
+
+项目代码或依赖变化后，在开发机重新运行 `create_bundle.sh`，再把新版生成目录复制到设备，
+进入该目录重新运行 `install_offline.sh`，即可完成升级。安装器会强制重装项目自有环境和
+控制台软件包，所以即使目标机误删了控制台文件，也能恢复并重新核验系统 Python 依赖。
+
+升级时会保留：
+
+- `/opt/ai_apps/.data` 中的运行记录和连接数据；
+- 用户自行上传或安装到 `/opt/ai_apps` 的程序；
+- `/userdata` 下旧版本的源码目录以及其中的板端修改；新版源码会安装到新的版本目录。
+
+Python 依赖直接安装进系统解释器，不再创建 `/opt/vision-analysis/python-env`。pip 会跳过已经
+满足 requirements 版本约束的包，只安装缺失项或调整不符合约束的版本；安装完成后会执行
+模块导入测试和 `pip check`。由于这些文件不由 deb 逐项拥有，卸载
+`vision-analysis-python-deps` 不会自动删除系统 Python 中已安装的模块。
+
+只卸载 Web 控制台：
 
 ```bash
-sudo bash offline_install_env_debian/install_offline.sh --runtime-only
-```
-
-安装器只使用包内 `file:` APT 仓库。架构不一致时会停止，因为 arm64 deb 无法安装到其他
-架构；发行版版本不一致只警告，最终由 APT 判断包是否兼容。
-
-Python 依赖安装到 `/opt/vision-analysis/python-env`，不会污染系统 Python。前端产物安装到
-`/usr/share/vision-analysis/frontend/dist`。项目固定的 RKNN Runtime 安装到
-`/opt/vision-analysis/rockchip/lib`。之后安装 Web 控制台：
-
-```bash
-sudo bash web_console/install.sh offline
+sudo apt remove vision-analysis
 ```
 
 ## 新增依赖
 
-### Python 或前端依赖
+大多数依赖不需要手工维护：
 
-- 修改生产 `requirements.txt` 后直接重新运行 `create_bundle.sh`；Python 依赖 deb 会自动更新。
-- 修改 `package.json`/`package-lock.json` 后直接重新制包；前端资源 deb 会自动更新。
-- 新增一个生产 requirements 文件时，把路径加入 `dependency_manifest.sh` 的
+- 修改生产 `requirements.txt` 后重新制包，Python 依赖 deb 会更新；
+- 修改 `package.json` 或 `package-lock.json` 后重新制包，前端会重建并进入控制台 deb；
+- 新增 C/C++ 链接库后直接重新制包，脚本会先构建应用，再从 ELF 的 `NEEDED` 项找到提供
+  动态库的 Debian 软件包；
+- 新增生产 requirements 文件时，把路径加入 `dependency_manifest.sh` 的
   `PYTHON_REQUIREMENTS`。
 
-### C/C++ 动态库
-
-新增库后先正常构建一次，再运行 `create_bundle.sh`。检测器会读取 ELF 的直接 `NEEDED`
-动态库，通过开发机 dpkg 数据库找到提供它们的软件包，并生成新版依赖元包。
-
-可单独查看检测结果：
+可单独查看自动识别结果：
 
 ```bash
 bash offline_install_env_debian/detect_apt_dependencies.sh
 bash offline_install_env_debian/detect_apt_dependencies.sh --build
 ```
 
-### 无法自动判断的依赖
-
-脚本中调用的外部命令、仅头文件依赖或运行时动态加载插件不一定能静态识别。可以一条命令添加：
+仅头文件依赖、运行时动态加载插件和脚本间接调用的命令不一定能静态识别。此时显式补充：
 
 ```bash
 bash offline_install_env_debian/create_bundle.sh --add jq
 bash offline_install_env_debian/create_bundle.sh --add-build libexample-dev
 ```
 
-成功制包后包名会分别记入 `extra-runtime-packages.txt` 或 `extra-build-packages.txt`，以后自动携带。
+成功后包名分别写入 `extra-runtime-packages.txt` 或 `extra-build-packages.txt`，以后自动携带。
 
 ## “空白 Debian”的边界
 
-这里的空白系统是指：RK3588 已经能用正确的厂家内核、设备树和固件启动，但 Debian 用户态
-尚未安装项目依赖。仓库会带上完整 Debian 依赖闭包、开发机上由 dpkg 管理的 RGA/MPP/
-Rockchip GStreamer 用户态包，以及项目固定的 RKNN Runtime。
+这里的空白系统是指：RK3588 已经能使用正确的厂家内核、设备树和固件启动，但 Debian
+用户态尚未安装本项目。安装包会带完整 Debian 用户态依赖、必要的 RGA/MPP/Rockchip
+GStreamer 厂商包和项目固定的 RKNN Runtime。
 
-内核驱动、设备树、固件和 `/dev/rknpu`、`/dev/dri` 等硬件节点不能由普通用户态 deb 从另一台
-机器安全迁移，仍必须来自适配该板卡的 BSP/系统镜像。未登记到 dpkg、来源和版本无法确认的
-散落 `.so` 也不会被盲目复制；需要携带这类固定文件时，应明确加入
-`dependency_manifest.sh` 的 `BUNDLED_RUNTIME_FILES`。硬件项可另外运行
-`bash install_deps.sh --check` 诊断，但不阻塞离线依赖安装。
+内核驱动、设备树、固件和 `/dev/rknpu`、`/dev/dri` 等设备节点无法由普通用户态 deb 从
+另一台机器安全迁移，仍需来自适配板卡的 BSP/系统镜像。未由 dpkg 管理的固定 `.so` 如需
+携带，应明确加入 `dependency_manifest.sh` 的 `BUNDLED_RUNTIME_FILES`。
+
+安装完成后可按需执行 `bash install_deps.sh --check` 诊断硬件、驱动和动态库。它是排障工具，
+不是一键安装流程的一部分，也不会替代真实摄像头和 NPU 推理测试。
