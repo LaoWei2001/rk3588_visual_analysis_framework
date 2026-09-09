@@ -10,7 +10,7 @@ APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 
 router = APIRouter()
 
-KNOWN_MODEL_TYPES = ["yolov5", "yolov8_det", "yolov8_pose", "yolov5_seg"]
+KNOWN_MODEL_TYPES = ["yolov5", "yolov8_det", "yolov8_pose", "yolo26_pose", "yolov5_seg"]
 
 
 def _app_dir(name: str) -> Path:

@@ -14,7 +14,7 @@
       "pose_model_id": {
         "type": "string",
         "title": "姿态模型节点ID",
-        "description": "留空时接收本通道全部yolov8_pose结果。",
+        "description": "留空时接收本通道全部yolov8_pose或yolo26_pose结果。",
         "default": "pose",
         "x-hot-reload": "reset_state"
       },

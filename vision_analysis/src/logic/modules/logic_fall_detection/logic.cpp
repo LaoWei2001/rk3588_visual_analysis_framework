@@ -13,7 +13,6 @@
 
 namespace
 {
-constexpr const char *POSE_MODEL_TYPE = "yolov8_pose";
 constexpr const char *SCRAPER_MODEL_TYPE = "yolov5_seg";
 constexpr int PERSON_CLASS_ID = 0;
 constexpr int SCRAPER_CLASS_ID = 0;
@@ -95,6 +94,12 @@ DetectionState &detection_state(ChannelContext *ctx)
 bool matches_source(const AlgoResult &result, const char *type, const std::string &model_id)
 {
     return result.model_type == type && (model_id.empty() || result.model_id == model_id);
+}
+
+bool matches_pose_source(const AlgoResult &result, const std::string &model_id)
+{
+    const bool pose_type = result.model_type == "yolov8_pose" || result.model_type == "yolo26_pose";
+    return pose_type && (model_id.empty() || result.model_id == model_id);
 }
 
 const RoiZone *valid_roi(const ChannelContext *ctx, const std::string &name)
@@ -431,7 +436,7 @@ static void logic_fall_detection(ChannelContext *ctx)
 
     for (AlgoResult &pose : *ctx->results)
     {
-        if (!matches_source(pose, POSE_MODEL_TYPE, pose_model_id) || pose.class_id != PERSON_CLASS_ID)
+        if (!matches_pose_source(pose, pose_model_id) || pose.class_id != PERSON_CLASS_ID)
             continue;
         ++raw_person_count;
         if (pose.score < min_person_score || pose.box.empty())

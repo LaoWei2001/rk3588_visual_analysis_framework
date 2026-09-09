@@ -35,6 +35,7 @@
 #include "common/logging.h"
 #include "yolo/composite_model.h"
 #include "yolo/yolo.h"
+#include "yolo/yolo26pose.h"
 #include "yolo/yolopose.h"
 #include "yolo/yoloseg.h"
 #include "yolo/yolov8det.h"
@@ -131,6 +132,8 @@ std::shared_ptr<ModelBase> create_inference_model(const std::string &type, const
                                         const std::string &label_path, int core_mask, float obj_thresh,
                                         float nms_thresh)
 {
+    if (type == "yolo26_pose")
+        return std::make_shared<Yolo26Pose>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
     if (type == "yolov8_pose")
         return std::make_shared<YoloPose>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
     if (type == "yolov5_seg")

@@ -245,7 +245,7 @@ GStreamer appsink
 | 类别 | 当前支持 |
 |---|---|
 | 输入源 | `rtsp`、`file`、`usb` |
-| 模型类型 | `yolov5`、`yolov8_det`、`yolov8_pose`、`yolov5_seg` |
+| 模型类型 | `yolov5`、`yolov8_det`、`yolov8_pose`、`yolo26_pose`、`yolov5_seg` |
 | 模型格式 | Rockchip RKNN |
 | 图像处理 | OpenCV、RGA |
 | 解码与推流 | GStreamer、GStreamer RTSP Server |
@@ -254,6 +254,28 @@ GStreamer appsink
 | 管理后端 | FastAPI、WebSocket |
 
 新增模型类型目前需要实现 `ModelBase` 并在模型工厂中注册，然后重新编译主程序。
+
+YOLO26 人体姿态模型使用独立类型 `yolo26_pose`，适配 Ultralytics 导出的
+`[1,56,8400]` FP16 one-to-many 输出。项目已内置模型
+`vision_analysis/assets/yolo26n-pose-rk3588.rknn`，该类型不要求标签文件：
+
+```json
+{
+  "id": "pose26",
+  "enable": true,
+  "model_type": "yolo26_pose",
+  "model_path": "assets/yolo26n-pose-rk3588.rknn",
+  "label_path": "",
+  "obj_thresh": 0.25,
+  "nms_thresh": 0.45,
+  "detect_classes": [],
+  "npu_core": -1
+}
+```
+
+完整的单路配置见 `vision_analysis/assets/config_yolo26_pose.json`。`yolo26_pose`
+产出的 `AlgoResult` 与 `yolov8_pose` 一致，包含人员框、17 个 COCO 关键点及其置信度，
+可以直接进入跟踪、画面骨架渲染和跌倒检测逻辑。
 
 ## 快速开始
 

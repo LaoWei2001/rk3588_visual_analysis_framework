@@ -4,6 +4,7 @@
         "yolov5",
         "yolov8_det",
         "yolov8_pose",
+        "yolo26_pose",
         "yolov5_seg"
     ]
 }

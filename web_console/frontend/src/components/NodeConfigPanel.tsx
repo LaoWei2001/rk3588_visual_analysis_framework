@@ -382,7 +382,7 @@ function StreamForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'
 function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'] }) {
   const assets     = useEditorStore(s => s.assets)
   const info       = useConsoleStore(s => s.info)
-  const modelTypes = info?.known_model_types ?? ['yolov8_det', 'yolov5', 'yolov8_pose', 'yolov5_seg']
+  const modelTypes = info?.known_model_types ?? ['yolov8_det', 'yolov5', 'yolov8_pose', 'yolo26_pose', 'yolov5_seg']
   const { busy, progress, upload } = useAssetUpload()
 
   const d   = node.data as Record<string, unknown>

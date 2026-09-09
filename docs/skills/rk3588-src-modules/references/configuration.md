@@ -105,7 +105,7 @@ file path 可相对 App 工作目录或使用绝对路径。当前初始验证�
 `version`、`obj_thresh`、`nms_thresh`、`detect_classes`、`npu_core`。
 
 所有模型项的 `id` 都必须非空且在通道内唯一。以下运行字段检查只针对 `enable=true` 的模型：支持
-类型为 `yolov5`、`yolov5_seg`、`yolov8_pose`、`yolov8_det`；除 pose 外要求 label，配置了 label
+类型为 `yolov5`、`yolov5_seg`、`yolov8_pose`、`yolo26_pose`、`yolov8_det`；除 pose 外要求 label，配置了 label
 时文件必须存在；阈值在 `[0,1]`；NPU core 为 `-1`/`"auto"` 或 0、1、2。
 
 同一帧可运行多个启用模型，结果通过 `model_id/model_type/model_index` 区分。模型 ID 也是 OTA 定位

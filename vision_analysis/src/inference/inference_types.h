@@ -16,7 +16,7 @@ struct AlgoResult
     int64_t frame_id = 0;      // monotonically increasing per channel
     uint64_t timestamp_ms = 0; // 对应业务帧进入分析管线时的 steady 毫秒；不是日历时间
     std::string model_id;      // 同通道多模型来源ID
-    std::string model_type;    // yolov8_det / yolov8_pose / ...
+    std::string model_type;    // yolov8_det / yolov8_pose / yolo26_pose / ...
     int model_index = 0;       // 在本次有效模型列表中的顺序
     cv::Scalar box_color = cv::Scalar(-1, -1, -1); // (-1,-1,-1) means use default color
 

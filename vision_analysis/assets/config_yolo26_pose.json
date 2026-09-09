@@ -1,0 +1,54 @@
+{
+  "global": {
+    "enable_display": 0,
+    "disp_width": 1280,
+    "disp_height": 720,
+    "tile_rows": 1,
+    "tile_cols": 1,
+    "max_fps": 10,
+    "queue_size": 1,
+    "channel_threads": 1,
+    "tracker_enable": 1,
+    "tracker_iou_thresh": 0.3,
+    "tracker_max_miss": 30,
+    "tracker_min_hits": 3,
+    "performance_display": 1,
+    "enable_pause_key": 0,
+    "enable_rtsp": 0
+  },
+  "channels": [
+    {
+      "id": 0,
+      "enable": true,
+      "infer_enable": true,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/模拟意外落水1.mp4",
+        "loop": true
+      },
+      "models": [
+        {
+          "id": "pose26",
+          "enable": true,
+          "model_type": "yolo26_pose",
+          "model_path": "assets/yolo26n-pose-rk3588.rknn",
+          "label_path": "",
+          "version": "yolo26n-fp16",
+          "obj_thresh": 0.25,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": -1
+        }
+      ],
+      "logic": "logic_default",
+      "logic_parameters": {},
+      "report_policy": {
+        "enabled": false,
+        "deliveries": [],
+        "parameters": []
+      },
+      "report_parameters": {},
+      "roi_zones": []
+    }
+  ]
+}
