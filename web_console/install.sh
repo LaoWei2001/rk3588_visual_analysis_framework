@@ -53,6 +53,12 @@ fi
 
 echo "=== RK3588 Web Console 安装 ==="
 
+if ! command -v ffmpeg >/dev/null 2>&1; then
+    echo "[错误] 未找到 ffmpeg，网页实时画面无法进行 RTSP 零转码封装。" >&2
+    echo "       请先在项目根目录运行 install_deps.sh。" >&2
+    exit 1
+fi
+
 # 模式必须由唯一的位置参数明确决定；offline 会完全禁止 pip/npm 联网。
 # frontend/dist 是否存在只代表项目带有预构建产物，绝不能作为网络状态判断依据。
 if [ "$OFFLINE" = "1" ]; then

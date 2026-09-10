@@ -28,14 +28,17 @@ int ansi_screen_columns_value = 80;
 int ansi_screen_rows_value = 24;
 
 static AnsiCell *screen_cells;
+static AnsiCell *previous_cells;
 static int allocated_columns;
 static int allocated_rows;
 static int current_attributes;
 static bool input_nonblocking;
 static bool size_changed;
+static bool previous_frame_valid;
 
 static bool resize_cells(int rows, int columns) {
   AnsiCell *replacement;
+  AnsiCell *previous_replacement;
 
   if (rows == allocated_rows && columns == allocated_columns && screen_cells) {
     return true;
@@ -44,10 +47,19 @@ static bool resize_cells(int rows, int columns) {
   if (!replacement) {
     return false;
   }
+  previous_replacement =
+      calloc((size_t)rows * (size_t)columns, sizeof(*previous_replacement));
+  if (!previous_replacement) {
+    free(replacement);
+    return false;
+  }
   free(screen_cells);
+  free(previous_cells);
   screen_cells = replacement;
+  previous_cells = previous_replacement;
   allocated_rows = rows;
   allocated_columns = columns;
+  previous_frame_valid = false;
   return true;
 }
 
@@ -161,18 +173,57 @@ static void apply_attributes(unsigned char attributes) {
   fputs("\033[37m", stdout);
 }
 
-int ansi_screen_refresh(void) {
-  unsigned char active_attributes = 0xffU;
+static bool cells_equal(const AnsiCell *left, const AnsiCell *right) {
+  return left->attributes == right->attributes &&
+         left->continuation == right->continuation &&
+         memcmp(left->bytes, right->bytes, sizeof(left->bytes)) == 0;
+}
 
-  if (!screen_cells) {
+int ansi_screen_refresh(void) {
+  if (!screen_cells || !previous_cells) {
     return ERR;
   }
-  /* 先设置黑底再清屏，保证擦除区域和动画空白区域同样为黑色。 */
-  fputs("\033[?25l\033[0;37;40m\033[H", stdout);
+
+  /*
+   * 串口终端吞吐远低于 SSH。旧实现每个动画帧都逐行清除并重画整屏，
+   * 115200 波特率下输出尚未发送完下一帧就已经开始，因此会明显闪烁。
+   * 首帧清屏，后续只写发生变化的连续区间。
+   */
+  if (!previous_frame_valid) {
+    fputs("\033[?25l\033[0;37;40m\033[2J\033[H", stdout);
+  }
   for (int row = 0; row < LINES; ++row) {
-    fprintf(stdout, "\033[%d;1H\033[2K", row + 1);
-    active_attributes = 0xffU;
+    int first = -1;
+    int last = -1;
+
     for (int column = 0; column < COLS; ++column) {
+      const AnsiCell *cell = &screen_cells[row * COLS + column];
+      const AnsiCell *previous = &previous_cells[row * COLS + column];
+
+      if (!cells_equal(cell, previous)) {
+        if (first < 0) {
+          first = column;
+        }
+        last = column;
+      }
+    }
+    if (first < 0) {
+      continue;
+    }
+    while (first > 0 &&
+           (screen_cells[row * COLS + first].continuation ||
+            previous_cells[row * COLS + first].continuation)) {
+      --first;
+    }
+    while (last + 1 < COLS &&
+           (screen_cells[row * COLS + last + 1].continuation ||
+            previous_cells[row * COLS + last + 1].continuation)) {
+      ++last;
+    }
+
+    fprintf(stdout, "\033[%d;%dH", row + 1, first + 1);
+    unsigned char active_attributes = 0xffU;
+    for (int column = first; column <= last; ++column) {
       const AnsiCell *cell = &screen_cells[row * COLS + column];
 
       if (cell->continuation) {
@@ -191,6 +242,9 @@ int ansi_screen_refresh(void) {
   }
   fputs("\033[0;37;40m", stdout);
   fflush(stdout);
+  memcpy(previous_cells, screen_cells,
+         (size_t)LINES * (size_t)COLS * sizeof(*screen_cells));
+  previous_frame_valid = true;
   return OK;
 }
 

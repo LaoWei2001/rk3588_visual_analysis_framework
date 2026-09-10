@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <time.h>
@@ -23,6 +24,7 @@
 #define UI_CHOICE_LABEL_SIZE 512
 #define UI_DIALOG_CONTEXT_MAX 6
 #define UI_PRINT_COALESCE_MS 50
+#define UI_CELL_BYTES 8
 
 #define ANSI_BODY "\033[0;92;40m"
 #define ANSI_BOLD "\033[1m"
@@ -71,6 +73,26 @@ typedef struct {
 } UiEvent;
 
 typedef enum {
+  UI_STYLE_BODY,
+  UI_STYLE_BOLD,
+  UI_STYLE_DIM,
+  UI_STYLE_GREEN,
+  UI_STYLE_YELLOW,
+  UI_STYLE_RED,
+  UI_STYLE_SELECTED,
+  UI_STYLE_GREEN_BOLD,
+  UI_STYLE_GREEN_DIM,
+  UI_STYLE_YELLOW_BOLD,
+  UI_STYLE_RED_BOLD
+} UiStyle;
+
+typedef struct {
+  char bytes[UI_CELL_BYTES];
+  unsigned char style;
+  bool continuation;
+} UiFrameCell;
+
+typedef enum {
   UI_CHOICE_CANCEL_INPUT,
   UI_CHOICE_CANCEL_LOCAL_RETURN,
   UI_CHOICE_CANCEL_MAIN_RETURN
@@ -101,6 +123,17 @@ static struct timespec ui_last_render_time;
 static bool ui_defer_output_until_dialog;
 static int ui_rows = 24;
 static int ui_columns = 80;
+static UiFrameCell *ui_frame;
+static UiFrameCell *ui_previous_frame;
+static int ui_frame_rows;
+static int ui_frame_columns;
+static bool ui_frame_building;
+static bool ui_previous_frame_valid;
+static bool ui_serial_terminal;
+static bool ui_cursor_visible;
+static bool ui_frame_cursor_visible;
+static int ui_frame_cursor_row;
+static int ui_frame_cursor_column;
 static volatile sig_atomic_t ui_resize_pending;
 static struct sigaction ui_old_winch_action;
 static bool ui_winch_action_saved;
@@ -137,6 +170,29 @@ static void update_terminal_size(void) {
       ui_columns = size.ws_col;
     }
   }
+}
+
+static bool tty_name_has_prefix(const char *name, const char *prefix) {
+  return name && prefix && strncmp(name, prefix, strlen(prefix)) == 0;
+}
+
+static bool detect_serial_terminal(void) {
+  const char *override = getenv("FIRST_NET_CONFIG_SERIAL");
+  const char *name;
+
+  if (override && override[0]) {
+    return strcmp(override, "0") != 0 && strcasecmp(override, "false") != 0 &&
+           strcasecmp(override, "no") != 0;
+  }
+  name = ttyname(STDIN_FILENO);
+  return tty_name_has_prefix(name, "/dev/ttyS") ||
+         tty_name_has_prefix(name, "/dev/ttyUSB") ||
+         tty_name_has_prefix(name, "/dev/ttyACM") ||
+         tty_name_has_prefix(name, "/dev/ttyAMA") ||
+         tty_name_has_prefix(name, "/dev/ttyFIQ") ||
+         tty_name_has_prefix(name, "/dev/ttymxc") ||
+         tty_name_has_prefix(name, "/dev/ttySC") ||
+         tty_name_has_prefix(name, "/dev/ttyLP");
 }
 
 static int display_width(const char *text) {
@@ -224,11 +280,170 @@ static void clip_tail_to_columns(const char *source, char *destination,
   clip_to_columns(visible, destination, destination_size, columns);
 }
 
+static UiStyle style_from_sequence(const char *style) {
+  if (!style || strcmp(style, ANSI_BODY) == 0)
+    return UI_STYLE_BODY;
+  if (strcmp(style, ANSI_BOLD) == 0)
+    return UI_STYLE_BOLD;
+  if (strcmp(style, ANSI_DIM) == 0)
+    return UI_STYLE_DIM;
+  if (strcmp(style, ANSI_GREEN) == 0)
+    return UI_STYLE_GREEN;
+  if (strcmp(style, ANSI_YELLOW) == 0)
+    return UI_STYLE_YELLOW;
+  if (strcmp(style, ANSI_RED) == 0)
+    return UI_STYLE_RED;
+  if (strcmp(style, ANSI_SELECTED) == 0)
+    return UI_STYLE_SELECTED;
+  if (strcmp(style, ANSI_GREEN ANSI_BOLD) == 0)
+    return UI_STYLE_GREEN_BOLD;
+  if (strcmp(style, ANSI_GREEN ANSI_DIM) == 0)
+    return UI_STYLE_GREEN_DIM;
+  if (strcmp(style, ANSI_YELLOW ANSI_BOLD) == 0)
+    return UI_STYLE_YELLOW_BOLD;
+  if (strcmp(style, ANSI_RED ANSI_BOLD) == 0)
+    return UI_STYLE_RED_BOLD;
+  return UI_STYLE_BODY;
+}
+
+static void emit_style(UiStyle style) {
+  fputs(ANSI_BODY, stdout);
+  switch (style) {
+  case UI_STYLE_BOLD:
+    fputs(ANSI_BOLD, stdout);
+    break;
+  case UI_STYLE_DIM:
+    fputs(ANSI_DIM, stdout);
+    break;
+  case UI_STYLE_GREEN:
+    fputs(ANSI_GREEN, stdout);
+    break;
+  case UI_STYLE_YELLOW:
+    fputs(ANSI_YELLOW, stdout);
+    break;
+  case UI_STYLE_RED:
+    fputs(ANSI_RED, stdout);
+    break;
+  case UI_STYLE_SELECTED:
+    fputs(ANSI_SELECTED, stdout);
+    break;
+  case UI_STYLE_GREEN_BOLD:
+    fputs(ANSI_GREEN ANSI_BOLD, stdout);
+    break;
+  case UI_STYLE_GREEN_DIM:
+    fputs(ANSI_GREEN ANSI_DIM, stdout);
+    break;
+  case UI_STYLE_YELLOW_BOLD:
+    fputs(ANSI_YELLOW ANSI_BOLD, stdout);
+    break;
+  case UI_STYLE_RED_BOLD:
+    fputs(ANSI_RED ANSI_BOLD, stdout);
+    break;
+  case UI_STYLE_BODY:
+    break;
+  }
+}
+
+static bool prepare_frame_buffers(void) {
+  UiFrameCell *frame;
+  UiFrameCell *previous;
+  size_t count;
+
+  if (ui_frame && ui_previous_frame && ui_frame_rows == ui_rows &&
+      ui_frame_columns == ui_columns) {
+    return true;
+  }
+  count = (size_t)ui_rows * (size_t)ui_columns;
+  frame = calloc(count, sizeof(*frame));
+  previous = calloc(count, sizeof(*previous));
+  if (!frame || !previous) {
+    free(frame);
+    free(previous);
+    return false;
+  }
+  free(ui_frame);
+  free(ui_previous_frame);
+  ui_frame = frame;
+  ui_previous_frame = previous;
+  ui_frame_rows = ui_rows;
+  ui_frame_columns = ui_columns;
+  ui_previous_frame_valid = false;
+  return true;
+}
+
+static UiFrameCell *frame_cell(int row, int column) {
+  if (!ui_frame || row < 0 || row >= ui_rows || column < 0 ||
+      column >= ui_columns) {
+    return NULL;
+  }
+  return &ui_frame[row * ui_columns + column];
+}
+
+static void frame_put_text(int row, int column, const char *text,
+                           UiStyle style, int maximum_columns) {
+  mbstate_t state;
+  int used_columns = 0;
+
+  if (!text || row < 0 || row >= ui_rows || column < 0 ||
+      column >= ui_columns || maximum_columns <= 0) {
+    return;
+  }
+  memset(&state, 0, sizeof(state));
+  while (*text && column < ui_columns && used_columns < maximum_columns) {
+    wchar_t value;
+    size_t length = mbrtowc(&value, text, UI_CELL_BYTES - 1, &state);
+    int width;
+    UiFrameCell *cell;
+
+    if (length == (size_t)-1 || length == (size_t)-2) {
+      memset(&state, 0, sizeof(state));
+      length = 1;
+      width = 1;
+    } else if (length == 0) {
+      break;
+    } else {
+      width = wcwidth(value);
+      if (width <= 0)
+        width = 1;
+    }
+    if (column + width > ui_columns || used_columns + width > maximum_columns) {
+      break;
+    }
+    cell = frame_cell(row, column);
+    memset(cell, 0, sizeof(*cell));
+    memcpy(cell->bytes, text, length);
+    cell->style = (unsigned char)style;
+    for (int offset = 1; offset < width; ++offset) {
+      UiFrameCell *continuation = frame_cell(row, column + offset);
+      memset(continuation, 0, sizeof(*continuation));
+      continuation->style = (unsigned char)style;
+      continuation->continuation = true;
+    }
+    column += width;
+    used_columns += width;
+    text += length;
+  }
+}
+
 static void move_cursor(int row, int column) {
+  if (ui_frame_building) {
+    ui_frame_cursor_row = row;
+    ui_frame_cursor_column = column;
+    return;
+  }
   fprintf(stdout, "\033[%d;%dH", row + 1, column + 1);
 }
 
 static void fill_row(int row, const char *style) {
+  if (ui_frame_building) {
+    UiStyle frame_style = style_from_sequence(style);
+    for (int column = 0; column < ui_columns; ++column) {
+      UiFrameCell *cell = frame_cell(row, column);
+      if (cell)
+        cell->style = (unsigned char)frame_style;
+    }
+    return;
+  }
   move_cursor(row, 0);
   fputs(style ? style : ANSI_BODY, stdout);
   for (int index = 0; index < ui_columns; ++index) {
@@ -246,6 +461,11 @@ static void draw_text(int row, int column, const char *text,
   }
   clip_to_columns(text ? text : "", clipped, sizeof(clipped),
                   ui_columns - column);
+  if (ui_frame_building) {
+    frame_put_text(row, column, clipped, style_from_sequence(style),
+                   ui_columns - column);
+    return;
+  }
   move_cursor(row, column);
   fputs(style ? style : ANSI_BODY, stdout);
   fputs(clipped, stdout);
@@ -259,6 +479,17 @@ static void fill_span(int row, int column, int width, const char *style) {
   }
   if (column + width > ui_columns) {
     width = ui_columns - column;
+  }
+  if (ui_frame_building) {
+    UiStyle frame_style = style_from_sequence(style);
+    for (int index = 0; index < width; ++index) {
+      UiFrameCell *cell = frame_cell(row, column + index);
+      if (cell) {
+        memset(cell, 0, sizeof(*cell));
+        cell->style = (unsigned char)frame_style;
+      }
+    }
+    return;
   }
   move_cursor(row, column);
   fputs(style ? style : ANSI_BODY, stdout);
@@ -276,6 +507,19 @@ static void draw_repeat(int row, int column, int count, const char *glyph,
   }
   if (column + count > ui_columns) {
     count = ui_columns - column;
+  }
+  if (ui_frame_building) {
+    UiStyle frame_style = style_from_sequence(style);
+    int glyph_width = display_width(glyph);
+    int used = 0;
+
+    if (glyph_width <= 0)
+      return;
+    while (used + glyph_width <= count) {
+      frame_put_text(row, column + used, glyph, frame_style, glyph_width);
+      used += glyph_width;
+    }
+    return;
   }
   move_cursor(row, column);
   fputs(style ? style : ANSI_BODY, stdout);
@@ -332,14 +576,109 @@ static void draw_separator(int row, int left, int width) {
 
 static void begin_frame(void) {
   update_terminal_size();
+  ui_frame_cursor_visible = false;
+  ui_frame_cursor_row = 0;
+  ui_frame_cursor_column = 0;
+  if (prepare_frame_buffers()) {
+    memset(ui_frame, 0,
+           (size_t)ui_rows * (size_t)ui_columns * sizeof(*ui_frame));
+    ui_frame_building = true;
+    return;
+  }
+
+  /* 极端低内存时保留可用的整屏绘制回退。 */
+  ui_frame_building = false;
   fputs("\033[?25l" ANSI_BODY "\033[H", stdout);
   for (int row = 0; row < ui_rows; ++row) {
-    move_cursor(row, 0);
-    fputs("\033[2K", stdout);
+    fprintf(stdout, "\033[%d;1H\033[2K", row + 1);
   }
 }
 
+static bool frame_cells_equal(const UiFrameCell *left,
+                              const UiFrameCell *right) {
+  return left->style == right->style &&
+         left->continuation == right->continuation &&
+         memcmp(left->bytes, right->bytes, sizeof(left->bytes)) == 0;
+}
+
+static void set_frame_cursor_visible(bool visible) {
+  if (ui_frame_building) {
+    ui_frame_cursor_visible = visible;
+    return;
+  }
+  fputs(visible ? "\033[?25h" : "\033[?25l", stdout);
+  ui_cursor_visible = visible;
+}
+
 static void end_frame(void) {
+  if (ui_frame_building) {
+    size_t frame_size =
+        (size_t)ui_rows * (size_t)ui_columns * sizeof(*ui_frame);
+
+    ui_frame_building = false;
+    if (!ui_previous_frame_valid) {
+      fputs("\033[?25l" ANSI_BODY "\033[2J\033[H", stdout);
+      ui_cursor_visible = false;
+    }
+    for (int row = 0; row < ui_rows; ++row) {
+      int first = -1;
+      int last = -1;
+
+      for (int column = 0; column < ui_columns; ++column) {
+        const UiFrameCell *cell = &ui_frame[row * ui_columns + column];
+        const UiFrameCell *previous =
+            &ui_previous_frame[row * ui_columns + column];
+
+        if (!frame_cells_equal(cell, previous)) {
+          if (first < 0)
+            first = column;
+          last = column;
+        }
+      }
+      if (first < 0)
+        continue;
+      while (first > 0 &&
+             (ui_frame[row * ui_columns + first].continuation ||
+              ui_previous_frame[row * ui_columns + first].continuation)) {
+        --first;
+      }
+      while (last + 1 < ui_columns &&
+             (ui_frame[row * ui_columns + last + 1].continuation ||
+              ui_previous_frame[row * ui_columns + last + 1].continuation)) {
+        ++last;
+      }
+
+      fprintf(stdout, "\033[%d;%dH", row + 1, first + 1);
+      UiStyle active_style = (UiStyle)-1;
+      for (int column = first; column <= last; ++column) {
+        const UiFrameCell *cell = &ui_frame[row * ui_columns + column];
+
+        if (cell->continuation)
+          continue;
+        if ((UiStyle)cell->style != active_style) {
+          active_style = (UiStyle)cell->style;
+          emit_style(active_style);
+        }
+        if (cell->bytes[0])
+          fputs(cell->bytes, stdout);
+        else
+          fputc(' ', stdout);
+      }
+    }
+    memcpy(ui_previous_frame, ui_frame, frame_size);
+    ui_previous_frame_valid = true;
+    if (ui_frame_cursor_visible) {
+      fprintf(stdout, "\033[%d;%dH", ui_frame_cursor_row + 1,
+              ui_frame_cursor_column + 1);
+      if (!ui_cursor_visible)
+        fputs("\033[?25h", stdout);
+      ui_cursor_visible = true;
+    } else {
+      if (ui_cursor_visible)
+        fputs("\033[?25l", stdout);
+      ui_cursor_visible = false;
+    }
+  }
   fputs(ANSI_BODY, stdout);
   fflush(stdout);
 }
@@ -677,6 +1016,7 @@ bool terminal_ui_start(void) {
   }
   (void)setlocale(LC_ALL, "");
   update_terminal_size();
+  ui_serial_terminal = detect_serial_terminal();
   if (ui_columns < 48 || ui_rows < 10 ||
       tcgetattr(STDIN_FILENO, &ui_original_termios) != 0) {
     return false;
@@ -712,12 +1052,17 @@ bool terminal_ui_start(void) {
   ui_next_choice_minimum_rows = 0;
   ui_step_pending = false;
   ui_defer_output_until_dialog = false;
+  ui_previous_frame_valid = false;
+  ui_frame_building = false;
+  ui_cursor_visible = false;
+  memset(&ui_last_render_time, 0, sizeof(ui_last_render_time));
   reset_output();
   if (!ui_registered_shutdown) {
     (void)atexit(terminal_ui_shutdown);
     ui_registered_shutdown = true;
   }
-  fputs("\033[?1049h\033[?25l\033[?1000h\033[?1006h\033[2J\033[H", stdout);
+  /* 首个差分帧会完成清屏；这里不重复清屏，避免串口启动时闪白两次。 */
+  fputs("\033[?1049h\033[?25l\033[?1000h\033[?1006h", stdout);
   fflush(stdout);
   return true;
 }
@@ -759,6 +1104,8 @@ void terminal_ui_detach(void) {
 }
 
 bool terminal_ui_enabled(void) { return ui_active; }
+
+bool terminal_ui_is_serial(void) { return ui_active && ui_serial_terminal; }
 
 int terminal_ui_content_width(void) {
   return ui_active && ui_columns > 3 ? ui_columns - 3 : 80;
@@ -1598,10 +1945,9 @@ bool terminal_ui_read_text(const char *prompt, char *buffer, size_t size,
                 ANSI_DIM);
     }
     move_cursor(top + input_row, left + 3 + display_width(clipped));
-    fputs("\033[?25h", stdout);
+    set_frame_cursor_visible(true);
     end_frame();
     event = read_event(-1);
-    fputs("\033[?25l", stdout);
     if (event.key == UI_KEY_RESIZE)
       continue;
     if (mouse_left_click(&event) && event.mouse_y == top + height - 2 &&
@@ -1632,6 +1978,7 @@ bool terminal_ui_read_text(const char *prompt, char *buffer, size_t size,
       ui_input_was_cancelled = true;
       ui_back_was_requested = can_go_back;
       if (can_go_back) {
+        set_frame_cursor_visible(false);
         rewind_step_output();
         ui_defer_output_until_dialog = true;
       } else

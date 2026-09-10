@@ -48,6 +48,12 @@ sudo ./first_net_config
 直接绘制，按任意键可以跳过。调试时可用环境变量
 `FIRST_NET_CONFIG_INTRO=ghostface|anonymous|cube|none` 固定或关闭动画。
 
+程序会识别 `/dev/ttyS*`、`ttyUSB*`、`ttyACM*`、`ttyAMA*`、`ttyFIQ*` 等物理串口，
+在串口上默认跳过高帧率启动动画，并通过差分绘制只发送变化的画面区域，避免在
+115200 波特率下因反复清屏造成闪烁和输入字符暂时不显示。需要手工指定时可设置
+`FIRST_NET_CONFIG_SERIAL=1` 强制使用串口策略，或设置为 `0` 关闭串口识别；显式设置
+`FIRST_NET_CONFIG_INTRO=ghostface|anonymous|cube` 仍可在串口播放指定动画。
+
 ```bash
 sudo ./first_net_config --plain
 ```

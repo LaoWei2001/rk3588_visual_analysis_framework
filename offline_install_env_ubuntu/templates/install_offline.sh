@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 制包器复制到 bundle 根目录的离线安装器模板；不要从 templates 目录直接运行。
+# Ubuntu 制包器复制到 bundle 根目录的独立离线安装器模板；
+# 不要从 templates 目录直接运行。
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,8 +47,8 @@ fi
 
 EXPECTED_OS_ID="$(metadata_value os_id)"
 EXPECTED_OS_VERSION="$(metadata_value os_version_id)"
-if [ "$EXPECTED_OS_ID" != debian ]; then
-    echo "[错误] 这不是 Debian 离线包：BUNDLE_INFO 中 os_id=${EXPECTED_OS_ID:-未设置}。" >&2
+if [ "$EXPECTED_OS_ID" != ubuntu ]; then
+    echo "[错误] 这不是 Ubuntu 离线包：BUNDLE_INFO 中 os_id=${EXPECTED_OS_ID:-未设置}。" >&2
     exit 1
 fi
 EXPECTED_OS="$EXPECTED_OS_ID $EXPECTED_OS_VERSION"
@@ -55,8 +56,8 @@ STRICT_TARGET_OS="$(metadata_value strict_target_os)"
 # shellcheck source=/etc/os-release
 source /etc/os-release
 CURRENT_OS="${ID:-unknown} ${VERSION_ID:-unknown}"
-if [ "${ID:-unknown}" != debian ]; then
-    echo "[错误] Debian 离线安装器不能安装到 ${ID:-unknown} ${VERSION_ID:-unknown}。" >&2
+if [ "${ID:-unknown}" != ubuntu ]; then
+    echo "[错误] Ubuntu 离线安装器不能安装到 ${ID:-unknown} ${VERSION_ID:-unknown}。" >&2
     exit 1
 fi
 if [ "$CURRENT_OS" != "$EXPECTED_OS" ]; then

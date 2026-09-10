@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 在联网 Ubuntu RK3588 制作机上准备项目构建和离线仓库制作工具。
+# 在联网 Debian RK3588 制作机上准备项目构建和离线仓库制作工具。
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,12 +12,12 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # shellcheck source=/etc/os-release
 source /etc/os-release
-if [ "${ID:-unknown}" != ubuntu ]; then
-    echo "[错误] 本脚本只用于 Ubuntu；当前系统为 ${ID:-unknown} ${VERSION_ID:-unknown}。" >&2
+if [ "${ID:-unknown}" != debian ]; then
+    echo "[错误] 本脚本只用于 Debian；当前系统为 ${ID:-unknown} ${VERSION_ID:-unknown}。" >&2
     exit 1
 fi
 if [ "$(uname -m)" != aarch64 ] || [ "$(dpkg --print-architecture)" != arm64 ]; then
-    echo "[错误] 必须在 Ubuntu ARM64 制作机上运行。" >&2
+    echo "[错误] 必须在 Debian ARM64 制作机上运行。" >&2
     echo "       当前 uname=$(uname -m), dpkg=$(dpkg --print-architecture)" >&2
     exit 1
 fi
@@ -31,8 +31,8 @@ else
     exit 1
 fi
 
-# 仓库可能携带在 Debian 上编译的调试二进制；它不代表 Ubuntu 环境缺包。
-# 制包器下一步会在 Ubuntu 上重新编译，并以新 ELF 识别真实依赖。
+# 仓库可能携带旧系统上编译的调试二进制；它不代表当前 Debian 环境缺包。
+# 制包器下一步会在当前 Debian 上重新编译，并以新 ELF 识别真实依赖。
 # install_deps.sh 会更新 APT 索引并安装运行、编译、Python、Node.js 和前端依赖。
 bash "$PROJECT_ROOT/install_deps.sh" --skip-app-check
 
@@ -42,9 +42,9 @@ bash "$PROJECT_ROOT/install_deps.sh" --skip-app-check
     dpkg-dev dpkg-repack
 
 echo
-echo "[OK] Ubuntu 制作机准备完成。"
+echo "[OK] Debian 制作机准备完成。"
 if [ "${OFFLINE_PREPARE_EMBEDDED:-false}" = true ]; then
     echo "     返回 create_bundle.sh 继续生成离线包。"
 else
-    echo "     可执行: bash offline_install_env_ubuntu/create_bundle.sh"
+    echo "     可执行: bash offline_install_env_debian/create_bundle.sh"
 fi

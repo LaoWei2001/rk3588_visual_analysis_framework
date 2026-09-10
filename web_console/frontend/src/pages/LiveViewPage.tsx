@@ -112,6 +112,18 @@ function errMsg(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function mediaErrorMessage(error: MediaError | null): string {
+  if (!error) return '浏览器视频解码器报错'
+  if (error.message) return `浏览器视频解码失败：${error.message}`
+  const descriptions: Record<number, string> = {
+    1: '视频加载被中止',
+    2: '视频数据传输失败',
+    3: '浏览器无法解码该 H264 视频',
+    4: '浏览器不支持该视频格式',
+  }
+  return descriptions[error.code] ?? `浏览器视频错误（代码 ${error.code}）`
+}
+
 function runtimeConfigPath(configName: string): string | null {
   const name = configName.trim()
   if (!name || name === 'config.json') return null
@@ -124,6 +136,7 @@ export default function LiveViewPage() {
   const [appsError, setAppsError] = useState('')
   const [rtspState, setRtspState] = useState<RtspState>('idle')
   const [streamErr, setStreamErr] = useState(false)
+  const [streamErrorDetail, setStreamErrorDetail] = useState('')
   const [streamLoading, setStreamLoading] = useState(true)
   const [streamNonce, setStreamNonce] = useState(0)
   const [videoFullscreen, setVideoFullscreen] = useState(false)
@@ -136,6 +149,7 @@ export default function LiveViewPage() {
   const streamRetryRef = useRef(0)
   const streamRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const streamRetryPendingRef = useRef(false)
+  const streamLastErrorRef = useRef('')
   const videoRef = useRef<HTMLVideoElement>(null)
   const videoFrameRef = useRef<HTMLDivElement>(null)
   const logWsRef = useRef<WebSocket | null>(null)
@@ -214,12 +228,16 @@ export default function LiveViewPage() {
     streamRetryPendingRef.current = false
   }
 
-  const scheduleStreamRetry = (delay: number) => {
+  const scheduleStreamRetry = (delay: number, reason = '') => {
+    if (reason) streamLastErrorRef.current = reason
     if (streamRetryPendingRef.current) return
     clearStreamRetry()
     if (streamRetryRef.current >= STREAM_MAX_RETRY) {
+      const detail = streamLastErrorRef.current || '视频流连续重连失败'
       setStreamLoading(false)
       setStreamErr(true)
+      setStreamErrorDetail(detail)
+      showToast(detail, 'err')
       return
     }
     streamRetryRef.current += 1
@@ -235,13 +253,17 @@ export default function LiveViewPage() {
   const handleStreamLoad = () => {
     clearStreamRetry()
     streamRetryRef.current = 0
+    streamLastErrorRef.current = ''
+    setStreamErrorDetail('')
     setStreamLoading(false)
   }
 
   const retryStream = () => {
     clearStreamRetry()
     streamRetryRef.current = 0
+    streamLastErrorRef.current = ''
     setStreamErr(false)
+    setStreamErrorDetail('')
     setStreamLoading(true)
     setStreamNonce(Date.now())
   }
@@ -432,7 +454,9 @@ export default function LiveViewPage() {
   useEffect(() => {
     clearStreamRetry()
     streamRetryRef.current = 0
+    streamLastErrorRef.current = ''
     setStreamErr(false)
+    setStreamErrorDetail('')
     setStreamLoading(true)
     return clearStreamRetry
   }, [appName, rtspEnabled])
@@ -548,15 +572,16 @@ export default function LiveViewPage() {
       setStreamLoading(false)
       if (error instanceof FatalStreamError) {
         setStreamErr(true)
+        setStreamErrorDetail(error.message)
         showToast(error.message, 'err')
       } else {
-        scheduleStreamRetry(500)
+        scheduleStreamRetry(500, errMsg(error))
       }
     })
 
     const onVideoError = () => {
       if (!disposed) {
-        scheduleStreamRetry(500)
+        scheduleStreamRetry(500, mediaErrorMessage(video.error))
         abortController.abort()
       }
     }
@@ -565,7 +590,7 @@ export default function LiveViewPage() {
     video.addEventListener('playing', onVideoPlaying)
     const startupTimer = setTimeout(() => {
       if (!disposed && !playbackStarted) {
-        scheduleStreamRetry(500)
+        scheduleStreamRetry(500, '视频数据已连接，但浏览器在 15 秒内未能开始播放')
         abortController.abort()
       }
     }, STREAM_STALL_MS)
@@ -581,7 +606,7 @@ export default function LiveViewPage() {
         lastPlaybackTime = video.currentTime
         lastPlaybackAdvanceAt = Date.now()
       } else if (Date.now() - lastPlaybackAdvanceAt > STREAM_STALL_MS) {
-        scheduleStreamRetry(500)
+        scheduleStreamRetry(500, '实时画面已停滞超过 15 秒')
         abortController.abort()
       }
     }, 2500)
@@ -694,7 +719,7 @@ export default function LiveViewPage() {
                 ) : (
                   <div className="live-view-video-state error">
                     <strong>实时视频暂不可用</strong>
-                    <span>请检查程序推流状态和视频源连接。</span>
+                    <span>{streamErrorDetail || '请检查程序推流状态和视频源连接。'}</span>
                     <button onClick={retryStream}>重新连接</button>
                   </div>
                 )

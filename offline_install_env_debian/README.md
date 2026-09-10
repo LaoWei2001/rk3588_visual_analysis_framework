@@ -101,45 +101,15 @@ npm run build
 7. 生成依赖元包和本地 APT 索引；
 8. 在空 dpkg 状态下验证依赖能够闭合，然后原子替换上一版仓库。
 
-制作机需要安装 `dpkg-repack`，APT、PyPI 和 npm 源需要可用。已有且与锁文件一致的
-`node_modules` 会直接复用。两种策略使用不同目录，互不覆盖：
+脚本会自动安装 `dpkg-repack` 等制包工具；APT、PyPI 和 npm 源需要可用。已有且与锁文件
+一致的 `node_modules` 会直接复用。制包入口不接受模式参数，固定输出：
 
 ```text
 offline_install_env_debian/output/full-bundle
-offline_install_env_debian/output/runtime-only-bundle
 ```
 
 生成失败时不会破坏上一版仓库。`output/`、`frontend/dist/` 和 `node_modules/` 都是生成物，
-不需要提交 GitHub；发布时只需压缩或复制所需的 `full-bundle` 或
-`runtime-only-bundle` 目录。
-
-默认安装包包含源码和编译环境。如果目标机只需要运行用户另外提供的预编译程序，可以在
-制包时选择精简模式：
-
-```bash
-# 制作机
-bash offline_install_env_debian/create_bundle.sh --runtime-only
-
-# 目标机
-cd /userdata/runtime-only-bundle
-sudo bash install_offline.sh
-```
-
-精简模式仍包含运行环境和 Web 控制台，但不安装源码、编译器、CMake、开发头文件、Node.js
-工具链和 `node_modules`。两种模式都不会预装默认程序；完整包可在板端重新构建前端，精简包
-只使用制作机已经构建并放入控制台 deb 的前端。
-
-`runtime-only-bundle` 只用于确认无需编译、且现有 Debian 软件包状态完整的运行设备。新设备、
-厂家镜像中预装过开发包的设备、曾安装过编译环境的设备，以及任何需要在板端编译源码的设备，
-都应使用默认的 `full-bundle`。精简包不会携带 `libopencv-dev` 等开发依赖，也不会尝试修复设备
-原有的残缺开发包依赖链。
-
-目标机始终在所选安装包目录内运行相同命令，不需要重复填写 `--runtime-only`。安装器会读取
-同目录的 `BUNDLE_INFO`，自动判断这是完整包还是精简包：
-
-```bash
-sudo bash install_offline.sh
-```
+不需要提交 GitHub；发布时只需压缩或复制 `full-bundle` 目录。
 
 ## 升级、修复与卸载
 
@@ -175,21 +145,21 @@ sudo apt remove vision-analysis
 - 新增生产 requirements 文件时，把路径加入 `dependency_manifest.sh` 的
   `PYTHON_REQUIREMENTS`。
 
-可单独查看自动识别结果：
+正常制包无需单独运行依赖探测器。若排障时需要查看运行依赖识别结果，可以执行：
 
 ```bash
 bash offline_install_env_debian/detect_apt_dependencies.sh
-bash offline_install_env_debian/detect_apt_dependencies.sh --build
 ```
 
-仅头文件依赖、运行时动态加载插件和脚本间接调用的命令不一定能静态识别。此时显式补充：
+仅头文件依赖、运行时动态加载插件和脚本间接调用的命令不一定能静态识别。此时直接把 APT
+包名逐行写入对应文件：
 
-```bash
-bash offline_install_env_debian/create_bundle.sh --add jq
-bash offline_install_env_debian/create_bundle.sh --add-build libexample-dev
+```text
+offline_install_env_debian/extra-runtime-packages.txt
+offline_install_env_debian/extra-build-packages.txt
 ```
 
-成功后包名分别写入 `extra-runtime-packages.txt` 或 `extra-build-packages.txt`，以后自动携带。
+保存后仍然只需重新运行 `bash offline_install_env_debian/create_bundle.sh`。
 
 ## “空白 Debian”的边界
 

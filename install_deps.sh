@@ -6,6 +6,7 @@
 #   bash install_deps.sh --runtime-only    只安装运行环境
 #   bash install_deps.sh --check      不联网、不修改系统，验收默认完整环境
 #   bash install_deps.sh --check --runtime-only   只验收运行环境
+#   bash install_deps.sh --skip-app-check  准备制包机时忽略从其他系统复制来的旧二进制
 #
 # 正常安装必须在盒子仍能访问 APT、PyPI/npm 镜像时执行。断网设备请先在同版本
 # 有网 ARM64 制作机上运行对应发行版的 create_bundle.sh；现场直接运行统一安装入口。
@@ -18,6 +19,7 @@ set -Eeuo pipefail
 
 WANT_BUILD=true
 CHECK_ONLY=false
+CHECK_APPLICATIONS=true
 
 usage() {
     sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
@@ -28,6 +30,7 @@ while [ "$#" -gt 0 ]; do
         --build) WANT_BUILD=true ;;
         --runtime-only) WANT_BUILD=false ;;
         --check) CHECK_ONLY=true ;;
+        --skip-app-check) CHECK_APPLICATIONS=false ;;
         -h|--help) usage; exit 0 ;;
         *) echo "[错误] 未知参数: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -126,10 +129,80 @@ install_apt_dependencies() {
     if ! as_root apt-get update; then
         echo "    [警告] apt-get update 有软件源失败；继续使用已成功更新的索引和现有缓存。" >&2
     fi
-    install_missing_apt_packages "运行环境" "${APT_RUNTIME[@]}"
+    install_missing_apt_packages "运行环境" \
+        "${APT_RUNTIME[@]}" "${LOCAL_RUNTIME_PACKAGES[@]}"
     if [ "$WANT_BUILD" = true ]; then
-        install_missing_apt_packages "C/C++ 编译环境" "${APT_BUILD[@]}"
+        install_missing_apt_packages "C/C++ 编译环境" \
+            "${APT_BUILD[@]}" "${LOCAL_BUILD_PACKAGES[@]}"
     fi
+}
+
+ensure_rga_pkg_config() {
+    [ "$WANT_BUILD" = true ] || return 0
+    command -v pkg-config >/dev/null 2>&1 || return 0
+    pkg-config --exists librga 2>/dev/null && return 0
+
+    local existing_pc=""
+    local rga_header=""
+    local rga_link=""
+    local rga_libdir=""
+    local rga_include_root=""
+    local rga_version=""
+    local pc_dir="/usr/local/lib/pkgconfig"
+    local pc_target="$pc_dir/librga.pc"
+    local pc_temp=""
+
+    existing_pc="$(find /usr/lib /usr/local/lib -type f -path '*/pkgconfig/librga.pc' \
+        -print -quit 2>/dev/null || true)"
+    if [ -n "$existing_pc" ]; then
+        echo "[错误] 已存在 $existing_pc，但 pkg-config 无法解析 librga。" >&2
+        pkg-config --print-errors --exists librga 2>&1 | sed 's/^/       /' >&2 || true
+        echo "       请先修复该文件引用的下游模块，脚本不会用另一份文件覆盖它。" >&2
+        return 1
+    fi
+
+    if ! apt_package_is_installed librga-dev; then
+        echo "[错误] 缺少 librga-dev，无法生成 Rockchip RGA 的 pkg-config 元数据。" >&2
+        return 1
+    fi
+    rga_header="$(dpkg-query -L librga-dev 2>/dev/null \
+        | sed -n '/\/include\/rga\/\(im2d\|RgaApi\)\.h$/p' | head -n 1)"
+    rga_link="$(dpkg-query -L librga-dev 2>/dev/null \
+        | sed -n '/\/librga\.so$/p' | head -n 1)"
+    if [ -z "$rga_header" ] || [ ! -f "$rga_header" ]; then
+        echo "[错误] librga-dev 已安装，但没有找到 RGA 开发头文件。" >&2
+        return 1
+    fi
+    if [ -z "$rga_link" ] || { [ ! -f "$rga_link" ] && [ ! -L "$rga_link" ]; }; then
+        echo "[错误] librga-dev 已安装，但没有找到未版本化的 librga.so 开发链接。" >&2
+        return 1
+    fi
+
+    rga_libdir="$(dirname "$rga_link")"
+    rga_include_root="${rga_header%%/rga/*}"
+    rga_version="$(dpkg-query -W -f='${Version}' librga-dev 2>/dev/null || true)"
+    rga_version="${rga_version#*:}"
+    rga_version="${rga_version%%-*}"
+    [ -n "$rga_version" ] || rga_version="0.0.0"
+
+    pc_temp="$(mktemp)"
+    cat > "$pc_temp" <<EOF
+Name: librga
+Description: Rockchip Raster Graphic Acceleration development library
+Version: $rga_version
+Libs: -L$rga_libdir -lrga
+Cflags: -I$rga_include_root
+EOF
+    "${ROOT[@]}" install -d -m 0755 "$pc_dir"
+    "${ROOT[@]}" install -m 0644 "$pc_temp" "$pc_target"
+    rm -f -- "$pc_temp"
+
+    if ! pkg-config --exists librga; then
+        echo "[错误] 已生成 $pc_target，但 pkg-config 仍无法解析 librga。" >&2
+        pkg-config --print-errors --exists librga 2>&1 | sed 's/^/       /' >&2 || true
+        return 1
+    fi
+    echo "    已为厂商 librga-dev 补充缺失的 pkg-config 元数据: $pc_target"
 }
 
 node_major_is_supported() {
@@ -518,7 +591,7 @@ check_userland_environment() {
     local runtime_commands=(
         bash curl python3 nmcli nm-online ip ping ethtool
         systemctl systemd-run journalctl timedatectl pgrep
-        gst-launch-1.0 gst-inspect-1.0 ffprobe v4l2-ctl
+        gst-launch-1.0 gst-inspect-1.0 ffmpeg ffprobe v4l2-ctl
         dpkg ldd readelf sha256sum
     )
     local missing_commands=()
@@ -672,9 +745,43 @@ PY
             fi
         fi
         if command -v pkg-config >/dev/null 2>&1; then
-            pkg-config --exists gtk+-3.0 gstreamer-1.0 gstreamer-video-1.0 \
-                gstreamer-allocators-1.0 gstreamer-rtsp-server-1.0 \
-                || check_fail "C/C++ pkg-config 开发模块"
+            local pkg_config_module
+            local missing_pkg_config_modules=()
+            local pkg_config_modules=(
+                gtk+-3.0
+                gstreamer-1.0
+                gstreamer-video-1.0
+                gstreamer-allocators-1.0
+                gstreamer-rtsp-server-1.0
+            )
+            for pkg_config_module in "${pkg_config_modules[@]}"; do
+                pkg-config --exists "$pkg_config_module" \
+                    || missing_pkg_config_modules+=("$pkg_config_module")
+            done
+            if [ "${#missing_pkg_config_modules[@]}" -gt 0 ]; then
+                check_fail "缺少 C/C++ pkg-config 开发模块: ${missing_pkg_config_modules[*]}"
+                echo "        对应包通常为: libgtk-3-dev、libgstreamer1.0-dev、" >&2
+                echo "        libgstreamer-plugins-base1.0-dev、libgstrtspserver-1.0-dev。" >&2
+                for pkg_config_module in "${missing_pkg_config_modules[@]}"; do
+                    echo "        pkg-config $pkg_config_module 的原始错误:" >&2
+                    pkg-config --print-errors --exists "$pkg_config_module" 2>&1 \
+                        | sed 's/^/          /' >&2 || true
+                done
+                local provider_package
+                local provider_status
+                for provider_package in \
+                        libgstreamer-plugins-base1.0-dev \
+                        libgstrtspserver-1.0-dev; do
+                    provider_status="$(dpkg-query -W \
+                        -f='${binary:Package} ${Version} ${db:Status-Status}' \
+                        "$provider_package" 2>/dev/null || true)"
+                    echo "        软件包状态: ${provider_status:-$provider_package 未安装}" >&2
+                done
+                if [ -n "${PKG_CONFIG_PATH:-}" ] || [ -n "${PKG_CONFIG_LIBDIR:-}" ]; then
+                    echo "        当前 PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-未设置}" >&2
+                    echo "        当前 PKG_CONFIG_LIBDIR=${PKG_CONFIG_LIBDIR:-未设置}" >&2
+                fi
+            fi
         fi
         [ -f /usr/include/gpiod.h ] || check_fail "libgpiod 开发头文件"
         if node_major_is_supported && command -v npm >/dev/null 2>&1; then
@@ -732,6 +839,16 @@ check_one_binary() {
     if [ -n "$missing" ]; then
         check_fail "$label 存在未解析动态库: $binary"
         printf '%s\n' "$missing" | sed 's/^/      /' >&2
+        if grep -qE 'libopencv_[^ ]+\.so\.[^ ]+.*not found' <<< "$missing"; then
+            local available_opencv=""
+            available_opencv="$(ldconfig -p 2>/dev/null \
+                | awk '$1 ~ /^libopencv_(core|freetype|imgcodecs|imgproc|video)\.so\.[0-9]/ {print $1}' \
+                | LC_ALL=C sort -u | paste -sd ' ' -)"
+            echo "        提示: 该 ELF 固定链接了另一套 OpenCV ABI，通常是从其他发行版复制来的旧产物。" >&2
+            [ -z "$available_opencv" ] \
+                || echo "        当前系统可用 OpenCV SONAME: $available_opencv" >&2
+            echo "        请在当前设备重新编译 vision_analysis，不要复制其他系统的可执行文件。" >&2
+        fi
     else
         check_pass "$label 的动态库均可解析。"
     fi
@@ -830,7 +947,11 @@ check_environment() {
         check_fail "缺少 gst-inspect-1.0，无法检查 Rockchip MPP 插件。"
     fi
     echo ">>> [检查 5/5] 项目和已安装应用的 ELF、动态库与固定 RKNN Runtime..."
-    check_application_binaries
+    if [ "$CHECK_APPLICATIONS" = true ]; then
+        check_application_binaries
+    else
+        check_info "已按 --skip-app-check 跳过现有应用 ELF；正式制包仍会在当前系统重新编译主程序。"
+    fi
 
     echo "------------------------------------------------------------"
     echo "检查统计: 通过 $CHECK_PASSES 项，警告 $CHECK_WARNINGS 项，失败 $CHECK_ERRORS 项。"
@@ -838,6 +959,7 @@ check_environment() {
 
 if [ "$CHECK_ONLY" != true ]; then
     install_apt_dependencies
+    ensure_rga_pkg_config
     install_node
     install_python_dependencies
     prepare_frontend

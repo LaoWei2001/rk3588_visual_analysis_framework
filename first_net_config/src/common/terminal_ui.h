@@ -12,6 +12,7 @@ bool terminal_ui_start(void);
 void terminal_ui_shutdown(void);
 void terminal_ui_detach(void);
 bool terminal_ui_enabled(void);
+bool terminal_ui_is_serial(void);
 int terminal_ui_content_width(void);
 bool terminal_ui_return_requested(void);
 bool terminal_ui_consume_return_request(void);

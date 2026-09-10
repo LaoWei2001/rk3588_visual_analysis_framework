@@ -1,2 +1,2 @@
 # 每行一个无法自动识别的编译期 APT 包。也可使用：
-# bash offline_install_env_debian/create_bundle.sh --add-build <包名>
+# 每行填写一个无法自动识别的额外编译依赖包名，然后重新运行 create_bundle.sh。

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 输出项目直接使用的 APT 包名：基础清单 + 用户追加 + 已构建 ELF 的动态库归属。
+# 为 Ubuntu 离线包输出项目直接使用的 APT 包名：基础清单、用户追加项和
+# 已构建 ELF 的动态库归属。本脚本不调用 Debian 离线环境中的任何文件。
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,12 +14,12 @@ source "$ENV_DIR/dependency_manifest.sh"
 
 # shellcheck source=/etc/os-release
 source /etc/os-release
-if [ "${ID:-unknown}" != debian ]; then
-    echo "[错误] Debian 依赖探测器不能在 ${ID:-unknown} ${VERSION_ID:-unknown} 上运行。" >&2
+if [ "${ID:-unknown}" != ubuntu ]; then
+    echo "[错误] Ubuntu 依赖探测器不能在 ${ID:-unknown} ${VERSION_ID:-unknown} 上运行。" >&2
     exit 1
 fi
 if [ "$(uname -m)" != aarch64 ] || [ "$(dpkg --print-architecture)" != arm64 ]; then
-    echo "[错误] Debian 依赖探测器要求 ARM64；当前 uname=$(uname -m), dpkg=$(dpkg --print-architecture)。" >&2
+    echo "[错误] Ubuntu 依赖探测器要求 ARM64；当前 uname=$(uname -m), dpkg=$(dpkg --print-architecture)。" >&2
     exit 1
 fi
 

@@ -3,13 +3,14 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_DIR="${OFFLINE_ENV_DIR:-$SCRIPT_DIR}"
-PROJECT_ROOT="${OFFLINE_PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-EXPECTED_OS_ID="${OFFLINE_EXPECTED_OS_ID:-debian}"
-ENV_DISPLAY_PATH="${OFFLINE_ENV_DISPLAY_PATH:-offline_install_env_debian}"
-STRICT_TARGET_OS="${OFFLINE_STRICT_TARGET_OS:-false}"
+ENV_DIR="$SCRIPT_DIR"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+EXPECTED_OS_ID="debian"
+ENV_DISPLAY_PATH="offline_install_env_debian"
+STRICT_TARGET_OS=false
 DETECTOR="$SCRIPT_DIR/detect_apt_dependencies.sh"
 INSTALLER_TEMPLATE="$SCRIPT_DIR/templates/install_offline.sh"
+PREPARE_HOST="$SCRIPT_DIR/prepare_host.sh"
 FRONTEND_DIR="$PROJECT_ROOT/web_console/frontend"
 VISION_DIR="$PROJECT_ROOT/vision_analysis"
 OUTPUT_DIR="$ENV_DIR/output"
@@ -17,72 +18,39 @@ SYSTEM_PYTHON="/usr/bin/python3"
 FINAL_BUNDLE_DIR=""
 REUSE_BUNDLE_DIR=""
 LEGACY_BUNDLE_DIR="$OUTPUT_DIR/bundle"
-BUNDLE_NAME=""
+BUNDLE_NAME="full-bundle"
 
 WANT_BUILD=true
-REFRESH_DEBS=false
-ADDED_RUNTIME=()
-ADDED_BUILD=()
 STAGE_DIR=""
 APP_BUILD_DIR=""
 BUILD_SUCCEEDED=false
 
 usage() {
-    printf '用法：bash %s/create_bundle.sh [选项]\n' "$ENV_DISPLAY_PATH"
+    printf '用法：bash %s/create_bundle.sh\n' "$ENV_DISPLAY_PATH"
     cat <<'EOF'
 
-选项：
-  --runtime-only          生成精简包，不包含源码、板端编译工具和 Node.js
-  --add <APT包名>         添加一个无法自动识别的运行依赖并永久记入清单
-  --add-build <APT包名>   添加一个编译依赖并永久记入清单
-  --refresh-debs          不复用上一版 deb，按当前软件源全量刷新
-  -h, --help              显示帮助
+无需参数。脚本会自动准备联网 Debian 制作机、刷新依赖、临时编译并识别
+项目依赖，最后固定生成 output/full-bundle 完整离线包。
 
-脚本会在制作机临时编译当前应用以识别 ELF 运行依赖，但不会把该程序安装到
-目标机的 Web 程序列表。随后自动收集基础清单、extra-*-packages.txt 和
-Python requirements，并生成可编译主程序和前端的完整开发仓库。
+少数无法自动识别的依赖，请直接逐行写入 extra-runtime-packages.txt 或
+extra-build-packages.txt，然后重新运行本脚本。
 EOF
 }
 
-valid_package_name() {
-    [[ "$1" =~ ^[a-z0-9][a-z0-9+.-]+$ ]]
-}
-
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        --runtime-only) WANT_BUILD=false ;;
-        --refresh-debs) REFRESH_DEBS=true ;;
-        --add|--add-build)
-            option="$1"
-            [ "$#" -ge 2 ] || { echo "[错误] $option 缺少 APT 包名" >&2; exit 2; }
-            valid_package_name "$2" || { echo "[错误] APT 包名无效: $2" >&2; exit 2; }
-            if [ "$option" = "--add" ]; then
-                ADDED_RUNTIME+=("$2")
-            else
-                ADDED_BUILD+=("$2")
-            fi
-            shift
-            ;;
-        -h|--help) usage; exit 0 ;;
-        *) echo "[错误] 未知参数: $1" >&2; usage >&2; exit 2 ;;
-    esac
-    shift
-done
-
-if [ "${#ADDED_BUILD[@]}" -gt 0 ] && [ "$WANT_BUILD" != true ]; then
-    echo "[错误] --add-build 不能和 --runtime-only 一起使用。" >&2
+[ "$#" -eq 0 ] || {
+    echo "[错误] create_bundle.sh 无需命令行参数。" >&2
+    usage >&2
     exit 2
-fi
-
-if [ "$WANT_BUILD" = true ]; then
-    BUNDLE_NAME="full-bundle"
-else
-    BUNDLE_NAME="runtime-only-bundle"
-fi
+}
 FINAL_BUNDLE_DIR="$OUTPUT_DIR/$BUNDLE_NAME"
 
 # shellcheck source=dependency_manifest.sh
 source "$ENV_DIR/dependency_manifest.sh"
+
+[ -f "$PREPARE_HOST" ] \
+    || { echo "[错误] 缺少 Debian 制作机准备脚本: $PREPARE_HOST" >&2; exit 1; }
+echo ">>> [准备] 自动安装并检查 Debian 制作机依赖..."
+OFFLINE_PREPARE_EMBEDDED=true bash "$PREPARE_HOST"
 
 required_commands=(
     apt-cache apt-get awk cmake curl dpkg dpkg-deb dpkg-query dpkg-scanpackages find grep gzip
@@ -147,12 +115,10 @@ LEGACY_BUNDLE_DIR="$OUTPUT_DIR/bundle"
 REPACK_CACHE_DIR="$OUTPUT_DIR/repack-cache"
 mkdir -p "$REPACK_CACHE_DIR"
 
-# 优先复用相同策略的上一版仓库。首次迁移新目录名时复用旧 output/bundle；
-# 另一种策略的仓库也可作为下载缓存，因为仍会按本轮精确包名和版本重新筛选。
+# 优先复用上一版完整仓库；首次迁移新目录名时复用旧 output/bundle。
 REUSE_BUNDLE_DIR="$FINAL_BUNDLE_DIR"
 if [ ! -d "$REUSE_BUNDLE_DIR/apt" ]; then
-    for reuse_candidate in "$LEGACY_BUNDLE_DIR" \
-            "$OUTPUT_DIR/full-bundle" "$OUTPUT_DIR/runtime-only-bundle"; do
+    for reuse_candidate in "$LEGACY_BUNDLE_DIR"; do
         if [ "$reuse_candidate" != "$FINAL_BUNDLE_DIR" ] \
                 && [ -d "$reuse_candidate/apt" ]; then
             REUSE_BUNDLE_DIR="$reuse_candidate"
@@ -169,8 +135,9 @@ mkdir -p "$APT_DIR" "$WORK_DIR"
 echo ">>> [1/8] 编译主程序依赖检测产物..."
 APP_BUILD_NAME=".offline-deb-app-$STAMP"
 APP_BUILD_DIR="$VISION_DIR/$APP_BUILD_NAME"
+# 项目可能从另一发行版复制而来，不能复用其中的 CMakeCache 和旧目标文件。
 bash "$VISION_DIR/build.sh" "$APP_BUILD_NAME" \
-    --no-bundle-libs --no-root-copy
+    --clean --no-bundle-libs --no-root-copy
 [ -x "$APP_BUILD_DIR/vision_analysis" ] \
     || { echo "[错误] 项目构建没有生成 vision_analysis。" >&2; exit 1; }
 
@@ -230,19 +197,10 @@ done < <(find "$REPACK_CACHE_DIR" -maxdepth 1 -type f -name '*.deb' -print0)
 RUNTIME_DIRECT="$WORK_DIR/runtime-direct-packages.txt"
 ALL_DIRECT="$WORK_DIR/all-direct-packages.txt"
 bash "$DETECTOR" > "$RUNTIME_DIRECT"
-if [ "${#ADDED_RUNTIME[@]}" -gt 0 ]; then
-    printf '%s\n' "${ADDED_RUNTIME[@]}" >> "$RUNTIME_DIRECT"
-fi
 LC_ALL=C sort -u -o "$RUNTIME_DIRECT" "$RUNTIME_DIRECT"
 
 if [ "$WANT_BUILD" = true ]; then
-    bash "$DETECTOR" --build > "$ALL_DIRECT"
-    if [ "${#ADDED_RUNTIME[@]}" -gt 0 ]; then
-        printf '%s\n' "${ADDED_RUNTIME[@]}" >> "$ALL_DIRECT"
-    fi
-    if [ "${#ADDED_BUILD[@]}" -gt 0 ]; then
-        printf '%s\n' "${ADDED_BUILD[@]}" >> "$ALL_DIRECT"
-    fi
+    OFFLINE_DETECT_BUILD_DEPS=true bash "$DETECTOR" > "$ALL_DIRECT"
     LC_ALL=C sort -u -o "$ALL_DIRECT" "$ALL_DIRECT"
 else
     cp "$RUNTIME_DIRECT" "$ALL_DIRECT"
@@ -293,18 +251,16 @@ repack_local_package() {
         | grep -qx installed || return 1
     installed_version="$(dpkg-query -W -f='${Version}' "$package")"
 
-    if [ "$REFRESH_DEBS" != true ]; then
-        while IFS= read -r cached_deb; do
-            if [ "$(dpkg-deb -f "$cached_deb" Package 2>/dev/null || true)" = "$package" ] \
-                    && [ "$(dpkg-deb -f "$cached_deb" Version 2>/dev/null || true)" = "$installed_version" ]; then
-                cp "$cached_deb" "$APT_DIR/"
-                candidate_deb="$APT_DIR/$(basename "$cached_deb")"
-                LOCAL_REPACKED_VERSIONS["$package"]="$installed_version"
-                LOCAL_REPACKED_DEBS["$package"]="$candidate_deb"
-                return 0
-            fi
-        done < <(find "$REPACK_CACHE_DIR" -maxdepth 1 -type f -name '*.deb')
-    fi
+    while IFS= read -r cached_deb; do
+        if [ "$(dpkg-deb -f "$cached_deb" Package 2>/dev/null || true)" = "$package" ] \
+                && [ "$(dpkg-deb -f "$cached_deb" Version 2>/dev/null || true)" = "$installed_version" ]; then
+            cp "$cached_deb" "$APT_DIR/"
+            candidate_deb="$APT_DIR/$(basename "$cached_deb")"
+            LOCAL_REPACKED_VERSIONS["$package"]="$installed_version"
+            LOCAL_REPACKED_DEBS["$package"]="$candidate_deb"
+            return 0
+        fi
+    done < <(find "$REPACK_CACHE_DIR" -maxdepth 1 -type f -name '*.deb')
 
     repack_dir="$WORK_DIR/repack/$package"
     repack_log="$WORK_DIR/repack-$package.log"
@@ -412,7 +368,7 @@ done < "$APT_DIR/resolved-packages.txt"
 
 # 增量复用只接受本轮仍需要、且版本完全相同的 deb；不会再把废弃包或旧版本
 # 无条件带入新仓库。
-if [ "$REFRESH_DEBS" != true ] && [ -d "$REUSE_BUNDLE_DIR/apt" ]; then
+if [ -d "$REUSE_BUNDLE_DIR/apt" ]; then
     reused=0
     declare -A REUSED_PACKAGE_KEYS=()
     while IFS= read -r -d '' old_deb; do
@@ -734,6 +690,20 @@ for file_mapping in "${BUNDLED_RUNTIME_FILES[@]}"; do
     mkdir -p "$ROCKCHIP_FILES_ROOT/${install_target%/*}"
     cp -a "$source_file" "$ROCKCHIP_FILES_ROOT/$install_target"
 done
+
+# 部分 Rockchip Ubuntu BSP 的 librga-dev 带头文件和链接库，却漏装 librga.pc；
+# install_deps.sh 会在严格核验后把兼容元数据写入 /usr/local。若该文件不归
+# 任何 deb 所有，则把它纳入项目的 Rockchip 文件包，供离线目标机使用。
+if pkg-config --exists librga 2>/dev/null; then
+    RGA_PC_DIR="$(pkg-config --variable=pcfiledir librga 2>/dev/null || true)"
+    RGA_PC_FILE="$RGA_PC_DIR/librga.pc"
+    if [ -f "$RGA_PC_FILE" ] && ! dpkg-query -S "$RGA_PC_FILE" >/dev/null 2>&1; then
+        mkdir -p "$ROCKCHIP_FILES_ROOT/usr/local/lib/pkgconfig"
+        cp -a "$RGA_PC_FILE" \
+            "$ROCKCHIP_FILES_ROOT/usr/local/lib/pkgconfig/librga.pc"
+        echo "    已封装 BSP 缺失的 librga.pc 兼容元数据。"
+    fi
+fi
 printf '%s\n' '/opt/vision-analysis/rockchip/lib' \
     > "$ROCKCHIP_FILES_ROOT/etc/ld.so.conf.d/vision-analysis-rockchip.conf"
 cat > "$ROCKCHIP_FILES_ROOT/DEBIAN/control" <<EOF
@@ -909,8 +879,7 @@ if [ "$WANT_BUILD" = true ]; then
             --exclude='.git/' --exclude='.claude/' --exclude='.vscode/' \
             --exclude='.pytest_cache/' --exclude='__pycache__/' --exclude='*.pyc' \
             --exclude='build/' --exclude='dist/' --exclude='node_modules/' \
-            --exclude='offline_install_env_debian/output/' \
-            --exclude='offline_install_env_ubuntu/output/' \
+            --exclude='offline_install_env_*/output/' \
             --exclude='vision_analysis/vision_analysis' \
             --exclude='first_net_config/first_net_config' \
             --exclude='*.mp4' --exclude='*.avi' --exclude='*.mkv' --exclude='*.docx' \
@@ -1090,7 +1059,7 @@ if ! apt-get "${APT_CHECK_OPTIONS[@]}" --simulate --no-install-recommends \
         >"$APT_CHECK_LOG" 2>&1; then
     cat "$APT_CHECK_LOG" >&2
     echo "[错误] 组合后的本地 deb 无法完成依赖解析。" >&2
-    echo "       可尝试增加缺失包，或使用 --refresh-debs 全量刷新。" >&2
+    echo "       请检查额外依赖清单和软件源后重新运行本脚本。" >&2
     exit 1
 fi
 
@@ -1110,17 +1079,6 @@ rm -rf -- "$PREVIOUS"
 if [ -d "$LEGACY_BUNDLE_DIR" ]; then
     rm -rf -- "$LEGACY_BUNDLE_DIR"
 fi
-
-persist_packages() {
-    local file="$1"
-    shift
-    local package
-    for package in "$@"; do
-        grep -qxF "$package" "$file" 2>/dev/null || printf '%s\n' "$package" >> "$file"
-    done
-}
-persist_packages "$ENV_DIR/extra-runtime-packages.txt" "${ADDED_RUNTIME[@]}"
-persist_packages "$ENV_DIR/extra-build-packages.txt" "${ADDED_BUILD[@]}"
 
 BUILD_SUCCEEDED=true
 echo
