@@ -1229,7 +1229,11 @@ static bool start_forked_pending_watchdog(const PendingNetworkChange *state)
         redirect_stdio_to_devnull();
 
         ready = '1';
-        (void)write(ready_pipe[1], &ready, 1);
+        if (!write_all(ready_pipe[1], &ready, 1))
+        {
+            close(ready_pipe[1]);
+            _exit(1);
+        }
         close(ready_pipe[1]);
         pending_watchdog_loop(state);
         _exit(0);

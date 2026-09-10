@@ -151,7 +151,9 @@ static void handle_exit_signal(int signal_number) {
       "\033[?1006l\033[?1000l\033[?25h\033[0m\033[?1049l";
 
   if (ui_active) {
-    (void)write(STDOUT_FILENO, restore_sequence, sizeof(restore_sequence) - 1);
+    ssize_t restore_result =
+        write(STDOUT_FILENO, restore_sequence, sizeof(restore_sequence) - 1);
+    (void)restore_result;
     if (ui_termios_saved) {
       (void)tcsetattr(STDIN_FILENO, TCSANOW, &ui_original_termios);
     }

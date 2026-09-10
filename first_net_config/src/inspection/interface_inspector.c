@@ -93,7 +93,11 @@ static int route_metric_for_network(const char *iface,
     {
         return -1;
     }
-    (void)fgets(line, sizeof(line), handle);
+    if (!fgets(line, sizeof(line), handle))
+    {
+        fclose(handle);
+        return -1;
+    }
     while (fgets(line, sizeof(line), handle))
     {
         char route_iface[IF_NAMESIZE];
@@ -384,7 +388,11 @@ bool interface_has_default_route(const char *iface)
     {
         return false;
     }
-    (void)fgets(line, sizeof(line), handle);
+    if (!fgets(line, sizeof(line), handle))
+    {
+        fclose(handle);
+        return false;
+    }
     while (fgets(line, sizeof(line), handle))
     {
         char device[IF_NAMESIZE];
