@@ -1,0 +1,2 @@
+# 每行一个 Ubuntu APT 无法自动识别的编译期包。也可使用：
+# bash offline_install_env_ubuntu/create_bundle.sh --add-build <包名>

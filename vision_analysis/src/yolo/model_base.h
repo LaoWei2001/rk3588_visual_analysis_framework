@@ -4,6 +4,7 @@
 #include <opencv2/opencv.hpp>
 #include <pthread.h>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct YoloPerfStat
@@ -75,6 +76,30 @@ class ModelBase
     virtual float get_obj_thresh() const = 0;
 
     /**
+     * @brief 绑定配置中的模型身份，并统一写入该模型产生的每条结果。
+     *
+     * 单模型和组合模型必须遵守同一来源元数据契约；具体后处理器不需要知道配置节点 ID。
+     */
+    void set_result_source(std::string model_id, std::string model_type, int model_index)
+    {
+        result_model_id_ = std::move(model_id);
+        result_model_type_ = std::move(model_type);
+        result_model_index_ = model_index;
+    }
+
+    void annotate_results(std::vector<AlgoResult> &results) const
+    {
+        if (result_model_type_.empty())
+            return;
+        for (AlgoResult &result : results)
+        {
+            result.model_id = result_model_id_;
+            result.model_type = result_model_type_;
+            result.model_index = result_model_index_;
+        }
+    }
+
+    /**
      * @brief Whether the model already performs NMS internally during post_process.
      *        If true, the pipeline will skip the redundant nms_inplace() call.
      */
@@ -82,4 +107,9 @@ class ModelBase
     {
         return false;
     }
+
+  private:
+    std::string result_model_id_;
+    std::string result_model_type_;
+    int result_model_index_ = 0;
 };

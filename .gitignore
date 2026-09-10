@@ -7,6 +7,7 @@ dist
 .rknn
 node_modules
 /offline_install_env_debian/output/
+/offline_install_env_ubuntu/output/
 .claude
 .vscode
 

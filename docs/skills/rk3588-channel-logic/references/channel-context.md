@@ -51,12 +51,14 @@
 | `chn_id`, `frame_id`, `timestamp_ms` | 结果来源与时间 |
 | `model_id`, `model_type`, `model_index` | 模型身份和通道内序号 |
 | `box_color` | 框颜色 |
-| `keypoints`, `keypoint_scores` | 姿态关键点和分数 |
+| `keypoints`, `keypoint_scores`, `pose_schema` | 姿态关键点、分数和稳定的关键点语义 |
 | `text_result` | 文本类结果 |
 | `boxMask` | 分割掩码 |
 
 跟踪在 logic 之前执行，因此 logic 看到的是已更新跟踪字段的结果。`has_target(label)` 和
 `target_count(label)` 是整帧快捷查询；必须先确认业务标签与模型 labels 完全一致。
+姿态业务应使用 `is_pose()` 或 `is_coco17_pose()` 判断统一能力，不要通过 `model_type`
+枚举 YOLO 版本；`model_type` 仅用于诊断和追踪具体模型来源。
 
 ## 参数和配置
 

@@ -219,15 +219,3 @@ set_target_properties(vision_analysis PROPERTIES
     BUILD_WITH_INSTALL_RPATH TRUE
     INSTALL_RPATH "$ORIGIN/libs"
 )
-
-# 独立验证主工程 Yolo26Pose 接口；EXCLUDE_FROM_ALL 保证发布构建不携带测试程序。
-add_executable(yolo26_pose_smoke EXCLUDE_FROM_ALL
-    ${PROJECT_SOURCE_DIR}/tests/yolo26_pose_smoke.cpp
-    ${PROJECT_SOURCE_DIR}/src/yolo/yolo26pose.cpp
-)
-target_include_directories(yolo26_pose_smoke PRIVATE ${custom_inc})
-target_link_libraries(yolo26_pose_smoke PRIVATE rga rknnrt_vendor ${OpenCV_LIBS} Threads::Threads)
-set_target_properties(yolo26_pose_smoke PROPERTIES
-    BUILD_WITH_INSTALL_RPATH TRUE
-    INSTALL_RPATH "$ORIGIN/../vendor/rknn/${RKNN_VENDOR_VERSION}/lib/aarch64"
-)

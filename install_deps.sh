@@ -8,7 +8,7 @@
 #   bash install_deps.sh --check --runtime-only   只验收运行环境
 #
 # 正常安装必须在盒子仍能访问 APT、PyPI/npm 镜像时执行。断网设备请先在同版本
-# 有网 Debian RK3588 上运行 offline_install_env_debian/create_bundle.sh；现场直接运行统一安装入口。
+# 有网 ARM64 制作机上运行对应发行版的 create_bundle.sh；现场直接运行统一安装入口。
 # 安装成功后，--check 可在断网现场重复执行。
 #
 # 不在本脚本职责内：Rockchip BSP 的 RKNPU 内核驱动、RGA、MPP 及其 GStreamer 插件。
@@ -36,7 +36,15 @@ done
 
 PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="$PROJ/web_console/frontend"
-DEPENDENCY_MANIFEST="$PROJ/offline_install_env_debian/dependency_manifest.sh"
+SYSTEM_ID="$(. /etc/os-release; printf '%s' "${ID:-unknown}")"
+case "$SYSTEM_ID" in
+    ubuntu)
+        DEPENDENCY_MANIFEST="$PROJ/offline_install_env_ubuntu/dependency_manifest.sh"
+        ;;
+    *)
+        DEPENDENCY_MANIFEST="$PROJ/offline_install_env_debian/dependency_manifest.sh"
+        ;;
+esac
 if [ ! -f "$DEPENDENCY_MANIFEST" ]; then
     echo "[错误] 缺少依赖清单: $DEPENDENCY_MANIFEST" >&2
     exit 1
@@ -556,7 +564,7 @@ import sys
 modules = (
     "fastapi", "starlette", "uvicorn", "pydantic", "aiofiles", "multipart",
     "uvloop", "httptools", "watchfiles", "dotenv",
-    "cv2", "pam", "six", "yaml", "requests", "websockets",
+    "cv2", "pam", "six", "cffi", "yaml", "requests", "websockets",
 )
 errors = []
 for name in modules:

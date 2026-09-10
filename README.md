@@ -50,7 +50,7 @@
 | 修改引擎、线程或生命周期 | [源码模块索引](docs/skills/rk3588-src-modules/SKILL.md) |
 | 操作 Web、投递、OTA 或排障 | [控制台与运维指南](docs/skills/rk3588-console-ops/SKILL.md) |
 | 首次配置设备网络 | [first_net_config 使用说明](first_net_config/README.md) |
-| 制作断网安装包 | [离线环境与控制台安装](offline_install_env_debian/README.md) |
+| 制作断网安装包 | [Debian 离线包](offline_install_env_debian/README.md) / [Ubuntu 离线包](offline_install_env_ubuntu/README.md) |
 | 查阅全部文档 | [文档总入口](docs/README.md) |
 
 仓库中的 `logic_course_01`～`logic_course_10` 是逐步学习 Logic API 的示例。第一次接触项目时，
@@ -230,7 +230,8 @@ GStreamer appsink
 │   ├── upload/                  # 可靠事件上传服务
 │   └── model_update/            # 模型 OTA 服务
 ├── first_net_config/            # 独立的首次网络配置终端工具（C + ANSI/termios）
-├── offline_install_env_debian/  # Debian/Ubuntu 同发行版离线仓库制作与安装
+├── offline_install_env_debian/  # Debian 离线仓库制作与安装
+├── offline_install_env_ubuntu/  # Ubuntu 离线仓库制作入口与依赖清单
 ├── gpio_test/                   # GPIO 独立测试工具
 ├── relay_test/                  # 继电器独立测试工具
 ├── docs/                        # 开发、运维和模块文档
@@ -275,7 +276,8 @@ YOLO26 人体姿态模型使用独立类型 `yolo26_pose`，适配 Ultralytics �
 
 完整的单路配置见 `vision_analysis/assets/config_yolo26_pose.json`。`yolo26_pose`
 产出的 `AlgoResult` 与 `yolov8_pose` 一致，包含人员框、17 个 COCO 关键点及其置信度，
-可以直接进入跟踪、画面骨架渲染和跌倒检测逻辑。
+并统一标记为 `PoseKeypointSchema::Coco17`，业务逻辑无需判断具体 YOLO 版本即可直接进入
+跟踪、画面骨架渲染和跌倒检测逻辑。`model_type` 仍保留具体版本，供日志和来源追踪使用。
 
 ## 快速开始
 
@@ -331,6 +333,10 @@ bash install_deps.sh --runtime-only
 # 制作机必须和目标机使用相同发行版及版本
 bash offline_install_env_debian/create_bundle.sh
 
+# Ubuntu ARM64 使用对应入口（首次先运行 prepare_host.sh）
+bash offline_install_env_ubuntu/prepare_host.sh
+bash offline_install_env_ubuntu/create_bundle.sh --refresh-debs
+
 # 把 output/full-bundle 复制到断网 RK3588，然后在包目录内一键安装
 cd /userdata/full-bundle
 sudo bash install_offline.sh
@@ -353,7 +359,8 @@ requirements 约束的包会跳过，只补装缺失项或调整不兼容版本�
 `offline_install_env_debian/output/full-bundle`，精简包生成到
 `offline_install_env_debian/output/runtime-only-bundle`。升级时重新制包并再次运行安装脚本即可；新增依赖和
 手工补包方法见
-[offline_install_env_debian/README.md](offline_install_env_debian/README.md)。
+[Debian 说明](offline_install_env_debian/README.md) 或
+[Ubuntu 说明](offline_install_env_ubuntu/README.md)。
 
 如需单独排查厂家 BSP、硬件驱动或应用动态库，可运行只读诊断（它不是离线安装步骤，
 诊断失败也不代表 deb 安装失败）：

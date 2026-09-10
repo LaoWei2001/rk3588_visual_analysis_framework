@@ -3,7 +3,8 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENV_DIR="${OFFLINE_ENV_DIR:-$SCRIPT_DIR}"
+PROJECT_ROOT="${OFFLINE_PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 WANT_BUILD=false
 
 while [ "$#" -gt 0 ]; do
@@ -24,7 +25,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 # shellcheck source=dependency_manifest.sh
-source "$SCRIPT_DIR/dependency_manifest.sh"
+source "$ENV_DIR/dependency_manifest.sh"
 
 declare -A PACKAGES=()
 declare -A SCANNED_LIBRARY_PATHS=()
@@ -74,7 +75,7 @@ done
 for package in "${LOCAL_RUNTIME_PACKAGES[@]}"; do
     add_package "$package"
 done
-read_extra_file "$SCRIPT_DIR/extra-runtime-packages.txt"
+read_extra_file "$ENV_DIR/extra-runtime-packages.txt"
 
 if [ "$WANT_BUILD" = true ]; then
     for package in "${APT_BUILD[@]}"; do
@@ -83,7 +84,7 @@ if [ "$WANT_BUILD" = true ]; then
     for package in "${LOCAL_BUILD_PACKAGES[@]}"; do
         add_package "$package"
     done
-    read_extra_file "$SCRIPT_DIR/extra-build-packages.txt"
+    read_extra_file "$ENV_DIR/extra-build-packages.txt"
 fi
 
 # 读取动态链接器缓存一次，后续按 ELF 的直接 NEEDED 项查询，避免对每个二进制运行
@@ -96,7 +97,7 @@ while read -r soname library_path; do
 done < <(ldconfig -p 2>/dev/null | awk '/aarch64|AArch64/ {print $1, $NF}')
 
 # 新增 C/C++ 动态库并完成一次构建后，可执行文件的 NEEDED 库会在这里自动映射
-# 回提供该库的 Debian 包。排除离线包、Git 与前端缓存，避免扫描生成物仓库。
+# 回提供该库的发行版包。排除离线包、Git 与前端缓存，避免扫描生成物仓库。
 while IFS= read -r -d '' candidate; do
     readelf -h "$candidate" >/dev/null 2>&1 || continue
     while IFS= read -r soname; do
@@ -110,7 +111,7 @@ while IFS= read -r -d '' candidate; do
 done < <(
     find "$PROJECT_ROOT" \
         \( -path "$PROJECT_ROOT/.git" \
-           -o -path "$SCRIPT_DIR/output" \
+           -o -path "$ENV_DIR/output" \
            -o -path '*/node_modules' \
            -o -path '*/.venv' \) -prune \
         -o -type f \( -perm /111 -o -name '*.so' -o -name '*.so.*' \) -print0
@@ -126,7 +127,7 @@ if [ "$WANT_BUILD" = true ]; then
             | grep -oE '/usr/include/[^[:space:]]+' \
             | LC_ALL=C sort -u || true)
     done < <(find "$PROJECT_ROOT" -type f -name '*.d' \
-        ! -path "$SCRIPT_DIR/output/*" ! -path '*/node_modules/*')
+        ! -path "$ENV_DIR/output/*" ! -path '*/node_modules/*')
 fi
 
 # 自动识别结果无论是否存在于软件源都输出。制包器会把它们分类为：

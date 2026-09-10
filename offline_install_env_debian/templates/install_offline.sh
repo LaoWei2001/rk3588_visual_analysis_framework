@@ -45,10 +45,16 @@ if [ "$CURRENT_ARCH" != "$EXPECTED_ARCH" ]; then
 fi
 
 EXPECTED_OS="$(metadata_value os_id) $(metadata_value os_version_id)"
+STRICT_TARGET_OS="$(metadata_value strict_target_os)"
 # shellcheck source=/etc/os-release
 source /etc/os-release
 CURRENT_OS="${ID:-unknown} ${VERSION_ID:-unknown}"
 if [ "$CURRENT_OS" != "$EXPECTED_OS" ]; then
+    if [ "$STRICT_TARGET_OS" = true ]; then
+        echo "[错误] 系统版本不匹配：离线包=$EXPECTED_OS，当前设备=$CURRENT_OS。" >&2
+        echo "       请使用与目标系统版本一致的离线包。" >&2
+        exit 1
+    fi
     echo "[警告] 制作机系统为 $EXPECTED_OS，当前设备为 $CURRENT_OS。" >&2
     echo "       将继续交给 APT 判断各 deb 是否兼容。" >&2
 fi
@@ -141,7 +147,7 @@ if ! as_root env DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTIONS[@]}" \
         echo "       请改用开发机生成的 full-bundle；不要在设备上联网补装。" >&2
         echo "       这也适用于新设备、曾安装过编译环境或软件包状态不确定的设备。" >&2
     else
-        echo "       请检查是否混用了其他 Debian 版本的软件源、是否锁定了软件包，" >&2
+        echo "       请检查是否混用了其他发行版或版本的软件源、是否锁定了软件包，" >&2
         echo "       以及 dpkg --audit 是否报告未配置完成的软件包。" >&2
     fi
     exit 1
@@ -154,7 +160,7 @@ import sys
 
 modules = (
     "fastapi", "starlette", "uvicorn", "pydantic", "aiofiles", "multipart",
-    "uvloop", "httptools", "watchfiles", "dotenv", "cv2", "pam", "six",
+    "uvloop", "httptools", "watchfiles", "dotenv", "cv2", "pam", "six", "cffi",
     "yaml", "requests", "websockets",
 )
 errors = []

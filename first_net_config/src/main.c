@@ -52,7 +52,7 @@ static void print_menu(void)
     printf("8. 测试指定地址能否连接\n");
     printf("9. 管理已保存的连接\n");
     printf("10. 查看或修改设备名称\n");
-    printf("11. 查看初始网络设置和恢复内容\n"); 
+    printf("11. 查看初始网络设置和恢复内容\n");
     printf("12. 保存系统初始网络设置（制作镜像）\n");
     printf("13. 恢复系统初始网络设置\n");
     printf("14. 清除所有已保存的连接（高风险）\n");

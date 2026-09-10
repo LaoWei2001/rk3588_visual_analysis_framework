@@ -81,7 +81,7 @@ import sys
 
 modules = (
     "fastapi", "starlette", "uvicorn", "pydantic", "aiofiles", "multipart",
-    "uvloop", "httptools", "watchfiles", "dotenv", "cv2", "pam", "six",
+    "uvloop", "httptools", "watchfiles", "dotenv", "cv2", "pam", "six", "cffi",
     "yaml", "requests", "websockets",
 )
 errors = []

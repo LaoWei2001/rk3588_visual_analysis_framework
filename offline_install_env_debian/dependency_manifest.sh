@@ -13,7 +13,8 @@ DEBIAN_SECURITY_SNAPSHOT="20260901T000000Z"
 
 APT_RUNTIME=(
     ca-certificates curl xz-utils
-    python3 python3-pip python3-setuptools python3-wheel libc6 libstdc++6
+    python3 python3-pip python3-setuptools python3-wheel python3-cffi
+    libc6 libstdc++6 binutils
 
     systemd dbus network-manager wpasupplicant iproute2 iputils-ping ethtool
     procps x11-xserver-utils tzdata
@@ -28,7 +29,7 @@ APT_RUNTIME=(
 )
 
 APT_BUILD=(
-    build-essential cmake pkg-config binutils rsync git clang-format
+    build-essential cmake pkg-config rsync git clang-format
     python3-dev
     libffi-dev libssl-dev
     libgtk-3-dev libgpiod-dev

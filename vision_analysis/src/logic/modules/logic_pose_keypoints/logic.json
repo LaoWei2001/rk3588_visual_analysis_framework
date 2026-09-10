@@ -1,0 +1,32 @@
+{
+  "label": "姿态骨骼点坐标打印",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "print_interval_ms": {
+        "type": "integer",
+        "title": "打印间隔",
+        "description": "两次骨骼点日志之间的最小时间；0 表示每帧打印。",
+        "default": 1000,
+        "minimum": 0,
+        "maximum": 60000,
+        "x-unit": "毫秒",
+        "x-step": 100,
+        "x-hot-reload": "preserve_state"
+      },
+      "min_keypoint_score": {
+        "type": "number",
+        "title": "骨骼点最低置信度",
+        "description": "低于该值的骨骼点仍会打印坐标，但会标记为 low。",
+        "default": 0.25,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state"
+      }
+    }
+  },
+  "report_fields": []
+}

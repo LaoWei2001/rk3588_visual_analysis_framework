@@ -609,6 +609,10 @@ int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std:
         res.class_id = classId[n];
         res.label = pose_label_;
         res.score = objProbs[n];
+        if (keypoint_count_ == 17)
+            res.pose_schema = PoseKeypointSchema::Coco17;
+        else if (keypoint_count_ == 21)
+            res.pose_schema = PoseKeypointSchema::Hand21;
 
         // yolo.cpp uses: res.box.x = (int)((cx - rw/2.0f - lb.dw) / lb.ratio);
         // We do identically. Here x1 is already center - width/2.

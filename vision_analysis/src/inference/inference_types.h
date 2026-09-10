@@ -5,6 +5,14 @@
 #include <string>
 #include <vector>
 
+/* 姿态结果的稳定业务语义。模型版本可以变化，logic 只依赖这里的关键点定义。 */
+enum class PoseKeypointSchema : uint8_t
+{
+    None = 0,
+    Coco17,
+    Hand21,
+};
+
 struct AlgoResult
 {
     cv::Rect box;
@@ -47,6 +55,18 @@ struct AlgoResult
 
     std::vector<cv::Point2f> keypoints;
     std::vector<float> keypoint_scores;
+    PoseKeypointSchema pose_schema = PoseKeypointSchema::None;
+
+    bool is_pose() const
+    {
+        return pose_schema != PoseKeypointSchema::None;
+    }
+
+    bool is_coco17_pose() const
+    {
+        return pose_schema == PoseKeypointSchema::Coco17 && keypoints.size() == 17 && keypoint_scores.size() == 17;
+    }
+
     std::string text_result;
     cv::Mat boxMask;
 };

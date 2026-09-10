@@ -3,12 +3,16 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENV_DIR="${OFFLINE_ENV_DIR:-$SCRIPT_DIR}"
+PROJECT_ROOT="${OFFLINE_PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+EXPECTED_OS_ID="${OFFLINE_EXPECTED_OS_ID:-debian}"
+ENV_DISPLAY_PATH="${OFFLINE_ENV_DISPLAY_PATH:-offline_install_env_debian}"
+STRICT_TARGET_OS="${OFFLINE_STRICT_TARGET_OS:-false}"
 DETECTOR="$SCRIPT_DIR/detect_apt_dependencies.sh"
 INSTALLER_TEMPLATE="$SCRIPT_DIR/templates/install_offline.sh"
 FRONTEND_DIR="$PROJECT_ROOT/web_console/frontend"
 VISION_DIR="$PROJECT_ROOT/vision_analysis"
-OUTPUT_DIR="$SCRIPT_DIR/output"
+OUTPUT_DIR="$ENV_DIR/output"
 SYSTEM_PYTHON="/usr/bin/python3"
 FINAL_BUNDLE_DIR=""
 REUSE_BUNDLE_DIR=""
@@ -24,8 +28,8 @@ APP_BUILD_DIR=""
 BUILD_SUCCEEDED=false
 
 usage() {
+    printf '用法：bash %s/create_bundle.sh [选项]\n' "$ENV_DISPLAY_PATH"
     cat <<'EOF'
-用法：bash offline_install_env_debian/create_bundle.sh [选项]
 
 选项：
   --runtime-only          生成精简包，不包含源码、板端编译工具和 Node.js
@@ -78,7 +82,7 @@ fi
 FINAL_BUNDLE_DIR="$OUTPUT_DIR/$BUNDLE_NAME"
 
 # shellcheck source=dependency_manifest.sh
-source "$SCRIPT_DIR/dependency_manifest.sh"
+source "$ENV_DIR/dependency_manifest.sh"
 
 required_commands=(
     apt-cache apt-get awk cmake curl dpkg dpkg-deb dpkg-query dpkg-scanpackages find grep gzip
@@ -105,6 +109,10 @@ fi
 source /etc/os-release
 OS_ID="${ID:-unknown}"
 OS_VERSION_ID="${VERSION_ID:-unknown}"
+if [ "$OS_ID" != "$EXPECTED_OS_ID" ]; then
+    echo "[错误] $ENV_DISPLAY_PATH 只能在 $EXPECTED_OS_ID 制作机上运行；当前系统为 $OS_ID $OS_VERSION_ID。" >&2
+    exit 1
+fi
 PYTHON_ABI="$($SYSTEM_PYTHON -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 DEB_VERSION="2.0.${STAMP//[TZ]/}"
@@ -205,7 +213,7 @@ while IFS= read -r package; do
 done < <(apt-cache "${SOURCE_APT_OPTIONS[@]}" dumpavail 2>/dev/null \
     | sed -n 's/^Package: //p' | LC_ALL=C sort -u)
 
-# 旧版脚本曾把 Debian 官方包重封装进缓存，既占空间，也可能把开发机上的
+# 旧版脚本曾把发行版官方包重封装进缓存，既占空间，也可能把开发机上的
 # 旧版本混入新仓库。缓存现在只允许保存软件源中不存在的本地厂商包。
 pruned_cache_count=0
 while IFS= read -r -d '' cached_deb; do
@@ -253,7 +261,7 @@ if [ -f "$REUSE_BUNDLE_DIR/apt/runtime-direct-packages.txt" ]; then
 fi
 echo "    直接运行依赖 $(wc -l < "$RUNTIME_DIRECT") 个。"
 
-echo "    收集本地厂商包并下载 Debian 完整依赖闭包..."
+echo "    收集本地厂商包并下载 $OS_ID 完整依赖闭包..."
 OFFICIAL_DIRECT="$WORK_DIR/official-direct-packages.txt"
 LOCAL_SEEDS="$WORK_DIR/local-seed-packages.txt"
 : > "$OFFICIAL_DIRECT"
@@ -273,7 +281,7 @@ done < "$ALL_DIRECT"
 LC_ALL=C sort -u -o "$OFFICIAL_DIRECT" "$OFFICIAL_DIRECT"
 LC_ALL=C sort -u -o "$LOCAL_SEEDS" "$LOCAL_SEEDS"
 
-# 只有 APT 软件源中不存在的本地厂商包才使用 dpkg-repack。Debian 官方包
+# 只有 APT 软件源中不存在的本地厂商包才使用 dpkg-repack。发行版官方包
 # 始终按空系统解析出的候选版本下载，避免开发机旧版本与软件源新版本混用。
 declare -A LOCAL_REPACKED_VERSIONS=()
 declare -A LOCAL_REPACKED_DEBS=()
@@ -328,7 +336,7 @@ for ((local_index=0; local_index<${#LOCAL_QUEUE[@]}; ++local_index)); do
     [ -z "${LOCAL_REPACKED_VERSIONS[$package]+set}" ] || continue
     repack_local_package "$package" || exit 1
 
-    # 把本地包依赖的 Debian 包加入官方解析；若依赖仍只存在于开发机，
+    # 把本地包依赖的发行版包加入官方解析；若依赖仍只存在于开发机，
     # 则递归作为本地包封装。最终仍由本地 APT 模拟检查完整关系。
     while IFS= read -r dependency; do
         dependency="${dependency%%:*}"
@@ -375,7 +383,7 @@ if ! LC_ALL=C apt-get --simulate \
         --no-install-recommends install "${OFFICIAL_DIRECT_PACKAGES[@]}" \
         >"$APT_PLAN" 2>&1; then
     cat "$APT_PLAN" >&2
-    echo "[错误] APT 无法为近乎空白的 Debian 解析官方依赖。" >&2
+    echo "[错误] APT 无法为近乎空白的 $OS_ID 解析官方依赖。" >&2
     exit 1
 fi
 awk '$1 == "Inst" {
@@ -902,6 +910,7 @@ if [ "$WANT_BUILD" = true ]; then
             --exclude='.pytest_cache/' --exclude='__pycache__/' --exclude='*.pyc' \
             --exclude='build/' --exclude='dist/' --exclude='node_modules/' \
             --exclude='offline_install_env_debian/output/' \
+            --exclude='offline_install_env_ubuntu/output/' \
             --exclude='vision_analysis/vision_analysis' \
             --exclude='first_net_config/first_net_config' \
             --exclude='*.mp4' --exclude='*.avi' --exclude='*.mkv' --exclude='*.docx' \
@@ -1039,6 +1048,7 @@ deb_arch=$DEB_ARCH
 python_abi=$PYTHON_ABI
 profile=$([ "$WANT_BUILD" = true ] && echo runtime-build || echo runtime)
 bundle_name=$BUNDLE_NAME
+strict_target_os=$STRICT_TARGET_OS
 runtime_meta_package=$RUNTIME_META
 build_meta_package=$BUILD_META
 package_version=$DEB_VERSION
@@ -1109,8 +1119,8 @@ persist_packages() {
         grep -qxF "$package" "$file" 2>/dev/null || printf '%s\n' "$package" >> "$file"
     done
 }
-persist_packages "$SCRIPT_DIR/extra-runtime-packages.txt" "${ADDED_RUNTIME[@]}"
-persist_packages "$SCRIPT_DIR/extra-build-packages.txt" "${ADDED_BUILD[@]}"
+persist_packages "$ENV_DIR/extra-runtime-packages.txt" "${ADDED_RUNTIME[@]}"
+persist_packages "$ENV_DIR/extra-build-packages.txt" "${ADDED_BUILD[@]}"
 
 BUILD_SUCCEEDED=true
 echo

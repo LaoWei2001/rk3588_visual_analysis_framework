@@ -214,6 +214,8 @@ static bool run_model_task(int chnId, const InferenceTask &task, const std::shar
         ret = false;
     }
 
+    if (ret)
+        model->annotate_results(results);
     pthread_mutex_unlock(&model->infer_mtx);
     return ret;
 }

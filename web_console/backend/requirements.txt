@@ -7,4 +7,8 @@ opencv-python-headless
 python-pam==2.0.2
 # python-pam 2.0.2 实际导入 six，但其 wheel 元数据未声明该依赖。
 six==1.17.0
+# Ubuntu/Rockchip 系统常预装 PyNaCl 1.5.0，其运行及 pip check 都要求 cffi。
+# 根安装器会同时安装 python3-cffi；此项保证单独执行 web_console/install.sh
+# online 时也能修复缺失的传递依赖。
+cffi>=1.4.1
 PyYAML==6.0.2

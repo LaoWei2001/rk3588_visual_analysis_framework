@@ -197,6 +197,8 @@ int inference_init(const AppConfig &cfg)
                                                   core_mask, spec.obj_thresh, spec.nms_thresh);
                         if (!child)
                             throw std::runtime_error("unsupported model_type: " + spec.model_type);
+                        child->set_result_source(spec.id.empty() ? "model_" + std::to_string(model_index) : spec.id,
+                                                 spec.model_type, static_cast<int>(model_index));
                         CompositeModel::Entry entry;
                         entry.id = spec.id.empty() ? "model_" + std::to_string(model_index) : spec.id;
                         entry.type = spec.model_type;
@@ -223,6 +225,7 @@ int inference_init(const AppConfig &cfg)
                                channel_id);
                         continue;
                     }
+                    model->set_result_source(spec.id.empty() ? "model_0" : spec.id, spec.model_type, 0);
                     log_printf_threadsafe("[Inference] Created %s instance for ch%d (Core %s, thread %d/%d)\n",
                                           spec.model_type.c_str(), channel_id,
                                           configured_npu_core_name(spec.npu_core), t, threads_for_chn);
@@ -740,6 +743,8 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
                                               spec.obj_thresh, spec.nms_thresh);
                     if (!child)
                         throw std::runtime_error("unsupported model_type: " + spec.model_type);
+                    child->set_result_source(spec.id.empty() ? "model_" + std::to_string(model_index) : spec.id,
+                                             spec.model_type, static_cast<int>(model_index));
                     CompositeModel::Entry entry;
                     entry.id = spec.id.empty() ? "model_" + std::to_string(model_index) : spec.id;
                     entry.type = spec.model_type;
@@ -757,6 +762,8 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
                 const int core_mask = configured_npu_core_mask(spec.npu_core);
                 model = create_inference_model(spec.model_type, spec.model_path, spec.label_path, core_mask,
                                      spec.obj_thresh, spec.nms_thresh);
+                if (model)
+                    model->set_result_source(spec.id.empty() ? "model_0" : spec.id, spec.model_type, 0);
             }
             if (!model)
                 continue;

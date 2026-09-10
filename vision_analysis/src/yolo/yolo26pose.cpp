@@ -396,6 +396,7 @@ void Yolo26Pose::decode(const Letterbox &letterbox, int image_width, int image_h
         result.label = label_;
         result.class_id = 0;
         result.score = candidate.score;
+        result.pose_schema = PoseKeypointSchema::Coco17;
         result.keypoints.resize(kKeypointCount);
         result.keypoint_scores.resize(kKeypointCount);
         for (int keypoint = 0; keypoint < kKeypointCount; ++keypoint)
