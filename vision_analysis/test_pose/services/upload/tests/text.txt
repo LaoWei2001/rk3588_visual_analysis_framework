@@ -1,5 +1,0 @@
-python3 ./dify_send_test.py \
-  --api-url http://127.0.0.1:9201 \
-  --api-key test-key-123 \
-  --image ./test.png \
-  --inputs '{"prompt": "请分析图片"}'
