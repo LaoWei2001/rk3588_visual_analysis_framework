@@ -616,25 +616,28 @@ static void end_frame(void) {
   if (ui_frame_building) {
     size_t frame_size =
         (size_t)ui_rows * (size_t)ui_columns * sizeof(*ui_frame);
+    bool full_redraw = !ui_previous_frame_valid;
 
     ui_frame_building = false;
-    if (!ui_previous_frame_valid) {
+    if (full_redraw) {
       fputs("\033[?25l" ANSI_BODY "\033[2J\033[H", stdout);
       ui_cursor_visible = false;
     }
     for (int row = 0; row < ui_rows; ++row) {
-      int first = -1;
-      int last = -1;
+      int first = full_redraw ? 0 : -1;
+      int last = full_redraw ? ui_columns - 1 : -1;
 
-      for (int column = 0; column < ui_columns; ++column) {
-        const UiFrameCell *cell = &ui_frame[row * ui_columns + column];
-        const UiFrameCell *previous =
-            &ui_previous_frame[row * ui_columns + column];
+      if (!full_redraw) {
+        for (int column = 0; column < ui_columns; ++column) {
+          const UiFrameCell *cell = &ui_frame[row * ui_columns + column];
+          const UiFrameCell *previous =
+              &ui_previous_frame[row * ui_columns + column];
 
-        if (!frame_cells_equal(cell, previous)) {
-          if (first < 0)
-            first = column;
-          last = column;
+          if (!frame_cells_equal(cell, previous)) {
+            if (first < 0)
+              first = column;
+            last = column;
+          }
         }
       }
       if (first < 0)

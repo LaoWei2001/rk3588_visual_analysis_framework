@@ -144,15 +144,14 @@ bash "$VISION_DIR/build.sh" "$APP_BUILD_NAME" \
 echo ">>> [2/8] 更新索引并识别、下载系统依赖..."
 SOURCE_APT_OPTIONS=()
 if [ "$OS_ID" = debian ] && [ -n "${VERSION_CODENAME:-}" ]; then
-    # 使用独立的 Debian 官方索引，不修改开发机 /etc/apt，也不受已经失效的
-    # 第三方镜像或 backports 条目影响。解析与下载始终使用同一份索引。
+    # Debian 11 已结束 LTS。使用固定的 Debian 官方历史快照，不修改开发机
+    # /etc/apt，也不受普通镜像归档和失效 backports 条目的影响。
     SOURCE_APT_ROOT="$WORK_DIR/source-apt"
     mkdir -p "$SOURCE_APT_ROOT/lists/partial" "$SOURCE_APT_ROOT/sourceparts" \
         "$SOURCE_APT_ROOT/cache/archives/partial"
     cat > "$SOURCE_APT_ROOT/sources.list" <<EOF
-deb https://deb.debian.org/debian ${VERSION_CODENAME} main contrib non-free
-deb https://deb.debian.org/debian ${VERSION_CODENAME}-updates main contrib non-free
-deb https://deb.debian.org/debian-security ${VERSION_CODENAME}-security main contrib non-free
+deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_MAIN_SNAPSHOT}/ ${VERSION_CODENAME} main contrib non-free
+deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_MAIN_SNAPSHOT}/ ${VERSION_CODENAME}-updates main contrib non-free
 deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/${DEBIAN_SECURITY_SNAPSHOT}/ ${VERSION_CODENAME}-security main contrib non-free
 EOF
     SOURCE_APT_OPTIONS=(
@@ -483,9 +482,24 @@ if find "$REUSED_WHEELS" -maxdepth 1 -type f -print -quit | grep -q .; then
     fi
 fi
 if [ "$WHEELS_REUSED" != true ]; then
-    "$SYSTEM_PYTHON" -m pip download --dest "$WHEELHOUSE" \
-        --find-links "$REUSED_WHEELS" --only-binary=:all: --prefer-binary \
-        pip setuptools wheel "${PIP_REQUIREMENT_ARGS[@]}"
+    PYTHON_DOWNLOAD_OK=false
+    for python_index in \
+        https://pypi.org/simple \
+        https://pypi.tuna.tsinghua.edu.cn/simple \
+        https://mirrors.aliyun.com/pypi/simple; do
+        echo "    尝试 Python 软件源: $python_index"
+        if "$SYSTEM_PYTHON" -m pip download --dest "$WHEELHOUSE" \
+                --find-links "$REUSED_WHEELS" --only-binary=:all: --prefer-binary \
+                --disable-pip-version-check --timeout 30 --retries 2 \
+                --index-url "$python_index" \
+                pip setuptools wheel "${PIP_REQUIREMENT_ARGS[@]}"; then
+            PYTHON_DOWNLOAD_OK=true
+            break
+        fi
+        echo "    [警告] 当前 Python 软件源失败，自动尝试下一个。" >&2
+    done
+    [ "$PYTHON_DOWNLOAD_OK" = true ] \
+        || { echo "[错误] 所有 Python 软件源均不可用，无法生成完整离线包。" >&2; exit 1; }
 fi
 
 PY_PACKAGE="vision-analysis-python-deps"

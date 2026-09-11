@@ -5,7 +5,6 @@
 #include "common/anonymous_intro.h"
 #include "common/cube_intro.h"
 #include "common/intro_animation.h"
-#include "common/terminal_ui.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -41,11 +40,6 @@ void startup_intro_play(void) {
   }
   if (forced_intro && strcmp(forced_intro, "cube") == 0) {
     cube_intro_play();
-    return;
-  }
-
-  /* 物理串口带宽有限，默认跳过高帧率动画；仍可用环境变量显式开启。 */
-  if ((!forced_intro || forced_intro[0] == '\0') && terminal_ui_is_serial()) {
     return;
   }
 

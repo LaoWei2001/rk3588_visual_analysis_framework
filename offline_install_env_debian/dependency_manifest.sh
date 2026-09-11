@@ -7,8 +7,10 @@ DEFAULT_NODE_VERSION="v20.18.0"
 MIN_NODE_MAJOR=18
 NODE_INSTALL_PARENT="/usr/local/lib/nodejs"
 
-# Debian 11 安全仓库结束常规维护后，索引与 pool 文件可能在归档切换期间不同步。
-# 固定到官方 snapshot 可确保同一批安全更新始终能够重新下载。
+# Debian 11 已结束 LTS，普通镜像会逐步移除 bullseye、bullseye-updates、
+# bullseye-security 和 bullseye-backports。固定官方 snapshot，避免制作结果随
+# 镜像归档进度变化，也避免陈旧索引指向已经被移走的 pool 文件。
+DEBIAN_MAIN_SNAPSHOT="20260901T000000Z"
 DEBIAN_SECURITY_SNAPSHOT="20260901T000000Z"
 
 APT_RUNTIME=(
@@ -29,7 +31,7 @@ APT_RUNTIME=(
 )
 
 APT_BUILD=(
-    build-essential cmake pkg-config rsync git clang-format
+    build-essential cmake pkg-config rsync git clang-format dpkg-dev dpkg-repack
     python3-dev
     libffi-dev libssl-dev
     libgtk-3-dev libgpiod-dev

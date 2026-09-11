@@ -446,9 +446,24 @@ if find "$REUSED_WHEELS" -maxdepth 1 -type f -print -quit | grep -q .; then
     fi
 fi
 if [ "$WHEELS_REUSED" != true ]; then
-    "$SYSTEM_PYTHON" -m pip download --dest "$WHEELHOUSE" \
-        --find-links "$REUSED_WHEELS" --only-binary=:all: --prefer-binary \
-        pip setuptools wheel "${PIP_REQUIREMENT_ARGS[@]}"
+    PYTHON_DOWNLOAD_OK=false
+    for python_index in \
+        https://pypi.org/simple \
+        https://pypi.tuna.tsinghua.edu.cn/simple \
+        https://mirrors.aliyun.com/pypi/simple; do
+        echo "    尝试 Python 软件源: $python_index"
+        if "$SYSTEM_PYTHON" -m pip download --dest "$WHEELHOUSE" \
+                --find-links "$REUSED_WHEELS" --only-binary=:all: --prefer-binary \
+                --disable-pip-version-check --timeout 30 --retries 2 \
+                --index-url "$python_index" \
+                pip setuptools wheel "${PIP_REQUIREMENT_ARGS[@]}"; then
+            PYTHON_DOWNLOAD_OK=true
+            break
+        fi
+        echo "    [警告] 当前 Python 软件源失败，自动尝试下一个。" >&2
+    done
+    [ "$PYTHON_DOWNLOAD_OK" = true ] \
+        || { echo "[错误] 所有 Python 软件源均不可用，无法生成完整离线包。" >&2; exit 1; }
 fi
 
 PY_PACKAGE="vision-analysis-python-deps"

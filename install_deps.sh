@@ -40,6 +40,7 @@ done
 PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="$PROJ/web_console/frontend"
 SYSTEM_ID="$(. /etc/os-release; printf '%s' "${ID:-unknown}")"
+SYSTEM_VERSION_ID="$(. /etc/os-release; printf '%s' "${VERSION_ID:-unknown}")"
 case "$SYSTEM_ID" in
     ubuntu)
         DEPENDENCY_MANIFEST="$PROJ/offline_install_env_ubuntu/dependency_manifest.sh"
@@ -57,6 +58,8 @@ source "$DEPENDENCY_MANIFEST"
 NODE_VERSION="${NODE_VERSION:-$DEFAULT_NODE_VERSION}"
 SYSTEM_PYTHON="/usr/bin/python3"
 NODE_TEMP_DIR=""
+APT_TEMP_DIR=""
+APT_COMMAND_OPTIONS=()
 
 if [[ ! "$NODE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "[错误] NODE_VERSION 必须采用 v主版本.次版本.补丁版本 格式" >&2
@@ -66,6 +69,9 @@ fi
 cleanup() {
     if [ -n "$NODE_TEMP_DIR" ] && [ -d "$NODE_TEMP_DIR" ]; then
         rm -rf -- "$NODE_TEMP_DIR"
+    fi
+    if [ -n "$APT_TEMP_DIR" ] && [ -d "$APT_TEMP_DIR" ]; then
+        rm -rf -- "$APT_TEMP_DIR"
     fi
 }
 trap cleanup EXIT
@@ -96,6 +102,45 @@ apt_package_is_installed() {
         | grep -qx 'installed'
 }
 
+apt_packages_are_missing() {
+    local package
+    for package in "$@"; do
+        if ! apt_package_is_installed "$package"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+configure_apt_source() {
+    APT_COMMAND_OPTIONS=()
+    if [ "$SYSTEM_ID" != debian ] || [ "$SYSTEM_VERSION_ID" != 11 ]; then
+        return
+    fi
+
+    APT_TEMP_DIR="$(mktemp -d)"
+    mkdir -p "$APT_TEMP_DIR/lists/partial" "$APT_TEMP_DIR/sourceparts" \
+        "$APT_TEMP_DIR/cache/archives/partial"
+    cat > "$APT_TEMP_DIR/sources.list" <<EOF
+deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_MAIN_SNAPSHOT}/ bullseye main contrib non-free
+deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_MAIN_SNAPSHOT}/ bullseye-updates main contrib non-free
+deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/${DEBIAN_SECURITY_SNAPSHOT}/ bullseye-security main contrib non-free
+EOF
+    APT_COMMAND_OPTIONS=(
+        -o Debug::NoLocking=true
+        -o "APT::Sandbox::User=$(id -un)"
+        -o "Dir::Etc::sourcelist=$APT_TEMP_DIR/sources.list"
+        -o "Dir::Etc::sourceparts=$APT_TEMP_DIR/sourceparts"
+        -o "Dir::State::lists=$APT_TEMP_DIR/lists"
+        -o "Dir::Cache::archives=$APT_TEMP_DIR/cache/archives"
+        -o Acquire::Languages=none
+        -o Acquire::Check-Valid-Until=false
+        -o Acquire::IndexTargets::deb::Contents-deb::DefaultEnabled=false
+        -o Acquire::https::Timeout=30
+    )
+    echo "    Debian 11 已结束 LTS；使用项目锁定的 Debian 官方历史快照。"
+}
+
 install_missing_apt_packages() {
     local group_name="$1"
     shift
@@ -117,7 +162,8 @@ install_missing_apt_packages() {
     # Rockchip BSP 经常 hold 多媒体相关包。只补装缺失项，并禁止 APT 顺带升级
     # 命令行中已经安装的包，避免 -y 因尝试改变 hold 包而中止整个事务。
     if ! as_root env DEBIAN_FRONTEND=noninteractive \
-            apt-get install -y --no-upgrade "${missing_packages[@]}"; then
+            apt-get "${APT_COMMAND_OPTIONS[@]}" install -y --no-upgrade \
+                "${missing_packages[@]}"; then
         echo "[错误] ${group_name}安装失败。脚本不会自动解除 hold 或升级厂家 BSP 包。" >&2
         echo "       请检查上方 APT 输出、软件源及依赖版本冲突。" >&2
         return 1
@@ -126,8 +172,19 @@ install_missing_apt_packages() {
 
 install_apt_dependencies() {
     echo ">>> [1/5] 安装 APT 第三方依赖..."
-    if ! as_root apt-get update; then
-        echo "    [警告] apt-get update 有软件源失败；继续使用已成功更新的索引和现有缓存。" >&2
+    local requested_packages=("${APT_RUNTIME[@]}" "${LOCAL_RUNTIME_PACKAGES[@]}")
+    if [ "$WANT_BUILD" = true ]; then
+        requested_packages+=("${APT_BUILD[@]}" "${LOCAL_BUILD_PACKAGES[@]}")
+    fi
+
+    if apt_packages_are_missing "${requested_packages[@]}"; then
+        configure_apt_source
+        if ! as_root apt-get "${APT_COMMAND_OPTIONS[@]}" update; then
+            echo "[错误] APT 软件源索引更新失败，无法补装缺失依赖。" >&2
+            return 1
+        fi
+    else
+        echo "    所有声明的 APT 包均已安装，跳过软件源刷新。"
     fi
     install_missing_apt_packages "运行环境" \
         "${APT_RUNTIME[@]}" "${LOCAL_RUNTIME_PACKAGES[@]}"

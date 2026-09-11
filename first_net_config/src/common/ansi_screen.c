@@ -35,6 +35,7 @@ static int current_attributes;
 static bool input_nonblocking;
 static bool size_changed;
 static bool previous_frame_valid;
+static unsigned int serial_refresh_counter;
 
 static bool resize_cells(int rows, int columns) {
   AnsiCell *replacement;
@@ -60,6 +61,7 @@ static bool resize_cells(int rows, int columns) {
   allocated_rows = rows;
   allocated_columns = columns;
   previous_frame_valid = false;
+  serial_refresh_counter = 0;
   return true;
 }
 
@@ -180,31 +182,42 @@ static bool cells_equal(const AnsiCell *left, const AnsiCell *right) {
 }
 
 int ansi_screen_refresh(void) {
+  bool full_redraw;
+
   if (!screen_cells || !previous_cells) {
     return ERR;
   }
 
   /*
-   * 串口终端吞吐远低于 SSH。旧实现每个动画帧都逐行清除并重画整屏，
-   * 115200 波特率下输出尚未发送完下一帧就已经开始，因此会明显闪烁。
-   * 首帧清屏，后续只写发生变化的连续区间。
+   * 串口终端吞吐远低于 SSH：保留动画时长，但只发送每三个计算帧中的
+   * 一个画面。首帧仍立即发送，后续差分始终相对于真正显示过的帧。
    */
-  if (!previous_frame_valid) {
+  full_redraw = !previous_frame_valid;
+  if (!full_redraw && terminal_ui_is_serial()) {
+    serial_refresh_counter = (serial_refresh_counter + 1U) % 3U;
+    if (serial_refresh_counter != 0U) {
+      return OK;
+    }
+  }
+
+  if (full_redraw) {
     fputs("\033[?25l\033[0;37;40m\033[2J\033[H", stdout);
   }
   for (int row = 0; row < LINES; ++row) {
-    int first = -1;
-    int last = -1;
+    int first = full_redraw ? 0 : -1;
+    int last = full_redraw ? COLS - 1 : -1;
 
-    for (int column = 0; column < COLS; ++column) {
-      const AnsiCell *cell = &screen_cells[row * COLS + column];
-      const AnsiCell *previous = &previous_cells[row * COLS + column];
+    if (!full_redraw) {
+      for (int column = 0; column < COLS; ++column) {
+        const AnsiCell *cell = &screen_cells[row * COLS + column];
+        const AnsiCell *previous = &previous_cells[row * COLS + column];
 
-      if (!cells_equal(cell, previous)) {
-        if (first < 0) {
-          first = column;
+        if (!cells_equal(cell, previous)) {
+          if (first < 0) {
+            first = column;
+          }
+          last = column;
         }
-        last = column;
       }
     }
     if (first < 0) {
