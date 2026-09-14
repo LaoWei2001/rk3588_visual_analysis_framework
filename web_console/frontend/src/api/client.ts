@@ -690,11 +690,12 @@ export const fetchCameraStatus = () =>
 export const openCameraWebProxy = () =>
   api.post<{ ok: boolean } & CameraWebProxySession>('/system/camera/web-session').then(r => r.data)
 
-// ── 板端后台服务 (systemd 单元: OTA 升级 / 告警上报) ────────────────────────
+// ── 板端后台服务 (systemd 单元: OTA / 告警上报 / GPIO 电平保持) ─────────────
 export interface ServiceInfo {
   key: string
   label: string
   unit: string
+  scope: 'app' | 'system'       // 应用绑定服务或独立板级服务
   installed: boolean
   active_state: string          // active / inactive / failed / activating / unknown
   sub_state: string
@@ -704,7 +705,7 @@ export interface ServiceInfo {
   bound_app: string | null      // 单元当前绑定到哪个 App 的 services/
   bound_config: string | null   // OTA 当前绑定的视觉启动配置
   working_dir: string | null    // 单元的 WorkingDirectory（用于判断是否失效）
-  path_ok: boolean              // WorkingDirectory 是否真实存在；false=失效单元，需重装修正
+  path_ok: boolean              // 应用工作目录或系统 unit 文件是否真实存在
   autostart: boolean            // 用户是否勾选“开机自启”
   desired_running: boolean      // 用户最后一次操作是否要求保持运行
 }

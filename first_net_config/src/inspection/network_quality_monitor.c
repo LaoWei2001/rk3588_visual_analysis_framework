@@ -1504,9 +1504,5 @@ void monitor_active_network_quality(void)
             return;
         }
         run_quality_monitor(&connections[choice - 1]);
-        if (!terminal_ui_enabled())
-        {
-            return;
-        }
     }
 }

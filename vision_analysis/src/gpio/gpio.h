@@ -6,10 +6,11 @@
  *   - 线程安全: 内部全局互斥锁, 多通道逻辑并行调用安全
  *   - 懒加载:   未预注册的引脚首次调用时自动打开, 通道逻辑里可直接使用
  *   - 错误缓存: 引脚名错误/被占用等同类错误只打印一次, 不会逐帧刷屏
+ *   - 电平保持: 独立服务开启时保存状态，设备重启时由 rk3588-gpio-restore 恢复
  *   - 修复原版 gpio_uinit() 中 pinObj 可能为空的野指针问题
  *
  * 引脚命名规则与 08_GPIO 例程完全一致: "GPIOx_Yz"
- *   x = GPIO 组号(0~6), Y = 组内 bank 字母(A~Z), z = bank 内编号(0~9)
+ *   x = 当前系统的 gpiochip 编号(0~255), Y = 组内 bank 字母(A~Z), z = bank 内编号(0~7)
  *   例如 "GPIO6_A0" -> gpiochip6 上的 0 号线; "GPIO6_B3" -> 8*1+3 = 11 号线
  *
  * 两种使用方式:
@@ -18,11 +19,12 @@
  *        pin_set_low ("GPIO6_A2");   // 拉低
  *        首次调用自动按输出方向打开该引脚并缓存, 之后复用句柄。
  *   2. 【预注册】在 main.cpp 启动阶段声明一次, 启动即校验(引脚名/占用/方向):
- *        // { 引脚名, 方向, 初始值 }
+ *        // { 引脚名, 方向, 首次运行的初始值 }
  *        static const GPIOCfg_t gpio_cfgs[] = {
  *            { "GPIO6_A2", DIR_OUTPUT, 0 },
  *        };
  *        gpio_init(gpio_cfgs, ARRAY_SIZE(gpio_cfgs));
+ *      电平保持服务开启且输出已有持久状态时优先恢复，val 只用于其他情况。
  *      预注册后同样可以随时 pin_* 调用; 未预注册的引脚仍走懒加载。
  *
  * 方向语义:
@@ -72,7 +74,7 @@ void gpio_deinit(void);
  *
  * @param pinName "GPIOx_Yz" 格式引脚名
  * @param val      0=低电平, 非0=高电平
- * @return 0 成功; -1 引脚名非法; -2 打开/设置失败(错误只打印一次)
+ * @return 0 成功; -1 引脚名非法; -2 打开/设置失败; -3 状态保存失败
  */
 int pin_out_val(const char *pinName, int val);
 

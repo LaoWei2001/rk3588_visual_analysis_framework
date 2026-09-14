@@ -5,7 +5,6 @@
     "disp_height": 1280,
     "tile_rows": 2,
     "tile_cols": 3,
-    "preview_fps": 30,
     "max_fps": 25,
     "queue_size": 1,
     "channel_threads": 3,
@@ -24,8 +23,9 @@
       "enable": true,
       "infer_enable": true,
       "stream": {
-        "src_type": "usb",
-        "device": "/dev/video81"
+        "src_type": "rtsp",
+        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
+        "video_enc": "h264"
       },
       "models": [
         {
@@ -38,7 +38,7 @@
           "obj_thresh": 0.3,
           "nms_thresh": 0.45,
           "detect_classes": [],
-          "npu_core": 0
+          "npu_core": 2
         }
       ],
       "logic": "logic_default",
@@ -56,22 +56,22 @@
       "enable": true,
       "infer_enable": true,
       "stream": {
-        "src_type": "file",
-        "url": "assets/platform2.mp4",
-        "loop": true
+        "src_type": "rtsp",
+        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
+        "video_enc": "h264"
       },
       "models": [
         {
           "id": "model_0",
           "enable": true,
-          "model_type": "yolov8_pose",
-          "model_path": "assets/yolov8_pose.rknn",
+          "model_type": "yolov8_det",
+          "model_path": "assets/yolov8n.rknn",
           "label_path": "assets/labels.txt",
           "version": "",
-          "obj_thresh": 0.2,
+          "obj_thresh": 0.3,
           "nms_thresh": 0.45,
           "detect_classes": [],
-          "npu_core": 1
+          "npu_core": 2
         }
       ],
       "logic": "logic_default",
@@ -89,16 +89,16 @@
       "enable": true,
       "infer_enable": true,
       "stream": {
-        "src_type": "file",
-        "url": "assets/platform2.mp4",
-        "loop": true
+        "src_type": "rtsp",
+        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
+        "video_enc": "h264"
       },
       "models": [
         {
           "id": "model_0",
           "enable": true,
-          "model_type": "yolov5_seg",
-          "model_path": "assets/yolov5_seg.rknn",
+          "model_type": "yolov8_det",
+          "model_path": "assets/yolov8n.rknn",
           "label_path": "assets/labels.txt",
           "version": "",
           "obj_thresh": 0.3,
@@ -137,72 +137,6 @@
           "obj_thresh": 0.3,
           "nms_thresh": 0.45,
           "detect_classes": [],
-          "npu_core": 0
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": [],
-        "parameters": []
-      },
-      "report_parameters": {},
-      "logic_parameters": {},
-      "roi_zones": []
-    },
-    {
-      "id": 4,
-      "enable": true,
-      "infer_enable": true,
-      "stream": {
-        "src_type": "file",
-        "url": "assets/platform2.mp4",
-        "loop": true
-      },
-      "models": [
-        {
-          "id": "model_0",
-          "enable": true,
-          "model_type": "yolov5_seg",
-          "model_path": "assets/yolov5_seg.rknn",
-          "label_path": "assets/labels.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": 1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": [],
-        "parameters": []
-      },
-      "report_parameters": {},
-      "logic_parameters": {},
-      "roi_zones": []
-    },
-    {
-      "id": 5,
-      "enable": true,
-      "infer_enable": true,
-      "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
-        "video_enc": "h264"
-      },
-      "models": [
-        {
-          "id": "model_0",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8n.rknn",
-          "label_path": "assets/labels.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
           "npu_core": 2
         }
       ],
@@ -220,86 +154,58 @@
   "_editor_layout": {
     "0": {
       "stream": {
-        "x": -323,
-        "y": 234
+        "x": -350,
+        "y": 541
       },
       "model": {
-        "x": -12,
-        "y": 235
+        "x": -39,
+        "y": 543
       },
       "logic": {
-        "x": 229,
-        "y": 236
+        "x": 197,
+        "y": 548
       }
     },
     "1": {
       "stream": {
-        "x": -314,
-        "y": 321
+        "x": -347,
+        "y": 626
       },
       "model": {
-        "x": -8,
-        "y": 322
+        "x": -36,
+        "y": 628
       },
       "logic": {
-        "x": 233,
-        "y": 323
+        "x": 200,
+        "y": 633
       }
     },
     "2": {
       "stream": {
-        "x": -311,
-        "y": 407
+        "x": -343,
+        "y": 707
       },
       "model": {
-        "x": 0,
-        "y": 408
+        "x": -32,
+        "y": 709
       },
       "logic": {
-        "x": 234,
-        "y": 408
+        "x": 204,
+        "y": 714
       }
     },
     "3": {
       "stream": {
-        "x": -314,
-        "y": 498
+        "x": -343,
+        "y": 793
       },
       "model": {
-        "x": -3,
-        "y": 500
+        "x": -32,
+        "y": 795
       },
       "logic": {
-        "x": 233,
-        "y": 501
-      }
-    },
-    "4": {
-      "stream": {
-        "x": -314,
-        "y": 581
-      },
-      "model": {
-        "x": -3,
-        "y": 582
-      },
-      "logic": {
-        "x": 231,
-        "y": 582
-      }
-    },
-    "5": {
-      "stream": {
-        "x": -317,
-        "y": 672
-      },
-      "model": {
-        "x": -6,
-        "y": 674
-      },
-      "logic": {
-        "x": 230,
-        "y": 679
+        "x": 204,
+        "y": 800
       }
     }
   }

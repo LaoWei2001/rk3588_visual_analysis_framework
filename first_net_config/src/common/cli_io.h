@@ -8,6 +8,7 @@
 #include "common/terminal_ui.h"
 
 void trim_space(char *s);
+void clear_terminal_screen(void);
 bool read_line(const char *prompt, char *buf, size_t size);
 int read_int(const char *prompt, int min_value, int max_value);
 bool read_yes_no(const char *prompt, bool default_yes);

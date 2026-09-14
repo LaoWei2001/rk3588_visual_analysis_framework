@@ -59,6 +59,9 @@ cd /userdata/full-bundle
 sudo bash install_offline.sh
 ```
 
+该一键安装同时安装 GPIO 实时控制与电平保持服务；首次安装会自动把继电器
+`GPIO6_A2` 设置为低电平，无需再进入 `service/gpio_state/`。
+
 如制作机缺少 `librga2`、MPP 或 Rockchip GStreamer 等厂商包，制包器会明确报错。
 这类用户态包应从对应 Ubuntu BSP 镜像或板卡厂商仓库安装，不能拿 Debian 版本替代。
 

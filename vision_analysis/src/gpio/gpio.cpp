@@ -13,16 +13,27 @@
 
 #include <gpiod.h>
 
+#include <cerrno>
+#include <climits>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <fcntl.h>
 #include <mutex>
 #include <set>
 #include <string>
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/un.h>
+#include <unistd.h>
 #include <vector>
 
-/* 支持的 GPIO 组号上限: gpiochip0 ~ gpiochip6 */
-#define GPIO_MAXGROUP_NUM 7
+/* 覆盖动态枚举的 gpiochip0 ~ gpiochip255，适配带不同扩展器的板卡。 */
+#define GPIO_MAXGROUP_NUM 256
+#define GPIO_STATE_DIR "/var/lib/rk3588-gpio"
+#define GPIO_PERSISTENCE_ENABLE_FILE "/run/rk3588-gpio-persistence/enabled"
+#define GPIO_CONTROL_SOCKET "/run/rk3588-gpio-control/control.sock"
 
 namespace {
 
@@ -32,9 +43,12 @@ struct GpioPin {
     int offset = -1;  /* 组内线号 */
     int direction = DIR_OUTPUT; /* DIR_OUTPUT / DIR_INPUT */
     int defaultVal = 0;
+    int persistedVal = -1; /* -1=没有已保存状态；0/1=磁盘中的期望电平 */
     struct gpiod_line *line = nullptr; /* gpiod 1.x 行句柄 */
+    bool daemonManaged = false;        /* 由独立实时控制服务持有 */
     bool autoOpened = false;           /* 懒加载自动打开(true) / 预注册(false) */
     bool errLogged = false;            /* 同类错误只打印一次 */
+    bool persistErrLogged = false;     /* 持久化错误只打印一次 */
 };
 
 std::mutex g_mutex;                                  /* 全部公共接口的互斥锁 */
@@ -43,27 +57,183 @@ struct gpiod_chip *g_chips[GPIO_MAXGROUP_NUM] = {};  /* 按组惰性打开的芯
 bool g_chip_errLogged[GPIO_MAXGROUP_NUM] = {};       /* 芯片打开失败只打印一次 */
 std::set<std::string> g_bad_names;                   /* 已报错的非法引脚名, 防逐帧刷屏 */
 
-/* 解析 "GPIOx_Yz": x=组号0~6, Y=bank字母A~Z, z=bank内编号0~9 */
-bool parse_pin_name(const char *pinName, int *group, int *offset)
+/*
+ * GPIO 电平保持由独立的 systemd 服务统一开关。视觉应用只读取这个运行时标志，
+ * 绝不自行启停服务：服务关闭时仍允许实时控制 GPIO，但不会读取或更新持久状态。
+ */
+bool persistence_enabled()
 {
-    if (!pinName || strlen(pinName) != 8)
+    return access(GPIO_PERSISTENCE_ENABLE_FILE, F_OK) == 0;
+}
+
+/* 返回 0=后台已处理，1=后台未运行（调用方可回退直控），-1=后台返回错误。 */
+int controller_request(const char *operation, const char *pinName,
+                       int requestedValue, int *returnedValue)
+{
+    struct sockaddr_un address {};
+    char request[128] = {};
+    char response[256] = {};
+    int socketFd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    if (socketFd < 0)
+        return 1;
+    address.sun_family = AF_UNIX;
+    snprintf(address.sun_path, sizeof(address.sun_path), "%s", GPIO_CONTROL_SOCKET);
+    if (connect(socketFd, reinterpret_cast<struct sockaddr *>(&address),
+                sizeof(address)) != 0) {
+        int connectErrno = errno;
+        close(socketFd);
+        if (connectErrno == ENOENT || connectErrno == ECONNREFUSED)
+            return 1;
+        errno = connectErrno;
+        return -1;
+    }
+    int requestSize = strcmp(operation, "SET") == 0
+        ? snprintf(request, sizeof(request), "SET %s %d", pinName,
+                   requestedValue ? 1 : 0)
+        : snprintf(request, sizeof(request), "GET %s", pinName);
+    if (requestSize <= 0 || requestSize >= static_cast<int>(sizeof(request)) ||
+        send(socketFd, request, static_cast<size_t>(requestSize), MSG_NOSIGNAL) !=
+            requestSize) {
+        int sendErrno = errno;
+        close(socketFd);
+        errno = sendErrno;
+        return -1;
+    }
+    ssize_t responseSize = recv(socketFd, response, sizeof(response) - 1, 0);
+    close(socketFd);
+    if (responseSize <= 0) {
+        errno = EIO;
+        return -1;
+    }
+    response[responseSize] = '\0';
+    int value = 0;
+    if (sscanf(response, "OK %d", &value) == 1) {
+        if (returnedValue)
+            *returnedValue = value;
+        return 0;
+    }
+    int remoteErrno = EPROTO;
+    if (sscanf(response, "ERR %d", &remoteErrno) != 1)
+        remoteErrno = EPROTO;
+    errno = remoteErrno;
+    return -1;
+}
+
+bool state_path(const char *pinName, char *path, size_t size)
+{
+    int count = snprintf(path, size, "%s/%s.state", GPIO_STATE_DIR, pinName);
+    return count > 0 && static_cast<size_t>(count) < size;
+}
+
+bool ensure_state_dir()
+{
+    struct stat info {};
+    if (mkdir(GPIO_STATE_DIR, 0755) != 0 && errno != EEXIST)
         return false;
-    if (strncmp(pinName, "GPIO", 4) != 0)
+    if (lstat(GPIO_STATE_DIR, &info) != 0 || !S_ISDIR(info.st_mode) ||
+        info.st_uid != geteuid() || (info.st_mode & 0022) != 0) {
+        errno = EPERM;
         return false;
-    char g = pinName[4];
-    if (g < '0' || g > '6')
-        return false;
-    if (pinName[5] != '_')
-        return false;
-    char bank = pinName[6];
-    if (bank < 'A' || bank > 'Z')
-        return false;
-    char off = pinName[7];
-    if (off < '0' || off > '9')
+    }
+    return true;
+}
+
+bool load_persistent_value(const char *pinName, int *value)
+{
+    char path[PATH_MAX];
+    char text[8] = {};
+    struct stat info {};
+    if (!persistence_enabled() || !value ||
+        !state_path(pinName, path, sizeof(path)))
         return false;
 
-    *group = g - '0';
-    *offset = 8 * (bank - 'A') + (off - '0');
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0)
+        return false;
+    ssize_t count = read(fd, text, sizeof(text) - 1);
+    if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode))
+        count = -1;
+    close(fd);
+    if (count < 1 || (text[0] != '0' && text[0] != '1') ||
+        (count > 1 && text[1] != '\n' && text[1] != '\0'))
+        return false;
+    *value = text[0] - '0';
+    return true;
+}
+
+bool save_persistent_value(const char *pinName, int value)
+{
+    char finalPath[PATH_MAX];
+    char temporaryPath[PATH_MAX];
+    char text[2] = {static_cast<char>('0' + (value ? 1 : 0)), '\n'};
+    if (!ensure_state_dir() || !state_path(pinName, finalPath, sizeof(finalPath)) ||
+        snprintf(temporaryPath, sizeof(temporaryPath), "%s/.%s.%ld.tmp",
+                 GPIO_STATE_DIR, pinName, static_cast<long>(getpid())) >=
+            static_cast<int>(sizeof(temporaryPath)))
+        return false;
+
+    unlink(temporaryPath);
+    int fd = open(temporaryPath,
+                  O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0)
+        return false;
+    bool ok = write(fd, text, sizeof(text)) == static_cast<ssize_t>(sizeof(text));
+    if (ok)
+        ok = fsync(fd) == 0;
+    if (close(fd) != 0)
+        ok = false;
+    if (ok)
+        ok = rename(temporaryPath, finalPath) == 0;
+    if (ok) {
+        int directoryFd = open(GPIO_STATE_DIR, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        ok = directoryFd >= 0 && fsync(directoryFd) == 0;
+        if (directoryFd >= 0)
+            close(directoryFd);
+    }
+    if (!ok)
+        unlink(temporaryPath);
+    return ok;
+}
+
+bool persist_output(GpioPin *pin, int value)
+{
+    value = value ? 1 : 0;
+    if (!persistence_enabled()) {
+        /* 服务关闭期间的实时输出不能污染下次开机要恢复的状态。 */
+        pin->persistedVal = -1;
+        pin->persistErrLogged = false;
+        return true;
+    }
+    if (pin->persistedVal == value)
+        return true;
+    if (!save_persistent_value(pin->name.c_str(), value)) {
+        if (!pin->persistErrLogged) {
+            printf("【GPIO】保存 %s=%d 到 %s 失败: %s\n",
+                   pin->name.c_str(), value, GPIO_STATE_DIR, strerror(errno));
+            pin->persistErrLogged = true;
+        }
+        return false;
+    }
+    pin->persistedVal = value;
+    pin->persistErrLogged = false;
+    return true;
+}
+
+/* 解析 "GPIOx_Yz": x=gpiochip编号, Y=bank字母A~Z, z=bank内编号0~7 */
+bool parse_pin_name(const char *pinName, int *group, int *offset)
+{
+    unsigned int parsedGroup = 0;
+    unsigned int bit = 0;
+    char bank = '\0';
+    int consumed = 0;
+    if (!pinName ||
+        sscanf(pinName, "GPIO%u_%c%u%n", &parsedGroup, &bank, &bit, &consumed) != 3 ||
+        pinName[consumed] != '\0' || parsedGroup >= GPIO_MAXGROUP_NUM ||
+        bank < 'A' || bank > 'Z' || bit > 7)
+        return false;
+
+    *group = static_cast<int>(parsedGroup);
+    *offset = 8 * (bank - 'A') + static_cast<int>(bit);
     return true;
 }
 
@@ -172,9 +342,25 @@ int gpio_init(const GPIOCfg_t cfg[], int size)
         pin.group = group;
         pin.offset = offset;
         pin.direction = cfg[i].direction;
-        pin.defaultVal = cfg[i].val;
+        int initialValue = cfg[i].val ? 1 : 0;
+        if (isOutput && load_persistent_value(pin.name.c_str(), &initialValue))
+            pin.persistedVal = initialValue;
+        pin.defaultVal = initialValue;
         pin.autoOpened = false;
-        pin.line = request_line(&pin, isOutput, cfg[i].val);
+        int controlledValue = -1;
+        int controllerResult = isOutput
+            ? controller_request("SET", pin.name.c_str(), initialValue, &controlledValue)
+            : 1;
+        if (controllerResult == 0) {
+            pin.daemonManaged = true;
+        } else if (controllerResult > 0) {
+            pin.line = request_line(&pin, isOutput, initialValue);
+        } else {
+            log_pin_error_once(&pin, "【GPIO】实时控制服务无法设置 %s: %s\n",
+                               pin.name.c_str(), strerror(errno));
+        }
+        if (isOutput && (pin.line || pin.daemonManaged))
+            (void)persist_output(&pin, initialValue);
 
         /* 同名重复注册: 覆盖旧项 */
         int idx = find_pin(cfg[i].pinName);
@@ -190,7 +376,8 @@ int gpio_init(const GPIOCfg_t cfg[], int size)
 
         printf("[%d]======(Name:%s, Dir:%s)  %s\n", i, cfg[i].pinName,
                isOutput ? "OUTPUT" : "INPUT",
-               pin.line ? "【初始化成功】" : "【初始化失败, 后续调用会自动重试】");
+               (pin.line || pin.daemonManaged)
+                   ? "【初始化成功】" : "【初始化失败, 后续调用会自动重试】");
     }
     printf("-------------------------------------------------------------\n");
     return 0;
@@ -242,6 +429,9 @@ int pin_out_val(const char *pinName, int val)
         pin.direction = DIR_OUTPUT;
         pin.defaultVal = val;
         pin.autoOpened = true;
+        int savedValue = 0;
+        if (load_persistent_value(pin.name.c_str(), &savedValue))
+            pin.persistedVal = savedValue;
         g_pins.push_back(pin);
         idx = (int)g_pins.size() - 1;
         printf("【GPIO】%s 未预注册, 自动按输出方向打开\n", pinName);
@@ -254,6 +444,28 @@ int pin_out_val(const char *pinName, int val)
         log_pin_error_once(pin, "【GPIO】%s 已预注册为输入方向, 不能设置输出\n", pinName);
         return -2;
     }
+
+    int controlledValue = -1;
+    int controllerResult = controller_request("SET", pinName, val, &controlledValue);
+    if (controllerResult == 0) {
+        if (pin->line) {
+            gpiod_line_release(pin->line);
+            pin->line = nullptr;
+        }
+        pin->daemonManaged = true;
+        pin->direction = DIR_OUTPUT;
+        pin->defaultVal = val ? 1 : 0;
+        if (!persist_output(pin, pin->defaultVal))
+            return -3;
+        pin->errLogged = false;
+        return 0;
+    }
+    if (controllerResult < 0) {
+        log_pin_error_once(pin, "【GPIO】实时控制服务无法设置 %s: %s\n",
+                           pinName, strerror(errno));
+        return -2;
+    }
+    pin->daemonManaged = false;
 
     /* 懒加载为输入的引脚, 改输出时自动重新打开 */
     if (pin->line && pin->autoOpened && pin->direction == DIR_INPUT) {
@@ -275,6 +487,9 @@ int pin_out_val(const char *pinName, int val)
         log_pin_error_once(pin, "【GPIO】设置 %s 输出失败\n", pinName);
         return -2;
     }
+    pin->defaultVal = val ? 1 : 0;
+    if (!persist_output(pin, pin->defaultVal))
+        return -3;
     pin->errLogged = false;
     return 0;
 }
@@ -300,6 +515,15 @@ int read_pin_val(const char *pinName)
     if (!parse_pin_name(pinName, &group, &offset)) {
         if (g_bad_names.insert(pinName).second)
             printf("【GPIO】引脚名 \"%s\" 非法, 应为 \"GPIOx_Yz\" 格式(如 GPIO6_A0)\n", pinName);
+        return -1;
+    }
+
+    int controlledValue = -1;
+    int controllerResult = controller_request("GET", pinName, 0, &controlledValue);
+    if (controllerResult == 0)
+        return controlledValue;
+    if (controllerResult < 0) {
+        printf("【GPIO】实时控制服务无法读取 %s: %s\n", pinName, strerror(errno));
         return -1;
     }
 

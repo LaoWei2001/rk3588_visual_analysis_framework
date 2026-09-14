@@ -17,3 +17,5 @@ set_target_properties(gpio_test PROPERTIES
     C_STANDARD_REQUIRED YES
     C_EXTENSIONS NO
 )
+
+install(TARGETS gpio_test RUNTIME DESTINATION bin)

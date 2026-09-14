@@ -1,8 +1,8 @@
 /**
  * ServicesPanel — 板级「后台服务」面板，由左侧“系统服务”独立页面承载。
  *
- * 托管两个 systemd 单元(OTA 升级 / 告警上报): 安装/启停/重启/看健康/看日志。
- * systemd 是唯一进程管家，单元由 Web 后端绑定当前运行的视觉程序并统一管理。
+ * 托管应用服务(OTA / 告警上报)和板级服务(GPIO 电平保持)。
+ * systemd 是唯一进程管家；应用服务绑定当前视觉程序，板级服务独立管理。
  */
 import { useEffect, useRef, useState } from 'react'
 import axios from 'axios'
@@ -33,7 +33,7 @@ function statusBadge(s: ServiceInfo): { text: string; color: string } {
   if (!s.installed) return { text: '未安装', color: '#f59e0b' }
   if (!s.path_ok)   return { text: '⚠ 路径失效', color: '#f59e0b' }
   switch (s.active_state) {
-    case 'active':     return { text: '● 运行中', color: '#22c55e' }
+    case 'active':     return { text: s.scope === 'system' ? '● 已开启' : '● 运行中', color: '#22c55e' }
     case 'failed':     return { text: '✕ 故障',   color: '#ef4444' }
     case 'activating': return { text: '… 启动中', color: '#3b82f6' }
     default:           return { text: '○ 已停止', color: '#9aa4b2' }
@@ -138,6 +138,7 @@ export default function ServicesPanel({ apps, onToast }: Props) {
         service.key === key ? { ...service, autostart: enabled } : service
       ))
       onToast(`${services.find(service => service.key === key)?.label ?? key} 已${enabled ? '开启' : '关闭'}开机自启`)
+      await load()
     } catch (e) {
       onToast(`设置开机自启失败：${errMsg(e)}`, 'err')
       await load()
@@ -152,12 +153,13 @@ export default function ServicesPanel({ apps, onToast }: Props) {
     <div style={panel}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{ fontWeight: 600, fontSize: 15 }}>⚙ 后台服务</span>
-        <span style={{ fontSize: 12, color: '#9aa4b2' }}>自动跟随当前运行的视觉程序</span>
+        <span style={{ fontSize: 12, color: '#9aa4b2' }}>应用服务跟随视觉程序 · GPIO 保持服务完全独立</span>
       </div>
 
       {services.map(s => {
         const b = statusBadge(s)
         const isBusy = !!busy[s.key]
+        const isSystemService = s.scope === 'system'
         const runningApp = apps.find(app => app.status === 'running')
         // "开着"判定：运行中 / 启动中 / 故障(反复尝试重启) 都算开 → 显示「停止」，
         // 方便在服务一直起不来、反复重启时摁停下来排查。只有干净 inactive / 未知才显示「启动」。
@@ -173,7 +175,8 @@ export default function ServicesPanel({ apps, onToast }: Props) {
                 {s.installed && s.path_ok && s.bound_app && ` · 绑定 ${s.bound_app}`}
                 {s.key === 'ota_agent' && s.bound_config && ` / ${s.bound_config}`}
                 {s.installed && !s.path_ok && s.working_dir && ` · ⚠ 旧路径不存在：${s.working_dir}`}
-                {s.active_state === 'active' && s.path_ok && ` · 运行 ${fmtUptime(s.uptime_seconds)}`}
+                {s.active_state === 'active' && s.path_ok &&
+                  ` · ${isSystemService ? '本次启动已恢复' : `运行 ${fmtUptime(s.uptime_seconds)}`}`}
                 {s.installed && s.n_restarts != null && s.n_restarts > 0 && ` · 尝试重启 ${s.n_restarts} 次`}
               </div>
             </div>
@@ -182,26 +185,31 @@ export default function ServicesPanel({ apps, onToast }: Props) {
 
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: '#9aa4b2',
                             fontSize: 12, whiteSpace: 'nowrap', cursor: 'pointer' }}
-                   title="勾选后，仅当关机前最后状态为运行时才会在下次开机恢复">
+                   title={isSystemService
+                     ? '独立于视觉应用；开启后保存输出电平，并在以后每次开机自动恢复'
+                     : '勾选后，仅当关机前最后状态为运行时才会在下次开机恢复'}>
               <input type="checkbox" checked={s.autostart} disabled={!!autostartBusy[s.key] || isBusy}
                 style={{ margin: 0, accentColor: '#3b82f6' }}
                 onChange={event => handleAutostart(s.key, event.target.checked)} />
-              {autostartBusy[s.key] ? '保存中' : '开机自启'}
+              {autostartBusy[s.key] ? '保存中' : (isSystemService ? '开机恢复' : '开机自启')}
             </label>
 
             <div style={{ display: 'flex', gap: 6, whiteSpace: 'nowrap' }}>
               {needsInstall ? (
                 <span
-                  title={runningApp ? `将自动绑定到 ${runningApp.name}` : '请先在「程序管理」中启动视觉程序，后台服务会自动绑定后再启动'}
-                  style={{ display: 'inline-flex', cursor: runningApp ? 'default' : 'not-allowed' }}
+                  title={isSystemService
+                    ? '请先在板端安装 service/gpio_state 服务'
+                    : (runningApp ? `将自动绑定到 ${runningApp.name}` : '请先在「程序管理」中启动视觉程序，后台服务会自动绑定后再启动')}
+                  style={{ display: 'inline-flex', cursor: !isSystemService && runningApp ? 'default' : 'not-allowed' }}
                 >
                   <button
-                    style={runningApp ? btn('#3b82f6') : { ...disabledStartBtn, pointerEvents: 'none' }}
-                    disabled={isBusy || !runningApp}
+                    style={!isSystemService && runningApp ? btn('#3b82f6') : { ...disabledStartBtn, pointerEvents: 'none' }}
+                    disabled={isBusy || isSystemService || !runningApp}
                     // disabled 按钮不接收鼠标事件，交给外层 span 显示悬停提示。
                     onClick={() => act(s.key, () => controlService(s.key, 'start'),
                       `${s.label} 已自动绑定到 ${runningApp?.name ?? ''} 并启动`)}>
-                    {isBusy ? '…' : (s.installed && !s.path_ok ? '🔧 自动修复并启动' : '自动绑定并启动')}
+                    {isBusy ? '…' : (isSystemService ? '请先安装服务' :
+                      (s.installed && !s.path_ok ? '🔧 自动修复并启动' : '自动绑定并启动'))}
                   </button>
                 </span>
               ) : (
@@ -209,19 +217,23 @@ export default function ServicesPanel({ apps, onToast }: Props) {
                   {started ? (
                     <button style={btn('#ef4444')} disabled={isBusy}
                       onClick={() => act(s.key, () => controlService(s.key, 'stop'), `${s.label} 已停止`)}>
-                      {isBusy ? '…' : '■ 停止'}
+                      {isBusy ? '…' : (isSystemService ? '■ 关闭服务' : '■ 停止')}
                     </button>
                   ) : (
                     <span
-                      title={runningApp ? `将自动绑定到 ${runningApp.name}` : '请先在「程序管理」中启动视觉程序，后台服务会自动绑定后再启动'}
-                      style={{ display: 'inline-flex', cursor: runningApp ? 'default' : 'not-allowed' }}
+                      title={isSystemService
+                        ? '独立开启服务并恢复已保存电平；不要求视觉应用正在运行'
+                        : (runningApp ? `将自动绑定到 ${runningApp.name}` : '请先在「程序管理」中启动视觉程序，后台服务会自动绑定后再启动')}
+                      style={{ display: 'inline-flex', cursor: isSystemService || runningApp ? 'default' : 'not-allowed' }}
                     >
                       <button
-                        style={runningApp ? btn('#22c55e') : { ...disabledStartBtn, pointerEvents: 'none' }}
-                        disabled={isBusy || !runningApp}
+                        style={isSystemService || runningApp ? btn('#22c55e') : { ...disabledStartBtn, pointerEvents: 'none' }}
+                        disabled={isBusy || (!isSystemService && !runningApp)}
                         onClick={() => act(s.key, () => controlService(s.key, 'start'),
-                          `${s.label} 已自动绑定到 ${runningApp?.name ?? ''} 并启动`)}>
-                        {isBusy ? '…' : '▶ 自动绑定并启动'}
+                          isSystemService
+                            ? `${s.label} 已独立开启并恢复保存电平`
+                            : `${s.label} 已自动绑定到 ${runningApp?.name ?? ''} 并启动`)}>
+                        {isBusy ? '…' : (isSystemService ? '▶ 开启并恢复' : '▶ 自动绑定并启动')}
                       </button>
                     </span>
                   )}

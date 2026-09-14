@@ -43,6 +43,48 @@ static bool input_line_complete(const char *text)
     return text && (strchr(text, '\n') != NULL || feof(stdin));
 }
 
+static bool utf8_continuation_byte(unsigned char value)
+{
+    return (value & 0xc0U) == 0x80U;
+}
+
+static bool remove_last_utf8_character(char *buf, size_t *length)
+{
+    if (!buf || !length || *length == 0)
+    {
+        return false;
+    }
+
+    --(*length);
+    while (*length > 0 &&
+           utf8_continuation_byte((unsigned char)buf[*length]))
+    {
+        --(*length);
+    }
+    buf[*length] = '\0';
+    return true;
+}
+
+static void erase_masked_characters(size_t count)
+{
+    while (count-- > 0)
+    {
+        fputs("\b \b", stdout);
+    }
+    fflush(stdout);
+}
+
+void clear_terminal_screen(void)
+{
+    if (!isatty(STDOUT_FILENO))
+    {
+        return;
+    }
+
+    fputs("\033[2J\033[H", stdout);
+    fflush(stdout);
+}
+
 void trim_space(char *s)
 {
     char *start;
@@ -182,8 +224,12 @@ bool read_exact_yes(const char *prompt)
 
     if (terminal_ui_enabled())
     {
-        return terminal_ui_read_text(prompt, buf, sizeof(buf), false) &&
-               strcmp(buf, "YES") == 0;
+        if (!terminal_ui_read_text(prompt, buf, sizeof(buf), false))
+        {
+            return false;
+        }
+        trim_space(buf);
+        return strcmp(buf, "YES") == 0;
     }
 
     printf("%s", prompt);
@@ -222,8 +268,12 @@ bool read_exact_word(const char *prompt, const char *expected)
 
     if (terminal_ui_enabled())
     {
-        return terminal_ui_read_text(prompt, buf, sizeof(buf), false) &&
-               strcmp(buf, expected) == 0;
+        if (!terminal_ui_read_text(prompt, buf, sizeof(buf), false))
+        {
+            return false;
+        }
+        trim_space(buf);
+        return strcmp(buf, expected) == 0;
     }
 
     printf("%s", prompt);
@@ -275,39 +325,116 @@ bool read_password(const char *prompt, char *buf, size_t size)
     if (tty_ok)
     {
         newt = oldt;
-        newt.c_lflag &= (tcflag_t)~ECHO;
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &newt);
+        newt.c_lflag &= (tcflag_t)~(ICANON | ECHO);
+        newt.c_iflag &= (tcflag_t)~(IXON | ICRNL);
+        newt.c_cc[VMIN] = 1;
+        newt.c_cc[VTIME] = 0;
+        tty_ok = (tcsetattr(STDIN_FILENO, TCSANOW, &newt) == 0);
     }
 
     for (;;)
     {
+        size_t length = 0;
+        size_t mask_count = 0;
+        bool overflow = false;
+
+        buf[0] = '\0';
         printf("%s", prompt ? prompt : "");
         fflush(stdout);
-        if (!fgets(buf, (int)size, stdin))
+        if (tty_ok)
         {
-            buf[0] = '\0';
+            (void)tcdrain(STDOUT_FILENO);
+            for (;;)
+            {
+                unsigned char character;
+                ssize_t count;
+
+                do
+                {
+                    count = read(STDIN_FILENO, &character, 1);
+                } while (count < 0 && errno == EINTR);
+                if (count != 1)
+                {
+                    (void)tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+                    buf[0] = '\0';
+                    printf("\n输入已结束，程序退出。\n");
+                    exit(EXIT_SUCCESS);
+                }
+                if (character == '\r' || character == '\n')
+                {
+                    printf("\n");
+                    break;
+                }
+                if (character == 8 || character == 127)
+                {
+                    if (remove_last_utf8_character(buf, &length))
+                    {
+                        if (mask_count > 0)
+                        {
+                            --mask_count;
+                        }
+                        erase_masked_characters(1);
+                    }
+                    continue;
+                }
+                if (character == 21)
+                {
+                    length = 0;
+                    buf[0] = '\0';
+                    overflow = false;
+                    erase_masked_characters(mask_count);
+                    mask_count = 0;
+                    continue;
+                }
+                if (character < 32)
+                {
+                    continue;
+                }
+                if (length + 1 >= size)
+                {
+                    overflow = true;
+                    fputc('\a', stdout);
+                    fflush(stdout);
+                    continue;
+                }
+
+                buf[length++] = (char)character;
+                buf[length] = '\0';
+                if (!utf8_continuation_byte(character))
+                {
+                    fputc('*', stdout);
+                    fflush(stdout);
+                    (void)tcdrain(STDOUT_FILENO);
+                    ++mask_count;
+                }
+            }
+        }
+        else
+        {
+            if (!fgets(buf, (int)size, stdin))
+            {
+                buf[0] = '\0';
+                printf("\n输入已结束，程序退出。\n");
+                exit(EXIT_SUCCESS);
+            }
+            if (input_line_complete(buf))
+            {
+                trim_newline(buf);
+                return true;
+            }
+            overflow = true;
+            discard_line_remainder();
+        }
+
+        if (!overflow)
+        {
             if (tty_ok)
             {
-                tcsetattr(STDIN_FILENO, TCSAFLUSH, &oldt);
+                (void)tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
             }
-            printf("\n输入已结束，程序退出。\n");
-            exit(EXIT_SUCCESS);
+            return true;
         }
-        if (input_line_complete(buf))
-        {
-            trim_newline(buf);
-            break;
-        }
-        discard_line_remainder();
         buf[0] = '\0';
-        printf("\n密码过长，请缩短后重新输入。\n");
+        printf("密码过长，请缩短后重新输入。\n");
     }
-
-    if (tty_ok)
-    {
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &oldt);
-    }
-
-    printf("\n");
-    return true;
 }

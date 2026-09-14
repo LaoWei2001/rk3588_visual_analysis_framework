@@ -1169,11 +1169,11 @@ password_step:
     if (security_choice == 2 || security_choice == 3)
     {
         terminal_ui_set_step("填写新的 Wi-Fi 密码",
-                             "密码不会明文显示");
+                             "密码仅用星号显示，不会明文回显");
         do
         {
             terminal_ui_prepare_step(true);
-            if (!read_password("新 Wi-Fi 密码（输入时不显示）: ",
+            if (!read_password("新 Wi-Fi 密码（仅显示星号）: ",
                                password, sizeof(password)))
             {
                 memset(password, 0, sizeof(password));

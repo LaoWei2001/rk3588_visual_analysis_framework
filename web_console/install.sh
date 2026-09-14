@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # RK3588 Web Console 安装脚本
-# 用法：把整个 web_console 文件夹复制到 RK3588，然后在板子上执行此脚本
-#   scp -r web_console root@<板子IP>:~
-#   ssh root@<板子IP> "cd ~/web_console && bash install.sh online"
-#   ssh root@<板子IP> "cd ~/web_console && bash install.sh offline"
+# 用法：把整个项目复制到 RK3588，然后执行此脚本。安装过程会同时安装 GPIO
+# 实时控制和电平保持服务，不需要用户再进入 service/gpio_state 手工安装。
 set -Eeuo pipefail
 
 usage() {
@@ -34,6 +32,8 @@ esac
 APPS_ROOT="${APPS_ROOT:-/opt/ai_apps}"
 INSTALL_DIR="${INSTALL_DIR:-$APPS_ROOT/_console}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+GPIO_SERVICE_INSTALLER="$PROJECT_ROOT/service/gpio_state/install.sh"
 PYTHON_BIN="/usr/bin/python3"
 FRONTEND_BUILD_DIR=""
 DIST_STAGE=""
@@ -52,6 +52,17 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 echo "=== RK3588 Web Console 安装 ==="
+
+# 1. 尽早安装独立 GPIO 服务，避免等待 Python/npm 安装后才把继电器置于安全电平。
+# 该安装器首次安装时默认开启电平保持并把继电器置低；重装 Web 控制台时会保留
+# 网页中原有的开关状态和已保存电平。
+echo "[1/5] 安装 GPIO 控制与电平保持服务..."
+if [ ! -f "$GPIO_SERVICE_INSTALLER" ]; then
+    echo "[错误] 项目中缺少 GPIO 服务安装器: $GPIO_SERVICE_INSTALLER" >&2
+    echo "       请复制完整项目后再运行 web_console/install.sh。" >&2
+    exit 1
+fi
+bash "$GPIO_SERVICE_INSTALLER"
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
     echo "[错误] 未找到 ffmpeg，网页实时画面无法进行 RTSP 零转码封装。" >&2
@@ -74,7 +85,7 @@ else
 fi
 
 # 1. 安装后端
-echo "[1/4] 安装后端..."
+echo "[2/5] 安装后端..."
 PIP_SYSTEM_ARGS=()
 PIP_INSTALL_HELP="$($PYTHON_BIN -m pip help install 2>/dev/null || true)"
 if grep -q -- '--break-system-packages' <<< "$PIP_INSTALL_HELP"; then
@@ -121,7 +132,7 @@ mkdir -p "$INSTALL_DIR/backend"
 cp -a "$SCRIPT_DIR/backend/." "$INSTALL_DIR/backend/"
 
 # 2. 构建 / 复制前端
-echo "[2/4] 处理前端..."
+echo "[3/5] 处理前端..."
 mkdir -p "$INSTALL_DIR/frontend"
 
 deploy_frontend_dist() {
@@ -185,8 +196,8 @@ if [ -d "$SCRIPT_DIR/frontend/logos" ]; then
     echo "    已准备随机 logo 目录: $INSTALL_DIR/frontend/logos/  (把图片/GIF 放这里)"
 fi
 
-# 3. 安装 systemd 服务
-echo "[3/4] 安装 systemd 服务..."
+# 4. 安装 Web systemd 服务
+echo "[4/5] 安装 Web systemd 服务..."
 {
     echo "[Unit]"
     echo "Description=RK3588 Web Config Console"
@@ -220,8 +231,8 @@ rmdir /etc/systemd/system/rk3588-console.service.d 2>/dev/null || true
 systemctl daemon-reload
 systemctl enable rk3588-console
 
-# 4. 启动
-echo "[4/4] 启动服务..."
+# 5. 启动
+echo "[5/5] 启动 Web 服务..."
 systemctl restart rk3588-console
 sleep 2
 systemctl status rk3588-console --no-pager
@@ -235,3 +246,4 @@ echo "✓ 安装完成！访问地址: http://${LAN_IP}:8080"
 echo "  程序根目录: $APPS_ROOT"
 echo "  控制台目录: $INSTALL_DIR"
 echo "  Python: $PYTHON_BIN（系统环境）"
+echo "  GPIO 服务: 已安装；后续在 Web「系统服务」中开启或关闭电平保持"

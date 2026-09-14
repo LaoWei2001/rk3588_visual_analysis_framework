@@ -927,6 +927,17 @@ static UiEvent read_event(int timeout_ms) {
     event.key = UI_KEY_RESIZE;
     return event;
   }
+  /*
+   * fflush() only hands a completed frame to the tty driver.  On a physical
+   * serial console the bytes can still need a noticeable amount of time to
+   * leave the UART, while poll() can already accept the next key.  Keep
+   * blocking input screens in lockstep with what the operator can actually
+   * see; timed/non-blocking polling used by live views must stay responsive.
+   */
+  if (ui_serial_terminal && timeout_ms < 0) {
+    while (tcdrain(STDOUT_FILENO) != 0 && errno == EINTR) {
+    }
+  }
   if (!read_one_byte(&first, timeout_ms)) {
     if (ui_resize_pending) {
       ui_resize_pending = 0;

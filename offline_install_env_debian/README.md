@@ -29,7 +29,8 @@ http://<RK3588-IP>:8080
 
 无需再运行 `web_console/install.sh`，也无需手工执行 pip/npm 安装依赖。安装器会在目标机上
 实际运行一次前端构建作为验收。安装完成后的程序列表为空；需要运行的程序由用户之后通过
-Web 上传，或使用 `vision_analysis/install_app.sh` 明确安装。
+Web 上传，或使用 `vision_analysis/install_app.sh` 明确安装。默认完整包还会自动安装 GPIO
+实时控制与电平保持服务，并在首次安装时将继电器 `GPIO6_A2` 设置为低电平。
 
 ## 安装了什么
 

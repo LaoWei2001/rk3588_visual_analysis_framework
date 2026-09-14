@@ -228,7 +228,8 @@ GStreamer appsink
 │   └── install.sh               # Web 控制台安装脚本
 ├── service/
 │   ├── upload/                  # 可靠事件上传服务
-│   └── model_update/            # 模型 OTA 服务
+│   ├── model_update/            # 模型 OTA 服务
+│   └── gpio_state/              # GPIO 输出电平开机恢复服务
 ├── first_net_config/            # 独立的首次网络配置终端工具（C + ANSI/termios）
 ├── offline_install_env_debian/  # Debian 离线仓库制作与安装
 ├── offline_install_env_ubuntu/  # Ubuntu 离线仓库制作入口与依赖清单
@@ -350,6 +351,8 @@ C++ 程序不会装入目标机的程序列表。目标机只需在所选 bundle
 ARM64 Node.js/npm 和前端 `node_modules`，源码入口为
 `/userdata/rk3588_visual_analysis_framework`；目标机可以直接编译主程序和重新构建前端。
 程序仍需由用户之后明确安装，或通过 Web 上传。
+默认完整离线包的一键安装流程也会自动安装 GPIO 服务并在首次安装时将继电器置低，无需再
+进入 `service/gpio_state/` 执行命令。
 
 联网 `install_deps.sh` 和离线安装现在使用同一套系统 `/usr/bin/python3`；pip 对已经满足
 requirements 约束的包会跳过，只补装缺失项或调整不兼容版本。两条路径都会核验模块导入和
@@ -399,6 +402,8 @@ sudo bash web_console/install.sh offline
 `web_console/install.sh` 强制要求一个安装模式参数，只接受 `online` 或 `offline`，不会根据
 `frontend/dist` 是否存在猜测网络状态。`offline` 模式会完全禁止 pip/npm 联网。使用上面的
 离线环境与控制台安装包时，这一步已经由 `vision-analysis` deb 完成，不要重复执行。
+从源码执行 `web_console/install.sh` 时，会同时安装 GPIO 实时控制和电平保持服务；首次安装
+默认开启电平保持并将继电器 `GPIO6_A2` 置为低电平，后续重装会保留 Web 页面中的开关状态。
 
 `install_deps.sh` 是“联网预配置 + 断网验收”脚本，不包含 deb/wheel/npm 离线安装包；
 因此不能把一台从未准备过的裸机带到无公网现场后再首次执行普通安装模式。

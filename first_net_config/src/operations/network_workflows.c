@@ -861,7 +861,7 @@ password_step:
             char entered_password[BUF_SIZE];
             const char *password_prompt = password[0]
                 ? "Wi-Fi 密码（已填写，回车保留）: "
-                : "Wi-Fi 密码（输入时不显示）: ";
+                : "Wi-Fi 密码（仅显示星号）: ";
 
             terminal_ui_set_step("填写 Wi-Fi 密码",
                                  "密码仅用星号显示，不会明文回显");

@@ -104,6 +104,8 @@ int main(int argc, char *argv[])
         return 2;
     }
 
+    clear_terminal_screen();
+
     if (geteuid() != 0)
     {
         fprintf(stderr,

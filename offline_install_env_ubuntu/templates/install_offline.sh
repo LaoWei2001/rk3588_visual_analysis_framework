@@ -164,6 +164,18 @@ if ! as_root env DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTIONS[@]}" \
     exit 1
 fi
 
+# 默认完整离线包带有源码和构建环境，因此在同一个一键安装流程内完成 GPIO 服务安装。
+# 精简运行包不携带源码/编译器，不能在目标机现场构建该板级服务。
+if [ "$WANT_BUILD" = true ]; then
+    GPIO_SERVICE_INSTALLER="$SOURCE_INSTALL_PATH/service/gpio_state/install.sh"
+    [ -f "$GPIO_SERVICE_INSTALLER" ] \
+        || { echo "[错误] 完整离线包缺少 GPIO 服务安装器: $GPIO_SERVICE_INSTALLER" >&2; exit 1; }
+    echo ">>> 安装 GPIO 控制与电平保持服务..."
+    as_root bash "$GPIO_SERVICE_INSTALLER"
+else
+    echo "[提示] 精简运行包不含板端编译环境，未安装源码版 GPIO 服务。"
+fi
+
 echo ">>> 验证系统 Python 环境..."
 if ! /usr/bin/python3 - <<'PY'
 import importlib

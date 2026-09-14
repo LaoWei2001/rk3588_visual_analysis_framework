@@ -4,7 +4,8 @@ services.py — 网页托管「板端后台微服务」(systemd 单元)。
 设计要点:
   - systemd 是唯一的进程管家, 本路由只是它的遥控器 + 仪表盘。
   - 控制台以 root 运行(rk3588-console.service), 可直接 systemctl / 写单元文件。
-  - 只管两个 python 服务; 二进制(vision_app)仍由 process_manager 按 App 托管(维持分工)。
+  - Python 服务绑定当前视觉 App；GPIO 状态恢复是独立的板级系统服务。
+  - 二进制(vision_app)仍由 process_manager 按 App 托管(维持分工)。
 
 安全: 用户只传白名单 key, 单元名/动作均从服务端常量取, 绝不把任意串塞进 systemctl。
 """
@@ -36,11 +37,18 @@ MANAGED: Dict[str, Dict[str, str]] = {
         "unit": "ota_agent.service",
         "label": "模型 OTA 升级服务",
         "subdir": "services/model_update",
+        "scope": "app",
     },
     "unified_upload": {
         "unit": "unified_upload.service",
         "label": "告警上报服务",
         "subdir": "services/upload",
+        "scope": "app",
+    },
+    "gpio_state": {
+        "unit": "rk3588-gpio-restore.service",
+        "label": "GPIO 电平保持服务",
+        "scope": "system",
     },
 }
 
@@ -129,10 +137,13 @@ def _environment_value(raw: str, name: str) -> Optional[str]:
 
 
 def _status(key: str) -> Dict[str, Any]:
-    unit = MANAGED[key]["unit"]
+    meta = MANAGED[key]
+    unit = meta["unit"]
+    is_system_service = meta.get("scope") == "system"
     props = ("LoadState,ActiveState,SubState,UnitFileState,NRestarts,"
-             "ActiveEnterTimestampMonotonic,WorkingDirectory,Environment")
-    intent = runtime_state.get_service_settings(key)
+             "ActiveEnterTimestampMonotonic,WorkingDirectory,Environment,FragmentPath")
+    intent = (runtime_state.get_service_settings(key) if not is_system_service
+              else {"autostart": False, "desired_running": False})
     try:
         r = _run(["systemctl", "show", unit, "--property=" + props])
     except Exception as e:  # systemctl 不存在(如开发机) → 视为未安装
@@ -168,21 +179,32 @@ def _status(key: str) -> Dict[str, Any]:
     # WorkingDirectory: 既反推绑定到哪个 App, 也判断路径是否真实存在。
     # path_ok=False 即「失效单元」(如残留旧单元指向已删目录) → 面板会改走「重新安装」强制修正。
     wd = kv.get("WorkingDirectory", "")
+    fragment_path = kv.get("FragmentPath", "")
     bound_app = None
     path_ok = False
     if installed:
-        path_ok = bool(wd) and os.path.isdir(wd)
-        try:
-            if wd and str(Path(wd)).startswith(str(APPS_ROOT)):
-                bound_app = Path(wd).relative_to(APPS_ROOT).parts[0]
-        except Exception:
-            bound_app = None
+        if is_system_service:
+            path_ok = bool(fragment_path) and os.path.isfile(fragment_path)
+        else:
+            path_ok = bool(wd) and os.path.isdir(wd)
+            try:
+                if wd and str(Path(wd)).startswith(str(APPS_ROOT)):
+                    bound_app = Path(wd).relative_to(APPS_ROOT).parts[0]
+            except Exception:
+                bound_app = None
+
+    enabled = kv.get("UnitFileState", "") in ("enabled", "enabled-runtime")
+    if is_system_service:
+        intent = {
+            "autostart": enabled,
+            "desired_running": active_state in ("active", "activating", "reloading"),
+        }
 
     return {
         "installed": installed,
         "active_state": active_state,        # active / inactive / failed / activating / unknown
         "sub_state": kv.get("SubState", ""),
-        "enabled": kv.get("UnitFileState", "") in ("enabled", "enabled-runtime"),
+        "enabled": enabled,
         "uptime_seconds": uptime,
         "n_restarts": n_restarts,
         "bound_app": bound_app,
@@ -197,7 +219,13 @@ def _status(key: str) -> Dict[str, Any]:
 async def list_services():
     out = []
     for key, meta in MANAGED.items():
-        out.append({"key": key, "label": meta["label"], "unit": meta["unit"], **_status(key)})
+        out.append({
+            "key": key,
+            "label": meta["label"],
+            "unit": meta["unit"],
+            "scope": meta.get("scope", "app"),
+            **_status(key),
+        })
     return out
 
 
@@ -215,6 +243,8 @@ def _running_context_or_409() -> Dict[str, Any]:
 def _write_and_start_unlocked(key: str, context: Dict[str, Any]) -> Dict[str, Any]:
     """调用方必须持有 pm.runtime_lock，保证查找和绑定之间视觉 App 不会切换。"""
     meta = _svc(key)
+    if meta.get("scope") == "system":
+        raise HTTPException(status_code=400, detail="系统服务不绑定视觉程序")
     app_name = str(context["app"])
     app_dir = Path(context["app_dir"]).resolve()
     config_name = str(context.get("config") or "config.json")
@@ -280,7 +310,9 @@ def sync_services_for_running_app() -> Dict[str, List[str]]:
         context = pm.get_running_app_context()
         if context is None:
             return {"updated": updated, "errors": ["视觉程序启动后未能读取运行上下文"]}
-        for key in MANAGED:
+        for key, meta in MANAGED.items():
+            if meta.get("scope") == "system":
+                continue
             status = _status(key)
             active = status.get("active_state") in ("active", "activating", "reloading")
             waiting_autostart = bool(status.get("autostart") and status.get("desired_running"))
@@ -309,7 +341,21 @@ def sync_services_for_running_app() -> Dict[str, List[str]]:
 
 @router.post("/services/{key}/autostart")
 async def set_service_autostart(key: str, req: AutostartReq):
-    _svc(key)
+    meta = _svc(key)
+    if meta.get("scope") == "system":
+        command = (["systemctl", "enable", "--now", meta["unit"]] if req.enabled
+                   else ["systemctl", "disable", "--now", meta["unit"]])
+        r = _run(command)
+        if r.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=(r.stderr or r.stdout or "systemctl 失败").strip(),
+            )
+        return {
+            "ok": True,
+            "autostart": req.enabled,
+            "desired_running": req.enabled,
+        }
     with pm.runtime_lock():
         settings = runtime_state.set_service_autostart(key, req.enabled)
         # Web 使用统一编排恢复，不能让 systemd 绕过视觉 App 匹配独立拉起旧 unit。
@@ -319,9 +365,25 @@ async def set_service_autostart(key: str, req: AutostartReq):
 
 @router.post("/services/{key}/{action}")
 async def control_service(key: str, action: str):
-    _svc(key)
+    meta = _svc(key)
     if action not in ("start", "stop", "restart"):
         raise HTTPException(status_code=400, detail="action 仅支持 start/stop/restart")
+    if meta.get("scope") == "system":
+        unit = meta["unit"]
+        commands = {
+            "start": [["systemctl", "enable", unit],
+                      ["systemctl", "restart", unit]],
+            "stop": [["systemctl", "disable", "--now", unit]],
+            "restart": [["systemctl", "restart", unit]],
+        }[action]
+        for command in commands:
+            r = _run(command)
+            if r.returncode != 0:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(r.stderr or r.stdout or "systemctl 失败").strip(),
+                )
+        return {"ok": True, "unit": unit, "started": action != "stop"}
     if action in ("start", "restart"):
         return start_for_running_app(key)
 
