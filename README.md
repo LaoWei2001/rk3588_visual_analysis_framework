@@ -238,7 +238,8 @@ GStreamer appsink
 ├── docs/                        # 开发、运维和模块文档
 ├── develop_feature              # Codex/Claude 隔离式 Logic 需求澄清与自动开发入口
 ├── develop_feature.cmd          # 原生 Windows 的同一向导入口
-├── install_deps.sh              # 联网安装或只读检查第三方环境
+├── install.sh                   # 平台统一安装、升级、状态与卸载入口
+├── install_deps.sh              # 内部依赖准备或只读环境检查脚本
 └── LICENSE                      # GPL-3.0
 ```
 
@@ -305,15 +306,27 @@ ARM64 制作。不要把 Debian bundle 强制安装到 Ubuntu，也不要通过�
 硬件验证基线见
 [平台兼容矩阵](docs/skills/rk3588-feature-wizard/references/platform-matrix.md)。
 
-### 2. 安装依赖
+### 2. 统一安装
 
-设备可以联网时，默认安装运行环境、C/C++ 编译环境，并预构建 Web 前端：
+设备可以联网时，在项目根目录执行一条命令即可安装依赖、Web 控制台、GPIO 实时控制器和
+电平保持服务：
 
 ```bash
-bash install_deps.sh
+sudo ./install.sh online
 ```
 
-该命令需要在盒子仍能访问 APT、PyPI/npm 镜像时执行，会安装完整第三方运行依赖、
+后续更新源码后可统一升级，也可以随时查看安装状态：
+
+```bash
+sudo ./install.sh upgrade online
+./install.sh status
+```
+
+根目录 `install.sh` 是面向使用者的唯一源码安装入口；`install_deps.sh`、
+`web_console/install.sh` 和 `service/gpio_state/install.sh` 是内部组件脚本，仅用于制包、
+开发或单项故障修复。
+
+联网安装需要在盒子仍能访问 APT、PyPI/npm 镜像时执行，会安装完整第三方运行依赖、
 锁定安装前端依赖并预生成 `web_console/frontend/dist`。RKNPU 内核驱动、RGA、MPP 等
 Rockchip BSP 组件不由该脚本安装；用户态 `librknnrt.so` 和 `rknn_api.h` 已固定在
 `vision_analysis/vendor/rknn/`。APT 阶段只补装缺失包，不升级已经安装或被厂家设为
@@ -326,6 +339,8 @@ Python requirements 直接安装到系统 `/usr/bin/python3`，不会创建项�
 ```bash
 bash install_deps.sh --runtime-only
 ```
+
+这属于高级依赖准备方式，不会完成 Web 控制台和 GPIO 服务部署。
 
 现场设备不能访问 APT、PyPI 或 npm 时，在系统版本完全相同且可以联网的 ARM64 制作机上
 生成环境与 Web 控制台安装包：
@@ -387,23 +402,23 @@ Python/通用动态库、Rockchip GStreamer 硬件插件，以及项目和 `/opt
 `vision_analysis/vendor/rockchip/PLATFORM_COMPATIBILITY.env`；只有完成硬件冒烟测试后
 才应更新该基线。
 
-联网设备默认从 pip/npm 软件源安装并重新构建 Web 控制台，无需设置环境变量：
+已经用 `install_deps.sh` 准备好依赖和前端，或者前端产物已随完整源码复制到断网设备时，
+可以使用严格断网模式完成统一安装：
 
 ```bash
-sudo bash web_console/install.sh online
+sudo ./install.sh offline
 ```
 
-如果只想从源码单独部署 Web 控制台，断网设备才使用 `offline` 模式：
+卸载统一安装的系统服务和控制台时使用：
 
 ```bash
-sudo bash web_console/install.sh offline
+sudo ./install.sh uninstall
 ```
 
-`web_console/install.sh` 强制要求一个安装模式参数，只接受 `online` 或 `offline`，不会根据
-`frontend/dist` 是否存在猜测网络状态。`offline` 模式会完全禁止 pip/npm 联网。使用上面的
-离线环境与控制台安装包时，这一步已经由 `vision-analysis` deb 完成，不要重复执行。
-从源码执行 `web_console/install.sh` 时，会同时安装 GPIO 实时控制和电平保持服务；首次安装
-默认开启电平保持并将继电器 `GPIO6_A2` 置为低电平，后续重装会保留 Web 页面中的开关状态。
+卸载前会要求明确确认；应用包和 GPIO 保存状态会保留，已安装的控制台目录会移动到带时间戳
+的备份目录。完整离线 bundle 仍然只需执行包内的 `install_offline.sh`，不需要再运行根安装器。
+首次统一安装默认开启电平保持并将继电器 `GPIO6_A2` 置为低电平，后续升级会保留 Web 页面中
+的开关状态和已经保存的 GPIO 电平。
 
 `install_deps.sh` 是“联网预配置 + 断网验收”脚本，不包含 deb/wheel/npm 离线安装包；
 因此不能把一台从未准备过的裸机带到无公网现场后再首次执行普通安装模式。
@@ -471,9 +486,12 @@ bash run.sh ./assets/config_6.json
 ### 5. 安装 Web 管理平台
 
 ```bash
-cd web_console
-sudo bash install.sh online
+cd /userdata/rk3588_visual_analysis_framework
+sudo ./install.sh online
 ```
+
+该统一入口也会安装 GPIO 子系统；已经完成依赖准备且不允许联网时改用
+`sudo ./install.sh offline`。
 
 安装完成后访问：
 

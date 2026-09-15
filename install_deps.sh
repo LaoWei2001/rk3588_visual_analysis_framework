@@ -1051,7 +1051,7 @@ else
         || echo "  仍有 $CHECK_WARNINGS 项兼容性警告，请查看上方提示并完成硬件冒烟测试。"
     echo "  到达断网现场后，可运行以下命令复检环境："
     echo "    bash install_deps.sh --check$([ "$WANT_BUILD" = false ] && echo ' --runtime-only' || true)"
-    echo "  仅在需要重新部署 Web 控制台时，才运行："
-    echo "    sudo bash web_console/install.sh offline"
+    echo "  继续统一部署或升级 Web 控制台与 GPIO 服务："
+    echo "    sudo ./install.sh upgrade offline"
 fi
 echo "  说明：Rockchip RKNPU内核驱动/RGA/MPP 由厂家系统提供；librknnrt.so 由应用包固定。"

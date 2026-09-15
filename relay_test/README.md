@@ -1,16 +1,17 @@
 # 继电器独立测试
 
-`relay_test` 是 `gpio_test` 的继电器专用入口，默认操作 `GPIO6_A2`。它不再直接申请
-libgpiod 线路，而是把命令交给统一的实时 GPIO 控制后台，因此不会与 `gpio_test` 或视觉
+`relay_test` 是 `rk3588-gpioctl` 的继电器专用入口，默认操作 `GPIO6_A2`。它不再直接申请
+libgpiod 线路，而是把命令交给统一的实时 GPIO 控制后台，因此不会与 GPIO 命令行工具或视觉
 主程序发生 `Device or resource busy` 冲突。
 
-正常部署时，`web_console/install.sh` 会自动安装实时控制和电平保持服务，不需要单独进入
-`service/gpio_state/`。如果设备不安装 Web 控制台，才使用独立安装入口：
+正常部署使用项目根目录的一条命令，它会同时安装 Web 控制台、实时控制和电平保持服务：
 
 ```bash
 cd /userdata/rk3588_visual_analysis_framework
-sudo ./service/gpio_state/install.sh
+sudo ./install.sh online
 ```
+
+`service/gpio_state/install.sh` 只保留为内部组件安装和故障修复入口。
 
 构建和测试：
 
@@ -26,7 +27,7 @@ cd /userdata/rk3588_visual_analysis_framework/relay_test
 ./build/relay_test
 ```
 
-切换板卡后，可以指定从 `gpio_test list` 和原理图确认的新引脚：
+切换板卡后，可以指定从 `rk3588-gpioctl list` 和原理图确认的新引脚：
 
 ```bash
 ./build/relay_test --pin GPIO7_A0 get

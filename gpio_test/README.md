@@ -1,6 +1,7 @@
-# GPIO 电平设置与重启恢复
+# GPIO 命令行控制工具
 
-`gpio_test` 默认控制 `GPIO6_A0`，也可以通过 `--pin` 操作其他符合
+本目录保留历史名称 `gpio_test` 以兼容已有脚本；安装后的正式工具名为
+`rk3588-gpioctl`。它默认控制 `GPIO6_A0`，也可以通过 `--pin` 操作其他符合
 `GPIOx_Yz` 命名规则的引脚。独立的 GPIO 电平保持服务开启时，每次成功设置输出后，
 期望电平都会保存到 `/var/lib/rk3588-gpio/`；服务关闭时只改变当前电平，不保存。
 
@@ -14,8 +15,8 @@
 ./build.sh
 ```
 
-正常部署时，`web_console/install.sh` 会自动安装 GPIO 服务，不需要再进入
-`service/gpio_state/`。GPIO 测试工具保留在本目录；首次安装会
+正常部署时，在项目根目录执行 `sudo ./install.sh online`，不需要再进入
+`service/gpio_state/`。本目录的 `build.sh` 只用于单独开发和测试；首次安装会
 启用 `rk3588-gpio-restore.service`；再次安装会保留网页中已有的开启/关闭状态。服务在
 系统初始化和声音服务之前恢复所有已保存的 GPIO 输出。
 
@@ -23,29 +24,31 @@
 
 ```bash
 # 列出当前板卡全部 GPIO，并显示占用状态
-./build/gpio_test list
+./build/rk3588-gpioctl list
 
 # 只列出空闲候选项和已经由本框架控制的 GPIO
-./build/gpio_test list --available
+./build/rk3588-gpioctl list --available
 
 # 只查看指定 gpiochip，例如本板 TCA9555 所在的 gpiochip6
-./build/gpio_test list --chip 6
+./build/rk3588-gpioctl list --chip 6
 
 # GPIO6_A0 设置为低电平（保持服务开启时同时保存）
-sudo ./build/gpio_test set 0
+sudo ./build/rk3588-gpioctl set 0
 
 # GPIO6_A0 设置为高电平（命令退出后仍保持）
-sudo ./build/gpio_test set 1
+sudo ./build/rk3588-gpioctl set 1
 
 # 查询保存值并重新施加到引脚
-sudo ./build/gpio_test get
+sudo ./build/rk3588-gpioctl get
 
 # 指定其他引脚
-sudo ./build/gpio_test --pin GPIO6_A2 set 0
+sudo ./build/rk3588-gpioctl --pin GPIO6_A2 set 0
 
 # 手动模拟一次开机恢复
-sudo ./build/gpio_test restore
+sudo ./build/rk3588-gpioctl restore
 ```
+
+`./build/gpio_test` 仍是指向同一程序的兼容链接，旧命令无需立即修改。
 
 `list` 是无扰动扫描，不会申请线路或改变电平。每一行会显示动态生成的 `GPIOX_YZ`、
 offset、设备树线路名称、当前方向、占用者，以及以下状态：

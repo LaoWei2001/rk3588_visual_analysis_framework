@@ -33,7 +33,8 @@ curl -s http://127.0.0.1:8080/health
 ```
 
 登录使用 Linux 系统凭据；后端 session 仅在内存中，控制台重启或 8 小时过期后需重新登录。若前端
-源码已改但页面没变，重新执行 `web_console/install.sh` 并确认安装目录的 `frontend/dist` 时间。
+源码已改但页面没变，在项目根目录执行 `sudo ./install.sh upgrade online`，并确认安装目录的
+`frontend/dist` 时间；已经预构建前端时可使用 `upgrade offline`。
 
 ## App 启动失败或异常退出
 

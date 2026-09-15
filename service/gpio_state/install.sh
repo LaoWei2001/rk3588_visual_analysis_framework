@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
+# GPIO 子系统内部组件安装器。正常部署由项目根目录 install.sh 调用。
 set -euo pipefail
 
 service_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${service_dir}/../.." && pwd)"
 gpio_test_dir="${repo_root}/gpio_test"
 daemon_build_dir="${service_dir}/build"
+gpioctl_path="/usr/local/bin/rk3588-gpioctl"
+gpioctl_compat_path="/usr/local/bin/gpio_test"
+daemon_path="/usr/local/sbin/rk3588-gpio-daemon"
+daemon_compat_path="/usr/local/sbin/rk3588_gpio_control_daemon"
 # 新设备首次安装时使用低电平作为继电器安全默认值。其他板卡可以在执行安装脚本时
 # 通过 RK3588_RELAY_PIN=GPIOx_Yz 覆盖，但升级时绝不覆盖已经保存的实际状态。
 relay_safe_pin="${RK3588_RELAY_PIN:-GPIO6_A2}"
@@ -34,9 +39,10 @@ cmake -S "${service_dir}" -B "${daemon_build_dir}" \
     -DCMAKE_BUILD_TYPE=Release
 cmake --build "${daemon_build_dir}" --parallel
 install -d -m 0755 /var/lib/rk3588-gpio
-install -m 0755 "${gpio_test_dir}/build/gpio_test" /usr/local/bin/gpio_test
-install -m 0755 "${daemon_build_dir}/rk3588_gpio_control_daemon" \
-    /usr/local/sbin/rk3588_gpio_control_daemon
+install -m 0755 "${gpio_test_dir}/build/rk3588-gpioctl" "${gpioctl_path}"
+ln -sfn "$(basename "${gpioctl_path}")" "${gpioctl_compat_path}"
+install -m 0755 "${daemon_build_dir}/rk3588-gpio-daemon" "${daemon_path}"
+ln -sfn "$(basename "${daemon_path}")" "${daemon_compat_path}"
 install -m 0644 "${service_dir}/rk3588-gpio-control.service" \
     "/etc/systemd/system/${control_unit_name}"
 install -m 0644 "${service_dir}/rk3588-gpio-restore.service" \
@@ -48,7 +54,7 @@ systemctl restart "${control_unit_name}"
 if [ "${was_installed}" -eq 0 ]; then
     systemctl enable --now "${unit_name}"
     echo "首次安装：正在将继电器 ${relay_safe_pin} 设置并保存为低电平。"
-    /usr/local/bin/gpio_test --pin "${relay_safe_pin}" set 0
+    "${gpioctl_path}" --pin "${relay_safe_pin}" set 0
 elif [ "${was_enabled}" -eq 1 ]; then
     systemctl enable "${unit_name}"
     systemctl restart "${unit_name}"

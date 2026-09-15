@@ -6,7 +6,7 @@ Before=rk3588-gpio-restore.service sysinit.target sound.target bootanim.service 
 
 [Service]
 Type=simple
-ExecStart=/usr/local/sbin/rk3588_gpio_control_daemon
+ExecStart=/usr/local/sbin/rk3588-gpio-daemon
 Restart=always
 RestartSec=1
 RuntimeDirectory=rk3588-gpio-control

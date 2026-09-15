@@ -622,6 +622,12 @@ int main(int argc, char **argv)
     int value;
     int persist;
 
+    if (argc == 2 && (strcmp(argv[1], "-h") == 0 ||
+                      strcmp(argv[1], "--help") == 0))
+    {
+        usage(argv[0]);
+        return 0;
+    }
     if (argc > 1 && strcmp(argv[1], "list") == 0)
         return list_gpio_lines(argc - 2, argv + 2);
     if (argc > 1 && strcmp(argv[1], "restore") == 0)
@@ -659,7 +665,7 @@ int main(int argc, char **argv)
     }
     else if (parse_value(command, &value) == 0)
     {
-        /* 允许简写：gpio_test 0 / gpio_test low。 */
+        /* 允许简写：rk3588-gpioctl 0 / rk3588-gpioctl low。 */
     }
     else if (strcmp(command, "get") == 0)
     {

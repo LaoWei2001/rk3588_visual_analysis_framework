@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# RK3588 Web Console 安装脚本
-# 用法：把整个项目复制到 RK3588，然后执行此脚本。安装过程会同时安装 GPIO
-# 实时控制和电平保持服务，不需要用户再进入 service/gpio_state 手工安装。
+# RK3588 Web Console 内部组件安装脚本。
+# 正常部署请从项目根目录执行 ./install.sh；本脚本仅供根安装器和单项故障修复调用。
 set -Eeuo pipefail
 
 usage() {
     echo "用法：sudo bash web_console/install.sh <online|offline>"
     echo "  online   联网安装 Python 依赖，并用 npm 重新构建前端"
     echo "  offline  使用已由离线包配置好的系统 Python 和预构建前端"
+    echo "推荐：在项目根目录执行 sudo ./install.sh <online|offline>"
 }
 
 if [ "$#" -ne 1 ]; then
@@ -46,8 +46,8 @@ trap cleanup EXIT
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "[错误] 安装 systemd 服务需要 root 权限。"
-    echo "       联网安装请执行: sudo bash $SCRIPT_DIR/install.sh online"
-    echo "       离线部署请执行: sudo bash $SCRIPT_DIR/install.sh offline"
+    echo "       联网安装请执行: sudo $PROJECT_ROOT/install.sh online"
+    echo "       离线部署请执行: sudo $PROJECT_ROOT/install.sh offline"
     exit 1
 fi
 
@@ -59,7 +59,7 @@ echo "=== RK3588 Web Console 安装 ==="
 echo "[1/5] 安装 GPIO 控制与电平保持服务..."
 if [ ! -f "$GPIO_SERVICE_INSTALLER" ]; then
     echo "[错误] 项目中缺少 GPIO 服务安装器: $GPIO_SERVICE_INSTALLER" >&2
-    echo "       请复制完整项目后再运行 web_console/install.sh。" >&2
+    echo "       请复制完整项目后从项目根目录运行 ./install.sh。" >&2
     exit 1
 fi
 bash "$GPIO_SERVICE_INSTALLER"

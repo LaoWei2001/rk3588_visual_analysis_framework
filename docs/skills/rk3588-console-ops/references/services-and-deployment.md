@@ -134,7 +134,7 @@ OTA 指令按 `channels[].id + models[].id` 定位；`channel` 缺失时当前�
 | 改动 | 生效动作 |
 |---|---|
 | C++、logic manifest、模块模板、打包服务代码 | 重建完整包、重新安装、重启 App/相关服务 |
-| Web 前端/后端 | 重新运行 `web_console/install.sh` |
+| Web 前端/后端 | 在项目根目录运行 `sudo ./install.sh upgrade online`（已备好依赖与前端时可用 `offline`） |
 | 当前运行 JSON 普通可热更字段 | Web 保存后观察 C++ config monitor；被拒绝时重启 App |
 | `connections.yaml`、活动契约 | 上传 worker 下一轮重新加载；测试仍需真实事件 |
 | `ota_config.json` | 重启 OTA 服务，因为模块启动时读取 |

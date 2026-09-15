@@ -183,22 +183,22 @@ export default function ServicesPanel({ apps, onToast }: Props) {
 
             <span style={{ color: b.color, fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>{b.text}</span>
 
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: '#9aa4b2',
-                            fontSize: 12, whiteSpace: 'nowrap', cursor: 'pointer' }}
-                   title={isSystemService
-                     ? '独立于视觉应用；开启后保存输出电平，并在以后每次开机自动恢复'
-                     : '勾选后，仅当关机前最后状态为运行时才会在下次开机恢复'}>
-              <input type="checkbox" checked={s.autostart} disabled={!!autostartBusy[s.key] || isBusy}
-                style={{ margin: 0, accentColor: '#3b82f6' }}
-                onChange={event => handleAutostart(s.key, event.target.checked)} />
-              {autostartBusy[s.key] ? '保存中' : (isSystemService ? '开机恢复' : '开机自启')}
-            </label>
+            {!isSystemService && (
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: '#9aa4b2',
+                              fontSize: 12, whiteSpace: 'nowrap', cursor: 'pointer' }}
+                     title="勾选后，仅当关机前最后状态为运行时才会在下次开机恢复">
+                <input type="checkbox" checked={s.autostart} disabled={!!autostartBusy[s.key] || isBusy}
+                  style={{ margin: 0, accentColor: '#3b82f6' }}
+                  onChange={event => handleAutostart(s.key, event.target.checked)} />
+                {autostartBusy[s.key] ? '保存中' : '开机自启'}
+              </label>
+            )}
 
             <div style={{ display: 'flex', gap: 6, whiteSpace: 'nowrap' }}>
               {needsInstall ? (
                 <span
                   title={isSystemService
-                    ? '请先在板端安装 service/gpio_state 服务'
+                    ? '请先在项目根目录执行 sudo ./install.sh online 安装平台服务'
                     : (runningApp ? `将自动绑定到 ${runningApp.name}` : '请先在「程序管理」中启动视觉程序，后台服务会自动绑定后再启动')}
                   style={{ display: 'inline-flex', cursor: !isSystemService && runningApp ? 'default' : 'not-allowed' }}
                 >

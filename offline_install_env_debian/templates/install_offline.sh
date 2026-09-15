@@ -242,6 +242,8 @@ if [ "$WANT_BUILD" = true ]; then
     if [ -L /userdata/rk3588_visual_analysis_framework ]; then
         echo "     源码入口: /userdata/rk3588_visual_analysis_framework"
     fi
+    echo "     统一状态: cd /userdata/rk3588_visual_analysis_framework && ./install.sh status"
+    echo "     源码升级: cd /userdata/rk3588_visual_analysis_framework && sudo ./install.sh upgrade offline"
     echo "     编译方法: cd $SOURCE_INSTALL_PATH/vision_analysis && ./build.sh dist"
     echo "     Node.js/npm: $NODE_TOOLCHAIN_ROOT/bin"
     echo "     前端构建: cd $SOURCE_INSTALL_PATH/web_console/frontend && PATH=$NODE_TOOLCHAIN_ROOT/bin:\$PATH $NODE_TOOLCHAIN_ROOT/bin/npm run build"

@@ -13,7 +13,7 @@ RuntimeDirectoryMode=0755
 ExecStartPre=/usr/bin/touch /run/rk3588-gpio-persistence/enabled
 # 视觉应用可能已占用某些 GPIO；这不能妨碍独立开启持久化功能。
 # 恢复失败会写入日志，但服务仍保持开启，后续视觉应用输出会正常保存。
-ExecStart=-/usr/local/bin/gpio_test restore
+ExecStart=-/usr/local/bin/rk3588-gpioctl restore
 RemainAfterExit=yes
 
 [Install]

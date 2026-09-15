@@ -878,6 +878,11 @@ if [ "$WANT_BUILD" = true ]; then
 项目源码由 $SOURCE_PACKAGE $DEB_VERSION 安装。
 实际目录: $SOURCE_INSTALL_PATH
 固定入口: /userdata/rk3588_visual_analysis_framework
+统一管理命令:
+  cd /userdata/rk3588_visual_analysis_framework
+  ./install.sh status
+  sudo ./install.sh upgrade offline
+
 编译命令:
   cd /userdata/rk3588_visual_analysis_framework/vision_analysis
   ./build.sh dist
