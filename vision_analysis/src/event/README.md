@@ -33,6 +33,41 @@ const EventReportResult result = report_event(ctx, event);
 
 `accepted()` 只表示事件进入了本地持久化发件箱，不表示远端已经收到。
 
+## 全局事件的图片通道
+
+全局 logic 如果知道本次事件由哪些通道触发，只需额外提交业务证据 ID：
+
+```cpp
+EventRequest event;
+event.event_type = "person_fall_into_water";
+event.evidence_channel_ids = alarm_channel_ids;
+report_event(gctx, event);
+```
+
+这不会在 C++ 中写死最终图片选择。Web 上报节点把选择保存到
+`report_policy.image_selection`，底层统一取帧和拼接：
+
+```json
+{
+  "image_selection": {
+    "mode": "selected",
+    "channel_ids": [0, 2]
+  }
+}
+```
+
+- `event_evidence`：使用 `EventRequest.evidence_channel_ids`；旧逻辑未提供时使用全部连入通道。
+- `selected`：使用 Web 固定选择的 `channel_ids`。
+- `connected`：使用画布连入全局 logic 的全部通道，兼容旧配置。
+
+全局聚合事件没有“主通道”。`source_channel_id` 只用于确实由单路通道独立触发的
+全局业务事件，不参与图片或视频选择，也不会由框架自动回退生成。
+
+取帧失败的通道会被跳过；至少一路可用就继续生成紧凑拼图。全部不可用时事件仍会
+持久化，图片状态明确标记为失败。事件的 `source.image_channel_ids` 和
+`source.missing_image_channel_ids` 记录实际结果，上传适配器仍只处理一份
+`annotated_image` / `raw_image`，无需了解拼图细节。
+
 ## 稳定边界
 
 ```text

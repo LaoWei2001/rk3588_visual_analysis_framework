@@ -4,6 +4,7 @@
 #include <map>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 struct ChannelContext;
 struct GlobalContext;
@@ -148,11 +149,17 @@ struct EventRequest
     std::string message;
     EventFields fields;
     EventMergeMode merge_mode = EventMergeMode::NEVER;
-    /* 全局 logic 可为本次事件选择来源标识和单通道图片；-1 使用节点配置的默认通道。
-     * 有画布输入时图片拼接连入通道；没有画布输入时图片使用该来源通道。
-     * 事件视频始终使用全局上报节点明确选择的 media_source_channel_id，以限制预录开销。
-     * 通道 logic 调用时无需设置，仍使用 ctx->chnId。 */
+    /* 仅当全局事件确实由某一路通道独立触发时填写其真实来源；多通道聚合事件保持 -1。
+     * 该字段不参与图片或视频选择，也不存在“主通道”回退。通道 logic 无需设置。 */
     int source_channel_id = -1;
+
+    /*
+     * 本次事件实际涉及的证据通道。这里只描述业务事实，不决定最终图片来源：
+     * report_policy.image_selection.mode 由 Web 上报节点配置，可选择使用本列表、
+     * 固定通道或全部画布输入。通道 logic 通常无需设置；
+     * 全局 logic 只需把已经参与告警判定的通道 ID 填进来，底层负责取帧和拼接。
+     */
+    std::vector<int> evidence_channel_ids;
 };
 
 enum class EventReportStatus

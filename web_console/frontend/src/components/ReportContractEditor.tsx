@@ -1,11 +1,36 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   apiErrorMessage, fetchDeliveryAdapters, saveReportContract,
   type DeliveryAdapterDef, type DeliveryConnection, type ReportContract, type ReportField,
 } from '../api/client'
+import { copyText } from '../utils/clipboard'
 
 type MediaKind = 'annotated_image' | 'raw_image' | 'video'
 type Mapping = ReportContract['mapping'][number]
+
+const PREVIEW_WIDTH_STORAGE_KEY = 'rk3588.reportContract.previewWidth'
+const PREVIEW_WIDTH_DEFAULT = 430
+const PREVIEW_WIDTH_MIN = 320
+const PREVIEW_WIDTH_MAX = 700
+
+function storedPreviewWidth(): number {
+  try {
+    const value = Number(window.localStorage.getItem(PREVIEW_WIDTH_STORAGE_KEY))
+    return Number.isFinite(value) && value > 0
+      ? Math.min(PREVIEW_WIDTH_MAX, Math.max(PREVIEW_WIDTH_MIN, value))
+      : PREVIEW_WIDTH_DEFAULT
+  } catch {
+    return PREVIEW_WIDTH_DEFAULT
+  }
+}
+
+function savePreviewWidth(value: number) {
+  try {
+    window.localStorage.setItem(PREVIEW_WIDTH_STORAGE_KEY, String(Math.round(value)))
+  } catch {
+    // 隐私模式禁用 localStorage 时仍允许本次页面正常拖拽。
+  }
+}
 
 interface Props {
   appName: string
@@ -23,7 +48,7 @@ interface Props {
 type SourceOption = {
   value: string
   label: string
-  group: '系统事件' | '当前算法' | '媒体' | '固定值' | '模板已有来源'
+  group: '通用信息' | '当前算法' | '媒体' | '固定值' | '模板已有来源'
   type: string
 }
 
@@ -34,18 +59,22 @@ const MEDIA: Array<{ value: MediaKind; label: string }> = [
 ]
 
 const SYSTEM_SOURCES: SourceOption[] = [
-  { value: 'event.id', label: '事件 ID', group: '系统事件', type: 'string' },
-  { value: 'event.type', label: '报警类型', group: '系统事件', type: 'string' },
-  { value: 'event.message', label: '报警说明', group: '系统事件', type: 'string' },
-  { value: 'event.snap_time', label: '抓拍时间', group: '系统事件', type: 'string' },
-  { value: 'event.end_time', label: '结束时间', group: '系统事件', type: 'string' },
-  { value: 'event.trigger_unix_ms', label: '触发时间戳', group: '系统事件', type: 'number' },
-  { value: 'event.trigger_count', label: '事件触发次数', group: '系统事件', type: 'number' },
-  { value: 'source.channel_id', label: '通道 ID', group: '系统事件', type: 'number' },
-  { value: 'source.video_channel_id', label: '事件视频通道 ID', group: '系统事件', type: 'number' },
-  { value: 'event', label: '完整事件对象', group: '系统事件', type: 'json' },
-  { value: 'source', label: '完整来源对象', group: '系统事件', type: 'json' },
-  { value: 'fields', label: '全部算法字段', group: '系统事件', type: 'json' },
+  { value: 'event.id', label: '记录 ID', group: '通用信息', type: 'string' },
+  { value: 'event.type', label: '告警类型', group: '通用信息', type: 'string' },
+  { value: 'event.message', label: '告警说明', group: '通用信息', type: 'string' },
+  { value: 'event.snap_time', label: '产生时间', group: '通用信息', type: 'string' },
+  { value: 'event.end_time', label: '结束时间', group: '通用信息', type: 'string' },
+  { value: 'event.trigger_unix_ms', label: '触发时间戳', group: '通用信息', type: 'number' },
+  { value: 'event.trigger_count', label: '触发次数', group: '通用信息', type: 'number' },
+  { value: 'source.channel_id', label: '通道 ID', group: '通用信息', type: 'number' },
+  { value: 'source.video_channel_id', label: '录像通道 ID', group: '通用信息', type: 'number' },
+  { value: 'source.image_channel_ids', label: '实际图片通道', group: '通用信息', type: 'json' },
+  { value: 'source.requested_image_channel_ids', label: '请求的图片通道', group: '通用信息', type: 'json' },
+  { value: 'source.missing_image_channel_ids', label: '缺失的图片通道', group: '通用信息', type: 'json' },
+  { value: 'source.image_selection_mode', label: '图片来源模式', group: '通用信息', type: 'string' },
+  { value: 'event', label: '完整记录信息（高级）', group: '通用信息', type: 'json' },
+  { value: 'source', label: '完整来源信息（高级）', group: '通用信息', type: 'json' },
+  { value: 'fields', label: '全部算法字段', group: '通用信息', type: 'json' },
 ]
 
 const MEDIA_SOURCES: SourceOption[] = [
@@ -180,7 +209,15 @@ function templateRequestPreview(
       id: 'preview-event', type: eventTypes[0] || 'sample_event', message: '接口映射预览',
       trigger_unix_ms: now.getTime(), snap_time: snapTime, end_time: snapTime, trigger_count: 1,
     },
-    source: { channel_id: 0, video_channel_id: 0, parameters: {} },
+    source: {
+      channel_id: 0,
+      video_channel_id: 0,
+      image_selection_mode: 'event_evidence',
+      requested_image_channel_ids: [0, 2],
+      image_channel_ids: [0, 2],
+      missing_image_channel_ids: [],
+      parameters: {},
+    },
     fields,
     media: {
       annotated_image: '/preview/annotated.jpg',
@@ -283,8 +320,38 @@ export default function ReportContractEditor({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [dirty, setDirty] = useState(false)
+  const [previewWidth, setPreviewWidth] = useState(storedPreviewWidth)
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const layoutRef = useRef<HTMLDivElement>(null)
+  const resizeRef = useRef<{
+    pointerId: number
+    startX: number
+    startWidth: number
+    latestWidth: number
+    previousCursor: string
+    previousUserSelect: string
+  } | null>(null)
   const markDirty = () => { if (!dirty) { setDirty(true); onDirtyChange?.(true) } }
   const clearDirty = () => { if (dirty) { setDirty(false); onDirtyChange?.(false) } }
+
+  useEffect(() => {
+    const fitPreview = () => {
+      if (window.innerWidth <= 1200) return
+      const available = (layoutRef.current?.clientWidth ?? window.innerWidth) - 500
+      const max = Math.min(PREVIEW_WIDTH_MAX, Math.max(PREVIEW_WIDTH_MIN, available))
+      setPreviewWidth(value => Math.min(value, max))
+    }
+    fitPreview()
+    window.addEventListener('resize', fitPreview)
+    return () => {
+      window.removeEventListener('resize', fitPreview)
+      const drag = resizeRef.current
+      if (!drag) return
+      document.body.style.cursor = drag.previousCursor
+      document.body.style.userSelect = drag.previousUserSelect
+      resizeRef.current = null
+    }
+  }, [])
 
   useEffect(() => {
     setDraft(clone(contract ?? emptyContract(adapter, logicName, eventTypes)))
@@ -495,7 +562,7 @@ export default function ReportContractEditor({
   }
 
   const groups: SourceOption['group'][] = [
-    '系统事件', '当前算法', '媒体', '固定值', '模板已有来源',
+    '通用信息', '当前算法', '媒体', '固定值', '模板已有来源',
   ]
   const requestPreview = useMemo(() => {
     try {
@@ -505,7 +572,77 @@ export default function ReportContractEditor({
     }
   }, [draft, reportFields, eventTypes, connection, deliveryId])
 
+  const beginPreviewResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    resizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: previewWidth,
+      latestWidth: previewWidth,
+      previousCursor: document.body.style.cursor,
+      previousUserSelect: document.body.style.userSelect,
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [previewWidth])
+
+  const movePreviewResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = resizeRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const requested = drag.startWidth + drag.startX - event.clientX
+    const available = (layoutRef.current?.clientWidth ?? window.innerWidth) - 500
+    const max = Math.min(PREVIEW_WIDTH_MAX, Math.max(PREVIEW_WIDTH_MIN, available))
+    const next = Math.min(max, Math.max(PREVIEW_WIDTH_MIN, requested))
+    drag.latestWidth = next
+    setPreviewWidth(next)
+  }, [])
+
+  const endPreviewResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = resizeRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    savePreviewWidth(drag.latestWidth)
+    document.body.style.cursor = drag.previousCursor
+    document.body.style.userSelect = drag.previousUserSelect
+    resizeRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }, [])
+
+  const resizePreviewByKeyboard = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const available = (layoutRef.current?.clientWidth ?? window.innerWidth) - 500
+    const max = Math.min(PREVIEW_WIDTH_MAX, Math.max(PREVIEW_WIDTH_MIN, available))
+    const step = event.shiftKey ? 50 : 10
+    const next = Math.min(max, Math.max(PREVIEW_WIDTH_MIN,
+      previewWidth + (event.key === 'ArrowLeft' ? step : -step)))
+    setPreviewWidth(next)
+    savePreviewWidth(next)
+  }, [previewWidth])
+
+  const copyPreview = async () => {
+    if (!requestPreview.value) return
+    const copied = await copyText(JSON.stringify(requestPreview.value, null, 2))
+    setCopyStatus(copied ? 'copied' : 'failed')
+    window.setTimeout(() => setCopyStatus('idle'), 1800)
+  }
+
   return <div className="report-contract-editor">
+    <div className="report-contract-pipeline" aria-label="上报数据处理流程">
+      <span>1　算法产生的数据</span>
+      <b>→</b>
+      <span className="active">2　字段转换规则</span>
+      <b>→</b>
+      <span className="active">3　最终发送请求</span>
+    </div>
+    <div
+      className="report-contract-layout"
+      ref={layoutRef}
+      style={{ '--report-preview-width': `${previewWidth}px` } as React.CSSProperties}
+    >
+      <div className="report-contract-form-pane">
     <div className="report-section-title">
       {editing ? `编辑模板：${contract?.label}` : '新建接口模板'}
     </div>
@@ -605,7 +742,7 @@ export default function ReportContractEditor({
       </label>
     </div>}
 
-    <div className="report-section-title">最终 JSON / Dify inputs 字段</div>
+    <div className="report-section-title">字段转换规则</div>
     {draft.mapping.map((item, index) => {
       const constantType = inferConstantType(item)
       return <div className="report-mapping-row" key={index}>
@@ -706,10 +843,42 @@ export default function ReportContractEditor({
       当前算法没有声明 report_fields；仍可选择系统字段、完整 fields 对象、媒体和固定值。
     </div>}
 
-    <div className="report-section-title">模板请求实时预览</div>
-    {requestPreview.error
-      ? <div className="report-contract-error">预览失败：{requestPreview.error}</div>
-      : <pre className="report-request-preview">{JSON.stringify(requestPreview.value, null, 2)}</pre>}
+      </div>
+      <div
+        className="report-contract-preview-resizer"
+        role="separator"
+        aria-label="调整模板预览宽度"
+        aria-orientation="vertical"
+        aria-valuemin={PREVIEW_WIDTH_MIN}
+        aria-valuemax={PREVIEW_WIDTH_MAX}
+        aria-valuenow={Math.round(previewWidth)}
+        tabIndex={0}
+        title="左右拖拽调整预览宽度"
+        onPointerDown={beginPreviewResize}
+        onPointerMove={movePreviewResize}
+        onPointerUp={endPreviewResize}
+        onPointerCancel={endPreviewResize}
+        onLostPointerCapture={endPreviewResize}
+        onKeyDown={resizePreviewByKeyboard}
+      />
+      <aside className="report-contract-preview-pane">
+        <div className="report-contract-preview-head">
+          <div>
+            <div className="report-section-title">最终发送请求</div>
+            <div className="report-mapping-help">这是服务器最终收到的内容，左侧修改后立即刷新。</div>
+          </div>
+          <button type="button" disabled={!requestPreview.value} onClick={copyPreview}>
+            {copyStatus === 'copied' ? '已复制'
+              : copyStatus === 'failed' ? '复制失败' : '复制 JSON'}
+          </button>
+        </div>
+        {requestPreview.error
+          ? <div className="report-contract-error">预览失败：{requestPreview.error}</div>
+          : <pre className="report-request-preview report-contract-preview-code">
+              {JSON.stringify(requestPreview.value, null, 2)}
+            </pre>}
+      </aside>
+    </div>
 
     {error && <div className="report-contract-error">{error}</div>}
     <div className="report-contract-actions">

@@ -73,7 +73,7 @@ class ContractCatalogTest(unittest.TestCase):
 class MappingAndAdapterTest(unittest.TestCase):
     EVENT = {
         "event": {"id": "e1", "type": "demo"},
-        "source": {"channel_id": 0},
+        "source": {"channel_id": 0, "image_channel_ids": [0, 2]},
         "fields": {"score": 0.9},
         "media": {"annotated_image": "/tmp/image.jpg"},
     }
@@ -85,6 +85,12 @@ class MappingAndAdapterTest(unittest.TestCase):
         ], preview=True)
         self.assertEqual(parts["query"]["kind"], "demo")
         self.assertEqual(parts["body"]["score"], 0.9)
+
+    def test_mapping_preserves_selected_image_channel_list(self):
+        parts = mapped_parts(self.EVENT, [{
+            "source": "source.image_channel_ids", "target": "imageChannels", "location": "body",
+        }], preview=True)
+        self.assertEqual(parts["body"]["imageChannels"], [0, 2])
 
     def test_http_preview_combines_base_url_and_contract_path(self):
         adapter = HttpAdapter({"base_url": "http://server.example/base", "headers": {}})

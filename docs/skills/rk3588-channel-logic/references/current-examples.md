@@ -18,7 +18,9 @@
 | `logic_course_10` | 空骨架 | 标签描述吊钩案例，但当前没有案例实现 |
 | `logic_course_gpio` | 检测标签触发 GPIO 输出 | 涉及真实硬件电平，先核对引脚和有效电平 |
 | `logic_dify` | Dify 周期截图和自定义变量 | 当前较完整的周期事件、JSON 字段、模板示例 |
-| `logic_global_input_demo` | 发布 `target_count/local_alarm/risk_ratio` | 是当前全局聚合 demo 的上游 |
+| `logic_roi_person_count_demo` | 发布 ROI 内 `person_count` | 是当前 `global_person_count_alarm_demo` 的上游 |
+| `logic_crane_motion`、`logic_crane_hook` | 发布行车运动与吊钩状态 | 行车全局控制器输入，依赖对应模型标签和参数 |
+| `logic_crane_intrusion`、`logic_crane_helmet` | 发布入侵与安全帽状态 | 行车全局控制器输入，涉及业务 ROI/状态机 |
 | `logic_relay` | Action 切换继电器 | 有真实 GPIO 副作用 |
 
 当前没有注册 `logic_path_sop`、`logic_periodic_snapshot_demo` 或 `logic_upload_teach`。Web 编辑器中

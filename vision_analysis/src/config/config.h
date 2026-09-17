@@ -114,13 +114,13 @@ struct GlobalLogicConfig
     bool enable = false;                     /* 是否启用 */
     std::string logic = "global_default";    /* 逻辑名称 */
     std::vector<int> channels;               /* Web 画布连入的通道列表；空表示没有画布输入 */
-    int poll_interval_ms = 100;              /* 轮询间隔 (毫秒) */
+    int poll_interval_ms = 100;              /* 无通道更新时的兜底运行间隔 (毫秒) */
     /* 全局逻辑模块专有参数：由 global_modules/<name>/logic.json 统一定义和校验。 */
     std::string logic_parameters_json = "{}";
     /* 与 ChannelConfig 完全相同的统一事件上报配置，由画布上的上报节点生成。 */
     std::string report_policy_json = "{}";
     std::string report_parameters_json = "{}";
-    /* 默认事件/单通道图片来源；启用事件视频时也是唯一预录来源且必须明确设置。 */
+    /* 事件视频的唯一预录来源；启用视频上报时必须明确设置。 */
     int media_source_channel_id = -1;
     EventVideoRuntimeConfig event_video;
 };

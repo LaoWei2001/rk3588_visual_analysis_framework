@@ -120,11 +120,15 @@ void enqueue_action(const LogicAction &action, int channel_id)
 
 void enqueue_global_action(const LogicAction &action, const std::string &instance_id)
 {
-    std::lock_guard<std::mutex> lock(g_global_action_mutex);
-    auto &queue = g_global_action_queues[instance_id];
-    if (static_cast<int>(queue.size()) >= kMaxQueuePerChannel)
-        queue.pop_front();
-    queue.push_back(action);
+    {
+        std::lock_guard<std::mutex> lock(g_global_action_mutex);
+        auto &queue = g_global_action_queues[instance_id];
+        if (static_cast<int>(queue.size()) >= kMaxQueuePerChannel)
+            queue.pop_front();
+        queue.push_back(action);
+    }
+    /* 全局动作和通道发布共用低延迟唤醒；调用方不再等待兜底周期。 */
+    publication_signal_notify();
 }
 
 void handle_client(int client_fd)

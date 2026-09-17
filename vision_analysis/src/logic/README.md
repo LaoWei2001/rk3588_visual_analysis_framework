@@ -130,12 +130,22 @@ CMake 编译（包括 `build.sh --debug`）会生成并编译嵌入式能力清�
 并自动排除尚未发布、离线或长时间没有更新的输入；业务模块不需要计算或配置数据年龄。
 只有确实需要版本对齐或媒体快照的高级逻辑才使用 `channel()` 等原始快照接口。
 
+调度器在任一通道发布新状态时立即唤醒全局 logic；`poll_interval_ms` 只是在没有新状态时
+保证定时业务继续运行的兜底周期，不再构成通道事件的额外轮询延迟。全局事件若要让 Web
+选择“本次触发告警的通道”，只需填写 `EventRequest.evidence_channel_ids`；未填写的旧模块
+继续按现有图片来源规则工作。
+
+因此回调不是固定周期：不要用 `tick_id × poll_interval_ms` 或调用次数计时，应使用
+`gctx->timestamp_ms`/`gctx->dt_ms`。多次快速发布可以合并为一次最新状态调度，不能把
+`outputs` 当作无损事件队列；同一实例不会并发重入，但业务回调必须有限时且不得阻塞联网。
+调度器保留 5 ms 的最小分发间隔，避免高帧率多通道持续抢占 CPU。
+
 全局模块清单和参数表会与通道模块一起聚合进 `logics.json`。Web 直接读取当前 App 的
 `global_logics`，不维护全局 logic 硬编码列表。每个全局实例使用稳定 `instance_id`；参数
 热更新遵守 Schema 的 `preserve_state`、`reset_state`、`restart_required`，只影响发生变化的实例。
 
-画布配置两路视频、发布通道变量、在全局节点聚合并复用统一上报链路的完整示例，见
-`modules/logic_global_input_demo/` 和 `global_modules/global_channel_aggregate_demo/`。
+画布配置多路视频、发布通道人数、在全局节点聚合并复用统一上报链路的当前示例，见
+`modules/logic_roi_person_count_demo/` 和 `global_modules/global_person_count_alarm_demo/`。
 
 ## 框架与业务边界
 

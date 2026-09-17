@@ -11,7 +11,7 @@
 | `unix_ms` | 当前 tick epoch 毫秒 |
 | `dt_ms` | 与上一 tick 的实际间隔；首 tick 为 0 |
 | `tick_id` | 从 0 开始的实例内 tick 序号 |
-| `effective_poll_interval_ms` | 调度器实际使用的周期，至少 10 ms |
+| `effective_poll_interval_ms` | 无通道更新时采用的兜底周期，至少 10 ms；不是固定回调周期 |
 | `runtime_generation` | 采样时不可变运行配置的 generation |
 | `state` | 每个 `instance_id` 一份的 `shared_ptr<void>*` |
 | `logic_parameters` | 已按全局模块 Schema 解析的参数 |
@@ -20,7 +20,9 @@
 
 ## 推荐业务输入 `ChannelInput`
 
-`gctx->inputs()` 返回本 tick 固定的有效输入列表。每个 `ChannelInput` 提供：
+`gctx->inputs()` 返回本 tick 固定的有效输入列表。偏 C 写法可以改用 `input_count()` 获取数量，
+再通过 `input_at(index)` 取得只读 `ChannelInput*`，从而使用普通下标 `for` 循环。每个
+`ChannelInput` 提供：
 
 - 身份/帧：`channel_id()`、`frame_id()`；
 - 尺寸/运行：`src_width()`、`src_height()`、`infer_enabled()`、`logic_name()`；
@@ -40,7 +42,7 @@
 - `has_publication == true`；
 - `online_state == CH_ONLINE`；
 - `publication_age_ms >= 0`；
-- age 不超过 `max(2000 ms, 3 × effective_poll_interval_ms)`。
+- age 不超过 `max(2000 ms, 3 × effective_poll_interval_ms)`，其中后者是兜底周期。
 
 这套过滤是运行时健康策略。若业务需要比自动阈值更严格的同步或新鲜度，使用下面的原始快照并
 显式判断。
@@ -56,7 +58,7 @@
 - `published_steady_ms`。
 
 可用 `has_updates()`、`channel_update(id)`、`channel_updated(id)`、`latest_update()` 和
-`for_each_updated_channel()`。`missed_revisions > 0` 表示轮询期间出现多个发布版本，但快照只保留
+`for_each_updated_channel()`。`missed_revisions > 0` 表示两次实际分发之间出现多个发布版本，但快照只保留
 最新状态；不能把瞬时 outputs 当作无损事件队列。
 
 不要对所有全局规则无条件 `if (!has_updates()) return`。超时、断流复位、周期事件仍需在没有新
@@ -81,9 +83,19 @@
 
 ## 调度与状态
 
-每个启用实例启动一个 pthread。每 tick 的顺序是：采样通道 → 构造 ready inputs/updates → 处理
-排队 Action → 调用全局 logic → 等待剩余周期。回调超时不会并发重入同实例，而会直接拉长实际
-tick 间隔，因此业务代码必须有限时且不得阻塞联网。
+每个启用实例启动一个 pthread，调度同时包含两条路径：
+
+1. 任一通道提交新业务状态时递增全局发布序号并广播条件变量，全局实例立即醒来；
+2. 没有新发布时，最多等待 `effective_poll_interval_ms` 后兜底运行一次，使超时、复位和周期任务继续推进。
+
+每次分发的顺序是：采样通道 → 构造 ready inputs/updates → 处理排队 Action → 调用全局 logic →
+等待新发布或兜底超时。调度器在分发之间保留至少 5 ms，避免高帧率、多通道同时发布时持续抢占
+CPU。线程在采样前记录全局发布序号；如果取快照或执行回调期间又有通道发布，后续等待会立即
+返回，不会因错过条件变量通知而延迟到兜底周期。
+
+这意味着 `dt_ms` 是两次真实回调的间隔，可能远小于或偶尔大于兜底周期。不要用 `tick_id`、
+调用次数或 `poll_interval_ms` 计时；连续多次发布也可能被合并为一次最新状态回调。回调超时不会
+并发重入同一实例，而会直接推迟后续处理，因此业务代码必须有限时且不得阻塞联网。
 
 热重载按 `instance_id` 精确替换变化实例。状态保留条件是 logic、channels 不变且参数变更策略允许
 保留；report policy、poll 等其他字段即使变化也会重建实例，但在上述条件满足时状态仍可保留。

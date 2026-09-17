@@ -1,0 +1,37 @@
+{
+  "label": "测试：多通道人数告警",
+  "report_templates": [
+    "report_templates/http_person_count_alarm.json"
+  ],
+  "event_types": [
+    {
+      "id": "person_count_alarm",
+      "label": "多通道人数告警"
+    }
+  ],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "alarm_threshold": {
+        "type": "integer",
+        "title": "总人数报警阈值",
+        "minimum": 1,
+        "default": 2,
+        "x-hot-reload": "preserve_state"
+      }
+    }
+  },
+  "report_fields": [
+    {
+      "key": "total_person_count",
+      "type": "number",
+      "label": "总人数"
+    },
+    {
+      "key": "alarm_threshold",
+      "type": "number",
+      "label": "报警阈值"
+    }
+  ]
+}

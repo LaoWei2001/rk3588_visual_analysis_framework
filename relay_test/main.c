@@ -1,3 +1,20 @@
+/*
+ * Copyright (C) 2026 JNU IOT C301 Sunny_Wei, all rights reserved.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 #define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
@@ -13,11 +30,10 @@ static void usage(const char *program)
 {
     fprintf(stderr,
             "用法：\n"
-            "  %s                         切换默认继电器 GPIO6_A2\n"
-            "  %s set <0|1|low|high>      明确设置默认继电器\n"
+            "  %s output <0|1|low|high>  设置默认继电器输出\n"
             "  %s get                     读取默认继电器\n"
-            "  %s --pin GPIOx_Yz set <值> 测试其他板卡上的继电器引脚\n",
-            program, program, program, program);
+            "  %s --pin GPIOx_Yz output <值> 测试其他板卡上的继电器引脚\n",
+            program, program, program);
 }
 
 int main(int argc, char **argv)
@@ -29,7 +45,7 @@ int main(int argc, char **argv)
                               ? override : INSTALLED_GPIOCTL;
     int has_explicit_pin = argc > 2 && strcmp(argv[1], "--pin") == 0;
     int extra_arguments = has_explicit_pin ? 0 : 2;
-    /* argv[0] + 可选的 --pin/PIN + 原参数或默认 toggle + 结尾 NULL。 */
+    /* argv[0] + 可选的 --pin/PIN + 原参数 + 结尾 NULL。 */
     size_t forwarded_capacity = (size_t)argc + (size_t)extra_arguments + 2U;
     char **forwarded;
     int output = 0;
@@ -39,6 +55,11 @@ int main(int argc, char **argv)
     {
         usage(argv[0]);
         return 0;
+    }
+    if (argc == 1)
+    {
+        usage(argv[0]);
+        return 2;
     }
 
     forwarded = calloc(forwarded_capacity, sizeof(*forwarded));
@@ -53,15 +74,8 @@ int main(int argc, char **argv)
         forwarded[output++] = "--pin";
         forwarded[output++] = DEFAULT_RELAY_PIN;
     }
-    if (argc == 1)
-    {
-        forwarded[output++] = "toggle";
-    }
-    else
-    {
-        for (int index = 1; index < argc; index++)
-            forwarded[output++] = argv[index];
-    }
+    for (int index = 1; index < argc; index++)
+        forwarded[output++] = argv[index];
     forwarded[output] = NULL;
 
     execv(gpioctl, forwarded);

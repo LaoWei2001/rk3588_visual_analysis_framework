@@ -45,7 +45,8 @@ GStreamer capturer/appsink
       └─ 事件视频源帧环形缓冲（仅配置需要视频时）
 
 channel publication（frame/results/outputs/draw/state 元信息）
-  → global logic 各实例独立轮询
+  → 发布序号递增并唤醒 global logic 各实例
+  → 无新发布时按 poll_interval_ms 兜底运行
   → report_event → 本地异步事件/媒体 → Python 上传服务
 ```
 

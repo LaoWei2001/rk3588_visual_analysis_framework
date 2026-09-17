@@ -1,5 +1,30 @@
 #!/usr/bin/env bash
 # 在有网 ARM64 开发机上生成可直接由 APT 安装的项目环境与 Web 控制台离线仓库。
+#
+# 用法（在项目根目录执行）：
+#
+#   1. 完整离线包：适用于全新设备、依赖变化或正式发布
+#      bash offline_install_env_debian/create_bundle.sh --full
+#
+#      不带参数也等价于 --full：
+#      bash offline_install_env_debian/create_bundle.sh
+#
+#      输出目录：offline_install_env_debian/output/full-bundle
+#      目标机安装：cd /userdata/full-bundle && sudo bash install_offline.sh
+#
+#   2. 快速源码更新包：适用于设备已安装完整包且只修改项目源码
+#      bash offline_install_env_debian/create_bundle.sh --source-only
+#
+#      简写：bash offline_install_env_debian/create_bundle.sh source
+#      输出目录：offline_install_env_debian/output/source-update
+#      目标机安装：cd /userdata/source-update && sudo bash install_source_update.sh
+#
+#      快速模式不编译 C/C++、不构建前端、不刷新 APT、不下载依赖；如果
+#      requirements、前端锁文件、APT 依赖清单或固定 RKNN 文件发生变化，
+#      脚本会拒绝生成并提示改用 --full。
+#
+#   3. 查看帮助
+#      bash offline_install_env_debian/create_bundle.sh --help
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,6 +44,16 @@ FINAL_BUNDLE_DIR=""
 REUSE_BUNDLE_DIR=""
 LEGACY_BUNDLE_DIR="$OUTPUT_DIR/bundle"
 BUNDLE_NAME="full-bundle"
+BUNDLE_FORMAT=11
+
+# 完整离线包必须携带的项目管理与 GPIO 子系统契约。这里在开始下载前检查，
+# 避免耗时制包结束后才发现源码不完整。
+PLATFORM_MANAGER_REL="install.sh"
+GPIO_SERVICE_INSTALLER_REL="service/gpio_state/install.sh"
+GPIO_CONTROL_UNIT_REL="service/gpio_state/rk3588-gpio-control.service"
+GPIO_RESTORE_UNIT_REL="service/gpio_state/rk3588-gpio-restore.service"
+GPIOCTL_INSTALL_PATH="/usr/local/bin/rk3588-gpioctl"
+GPIO_DAEMON_INSTALL_PATH="/usr/local/sbin/rk3588-gpio-daemon"
 
 WANT_BUILD=true
 STAGE_DIR=""
@@ -26,22 +61,41 @@ APP_BUILD_DIR=""
 BUILD_SUCCEEDED=false
 
 usage() {
-    printf '用法：bash %s/create_bundle.sh\n' "$ENV_DISPLAY_PATH"
+    printf '用法：bash %s/create_bundle.sh [--full | --source-only]\n' "$ENV_DISPLAY_PATH"
     cat <<'EOF'
 
-无需参数。脚本会自动准备联网 Debian 制作机、刷新依赖、临时编译并识别
-项目依赖，最后固定生成 output/full-bundle 完整离线包。
+不带参数或使用 --full：准备联网 Debian 制作机、刷新依赖、执行干净编译并
+生成 output/full-bundle，适用于全新设备和依赖发生变化时。
+
+使用 --source-only：不编译、不联网，只生成 output/source-update，适用于
+已经安装过完整包且只修改了项目源码的设备。
 
 少数无法自动识别的依赖，请直接逐行写入 extra-runtime-packages.txt 或
 extra-build-packages.txt，然后重新运行本脚本。
 EOF
 }
 
-[ "$#" -eq 0 ] || {
-    echo "[错误] create_bundle.sh 无需命令行参数。" >&2
-    usage >&2
-    exit 2
-}
+case "${1:-}" in
+    --source-only|source-only|source)
+        [ "$#" -eq 1 ] \
+            || { echo "[错误] --source-only 不接受额外参数。" >&2; exit 2; }
+        exec bash "$SCRIPT_DIR/create_source_update.sh"
+        ;;
+    --full|full)
+        shift
+        ;;
+    -h|--help|help)
+        usage
+        exit 0
+        ;;
+    "") ;;
+    *)
+        echo "[错误] 未知参数: $1" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
+[ "$#" -eq 0 ] || { echo "[错误] 完整制包不接受额外参数。" >&2; exit 2; }
 FINAL_BUNDLE_DIR="$OUTPUT_DIR/$BUNDLE_NAME"
 
 # shellcheck source=dependency_manifest.sh
@@ -65,6 +119,36 @@ done
 [ -x "$DETECTOR" ] || chmod +x "$DETECTOR"
 [ -f "$INSTALLER_TEMPLATE" ] \
     || { echo "[错误] 缺少安装器模板: $INSTALLER_TEMPLATE" >&2; exit 1; }
+
+required_project_files=(
+    "$PLATFORM_MANAGER_REL"
+    "offline_install_env_debian/create_source_update.sh"
+    "offline_install_env_debian/templates/install_source_update.sh"
+    "web_console/install.sh"
+    "web_console/backend/requirements.txt"
+    "web_console/frontend/package-lock.json"
+    "gpio_test/CMakeLists.txt"
+    "gpio_test/build.sh"
+    "gpio_test/main.c"
+    "relay_test/CMakeLists.txt"
+    "relay_test/build.sh"
+    "relay_test/main.c"
+    "vision_analysis/src/gpio/gpio.cpp"
+    "vision_analysis/src/gpio/gpio.h"
+    "$GPIO_SERVICE_INSTALLER_REL"
+    "service/gpio_state/CMakeLists.txt"
+    "service/gpio_state/gpio_control_daemon.c"
+    "$GPIO_CONTROL_UNIT_REL"
+    "$GPIO_RESTORE_UNIT_REL"
+)
+for required_project_file in "${required_project_files[@]}"; do
+    [ -f "$PROJECT_ROOT/$required_project_file" ] \
+        || { echo "[错误] 项目缺少离线发布必需文件: $required_project_file" >&2; exit 1; }
+done
+[ -x "$PROJECT_ROOT/$PLATFORM_MANAGER_REL" ] \
+    || { echo "[错误] 统一安装入口没有执行权限: $PLATFORM_MANAGER_REL" >&2; exit 1; }
+[ -x "$PROJECT_ROOT/$GPIO_SERVICE_INSTALLER_REL" ] \
+    || { echo "[错误] GPIO 服务安装器没有执行权限: $GPIO_SERVICE_INSTALLER_REL" >&2; exit 1; }
 
 MACHINE_ARCH="$(uname -m)"
 DEB_ARCH="$(dpkg --print-architecture)"
@@ -885,8 +969,15 @@ if [ "$WANT_BUILD" = true ]; then
             while IFS= read -r -d '' source_path; do
                 [ "$source_path" = 'vision_analysis/vision_analysis' ] && continue
                 [ "$source_path" = 'first_net_config/first_net_config' ] && continue
+                case "$source_path" in
+                    vision_analysis/.offline-deb-app-*) continue ;;
+                    vision_analysis/.offline-deb-app-*/*) continue ;;
+                esac
                 [ -e "$source_path" ] && printf '%s\0' "$source_path"
             done < <(git ls-files -z --cached --others --exclude-standard)
+            # 删除的已跟踪文件会让最后一次 [ -e ] 返回 1；显式归零，避免
+            # pipefail 把正常的“跳过已删除文件”误判为制包失败。
+            true
         ) | rsync -a --from0 --files-from=- "$PROJECT_ROOT/" "$SOURCE_TREE/"
     else
         rsync -a \
@@ -894,6 +985,7 @@ if [ "$WANT_BUILD" = true ]; then
             --exclude='.pytest_cache/' --exclude='__pycache__/' --exclude='*.pyc' \
             --exclude='build/' --exclude='dist/' --exclude='node_modules/' \
             --exclude='offline_install_env_*/output/' \
+            --exclude='vision_analysis/.offline-deb-app-*' \
             --exclude='vision_analysis/vision_analysis' \
             --exclude='first_net_config/first_net_config' \
             --exclude='*.mp4' --exclude='*.avi' --exclude='*.mkv' --exclude='*.docx' \
@@ -903,6 +995,14 @@ if [ "$WANT_BUILD" = true ]; then
         || { echo "[错误] 源码包缺少 vision_analysis/CMakeLists.txt。" >&2; exit 1; }
     [ -f "$SOURCE_TREE/vision_analysis/build.sh" ] \
         || { echo "[错误] 源码包缺少 vision_analysis/build.sh。" >&2; exit 1; }
+    for required_project_file in "${required_project_files[@]}"; do
+        [ -f "$SOURCE_TREE/$required_project_file" ] \
+            || { echo "[错误] 源码包遗漏发布必需文件: $required_project_file" >&2; exit 1; }
+    done
+    [ -x "$SOURCE_TREE/$PLATFORM_MANAGER_REL" ] \
+        || { echo "[错误] 源码包中的统一安装入口不可执行。" >&2; exit 1; }
+    [ -x "$SOURCE_TREE/$GPIO_SERVICE_INSTALLER_REL" ] \
+        || { echo "[错误] 源码包中的 GPIO 服务安装器不可执行。" >&2; exit 1; }
     [ -d "$FRONTEND_WORK/node_modules" ] \
         || { echo "[错误] 前端依赖目录 node_modules 不存在。" >&2; exit 1; }
     tar -C "$SOURCE_TREE" -czf "$SOURCE_SHARE/source.tar.gz" .
@@ -915,16 +1015,16 @@ if [ "$WANT_BUILD" = true ]; then
 实际目录: $SOURCE_INSTALL_PATH
 固定入口: /userdata/rk3588_visual_analysis_framework
 统一管理命令:
-  cd /userdata/rk3588_visual_analysis_framework
+  cd $SOURCE_INSTALL_PATH
   ./install.sh status
   sudo ./install.sh upgrade offline
 
 编译命令:
-  cd /userdata/rk3588_visual_analysis_framework/vision_analysis
+  cd $SOURCE_INSTALL_PATH/vision_analysis
   ./build.sh dist
 
 前端构建命令（Node.js、npm 和 node_modules 已离线提供）:
-  cd /userdata/rk3588_visual_analysis_framework/web_console/frontend
+  cd $SOURCE_INSTALL_PATH/web_console/frontend
   PATH=$NODE_TOOLCHAIN_ROOT/bin:\$PATH npm run build
 
 升级会创建新的版本目录并更新固定入口，不会删除旧版本目录中的板端修改。
@@ -1027,7 +1127,7 @@ echo ">>> [7/8] 生成本地 APT 仓库..."
     gzip -9c Packages > Packages.gz
 )
 cat > "$BUNDLE_DIR/BUNDLE_INFO" <<EOF
-bundle_format=10
+bundle_format=$BUNDLE_FORMAT
 dependency_schema=$OFFLINE_DEPENDENCY_SCHEMA
 created_at=$STAMP
 os_id=$OS_ID
@@ -1047,6 +1147,12 @@ source_package=$SOURCE_PACKAGE
 source_install_path=$SOURCE_INSTALL_PATH
 node_toolchain_package=$NODE_TOOLCHAIN_PACKAGE
 node_toolchain_root=$NODE_TOOLCHAIN_ROOT
+platform_manager_rel=$PLATFORM_MANAGER_REL
+gpio_service_installer_rel=$GPIO_SERVICE_INSTALLER_REL
+gpio_control_unit=rk3588-gpio-control.service
+gpio_restore_unit=rk3588-gpio-restore.service
+gpioctl_path=$GPIOCTL_INSTALL_PATH
+gpio_daemon_path=$GPIO_DAEMON_INSTALL_PATH
 EOF
 cp "$INSTALLER_TEMPLATE" "$BUNDLE_DIR/install_offline.sh"
 chmod +x "$BUNDLE_DIR/install_offline.sh"

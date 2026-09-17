@@ -41,6 +41,34 @@ import ConfigPreviewPanel from '../components/ConfigPreviewPanel'
 import AppIntegrationModal from '../components/AppIntegrationModal'
 import './EditorPage.css'
 
+const RIGHT_PANEL_STORAGE_KEY = 'rk3588.editor.rightPanelWidth'
+const BOTTOM_PANEL_STORAGE_KEY = 'rk3588.editor.bottomPanelHeight'
+const RIGHT_PANEL_DEFAULT = 360
+const RIGHT_PANEL_MIN = 260
+const RIGHT_PANEL_MAX = 900
+const BOTTOM_PANEL_DEFAULT = 220
+const BOTTOM_PANEL_MIN = 150
+const BOTTOM_PANEL_MAX = 900
+
+function storedPanelSize(key: string, fallback: number, min: number, max: number): number {
+  try {
+    const value = Number(window.localStorage.getItem(key))
+    return Number.isFinite(value) && value > 0
+      ? Math.min(max, Math.max(min, value))
+      : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function savePanelSize(key: string, value: number) {
+  try {
+    window.localStorage.setItem(key, String(Math.round(value)))
+  } catch {
+    // 隐私模式禁用 localStorage 时仍允许本次页面正常拖拽。
+  }
+}
+
 // ── Node types (defined outside component → stable reference) ──
 const nodeTypes = {
   stream: StreamNode,
@@ -133,6 +161,63 @@ const channelInputForLogic = (
   }
 }
 
+type ReportConfigPreview = { json: string; path: string }
+
+const reportConfigPreviewForNode = (
+  reportNode: Node,
+  nodes: Node[],
+  edges: Edge[],
+  config: Record<string, unknown>,
+): ReportConfigPreview | null => {
+  const incoming = edges.find(edge =>
+    edge.target === reportNode.id && edge.targetHandle === 'report-in')
+  const source = incoming ? nodes.find(node => node.id === incoming.source) : null
+  if (!source) return null
+
+  const globalConfig = config.global && typeof config.global === 'object'
+    && !Array.isArray(config.global)
+    ? config.global as Record<string, unknown> : {}
+
+  if (source.type === 'globalLogic') {
+    const instanceId = String((source.data as Record<string, unknown>).instance_id ?? '')
+    const entries = Array.isArray(globalConfig.global_logics)
+      ? globalConfig.global_logics as Record<string, unknown>[] : []
+    const entry = entries.find(item => String(item.instance_id ?? '') === instanceId)
+    if (!entry) return null
+
+    const fragment: Record<string, unknown> = {
+      instance_id: entry.instance_id,
+      logic: entry.logic,
+      report_policy: entry.report_policy,
+      report_parameters: entry.report_parameters,
+    }
+    for (const key of ['media_source_channel_id', 'event_video']) {
+      if (entry[key] != null) fragment[key] = entry[key]
+    }
+    return {
+      json: JSON.stringify(fragment, null, 2),
+      path: `global.global_logics[instance_id="${instanceId}"]`,
+    }
+  }
+
+  if (source.type !== 'logic' && source.type !== 'sop') return null
+  const sourceInput = channelInputForLogic(source, nodes, edges)
+  if (!sourceInput) return null
+  const channels = Array.isArray(config.channels)
+    ? config.channels as Record<string, unknown>[] : []
+  const entry = channels.find(item => Number(item.id) === sourceInput.channelId)
+  if (!entry) return null
+  return {
+    json: JSON.stringify({
+      id: entry.id,
+      logic: entry.logic,
+      report_policy: entry.report_policy,
+      report_parameters: entry.report_parameters,
+    }, null, 2),
+    path: `channels[id=${sourceInput.channelId}]`,
+  }
+}
+
 // 'assets/config.json' → 'config.json'
 const cfgBase = (p: string): string => p.split('/').pop() ?? p
 // 由当前文件名推一个「另存为」默认名：config.json → config_copy.json
@@ -178,6 +263,17 @@ export default function EditorPage() {
   const pendingFitRef  = useRef(false)
   // 浏览器本地 JSON 文件选择器；隐藏 input 由工具栏按钮触发。
   const localConfigInputRef = useRef<HTMLInputElement | null>(null)
+  const editorMainRef = useRef<HTMLDivElement | null>(null)
+  const editorPageRef = useRef<HTMLDivElement | null>(null)
+  const panelResizeRef = useRef<{
+    axis: 'right' | 'bottom'
+    pointerId: number
+    startPointer: number
+    startSize: number
+    latestSize: number
+    previousCursor: string
+    previousUserSelect: string
+  } | null>(null)
 
   // Keep refs to the latest nodes/edges (used by paste / connect-validation / save)
   const nodesRef       = useRef<Node[]>([])
@@ -207,6 +303,10 @@ export default function EditorPage() {
   const [showImport,     setShowImport]    = useState(false)
   const [leavePrompt,    setLeavePrompt]    = useState(false)   // 未保存退出时的「是否保存配置」弹窗
   const [showIntegrations, setShowIntegrations] = useState(false)
+  const [rightPanelWidth, setRightPanelWidth] = useState(() =>
+    storedPanelSize(RIGHT_PANEL_STORAGE_KEY, RIGHT_PANEL_DEFAULT, RIGHT_PANEL_MIN, RIGHT_PANEL_MAX))
+  const [bottomPanelHeight, setBottomPanelHeight] = useState(() =>
+    storedPanelSize(BOTTOM_PANEL_STORAGE_KEY, BOTTOM_PANEL_DEFAULT, BOTTOM_PANEL_MIN, BOTTOM_PANEL_MAX))
   // 当前正在编辑/将保存到的配置文件（相对 app 目录）。导入/另存为后会切到对应文件，
   // 之后「保存」写到这里 —— 这样可以在副本上改而不动 config.json。
   const [currentFile,    setCurrentFile]   = useState('assets/config.json')
@@ -216,6 +316,108 @@ export default function EditorPage() {
   const loadConsole = useConsoleStore(s => s.load)
   // SOP 流程弹窗打开时, 暂停主画布的 Delete 删节点(避免误删整个 SOP 节点)
   const sopFlowOpen = useSopUiStore(s => s.flowOpen)
+
+  useEffect(() => {
+    const fitPanelSizes = () => {
+      const rightMax = Math.min(RIGHT_PANEL_MAX, Math.max(RIGHT_PANEL_MIN,
+        (editorMainRef.current?.clientWidth ?? window.innerWidth) - 320))
+      const bottomMax = Math.min(BOTTOM_PANEL_MAX, Math.max(BOTTOM_PANEL_MIN,
+        (editorPageRef.current?.clientHeight ?? window.innerHeight) - 220))
+      setRightPanelWidth(value => Math.min(value, rightMax))
+      setBottomPanelHeight(value => Math.min(value, bottomMax))
+    }
+    fitPanelSizes()
+    window.addEventListener('resize', fitPanelSizes)
+    return () => {
+      window.removeEventListener('resize', fitPanelSizes)
+      const drag = panelResizeRef.current
+      if (drag) {
+        document.body.style.cursor = drag.previousCursor
+        document.body.style.userSelect = drag.previousUserSelect
+        panelResizeRef.current = null
+      }
+    }
+  }, [])
+
+  const beginPanelResize = useCallback((
+    axis: 'right' | 'bottom',
+    event: React.PointerEvent<HTMLDivElement>,
+  ) => {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const isRight = axis === 'right'
+    panelResizeRef.current = {
+      axis,
+      pointerId: event.pointerId,
+      startPointer: isRight ? event.clientX : event.clientY,
+      startSize: isRight ? rightPanelWidth : bottomPanelHeight,
+      latestSize: isRight ? rightPanelWidth : bottomPanelHeight,
+      previousCursor: document.body.style.cursor,
+      previousUserSelect: document.body.style.userSelect,
+    }
+    document.body.style.cursor = isRight ? 'col-resize' : 'row-resize'
+    document.body.style.userSelect = 'none'
+  }, [rightPanelWidth, bottomPanelHeight])
+
+  const movePanelResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = panelResizeRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const isRight = drag.axis === 'right'
+    const pointer = isRight ? event.clientX : event.clientY
+    const requested = drag.startSize + drag.startPointer - pointer
+    const available = isRight
+      ? (editorMainRef.current?.clientWidth ?? window.innerWidth) - 320
+      : (editorPageRef.current?.clientHeight ?? window.innerHeight) - 220
+    const min = isRight ? RIGHT_PANEL_MIN : BOTTOM_PANEL_MIN
+    const hardMax = isRight ? RIGHT_PANEL_MAX : BOTTOM_PANEL_MAX
+    const next = Math.min(Math.max(min, available), hardMax, Math.max(min, requested))
+    drag.latestSize = next
+    if (isRight) setRightPanelWidth(next)
+    else setBottomPanelHeight(next)
+  }, [])
+
+  const endPanelResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = panelResizeRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    savePanelSize(
+      drag.axis === 'right' ? RIGHT_PANEL_STORAGE_KEY : BOTTOM_PANEL_STORAGE_KEY,
+      drag.latestSize,
+    )
+    document.body.style.cursor = drag.previousCursor
+    document.body.style.userSelect = drag.previousUserSelect
+    panelResizeRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }, [])
+
+  const resizePanelByKeyboard = useCallback((
+    axis: 'right' | 'bottom',
+    event: React.KeyboardEvent<HTMLDivElement>,
+  ) => {
+    const relevant = axis === 'right'
+      ? event.key === 'ArrowLeft' || event.key === 'ArrowRight'
+      : event.key === 'ArrowUp' || event.key === 'ArrowDown'
+    if (!relevant) return
+    event.preventDefault()
+    const grow = event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+    const step = event.shiftKey ? 50 : 10
+    if (axis === 'right') {
+      const available = (editorMainRef.current?.clientWidth ?? window.innerWidth) - 320
+      const max = Math.min(RIGHT_PANEL_MAX, Math.max(RIGHT_PANEL_MIN, available))
+      const next = Math.min(max, Math.max(RIGHT_PANEL_MIN,
+        rightPanelWidth + (grow ? step : -step)))
+      setRightPanelWidth(next)
+      savePanelSize(RIGHT_PANEL_STORAGE_KEY, next)
+    } else {
+      const available = (editorPageRef.current?.clientHeight ?? window.innerHeight) - 220
+      const max = Math.min(BOTTOM_PANEL_MAX, Math.max(BOTTOM_PANEL_MIN, available))
+      const next = Math.min(max, Math.max(BOTTOM_PANEL_MIN,
+        bottomPanelHeight + (grow ? step : -step)))
+      setBottomPanelHeight(next)
+      savePanelSize(BOTTOM_PANEL_STORAGE_KEY, next)
+    }
+  }, [rightPanelWidth, bottomPanelHeight])
 
   // ── 撤销/恢复 历史栈 (Ctrl+Z / Ctrl+Y) ──
   const gsRef   = useRef(globalSettings)
@@ -259,11 +461,18 @@ export default function EditorPage() {
       .sort((a, b) => a - b)
   }, [selectedNode, channelIds, nodes, edges])
 
-  // 与“保存”共用同一个序列化函数：这里看到的就是将写入当前配置文件的 JSON。
-  const previewJson = useMemo(() => {
+  // 与“保存”共用同一个序列化函数：完整预览和节点片段都从这一个结果读取。
+  const previewConfig = useMemo(() => {
     const result = graphToConfig(nodes, edges, roiZones, globalSettings)
-    return result ? JSON.stringify(result.config, null, 2) : null
+    return result?.config ?? null
   }, [nodes, edges, roiZones, globalSettings])
+  const previewJson = useMemo(() =>
+    previewConfig ? JSON.stringify(previewConfig, null, 2) : null,
+  [previewConfig])
+  const selectedReportConfig = useMemo(() => {
+    if (selectedNode?.type !== 'report' || !previewConfig) return null
+    return reportConfigPreviewForNode(selectedNode, nodes, edges, previewConfig)
+  }, [selectedNode, nodes, edges, previewConfig])
 
   // ── Update node data from config panel (outside ReactFlow context) ──
   const handleUpdateNodeData = useCallback((nodeId: string, patch: Record<string, unknown>) => {
@@ -272,6 +481,7 @@ export default function EditorPage() {
         .map(edge => edge.target)
     )
     const mediaSourceTargets = new Set<string>()
+    const imageSelectionTargets = new Set<string>()
     if (Object.prototype.hasOwnProperty.call(patch, 'media_source_channel_id')) {
       const incoming = edgesRef.current.find(edge =>
         edge.target === nodeId && edge.targetHandle === 'report-in')
@@ -282,9 +492,35 @@ export default function EditorPage() {
           .forEach(edge => mediaSourceTargets.add(edge.target))
       }
     }
+    const patchedPolicy = patch.report_policy && typeof patch.report_policy === 'object'
+      && !Array.isArray(patch.report_policy)
+      ? patch.report_policy as Record<string, unknown> : null
+    if (patchedPolicy && Object.prototype.hasOwnProperty.call(patchedPolicy, 'image_selection')) {
+      const incoming = edgesRef.current.find(edge =>
+        edge.target === nodeId && edge.targetHandle === 'report-in')
+      const source = incoming ? nodesRef.current.find(node => node.id === incoming.source) : null
+      if (source?.type === 'globalLogic') {
+        edgesRef.current
+          .filter(edge => edge.source === source.id && edge.targetHandle === 'report-in')
+          .forEach(edge => imageSelectionTargets.add(edge.target))
+      }
+    }
     setNodes(prev => prev.map(n => {
       if (n.id === nodeId || mediaSourceTargets.has(n.id))
         return { ...n, data: { ...(n.data as Record<string, unknown>), ...patch } }
+      if (imageSelectionTargets.has(n.id)) {
+        const nodeData = n.data as Record<string, unknown>
+        const nodePolicy = nodeData.report_policy && typeof nodeData.report_policy === 'object'
+          && !Array.isArray(nodeData.report_policy)
+          ? nodeData.report_policy as Record<string, unknown> : {}
+        return {
+          ...n,
+          data: {
+            ...nodeData,
+            report_policy: { ...nodePolicy, image_selection: patchedPolicy?.image_selection },
+          },
+        }
+      }
       if (reportTargets.has(n.id)) return {
         ...n,
         data: { ...(n.data as Record<string, unknown>), logic_name: String(patch.logic) },
@@ -977,6 +1213,21 @@ export default function EditorPage() {
         return null
       }
       const media = Array.isArray(delivery.media) ? delivery.media : []
+      if (data.logic_kind === 'global'
+          && (media.includes('annotated_image') || media.includes('raw_image'))) {
+        const imageSelection = policy.image_selection && typeof policy.image_selection === 'object'
+          && !Array.isArray(policy.image_selection)
+          ? policy.image_selection as Record<string, unknown> : {}
+        if (String(imageSelection.mode ?? 'connected') === 'selected') {
+          const selectedChannels = Array.isArray(imageSelection.channel_ids)
+            ? [...new Set(imageSelection.channel_ids.map(Number))] : []
+          if (selectedChannels.length === 0
+              || selectedChannels.some(channelId => !channelIds.includes(channelId))) {
+            showToast('指定告警图片来源时，请至少选择一路当前应用中的有效通道', false)
+            return null
+          }
+        }
+      }
       if (data.logic_kind === 'global' && media.includes('video')) {
         const videoChannelId = Number(data.media_source_channel_id ?? -1)
         if (!channelIds.includes(videoChannelId)) {
@@ -1072,7 +1323,7 @@ export default function EditorPage() {
   }
 
   return (
-    <div className="editor-page">
+    <div className="editor-page" ref={editorPageRef}>
       {toast && (
         <div className={`editor-toast ${toast.ok ? 'ok' : 'err'}`}>
           <span>{toast.msg}</span>
@@ -1180,7 +1431,7 @@ export default function EditorPage() {
       </div>
 
       {/* Canvas + config sidebar */}
-      <div className="editor-main">
+      <div className="editor-main" ref={editorMainRef}>
         <div
           className="flow-container"
           onDropCapture={onDrop}
@@ -1224,20 +1475,58 @@ export default function EditorPage() {
         </div>
 
         {/* Right config sidebar */}
-        <NodeConfigPanel
-          node={selectedNode}
-          onUpdate={handleUpdateNodeData}
-          channelIds={selectedReportChannelIds}
-          allChannelIds={channelIds}
-          globalInputs={selectedGlobalInputs}
-        />
+        <div className="editor-sidebar" style={{ width: rightPanelWidth }}>
+          <div
+            className="editor-panel-resizer editor-panel-resizer-right"
+            role="separator"
+            aria-label="调整右侧配置栏宽度"
+            aria-orientation="vertical"
+            aria-valuemin={RIGHT_PANEL_MIN}
+            aria-valuemax={RIGHT_PANEL_MAX}
+            aria-valuenow={Math.round(rightPanelWidth)}
+            tabIndex={0}
+            title="左右拖拽调整配置栏宽度"
+            onPointerDown={event => beginPanelResize('right', event)}
+            onPointerMove={movePanelResize}
+            onPointerUp={endPanelResize}
+            onPointerCancel={endPanelResize}
+            onLostPointerCapture={endPanelResize}
+            onKeyDown={event => resizePanelByKeyboard('right', event)}
+          />
+          <NodeConfigPanel
+            node={selectedNode}
+            onUpdate={handleUpdateNodeData}
+            channelIds={selectedReportChannelIds}
+            allChannelIds={channelIds}
+            globalInputs={selectedGlobalInputs}
+            reportConfigJson={selectedReportConfig?.json ?? null}
+            reportConfigPath={selectedReportConfig?.path ?? null}
+          />
+        </div>
       </div>
 
       {showIntegrations && appName && <AppIntegrationModal appName={appName}
         onClose={() => setShowIntegrations(false)} onToast={showToast} />}
 
       {/* Bottom area: merged global settings panel + generated config preview */}
-      <div className="editor-bottom">
+      <div
+        className="editor-panel-resizer editor-panel-resizer-bottom"
+        role="separator"
+        aria-label="调整底部栏高度"
+        aria-orientation="horizontal"
+        aria-valuemin={BOTTOM_PANEL_MIN}
+        aria-valuemax={BOTTOM_PANEL_MAX}
+        aria-valuenow={Math.round(bottomPanelHeight)}
+        tabIndex={0}
+        title="上下拖拽调整底部栏高度"
+        onPointerDown={event => beginPanelResize('bottom', event)}
+        onPointerMove={movePanelResize}
+        onPointerUp={endPanelResize}
+        onPointerCancel={endPanelResize}
+        onLostPointerCapture={endPanelResize}
+        onKeyDown={event => resizePanelByKeyboard('bottom', event)}
+      />
+      <div className="editor-bottom" style={{ height: bottomPanelHeight }}>
         <GlobalSettingsPanel settings={globalSettings} onChange={setGlobalSettings} />
         <ConfigPreviewPanel fileName={cfgBase(currentFile)} json={previewJson} />
       </div>

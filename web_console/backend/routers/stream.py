@@ -2,7 +2,7 @@
 GET /api/apps/{name}/stream — 将 App 的 H264 RTSP 拼接画面零转码封装为碎片化 MP4。
 
 数据路径：
-  FFmpeg RTSP demux → H264 stream copy → fragmented MP4 → HTTP
+  FFmpeg RTSP demux → H264 stream copy → 200ms fragmented MP4 → HTTP
 
 后端不再解码视频、不做颜色转换、也不编码 JPEG。浏览器通过 Media Source
 Extensions 直接把 fMP4 交给系统 H264 解码器，CPU、内存带宽和网络带宽都只承担
@@ -74,6 +74,10 @@ def _build_ffmpeg_args(rtsp_url: str) -> list[str]:
     DTS 重复。旧的 gst mp4mux 直播分片管线会因此生成浏览器无法解析的
     moof/mdat 偏移。FFmpeg 只做 demux/mux，-c:v copy 不解码也不重编码，
     同时为缺失的时间戳生成可单调的时间线。
+
+    不能只用 frag_keyframe：内置编码器的 GOP 约为 1 秒，MP4 muxer 会攒满
+    整个 GOP 才向 stdout 交付，浏览器因周期性断粮表现为画面一卡一卡。固定
+    200ms 切片可持续喂给 MSE；后续非关键帧切片仍属于同一连续解码时间线。
     """
     return [
         "ffmpeg",
@@ -99,7 +103,9 @@ def _build_ffmpeg_args(rtsp_url: str) -> list[str]:
         "-f",
         "mp4",
         "-movflags",
-        "frag_keyframe+empty_moov+default_base_moof",
+        "empty_moov+default_base_moof",
+        "-frag_duration",
+        "200000",
         "-flush_packets",
         "1",
         "pipe:1",

@@ -161,13 +161,79 @@
 }
 
 /* ── Canvas row: flow + config sidebar ── */
-.editor-main    { flex: 1; display: flex; overflow: hidden; }
-.flow-container { flex: 1; overflow: hidden; }
+.editor-main    { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.flow-container { flex: 1; min-width: 0; overflow: hidden; }
+
+.editor-sidebar {
+  position: relative;
+  min-width: 260px;
+  max-width: calc(100% - 320px);
+  flex-shrink: 0;
+  display: flex;
+  min-height: 0;
+}
+
+.editor-sidebar > .ncp,
+.editor-sidebar > .ncp.ncp-report {
+  width: 100%;
+  min-width: 0;
+}
+
+.editor-panel-resizer {
+  position: relative;
+  z-index: 30;
+  flex-shrink: 0;
+  outline: none;
+  touch-action: none;
+}
+
+.editor-panel-resizer::after {
+  content: '';
+  position: absolute;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.editor-panel-resizer:hover::after,
+.editor-panel-resizer:focus-visible::after,
+.editor-panel-resizer:active::after {
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.65);
+}
+
+.editor-panel-resizer-right {
+  position: absolute;
+  inset: 0 auto 0 -5px;
+  width: 10px;
+  cursor: col-resize;
+}
+
+.editor-panel-resizer-right::after {
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+}
+
+.editor-panel-resizer-bottom {
+  width: 100%;
+  height: 9px;
+  cursor: row-resize;
+  background: var(--surface);
+}
+
+.editor-panel-resizer-bottom::after {
+  top: 3px;
+  right: 0;
+  left: 0;
+  height: 2px;
+}
 
 /* ── Bottom row: merged global settings + generated config preview ── */
 .editor-bottom {
-  height: clamp(190px, 24vh, 220px);
-  min-height: 0;
+  min-height: 150px;
+  max-height: calc(100% - 220px);
   flex-shrink: 0;
   display: flex;
   overflow: hidden;

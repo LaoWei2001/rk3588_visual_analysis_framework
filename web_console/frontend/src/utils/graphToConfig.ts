@@ -9,6 +9,14 @@ import { normalizeRoiPolygon } from './roiPolygon'
 // 一个通道可有多个 ROI 区域: 区域名 + 多边形(归一化坐标)。(与 roiStore 的 Zone 同构)
 export type RoiZone = Zone
 
+function normalizedImageSelection(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const selection = value as Record<string, unknown>
+  return ['event_evidence', 'selected', 'connected'].includes(String(selection.mode ?? 'connected'))
+    ? selection
+    : { mode: 'connected' }
+}
+
 function buildStream(d: Record<string, unknown>): Record<string, unknown> {
   // src_type 必填、不再自动推断；按【显式】类型分别落字段（新建节点已带 src_type）。
   const t = getSrcType(d)
@@ -196,6 +204,9 @@ export function graphToConfig(
       item.enabled && Array.isArray(item.delivery.media) && item.delivery.media.includes('video')
     )?.policy
     if (imagePolicy?.image_overlay != null) reportPolicy.image_overlay = imagePolicy.image_overlay
+    if (imagePolicy?.image_selection != null) {
+      reportPolicy.image_selection = normalizedImageSelection(imagePolicy.image_selection)
+    }
     if (videoPolicy) {
       for (const key of ['video_overlay', 'video_pre_sec', 'video_post_sec', 'video_fps', 'merge_window_sec']) {
         if (videoPolicy[key] != null) reportPolicy[key] = videoPolicy[key]
@@ -314,6 +325,9 @@ export function graphToConfig(
         item.enabled && Array.isArray(item.delivery.media)
         && item.delivery.media.includes('video'))?.policy
       if (imagePolicy?.image_overlay != null) reportPolicy.image_overlay = imagePolicy.image_overlay
+      if (imagePolicy?.image_selection != null) {
+        reportPolicy.image_selection = normalizedImageSelection(imagePolicy.image_selection)
+      }
       if (videoPolicy) {
         for (const key of ['video_overlay', 'video_pre_sec', 'video_post_sec', 'video_fps', 'merge_window_sec']) {
           if (videoPolicy[key] != null) reportPolicy[key] = videoPolicy[key]

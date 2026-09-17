@@ -7,7 +7,7 @@ import './SystemSettingsPage.css'
 type Section = 'storage' | 'network' | 'system'
 
 const sections: Array<{ id: Section; icon: string; title: string; hint: string }> = [
-  { id: 'storage', icon: '▰', title: '存储', hint: '磁盘与事件数据' },
+  { id: 'storage', icon: '▰', title: '存储', hint: '磁盘与告警记录' },
   { id: 'network', icon: '⌁', title: '网络', hint: '网卡与 IPv4' },
   { id: 'system', icon: '⚙', title: '系统', hint: '时间与定时重启' },
 ]

@@ -8,6 +8,6 @@ cmake --build "${project_dir}/build" --parallel
 
 echo "构建完成：${project_dir}/build/rk3588-gpioctl"
 echo "兼容入口：${project_dir}/build/gpio_test"
-echo "设置低电平：sudo ${project_dir}/build/rk3588-gpioctl set 0"
+echo "输出低电平：sudo ${project_dir}/build/rk3588-gpioctl output 0"
 echo "完整部署请从项目根目录执行："
 echo "  sudo ${project_dir}/../install.sh offline"

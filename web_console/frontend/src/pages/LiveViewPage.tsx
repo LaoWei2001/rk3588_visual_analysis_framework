@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import axios from 'axios'
 import {
   fetchApps,
@@ -21,6 +21,32 @@ type RtspState = 'idle' | 'checking' | 'enabled' | 'disabled' | 'error'
 const STREAM_MAX_RETRY = 25
 const STREAM_STALL_MS = 15000
 const STREAM_INIT_LIMIT = 4 * 1024 * 1024
+const STREAM_START_BUFFER_SECONDS = 0.6
+const STREAM_TARGET_LATENCY_SECONDS = 0.75
+const STREAM_SEEK_THRESHOLD_SECONDS = 2
+const LIVE_SIDE_WIDTH_STORAGE_KEY = 'rk3588.liveView.sidePanelWidth'
+const LIVE_SIDE_WIDTH_DEFAULT = 380
+const LIVE_SIDE_WIDTH_MIN = 310
+const LIVE_SIDE_WIDTH_MAX = 900
+
+function storedSidePanelWidth(): number {
+  try {
+    const value = Number(window.localStorage.getItem(LIVE_SIDE_WIDTH_STORAGE_KEY))
+    return Number.isFinite(value) && value > 0
+      ? Math.min(LIVE_SIDE_WIDTH_MAX, Math.max(LIVE_SIDE_WIDTH_MIN, value))
+      : LIVE_SIDE_WIDTH_DEFAULT
+  } catch {
+    return LIVE_SIDE_WIDTH_DEFAULT
+  }
+}
+
+function saveSidePanelWidth(value: number) {
+  try {
+    window.localStorage.setItem(LIVE_SIDE_WIDTH_STORAGE_KEY, String(Math.round(value)))
+  } catch {
+    // 隐私模式禁用 localStorage 时仍允许本次页面正常拖拽。
+  }
+}
 
 class FatalStreamError extends Error {}
 
@@ -145,7 +171,9 @@ export default function LiveViewPage() {
   const [controls, setControls] = useState<LogicControlsResponse | null>(null)
   const [actionBusy, setActionBusy] = useState<Record<string, boolean>>({})
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
+  const [sidePanelWidth, setSidePanelWidth] = useState(storedSidePanelWidth)
 
+  const workspaceRef = useRef<HTMLDivElement>(null)
   const streamRetryRef = useRef(0)
   const streamRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const streamRetryPendingRef = useRef(false)
@@ -157,11 +185,90 @@ export default function LiveViewPage() {
   const logAutoScrollRef = useRef(true)
   const pendingLogsRef = useRef<string[]>([])
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sideResizeRef = useRef<{
+    pointerId: number
+    startX: number
+    startWidth: number
+    latestWidth: number
+    previousCursor: string
+    previousUserSelect: string
+  } | null>(null)
+
+  useEffect(() => {
+    const fitSidePanel = () => {
+      if (window.innerWidth <= 1080) return
+      const available = (workspaceRef.current?.clientWidth ?? window.innerWidth) - 420
+      const max = Math.min(LIVE_SIDE_WIDTH_MAX, Math.max(LIVE_SIDE_WIDTH_MIN, available))
+      setSidePanelWidth(value => Math.min(value, max))
+    }
+    fitSidePanel()
+    window.addEventListener('resize', fitSidePanel)
+    return () => {
+      window.removeEventListener('resize', fitSidePanel)
+      const drag = sideResizeRef.current
+      if (drag) {
+        document.body.style.cursor = drag.previousCursor
+        document.body.style.userSelect = drag.previousUserSelect
+        sideResizeRef.current = null
+      }
+    }
+  }, [])
+
+  const beginSideResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    sideResizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: sidePanelWidth,
+      latestWidth: sidePanelWidth,
+      previousCursor: document.body.style.cursor,
+      previousUserSelect: document.body.style.userSelect,
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [sidePanelWidth])
+
+  const moveSideResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = sideResizeRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const requested = drag.startWidth + drag.startX - event.clientX
+    const available = (workspaceRef.current?.clientWidth ?? window.innerWidth) - 420
+    const max = Math.min(LIVE_SIDE_WIDTH_MAX, Math.max(LIVE_SIDE_WIDTH_MIN, available))
+    const next = Math.min(max, Math.max(LIVE_SIDE_WIDTH_MIN, requested))
+    drag.latestWidth = next
+    setSidePanelWidth(next)
+  }, [])
+
+  const endSideResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = sideResizeRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    saveSidePanelWidth(drag.latestWidth)
+    document.body.style.cursor = drag.previousCursor
+    document.body.style.userSelect = drag.previousUserSelect
+    sideResizeRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }, [])
+
+  const resizeSideByKeyboard = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const available = (workspaceRef.current?.clientWidth ?? window.innerWidth) - 420
+    const max = Math.min(LIVE_SIDE_WIDTH_MAX, Math.max(LIVE_SIDE_WIDTH_MIN, available))
+    const step = event.shiftKey ? 50 : 10
+    const next = Math.min(max, Math.max(LIVE_SIDE_WIDTH_MIN,
+      sidePanelWidth + (event.key === 'ArrowLeft' ? step : -step)))
+    setSidePanelWidth(next)
+    saveSidePanelWidth(next)
+  }, [sidePanelWidth])
 
   const runningApp = apps.find(app => app.status === 'running') ?? null
   const appName = runningApp?.name ?? ''
   const runningConfig = runningApp?.config ?? ''
   const rtspEnabled = rtspState === 'enabled'
+
   const actionTargets = controls ? [
     ...controls.globals.map(instance => ({
       key: `global:${instance.instance_id}`,
@@ -255,6 +362,7 @@ export default function LiveViewPage() {
     streamRetryRef.current = 0
     streamLastErrorRef.current = ''
     setStreamErrorDetail('')
+    // video 已经真正进入 playing，立即撤掉遮罩；进度动画绝不延后画面显示。
     setStreamLoading(false)
   }
 
@@ -508,12 +616,21 @@ export default function LiveViewPage() {
 
       if (sourceBuffer.buffered.length > 0) {
         const liveEdge = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1)
-        // 保留约两个25FPS视频帧的解码余量；落后超过600ms时主动追赶实时点。
-        if (!Number.isFinite(video.currentTime) || liveEdge - video.currentTime > 0.6) {
-          video.currentTime = Math.max(0, liveEdge - 0.08)
+        const bufferedStart = sourceBuffer.buffered.start(0)
+        const bufferedDuration = liveEdge - bufferedStart
+        const lag = liveEdge - video.currentTime
+
+        // 旧逻辑每收到约 1 秒的 MP4 分片就跳到末尾前 80ms，解码余量不足一个
+        // 网络/调度抖动周期，必然反复耗尽缓冲。启动时先攒约 600ms；运行中只在
+        // 真正落后超过 2 秒时跳帧，正常情况下让 video 连续播放。
+        if (!playbackStarted && bufferedDuration >= STREAM_START_BUFFER_SECONDS) {
+          video.currentTime = Math.max(bufferedStart, liveEdge - STREAM_TARGET_LATENCY_SECONDS)
+          void video.play().catch(() => {})
+        } else if (playbackStarted && lag > STREAM_SEEK_THRESHOLD_SECONDS) {
+          video.currentTime = Math.max(bufferedStart, liveEdge - STREAM_TARGET_LATENCY_SECONDS)
         }
       }
-      if (video.paused) void video.play().catch(() => {})
+      if (playbackStarted && video.paused) void video.play().catch(() => {})
     }
 
     const start = async () => {
@@ -685,7 +802,11 @@ export default function LiveViewPage() {
           {appsError && <p className="live-view-empty-error">{appsError}</p>}
         </div>
       ) : (
-        <div className="live-view-workspace">
+        <div
+          className="live-view-workspace"
+          ref={workspaceRef}
+          style={{ '--live-view-side-width': `${sidePanelWidth}px` } as React.CSSProperties}
+        >
           <section className="live-view-visual-panel">
             <div className="live-view-video-frame" ref={videoFrameRef}>
               <button
@@ -712,7 +833,18 @@ export default function LiveViewPage() {
                     {streamLoading && (
                       <div className="live-view-loading">
                         <div className="live-view-spinner" />
-                        <span>正在连接实时画面……</span>
+                        <span>正在准备实时画面……</span>
+                        <div
+                          className="live-view-progress"
+                          role="progressbar"
+                          aria-label="实时画面连接进度"
+                          aria-valuetext="正在连接视频流"
+                        >
+                          <div className="live-view-progress-fill" />
+                        </div>
+                        <span className="live-view-progress-text">
+                          正在连接视频流，通常约 3 秒
+                        </span>
                       </div>
                     )}
                   </>
@@ -743,6 +875,23 @@ export default function LiveViewPage() {
           </section>
 
           <div className="live-view-side-column">
+            <div
+              className="live-view-side-resizer"
+              role="separator"
+              aria-label="调整实时画面右侧栏宽度"
+              aria-orientation="vertical"
+              aria-valuemin={LIVE_SIDE_WIDTH_MIN}
+              aria-valuemax={LIVE_SIDE_WIDTH_MAX}
+              aria-valuenow={Math.round(sidePanelWidth)}
+              tabIndex={0}
+              title="左右拖拽调整右侧栏宽度"
+              onPointerDown={beginSideResize}
+              onPointerMove={moveSideResize}
+              onPointerUp={endSideResize}
+              onPointerCancel={endSideResize}
+              onLostPointerCapture={endSideResize}
+              onKeyDown={resizeSideByKeyboard}
+            />
             <section className="live-view-console-panel">
               <div className="live-view-panel-head">
                 <span>终端输出</span>

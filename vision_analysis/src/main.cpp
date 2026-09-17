@@ -27,7 +27,7 @@
  * 4. display_worker[N]      — 异步显示 RGA + framebuffer (main 直接 pthread_create)
  * 5. dispatch_worker[N]     — NPU 结果分发 + channel_logic (main 直接 pthread_create)
  * 6. infer_worker[N]        — NPU 推理 worker (inference_init 内部创建, 底层)
- * 7. global_logic[N]        — 跨通道全局逻辑轮询 (global_logic_start_all 内部创建)
+ * 7. global_logic[N]        — 跨通道全局逻辑（通道发布唤醒 + 周期兜底）
  * 8. event_image_worker     — 事件图片异步渲染/编码并更新媒体状态 (首次图片事件时创建)
  * 9. event_video_worker     — 报警前后片段异步编码 (首次启用录像时创建)
  *
@@ -54,21 +54,22 @@
 #include <unistd.h>
 #include <vector>
 
-#include "event/event_report.h"
-#include "pipeline/pipeline_runtime.h"
 #include "capturer/decChannel.h"
+#include "common/logging.h"
 #include "config/config.h"
 #include "control/logic_control.h"
+#include "display/display.h"
+#include "display/display_pipeline.h"
+#include "event/event_report.h"
+#include "gpio/gpio.h"
+#include "logic/core/channel_logic.h"
+#include "logic/core/global_logic.h"
+#include "pipeline/pipeline_runtime.h"
+#include "recorder/event_video_recorder.h"
+#include "rtsp/rtsp_streamer.h"
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
 #include "runtime/process_signals.h"
-#include "logic/core/channel_logic.h"
-#include "logic/core/global_logic.h"
-#include "display/display.h"
-#include "display/display_pipeline.h"
-#include "rtsp/rtsp_streamer.h"
-#include "recorder/event_video_recorder.h"
-#include "common/logging.h"
 
 /* config_monitor_thread_func — 由 app_ctrl.cpp 导出 (C++ mangling) */
 extern "C" void *config_monitor_thread_func(void *arg);
@@ -233,20 +234,14 @@ int main(int argc, char **argv)
     }
 
     {
-        struct sigaction sa
-        {
-        };
+        struct sigaction sa{};
         sa.sa_handler = signal_handler;
         sigaction(SIGINT, &sa, nullptr);
         sigaction(SIGTERM, &sa, nullptr);
-        struct sigaction sa_usr
-        {
-        };
+        struct sigaction sa_usr{};
         sa_usr.sa_handler = sigusr1_handler;
         sigaction(SIGUSR1, &sa_usr, nullptr);
-        struct sigaction sa_pipe
-        {
-        };
+        struct sigaction sa_pipe{};
         sa_pipe.sa_handler = SIG_IGN;
         sigaction(SIGPIPE, &sa_pipe, nullptr);
     }
@@ -374,8 +369,7 @@ int main(int argc, char **argv)
         pthread_t tid{};
         const int ret = pthread_create(&tid, nullptr, pipeline_logic_worker, (void *)(intptr_t)channel_id);
         if (ret != 0)
-            fprintf(stderr, "[Main] pthread_create logic_worker[channel=%d] failed: %s\n", channel_id,
-                    strerror(ret));
+            fprintf(stderr, "[Main] pthread_create logic_worker[channel=%d] failed: %s\n", channel_id, strerror(ret));
         else
         {
             logic_tids.push_back(tid);
@@ -465,6 +459,9 @@ cleanup:
         pthread_join(tid, nullptr);
     for (pthread_t tid : display_tids)
         pthread_join(tid, nullptr);
+
+    /* 所有可能访问 GPIO 的逻辑线程退出后，再释放本进程持有的线路。 */
+    gpio_deinit();
 
     if (pipeline_initialized)
         pipeline_deinit();

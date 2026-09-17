@@ -1,0 +1,17 @@
+{
+  "label": "测试：ROI 人数统计",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "outputs": [
+    {
+      "key": "person_count",
+      "type": "integer",
+      "label": "ROI 内人数"
+    }
+  ],
+  "report_fields": []
+}

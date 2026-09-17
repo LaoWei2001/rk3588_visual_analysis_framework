@@ -56,6 +56,7 @@ void report_hook_alarm(GlobalContext *gctx, int channel_id, bool crane_moving,
     request.event_type = "crane_hook_outside";
     request.message = "吊钩中心超出安全圆范围";
     request.source_channel_id = channel_id;
+    request.evidence_channel_ids = {channel_id};
     request.fields = {
         event_field("source_channel_id", channel_id),
         event_field("crane_moving", crane_moving),
@@ -73,6 +74,7 @@ void report_intrusion_alarm(GlobalContext *gctx, int channel_id, const ChannelIn
     request.event_type = "crane_moving_intrusion";
     request.message = "行车运动期间投影灯区域内检测到人员";
     request.source_channel_id = channel_id;
+    request.evidence_channel_ids = {channel_id};
     request.fields = {
         event_field("source_channel_id", channel_id),
         event_field("crane_moving", true),
@@ -88,6 +90,7 @@ void report_helmet_alarm(GlobalContext *gctx, int channel_id, const ChannelInput
     request.event_type = "crane_still_no_helmet";
     request.message = "行车静止期间下方区域内检测到未佩戴安全帽人员";
     request.source_channel_id = channel_id;
+    request.evidence_channel_ids = {channel_id};
     request.fields = {
         event_field("source_channel_id", channel_id),
         event_field("crane_moving", false),

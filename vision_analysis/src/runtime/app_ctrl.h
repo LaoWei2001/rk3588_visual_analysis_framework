@@ -11,7 +11,7 @@
  *   4. display_worker[N]       — 异步显示 RGA + framebuffer
  *   5. dispatch_worker[N]      — NPU 结果分发 + channel_logic
  *   6. infer_worker[N]         — NPU 推理 (inference_engine 内部)
- *   7. global_logic[N]         — 跨通道全局逻辑轮询
+ *   7. global_logic[N]         — 跨通道全局逻辑（通道发布唤醒 + 周期兜底）
  *   8. alarm/event workers     — 告警落盘与事件录像（各模块内部管理）
  */
 
@@ -21,6 +21,7 @@
 #include "display/display.h"
 #include "logic/core/channel_logic.h"
 #include "logic/core/logic_parameters.h"
+#include "runtime/publication_signal.h"
 #include <atomic>
 #include <cstdint>
 #include <map>
@@ -142,6 +143,7 @@ struct ChannelState
         published_src_width = source_width > 0 ? source_width : src_w_now;
         published_src_height = source_height > 0 ? source_height : src_h_now;
         published_logic_frame_id = logic_frame_id;
+        publication_signal_notify();
     }
 };
 

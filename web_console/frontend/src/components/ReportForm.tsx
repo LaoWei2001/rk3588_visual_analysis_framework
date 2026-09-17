@@ -5,11 +5,13 @@ import {
   type EventRecord, type LogicDef, type ReportContract,
 } from '../api/client'
 import { useEditorStore } from '../store/editorStore'
+import { copyText } from '../utils/clipboard'
 import NumberField from './NumberField'
 import ReportContractEditor from './ReportContractEditor'
 
 type Update = (nodeId: string, patch: Record<string, unknown>) => void
 type MediaKind = 'annotated_image' | 'raw_image' | 'video'
+type ImageSelectionMode = 'event_evidence' | 'selected' | 'connected'
 type Delivery = {
   id: string
   enabled: boolean
@@ -33,11 +35,15 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 const copy = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
-export default function ReportForm({ node, onUpdate, channelIds = [], allChannelIds = [] }: {
+export default function ReportForm({
+  node, onUpdate, channelIds = [], allChannelIds = [], configJson = null, configPath = null,
+}: {
   node: Node
   onUpdate: Update
   channelIds?: number[]
   allChannelIds?: number[]
+  configJson?: string | null
+  configPath?: string | null
 }) {
   const data = node.data as Record<string, unknown>
   const appName = useEditorStore(state => state.appName)
@@ -51,6 +57,7 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
   const [eventTotalBytes, setEventTotalBytes] = useState(0)
   const [eventId, setEventId] = useState('')
   const [busy, setBusy] = useState(false)
+  const [configCopyStatus, setConfigCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [contractEditor, setContractEditor] = useState<ReportContract | null | undefined>(undefined)
   const [editorDirty, setEditorDirty] = useState(false)
 
@@ -58,6 +65,13 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
     if (editorDirty && !window.confirm('接口模板有未保存的修改，确定关闭吗？')) return
     setEditorDirty(false)
     setContractEditor(undefined)
+  }
+
+  const copyConfigJson = async () => {
+    if (!configJson) return
+    const success = await copyText(configJson)
+    setConfigCopyStatus(success ? 'copied' : 'failed')
+    window.setTimeout(() => setConfigCopyStatus('idle'), 1800)
   }
 
   const loadCatalog = useCallback(() => {
@@ -131,9 +145,35 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
   const isGlobalReport = data.logic_kind === 'global'
   const hasImageMedia = delivery.media.includes('annotated_image') || delivery.media.includes('raw_image')
   const hasVideoMedia = delivery.media.includes('video')
+  const rawImageSelection = policy.image_selection && typeof policy.image_selection === 'object'
+    && !Array.isArray(policy.image_selection)
+    ? policy.image_selection as Record<string, unknown> : {}
+  const configuredImageMode = String(rawImageSelection.mode ?? 'connected')
+  const imageMode: ImageSelectionMode = ['event_evidence', 'selected', 'connected']
+    .includes(configuredImageMode)
+    ? configuredImageMode as ImageSelectionMode : 'connected'
+  const selectedImageChannels = Array.isArray(rawImageSelection.channel_ids)
+    ? [...new Set(rawImageSelection.channel_ids.map(Number).filter(channelId => allChannelIds.includes(channelId)))]
+    : []
 
   const setPolicy = (patch: Record<string, unknown>) =>
     onUpdate(node.id, { report_policy: { ...policy, ...patch } })
+  const setImageMode = (mode: ImageSelectionMode) => {
+    const defaultChannels = selectedImageChannels.length > 0
+      ? selectedImageChannels
+      : (channelIds.length > 0 ? channelIds : allChannelIds.slice(0, 1))
+    setPolicy({
+      image_selection: mode === 'selected'
+        ? { mode, channel_ids: defaultChannels }
+        : { mode },
+    })
+  }
+  const toggleImageChannel = (channelId: number, checked: boolean) => {
+    const channelIds = checked
+      ? [...new Set([...selectedImageChannels, channelId])]
+      : selectedImageChannels.filter(value => value !== channelId)
+    setPolicy({ image_selection: { mode: 'selected', channel_ids: channelIds } })
+  }
   const patchDelivery = (patch: Partial<Delivery>) => {
     const next = { ...delivery, ...patch }
     setPolicy({
@@ -228,11 +268,38 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
       启用上报
     </label>
     <div className="report-delivery-card">
-      {isGlobalReport && hasImageMedia && <div className="report-mapping-help">
-        {channelIds.length
-          ? `图片来源：${channelIds.map(channelId => `通道 ${channelId}`).join('、')}`
-          : '图片来源由事件指定。'}
-      </div>}
+      {isGlobalReport && hasImageMedia && <>
+        <Field label="告警图片来源">
+          <select value={imageMode}
+            onChange={event => setImageMode(event.target.value as ImageSelectionMode)}>
+            <option value="event_evidence">本次触发告警的通道</option>
+            <option value="selected">指定通道</option>
+            <option value="connected">所有连入全局逻辑的通道</option>
+          </select>
+        </Field>
+        {imageMode === 'selected' && <div className="report-channel-picker">
+          {allChannelIds.map(channelId => <label key={channelId}
+            className={selectedImageChannels.includes(channelId) ? 'selected' : ''}>
+            <input type="checkbox" checked={selectedImageChannels.includes(channelId)}
+              onChange={event => toggleImageChannel(channelId, event.target.checked)} />
+            <span>通道 {channelId}</span>
+          </label>)}
+          {allChannelIds.length === 0 && <div className="report-contract-error">当前应用没有可选通道。</div>}
+        </div>}
+        <div className="report-mapping-help">
+          {imageMode === 'event_evidence'
+            ? '使用本次事件实际涉及的通道；旧逻辑未提供证据通道时使用所有连入通道。'
+            : imageMode === 'selected'
+              ? (selectedImageChannels.length
+                  ? `按顺序自动拼接：${selectedImageChannels.map(channelId => `通道 ${channelId}`).join('、')}`
+                  : '请至少选择一个图片通道。')
+              : imageMode === 'connected'
+                ? (channelIds.length
+                    ? `自动拼接：${channelIds.map(channelId => `通道 ${channelId}`).join('、')}`
+                    : '全局逻辑没有连入通道，无法生成告警图片。')
+                : ''}
+        </div>
+      </>}
       {isGlobalReport && hasVideoMedia && <Field label="事件视频来源通道">
         <select
           value={selectedMediaChannel == null ? '' : String(selectedMediaChannel)}
@@ -338,11 +405,11 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
         <div className="report-event-actions">
           {selectedContract.media.length
             ? selectedContract.media.map(kind => <span key={kind}>{MEDIA_LABELS[kind]}</span>)
-            : <span>仅事件数据</span>}
+            : <span>仅发送数据，不附带媒体</span>}
         </div>
 
         <details className="report-extra-inputs">
-          <summary>查看当前模板字段对接</summary>
+          <summary>查看字段转换规则</summary>
           {selectedContract.mapping.map((item, index) =>
             <div key={`${item.target}-${index}`} className="report-map-preview">
               {item.source === 'constant'
@@ -391,30 +458,58 @@ export default function ReportForm({ node, onUpdate, channelIds = [], allChannel
       </Field>
     </div>
 
+    <details className="report-advanced-section report-debug-section">
+      <summary>高级诊断：查看画布保存配置</summary>
+      <div className="report-mapping-help">
+        供排查配置使用。由保存按钮使用的同一序列化结果生成，普通接口配置无需关注。
+      </div>
+      <div className="report-event-actions">
+        <span>{configPath ?? '当前节点尚未连接到通道逻辑或全局逻辑'}</span>
+        <button type="button" className="report-event-button" disabled={!configJson}
+          onClick={copyConfigJson}>
+          {configCopyStatus === 'copied'
+            ? '已复制'
+            : configCopyStatus === 'failed' ? '复制失败，请手动选择' : '复制 JSON'}
+        </button>
+      </div>
+      {configJson
+        ? <pre className="report-request-preview">{configJson}</pre>
+        : <div className="report-contract-error">连接上报节点后才能生成最终配置片段。</div>}
+    </details>
+
     <div className="report-advanced-section">
-      <div className="report-section-title">请求预览与测试发送</div>
-      <Field label="预览数据">
+      <div className="report-section-title">最终发送请求</div>
+      <div className="report-data-flow">
+        <span>算法产生的数据</span><b>→</b><span>字段转换规则</span><b>→</b><strong>最终发送请求</strong>
+      </div>
+      <Field label="选择算法产生的数据">
         <select value={eventId} onChange={event => setEventId(event.target.value)}>
-          <option value="">示例事件</option>
+          <option value="">使用示例数据</option>
           {localEvents.map(event => <option key={event.id} value={event.id}>
-            {event.id} · {event.event_type || 'unknown'} · 通道 {event.channel_id ?? '-'}
+            {event.id} · {event.event_type || 'unknown'} · {event.channel_id == null ? '全局逻辑' : `通道 ${event.channel_id}`}
           </option>)}
         </select>
       </Field>
       <div className="report-event-actions">
         <span>{eventCount > 0 ? `共 ${eventCount} 条记录` : '暂无记录'}</span>
-        <button type="button" className="report-event-button" onClick={refreshEvents}>刷新本地事件</button>
+        <button type="button" className="report-event-button" onClick={refreshEvents}>刷新告警记录</button>
         <button type="button" className="report-event-button"
           disabled={busy || !templateReady} onClick={() => runPreview(false)}>
-          预览请求
+          生成最终请求
         </button>
         <button type="button" className="report-event-button"
           disabled={busy || !templateReady || !eventId || !reportEnabled}
-          title={!reportEnabled ? '请先开启上报' : !eventId ? '请先选择一条真实本地事件' : ''}
+          title={!reportEnabled ? '请先开启上报' : !eventId ? '请先选择一条真实告警记录' : ''}
           onClick={() => runPreview(true)}>测试发送</button>
       </div>
-      {preview && <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{JSON.stringify(preview, null, 2)}</pre>}
-      {testResult && <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{JSON.stringify(testResult, null, 2)}</pre>}
+      {preview && <>
+        <div className="report-preview-label">最终请求内容</div>
+        <pre className="report-request-preview">{JSON.stringify(preview, null, 2)}</pre>
+      </>}
+      {testResult && <>
+        <div className="report-preview-label">测试发送结果</div>
+        <pre className="report-request-preview">{JSON.stringify(testResult, null, 2)}</pre>
+      </>}
     </div>
   </div>
 }

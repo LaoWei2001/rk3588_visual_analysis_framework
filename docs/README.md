@@ -23,7 +23,8 @@ Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` �
 `vision_analysis/src/logic/global_modules/**`，发现其他改动便整批拒绝；选择和权限差异见
 [`agent-adapters.md`](skills/rk3588-feature-wizard/references/agent-adapters.md)。
 
-本文档已按仓库提交 `6bd2b94dbbdd8787753b90d1527a6882e3a70aa2`（2026-08-23）核对，文档整理日期为 2026-08-25。核对范围包括 C++ 运行时、逻辑模块清单、配置加载与热重载、事件发件箱、Python 投递服务、FastAPI 路由和 React 页面。
+本文档最初按仓库提交 `6bd2b94dbbdd8787753b90d1527a6882e3a70aa2`（2026-08-23）整理；
+2026-09-15 又按当前工作区源码复核了全局调度、逻辑模块清单和全局事件媒体规则。
 
 ## 事实来源与冲突处理
 
@@ -55,7 +56,7 @@ Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` �
 | 从模糊想法开始，只在 Logic 白名单内自动开发 | [`rk3588-feature-wizard`](skills/rk3588-feature-wizard/SKILL.md) |
 | 从需求完成一个端到端视觉应用改动 | [`build-rk3588-vision-app`](skills/build-rk3588-vision-app/SKILL.md) |
 | 新增/修改逐通道逻辑、参数、ROI、绘制或按钮 | [`rk3588-channel-logic`](skills/rk3588-channel-logic/SKILL.md) |
-| 开发多通道聚合、轮询、全局按钮或全局上报 | [`rk3588-global-logic`](skills/rk3588-global-logic/SKILL.md) |
+| 开发多通道聚合、事件驱动/周期兜底任务、全局按钮或全局上报 | [`rk3588-global-logic`](skills/rk3588-global-logic/SKILL.md) |
 | 使用或扩展 Web、投递、OTA、服务和排障 | [`rk3588-console-ops`](skills/rk3588-console-ops/SKILL.md) |
 | 理解/修改引擎模块、配置、线程与生命周期 | [`rk3588-src-modules`](skills/rk3588-src-modules/SKILL.md) |
 
@@ -83,15 +84,19 @@ logic_course_01 ... logic_course_10
 logic_course_gpio
 logic_default
 logic_dify
-logic_global_input_demo
+logic_crane_helmet
+logic_crane_hook
+logic_crane_intrusion
+logic_crane_motion
 logic_relay
+logic_roi_person_count_demo
 ```
 
 全局逻辑：
 
 ```text
-global_channel_aggregate_demo
-global_default
+global_crane_safety_controller
+global_person_count_alarm_demo
 ```
 
 仓库当前没有提交预编译二进制。仅在完成当前源码的同版构建后核对：
@@ -113,11 +118,11 @@ cd vision_analysis
 ## 必须知道的当前边界
 
 1. Web 编辑器仍显示“SOP流程”节点，并会生成 `logic_path_sop`；当前 C++ 模块目录中没有该逻辑。因此它不是可运行能力，不能用于新配置，也不能在文档或提示词中当作现成示例。
-2. `logic_periodic_snapshot_demo`、`logic_upload_teach`、`logic_path_sop` 和 `global_two_channel_demo` 均不在当前源码中。现有替代示例分别是 `logic_course_08`、`logic_dify`、`logic_global_input_demo` 与 `global_channel_aggregate_demo`；替代仅表示学习入口，不表示业务语义完全相同。
+2. `logic_periodic_snapshot_demo`、`logic_upload_teach`、`logic_path_sop`、`logic_global_input_demo`、`global_channel_aggregate_demo`、`global_default` 和 `global_two_channel_demo` 均不在当前源码中。周期事件可参考 `logic_course_08`/`logic_dify`；当前跨通道人数闭环由 `logic_roi_person_count_demo` 与 `global_person_count_alarm_demo` 组成。
 3. 全局实例的 `channels` 非空时按连接列表取输入；为空时，当前调度实现会取应用全部通道。普通业务应使用 `gctx->inputs()`，它会过滤未发布、离线或过期输入。
-4. 全局事件的 `request.source_channel_id` 选择事件来源身份和图片回退来源；事件视频固定使用全局节点的 `media_source_channel_id`。需要视频时必须在 Web 明确选择有效通道。
-5. 待上报记录页是本地发件箱视图，不是成功历史。全部 delivery 成功后，投递服务会删除事件目录。
-6. `logic_global_input_demo/logic.json` 中 `risk_ratio.help` 仍写着会动态选择“视频通道”，这段帮助文字已落后于实现。当前聚合模块只用它设置 `request.source_channel_id`；视频来源不会随它变化。
+4. 全局实例由通道新发布立即唤醒，`poll_interval_ms` 只是无更新兜底周期。回调不是固定频率，计时必须使用 `timestamp_ms`/`dt_ms`，快速连续发布可能只读取一次最新状态。
+5. 全局聚合事件没有主通道。`evidence_channel_ids` 描述事件涉及通道，Web policy 决定图片通道；`source_channel_id` 只用于确有单路来源的元数据，事件视频固定使用明确配置的 `media_source_channel_id`。
+6. 待上报记录页是本地发件箱视图，不是成功历史。全部 delivery 成功后，投递服务会删除事件目录。
 7. `config.h` 对 `swap_rb` 的行内注释仍写“不影响上报”，但当前录像实现会在 `video_overlay` 为 `custom`/`all` 时把它应用到事件视频；事件图片仍不受影响。以 recorder 实际分支为准。
 8. OTA Agent 当前不单独校验下载 `url` 的格式，也只检查 `type` 非空而不检查它是否属于 C++ 支持的模型类型。下载/写配置成功后仍必须以 MD5、配置监控和模型热加载日志确认最终结果。
 

@@ -33,6 +33,8 @@ interface Props {
   channelIds?: number[]
   allChannelIds?: number[]
   globalInputs?: { channelId: number; logic: string }[]
+  reportConfigJson?: string | null
+  reportConfigPath?: string | null
 }
 
 // ── Header label per type ────────────────────────────────────────────────────
@@ -58,6 +60,7 @@ const HEADER_CLASS: Record<string, string> = {
 
 export default function NodeConfigPanel({
   node, onUpdate, channelIds = [], allChannelIds = [], globalInputs = [],
+  reportConfigJson = null, reportConfigPath = null,
 }: Props) {
   if (!node) {
     return (
@@ -87,7 +90,8 @@ export default function NodeConfigPanel({
         {node.type === 'globalLogic' &&
           <GlobalLogicForm node={node} onUpdate={onUpdate} inputs={globalInputs} />}
         {node.type === 'report' && <ReportForm node={node} onUpdate={onUpdate}
-          channelIds={channelIds} allChannelIds={allChannelIds} />}
+          channelIds={channelIds} allChannelIds={allChannelIds}
+          configJson={reportConfigJson} configPath={reportConfigPath} />}
         {node.type === 'roi'    && <ROIInfo     node={node} />}
       </div>
     </div>
@@ -153,10 +157,11 @@ function GlobalLogicForm({ node, onUpdate, inputs }: {
       </select>
     </F>
     {catalogError && <div className="ncp-hint">⚠ {catalogError}</div>}
-    <F label="轮询间隔（毫秒）">
+    <F label="无更新兜底周期（毫秒）">
       <NumberField min={10} def={200} value={data.poll_interval_ms}
         onChange={value => onUpdate(node.id, { poll_interval_ms: value ?? 200 })} />
     </F>
+    <div className="ncp-hint">通道发布新结果时会立即运行；该周期只用于无新结果时的定时任务。</div>
     <div className="ncp-section-label">已连接的通道数据契约</div>
     {inputs.length === 0
       ? <div className="ncp-hint">尚未连接单通道逻辑；该节点仍可由 C++ 或参数自行选择通道。</div>

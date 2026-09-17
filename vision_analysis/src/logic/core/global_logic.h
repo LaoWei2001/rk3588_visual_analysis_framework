@@ -1,8 +1,9 @@
 /**
  * @file global_logic.h
- * @brief 跨通道全局算法接口与轮询调度
+ * @brief 跨通道全局算法接口与事件驱动/周期兜底调度
  *
- * 全局算法每个 tick 通过 GlobalContext::inputs() 接收一批已经过框架筛选的 ChannelInput。
+ * 全局算法在通道发布新状态时立即唤醒，并以 poll_interval_ms 周期兜底运行；每个 tick
+ * 通过 GlobalContext::inputs() 接收一批已经过框架筛选的 ChannelInput。
  * Web 画布有连线时使用连入通道，否则使用应用全部通道；离线、尚未发布或长期没有
  * 更新的通道不会进入业务输入。底层仍保留原始快照接口供版本对齐和媒体同步使用。
  *
@@ -28,7 +29,7 @@
  * @brief 本全局实例从上个 tick 到本 tick 观察到的通道版本变化。
  *
  * initial_snapshot 表示全局实例启动后首次看到该通道的已有状态。之后
- * revision_count 大于 1 表示轮询期间该通道发生过多次发布；全局算法得到的是最新
+ * revision_count 大于 1 表示两次调度之间该通道发生过多次发布；全局算法得到的是最新
  * 状态，若业务要求逐事件不丢失，应使用事件队列而不是瞬时 outputs。
  */
 struct ChannelUpdate
@@ -162,7 +163,7 @@ struct GlobalContext
     uint64_t unix_ms = 0;
     float dt_ms = 0.0f;
 
-    /** 从 0 开始的 tick 序号及调度器实际采用的轮询周期。 */
+    /** 从 0 开始的 tick 序号及无数据更新时调度器采用的兜底周期。 */
     int64_t tick_id = 0;
     int effective_poll_interval_ms = 0;
 
@@ -207,6 +208,17 @@ struct GlobalContext
     {
         static const std::vector<ChannelInput> empty;
         return ready_inputs ? *ready_inputs : empty;
+    }
+
+    /** 面向偏 C 写法的下标接口；只在本次全局 Logic 回调期间有效。 */
+    std::size_t input_count() const
+    {
+        return ready_inputs ? ready_inputs->size() : 0;
+    }
+
+    const ChannelInput *input_at(std::size_t index) const
+    {
+        return ready_inputs && index < ready_inputs->size() ? &(*ready_inputs)[index] : nullptr;
     }
 
     const ChannelInput *input(int configured_id) const

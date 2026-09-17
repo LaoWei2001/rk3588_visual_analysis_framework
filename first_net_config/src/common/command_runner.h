@@ -5,6 +5,8 @@
 
 int run_cmd(const char *const argv[]);
 int run_cmd_silent(const char *const argv[]);
+int run_cmd_with_input_silent(const char *const argv[],
+                              const char *input, size_t input_size);
 int capture_cmd(const char *const argv[], char *out, size_t out_size);
 
 #endif

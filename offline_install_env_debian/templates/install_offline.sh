@@ -37,6 +37,14 @@ metadata_value() {
     sed -n "s/^${key}=//p" "$BUNDLE_DIR/BUNDLE_INFO" | head -n 1
 }
 
+EXPECTED_BUNDLE_FORMAT=11
+ACTUAL_BUNDLE_FORMAT="$(metadata_value bundle_format)"
+if [ "$ACTUAL_BUNDLE_FORMAT" != "$EXPECTED_BUNDLE_FORMAT" ]; then
+    echo "[错误] 离线包格式不匹配：安装器要求 $EXPECTED_BUNDLE_FORMAT，当前为 ${ACTUAL_BUNDLE_FORMAT:-未设置}。" >&2
+    echo "       请复制完整的新版 full-bundle，不要混用不同版本的安装器和 apt 目录。" >&2
+    exit 1
+fi
+
 EXPECTED_ARCH="$(metadata_value deb_arch)"
 CURRENT_ARCH="$(dpkg --print-architecture)"
 if [ "$CURRENT_ARCH" != "$EXPECTED_ARCH" ]; then
@@ -95,6 +103,12 @@ SOURCE_PACKAGE="$(metadata_value source_package)"
 SOURCE_INSTALL_PATH="$(metadata_value source_install_path)"
 NODE_TOOLCHAIN_PACKAGE="$(metadata_value node_toolchain_package)"
 NODE_TOOLCHAIN_ROOT="$(metadata_value node_toolchain_root)"
+PLATFORM_MANAGER_REL="$(metadata_value platform_manager_rel)"
+GPIO_SERVICE_INSTALLER_REL="$(metadata_value gpio_service_installer_rel)"
+GPIO_CONTROL_UNIT="$(metadata_value gpio_control_unit)"
+GPIO_RESTORE_UNIT="$(metadata_value gpio_restore_unit)"
+GPIOCTL_PATH="$(metadata_value gpioctl_path)"
+GPIO_DAEMON_PATH="$(metadata_value gpio_daemon_path)"
 if [ -z "$CONSOLE_PACKAGE" ]; then
     echo "[错误] 当前离线仓库不包含 Web 控制台 deb，请在开发机重新运行 create_bundle.sh。" >&2
     exit 1
@@ -113,6 +127,12 @@ if [ "$WANT_BUILD" = true ]; then
     fi
     if [ -z "$NODE_TOOLCHAIN_PACKAGE" ] || [ -z "$NODE_TOOLCHAIN_ROOT" ]; then
         echo "[错误] 当前仓库没有 Node.js/npm 前端工具链，请重新运行默认的 create_bundle.sh。" >&2
+        exit 1
+    fi
+    if [ -z "$PLATFORM_MANAGER_REL" ] || [ -z "$GPIO_SERVICE_INSTALLER_REL" ] \
+            || [ -z "$GPIO_CONTROL_UNIT" ] || [ -z "$GPIO_RESTORE_UNIT" ] \
+            || [ -z "$GPIOCTL_PATH" ] || [ -z "$GPIO_DAEMON_PATH" ]; then
+        echo "[错误] 当前仓库缺少统一安装或 GPIO 子系统元数据，请重新生成 full-bundle。" >&2
         exit 1
     fi
     TARGET_PACKAGES+=("$BUILD_META")
@@ -166,11 +186,32 @@ fi
 # 默认完整离线包带有源码和构建环境，因此在同一个一键安装流程内完成 GPIO 服务安装。
 # 精简运行包不携带源码/编译器，不能在目标机现场构建该板级服务。
 if [ "$WANT_BUILD" = true ]; then
-    GPIO_SERVICE_INSTALLER="$SOURCE_INSTALL_PATH/service/gpio_state/install.sh"
-    [ -f "$GPIO_SERVICE_INSTALLER" ] \
+    PLATFORM_MANAGER="$SOURCE_INSTALL_PATH/$PLATFORM_MANAGER_REL"
+    GPIO_SERVICE_INSTALLER="$SOURCE_INSTALL_PATH/$GPIO_SERVICE_INSTALLER_REL"
+    [ -x "$PLATFORM_MANAGER" ] \
+        || { echo "[错误] 完整离线包缺少可执行的统一管理入口: $PLATFORM_MANAGER" >&2; exit 1; }
+    [ -x "$GPIO_SERVICE_INSTALLER" ] \
         || { echo "[错误] 完整离线包缺少 GPIO 服务安装器: $GPIO_SERVICE_INSTALLER" >&2; exit 1; }
     echo ">>> 安装 GPIO 控制与电平保持服务..."
-    as_root bash "$GPIO_SERVICE_INSTALLER"
+    as_root "$GPIO_SERVICE_INSTALLER"
+
+    echo ">>> 验证 GPIO 子系统..."
+    [ -x "$GPIOCTL_PATH" ] \
+        || { echo "[错误] GPIO 控制工具未安装: $GPIOCTL_PATH" >&2; exit 1; }
+    [ -x "$GPIO_DAEMON_PATH" ] \
+        || { echo "[错误] GPIO 实时控制后台未安装: $GPIO_DAEMON_PATH" >&2; exit 1; }
+    [ -x /usr/local/bin/gpio_test ] \
+        || { echo "[错误] GPIO 旧命令兼容入口未安装: /usr/local/bin/gpio_test" >&2; exit 1; }
+    [ -x /usr/local/sbin/rk3588_gpio_control_daemon ] \
+        || { echo "[错误] GPIO 旧后台兼容入口未安装。" >&2; exit 1; }
+    as_root systemctl is-enabled --quiet "$GPIO_CONTROL_UNIT" \
+        || { echo "[错误] GPIO 实时控制服务没有启用: $GPIO_CONTROL_UNIT" >&2; exit 1; }
+    as_root systemctl is-active --quiet "$GPIO_CONTROL_UNIT" \
+        || { echo "[错误] GPIO 实时控制服务没有运行: $GPIO_CONTROL_UNIT" >&2; exit 1; }
+    as_root systemctl cat "$GPIO_RESTORE_UNIT" >/dev/null \
+        || { echo "[错误] GPIO 电平保持服务没有安装: $GPIO_RESTORE_UNIT" >&2; exit 1; }
+    "$GPIOCTL_PATH" --help >/dev/null 2>&1 \
+        || { echo "[错误] GPIO 控制工具无法执行。" >&2; exit 1; }
 else
     echo "[提示] 精简运行包不含板端编译环境，未安装源码版 GPIO 服务。"
 fi
@@ -208,7 +249,7 @@ if [ "$WANT_BUILD" = true ]; then
             || { echo "[错误] 完整包安装后缺少编译命令: $build_command" >&2; exit 1; }
     done
     for pkg_module in \
-            librga gtk+-3.0 gstreamer-1.0 gstreamer-video-1.0 \
+            librga libgpiod gtk+-3.0 gstreamer-1.0 gstreamer-video-1.0 \
             gstreamer-allocators-1.0 gstreamer-rtsp-server-1.0; do
         if ! pkg-config --exists "$pkg_module"; then
             echo "[错误] 完整包安装后 pkg-config 无法解析: $pkg_module" >&2
@@ -242,8 +283,9 @@ if [ "$WANT_BUILD" = true ]; then
     if [ -L /userdata/rk3588_visual_analysis_framework ]; then
         echo "     源码入口: /userdata/rk3588_visual_analysis_framework"
     fi
-    echo "     统一状态: cd /userdata/rk3588_visual_analysis_framework && ./install.sh status"
-    echo "     源码升级: cd /userdata/rk3588_visual_analysis_framework && sudo ./install.sh upgrade offline"
+    echo "     统一状态: cd $SOURCE_INSTALL_PATH && ./install.sh status"
+    echo "     源码升级: cd $SOURCE_INSTALL_PATH && sudo ./install.sh upgrade offline"
+    echo "     GPIO工具: $GPIOCTL_PATH"
     echo "     编译方法: cd $SOURCE_INSTALL_PATH/vision_analysis && ./build.sh dist"
     echo "     Node.js/npm: $NODE_TOOLCHAIN_ROOT/bin"
     echo "     前端构建: cd $SOURCE_INSTALL_PATH/web_console/frontend && PATH=$NODE_TOOLCHAIN_ROOT/bin:\$PATH $NODE_TOOLCHAIN_ROOT/bin/npm run build"

@@ -40,8 +40,10 @@ if (!report.accepted())
             event_report_status_name(report.status), report.detail.c_str());
 ```
 
-`EventRequest` 当前字段：`event_type`、`message`、`fields`、`merge_mode` 和
-`source_channel_id`。通道 logic 不需设置来源；全局 logic 可设置动态来源。
+`EventRequest` 当前字段：`event_type`、`message`、`fields`、`merge_mode`、
+`source_channel_id` 和 `evidence_channel_ids`。通道 logic 不需设置来源；全局聚合 logic 通常只填写
+业务实际涉及的 `evidence_channel_ids`。只有事件确实由某一路通道独立触发时，才设置
+`source_channel_id` 作为来源元数据。
 
 结果状态：
 
@@ -81,7 +83,8 @@ Web 画布负责生成这些字段并绑定当前契约 revision。不要在 C++
 
 `merge_mode` 默认 `EventMergeMode::NEVER`。只有 C++ 显式设为 `POLICY` 且 policy 的
 `merge_window_sec > 0` 才合并；窗口会限制到 0–60 秒，缺省为 5 秒。合并 key 是
-`source channel id + event_type`。仅在 Web 把窗口填为非零不会自动改变默认 NEVER。
+`事件作用域 + event_type`：通道事件作用域是通道 ID，全局事件作用域是稳定的全局实例 ID。
+仅在 Web 把窗口填为非零不会自动改变默认 NEVER。
 
 ## 图片和视频
 
@@ -97,13 +100,19 @@ Web 画布负责生成这些字段并绑定当前契约 revision。不要在 C++
 - 当前 Web 上报表单可改图片叠加和视频前后时长/FPS，但没有视频叠加选择器；新节点默认
   `video_overlay: "custom"`，导入配置中的现值会往返保留。需要其他值时不能假装已有可见控件。
 
-全局事件的来源解析顺序：`request.source_channel_id` → `media_source_channel_id` → 第一个画布连入
-通道 → 应用第一个通道。有连入通道且需要图片时，图片按全局显示尺寸/宫格将所有连入通道拼接；
-没有连入通道时只取解析后的来源通道。
+全局图片由 `report_policy.image_selection` 明确决定：
 
-`request.source_channel_id` 决定事件 `source.channel_id` 和图片回退来源，但事件视频始终使用全局
-配置的 `media_source_channel_id`。全局启用视频时该字段必须是存在的通道 ID，以便预先建立录像
-缓冲。
+- `event_evidence`：使用 `request.evidence_channel_ids`；旧业务未提供证据列表时使用所有画布连入通道；
+- `selected`：使用 Web 固定选择的 `channel_ids`；
+- `connected`：使用所有画布连入全局 Logic 的通道，也是未配置该字段时的默认值。
+
+多路图片按全局显示尺寸和网格拼接。某一路暂时无法取帧时跳过该路并记录
+`source.missing_image_channel_ids`；至少一路成功就继续生成，全部失败时事件仍持久化并把图片标为
+failed。`source.requested_image_channel_ids` 和 `source.image_channel_ids` 分别记录请求与实际通道。
+
+全局聚合事件没有主通道。`request.source_channel_id` 只在确有单路业务来源时写入
+`source.channel_id`，不参与图片或视频选择，也没有自动回退。事件视频始终使用全局配置的
+`media_source_channel_id`；启用视频时该字段必须是存在的通道 ID，以便预先建立该路录像缓冲。
 
 ## 本地 schema v3
 

@@ -1,7 +1,8 @@
 # GPIO 电平持久化服务
 
-该服务是 GPIO 电平持久化的独立总开关，负责在系统启动早期恢复由 `rk3588-gpioctl` 和视觉
-主程序保存的 GPIO 输出电平。状态按引脚保存在
+该服务是 GPIO 电平持久化的独立总开关，负责在系统启动早期恢复 GPIO 实时控制后台统一
+保存的输出电平。`rk3588-gpioctl`、视觉主程序和 GPIO API 测试程序只提交控制请求，不再
+各自写状态文件。状态按引脚保存在
 `/var/lib/rk3588-gpio/GPIOx_Yz.state`。
 
 - 服务开启：测试程序和视觉程序的输出会保存，开机时会恢复。
@@ -10,7 +11,7 @@
 - 服务关闭期间的 GPIO 变化不会覆盖最后一次保存的状态；重新开启时恢复最后保存值。
 
 实时输出与重启保持是两个独立层次：`rk3588-gpio-control.service` 是始终运行的底层实时
-控制器，它持有已经设置的 GPIO，因此 `rk3588-gpioctl set 1` 退出后电平不会被外接下拉立即拉回
+控制器，它持有已经设置的 GPIO，因此 `rk3588-gpioctl output 1` 退出后电平不会被外接下拉立即拉回
 0；`rk3588-gpio-restore.service` 只是网页可开关的持久化功能。关闭持久化不会停止实时
 控制器，也不会妨碍测试程序或视觉程序自由设置 0/1。
 
@@ -55,8 +56,13 @@ sudo RK3588_RELAY_PIN=GPIO7_A0 ./install.sh online
 恢复保存电平并启用以后每次开机恢复；关闭会停止服务并取消开机恢复。
 
 服务用 `/run/rk3588-gpio-persistence/enabled` 作为只读运行时开关。该目录由 systemd
-随服务创建和删除；视觉程序只检查它，不会修改它。即使视觉程序已经占用 GPIO，开启
+随服务创建和删除；GPIO 后台负责检查它，视觉程序不会修改它。即使视觉程序已经占用 GPIO，开启
 服务也不会因此失败：当次无法恢复的引脚会记录到日志，之后视觉程序的输出仍会保存。
+
+新版客户端使用 `SET_MANAGED` 和 `INPUT_MANAGED` 协议：后台在同一个串行请求中完成硬件
+方向/电平、运行记录和开机状态更新，因此多个入口不会再出现“当前电平属于后一个请求，
+保存值却被前一个请求覆盖”的顺序反转。公共 `gpio_set_output()`、`pin_out_val()`、
+`gpio_set_input()` 接口保持不变；旧后台仍可由底层自动兼容，无需修改业务逻辑。
 
 ## 上电瞬间的硬件安全态
 
@@ -73,4 +79,22 @@ systemctl status rk3588-gpio-control.service
 journalctl -u rk3588-gpio-restore.service -b
 journalctl -u rk3588-gpio-control.service -b
 /usr/local/bin/rk3588-gpioctl get
+/usr/local/bin/rk3588-gpioctl --pin GPIO6_B3 read
 ```
+
+实时控制服务协议区分三种读取：`STATUS` 只查询服务正在持有的输出，`READ` 只读取已经处于
+输入方向的空闲线路，旧的 `GET` 保留给现有视觉程序和兼容调用。这样命令行 `get` 不会再
+被误当作输入采样，`read` 也不会把正在控制设备的输出线改成输入。
+
+命令行还可以显式切换方向：
+
+```bash
+/usr/local/bin/rk3588-gpioctl --pin GPIO6_B3 input
+/usr/local/bin/rk3588-gpioctl --pin GPIO6_B3 output 0
+```
+
+后台的 `INPUT_MANAGED` 请求会持续持有输入线路，并用运行时 `.input` 标记在后台重启后恢复；
+`SET_MANAGED` 既负责切换成输出、设置电平，也负责按服务开关统一提交保存值。输出方向必须带
+明确初始值。持久化开启时，切成输入会在同一个请求内删除
+该引脚旧的 `.state` 输出恢复值，避免下次启动又恢复成输出。任何已经由内核或其他进程占用
+的线路都会返回忙，不会被强制接管。

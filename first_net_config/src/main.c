@@ -29,6 +29,7 @@
 #include "operations/network_cleanup.h"
 #include "operations/saved_connections.h"
 #include "operations/device_name.h"
+#include "operations/system_access.h"
 #include "inspection/network_quality_monitor.h"
 
 #include <stdbool.h>
@@ -58,6 +59,7 @@ static void print_menu(void)
     printf("14. 清除所有已保存的连接（高风险）\n");
     printf("15. 检查并修复网络问题\n");
     printf("16. 查看实时网络质量曲线\n");
+    printf("17. 管理 SSH 与系统用户\n");
     printf("0. 退出程序\n");
     printf("====================================================\n");
 }
@@ -79,6 +81,7 @@ static const char *const tui_menu_labels[] = {
     "清除全部连接",
     "网络检查与修复",
     "实时质量曲线",
+    "SSH 与系统用户",
     "退出程序"};
 
 int main(int argc, char *argv[])
@@ -151,7 +154,7 @@ int main(int argc, char *argv[])
                 tui_menu_labels,
                 (int)(sizeof(tui_menu_labels) / sizeof(tui_menu_labels[0])));
 
-            choice = selected == 16 ? 0 : selected + 1;
+            choice = selected == 17 ? 0 : selected + 1;
             if (choice != 0)
             {
                 terminal_ui_begin_screen(tui_menu_labels[selected]);
@@ -160,7 +163,7 @@ int main(int argc, char *argv[])
         else
         {
             print_menu();
-            choice = read_int("请选择功能 [0-16]: ", 0, 16);
+            choice = read_int("请选择功能 [0-17]: ", 0, 17);
         }
 
         switch (choice)
@@ -213,6 +216,9 @@ int main(int argc, char *argv[])
             break;
         case 16:
             monitor_active_network_quality();
+            break;
+        case 17:
+            manage_system_access();
             break;
         case 0:
             if (!terminal_ui_enabled())

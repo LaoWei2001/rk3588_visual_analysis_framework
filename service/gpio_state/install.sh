@@ -54,7 +54,7 @@ systemctl restart "${control_unit_name}"
 if [ "${was_installed}" -eq 0 ]; then
     systemctl enable --now "${unit_name}"
     echo "首次安装：正在将继电器 ${relay_safe_pin} 设置并保存为低电平。"
-    "${gpioctl_path}" --pin "${relay_safe_pin}" set 0
+    "${gpioctl_path}" --pin "${relay_safe_pin}" output 0
 elif [ "${was_enabled}" -eq 1 ]; then
     systemctl enable "${unit_name}"
     systemctl restart "${unit_name}"

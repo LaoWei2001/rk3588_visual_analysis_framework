@@ -349,6 +349,9 @@ bash install_deps.sh --runtime-only
 # 制作机必须和目标机使用相同发行版及版本
 bash offline_install_env_debian/create_bundle.sh
 
+# 已装过完整包且只修改源码时，生成快速源码更新包（不编译、不联网）
+bash offline_install_env_debian/create_bundle.sh --source-only
+
 # Ubuntu ARM64 使用对应入口（首次先运行 prepare_host.sh）
 bash offline_install_env_ubuntu/prepare_host.sh
 bash offline_install_env_ubuntu/create_bundle.sh --refresh-debs
@@ -368,6 +371,10 @@ ARM64 Node.js/npm 和前端 `node_modules`，源码入口为
 程序仍需由用户之后明确安装，或通过 Web 上传。
 默认完整离线包的一键安装流程也会自动安装 GPIO 服务并在首次安装时将继电器置低，无需再
 进入 `service/gpio_state/` 执行命令。
+
+日常源码迭代可复制 `offline_install_env_debian/output/source-update` 到已安装过完整包的设备，
+并运行 `sudo bash install_source_update.sh`。依赖清单、前端锁文件或固定 RKNN 文件变化时，
+快速模式会拒绝制包并提示重新生成 `full-bundle`；全新设备也始终使用完整包。
 
 联网 `install_deps.sh` 和离线安装现在使用同一套系统 `/usr/bin/python3`；pip 对已经满足
 requirements 约束的包会跳过，只补装缺失项或调整不兼容版本。两条路径都会核验模块导入和
@@ -676,15 +683,16 @@ REGISTER_LOGIC(logic_people_count);
 | `logic_course_gpio` | 检测结果驱动 GPIO |
 | `logic_default` | 可删除的空白逻辑示例 |
 | `logic_dify` | Dify 周期截图与自定义变量 |
-| `logic_global_input_demo` | 向全局 logic 发布类型化变量 |
-| `logic_person_roi_alarm` | 人员警戒区持续停留报警 |
-| `logic_fall_detection` | 单路落水与走廊跌倒检测 |
+| `logic_roi_person_count_demo` | 发布 ROI 内 `person` 人数，作为当前全局人数聚合示例的上游 |
 | `logic_crane_motion`、`logic_crane_hook` | 行车运动和吊钩状态检测 |
 | `logic_crane_intrusion`、`logic_crane_helmet` | 行车投影区域入侵和静止安全帽检测 |
 | `logic_relay` | Action 控制继电器 |
 
-当前全局 Logic 包括 `global_default`、`global_channel_aggregate_demo`、
-`global_crane_safety_controller` 和 `global_mongolian_yurt_event`。
+当前全局 Logic 包括 `global_person_count_alarm_demo` 和 `global_crane_safety_controller`。
+
+全局实例在任一通道发布新业务状态时立即唤醒；`poll_interval_ms` 只负责没有新发布时的兜底
+运行，不是固定回调周期。二次开发代码应使用 `gctx->timestamp_ms`/`gctx->dt_ms` 计时，不能用
+调用次数或 tick 序号推算时间。快速连续发布可能合并为一次最新状态回调。
 
 当前未注册 `logic_path_sop`。Web 仍有 SOP 节点并会生成这个缺失的 Logic ID，不能作为可运行配置。
 
@@ -743,11 +751,11 @@ channel logic / global logic
   → 全部成功后删除事件目录
 ```
 
-全局逻辑使用同一个 `EventRequest` 与 `report_event(gctx, request)`。全局事件图片会把连入该全局
-逻辑的全部连入通道按全局显示尺寸和网格规则拼接；图片叠加仍由 `image_overlay` 决定。
-`request.source_channel_id` 动态选择事件身份和图片回退来源；事件视频固定使用全局节点的
-`media_source_channel_id`。Web 画布以“通道逻辑 → 全局逻辑 → 上报配置”连线生成输入通道和统一
-上报策略。
+全局逻辑使用同一个 `EventRequest` 与 `report_event(gctx, request)`。聚合事件通过
+`evidence_channel_ids` 描述本次涉及的通道；Web 上报节点决定图片使用证据通道、指定通道或全部
+画布连入通道，并按全局显示尺寸和网格拼接。聚合事件没有主通道，`source_channel_id` 只用于
+确实来自单路通道的来源元数据，不参与媒体选择。事件视频固定使用全局节点明确配置的
+`media_source_channel_id`。Web 画布以“通道逻辑 → 全局逻辑 → 上报配置”连线生成输入和上报策略。
 
 事件目录按写入者拆分：C++ 维护 `event.json` 和 `media_state.json`，并初始化
 `delivery_state.json`；此后上传服务独占 delivery 状态，避免两个进程并发覆盖同一份状态。

@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "label": "人数告警测试接口",
+  "owner_logic": "global_person_count_alarm_demo",
+  "event_types": [
+    "person_count_alarm"
+  ],
+  "adapter": "http",
+  "media": [
+    "annotated_image"
+  ],
+  "request": {
+    "method": "POST",
+    "path": "/events",
+    "encoding": "json"
+  },
+  "mapping": [
+    {
+      "source": "event.type",
+      "target": "eventType",
+      "location": "body"
+    },
+    {
+      "source": "fields.total_person_count",
+      "target": "totalPersonCount",
+      "location": "body",
+      "type": "number"
+    },
+    {
+      "source": "fields.alarm_threshold",
+      "target": "alarmThreshold",
+      "location": "body",
+      "type": "number"
+    },
+    {
+      "source": "media.annotated_image",
+      "target": "image",
+      "location": "body",
+      "transform": "base64",
+      "required": true
+    }
+  ],
+  "success": {
+    "http_status": [
+      200
+    ]
+  }
+}

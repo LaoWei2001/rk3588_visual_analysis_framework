@@ -5,13 +5,14 @@ Web 控制台、systemd 服务、系统 Python 依赖、Rockchip 用户态库，
 C/C++ 编译环境、Node.js/npm 和前端 `node_modules` 都会一起安装，但不会向 Web 程序列表
 预装任何 C++ 程序。
 
-## 用户只需要这两条命令
+## 首次安装：完整离线包
 
 在能够联网、且系统版本与目标机一致的 ARM64 开发机生成安装包：
 
 ```bash
 cd /userdata/rk3588_visual_analysis_framework
 bash offline_install_env_debian/create_bundle.sh
+# 等价的明确写法：bash offline_install_env_debian/create_bundle.sh --full
 ```
 
 把生成的 `output/full-bundle` 目录复制到新设备，然后进入安装包目录安装：
@@ -30,7 +31,41 @@ http://<RK3588-IP>:8080
 无需再运行 `web_console/install.sh`，也无需手工执行 pip/npm 安装依赖。安装器会在目标机上
 实际运行一次前端构建作为验收。安装完成后的程序列表为空；需要运行的程序由用户之后通过
 Web 上传，或使用 `vision_analysis/install_app.sh` 明确安装。默认完整包还会自动安装 GPIO
-实时控制与电平保持服务，并在首次安装时将继电器 `GPIO6_A2` 设置为低电平。
+实时控制与电平保持服务，并在首次安装时将继电器 `GPIO6_A2` 设置为低电平。安装器会进一步
+验收 GPIO 正式命令、旧命令兼容入口、实时控制后台及两个 systemd 单元；缺少任一项都会
+终止安装并明确报错。
+
+## 日常改源码：快速更新包
+
+设备已经安装过一次完整包后，如果只修改了 C/C++、Python、前端源码、配置或文档，不必再次
+编译并封装整个离线环境。在制作机执行：
+
+```bash
+cd /userdata/rk3588_visual_analysis_framework
+bash offline_install_env_debian/create_bundle.sh --source-only
+```
+
+该命令固定生成 `offline_install_env_debian/output/source-update`，不会执行 C/C++ 编译、前端
+构建、APT 刷新或依赖下载。把这个目录复制到目标设备后执行：
+
+```bash
+cd /userdata/source-update
+sudo bash install_source_update.sh
+```
+
+更新器会把源码安装到新的带版本号目录，保留旧源码及其中的板端修改；如果固定入口是由完整包
+管理的符号链接，会将它切换到新版。它不会自动替换正在运行的程序；安装结束会打印主程序、
+`first_net_config` 和 Web 控制台的构建或部署命令。
+
+快速模式会与最近一次 `full-bundle` 中的源码进行检查。下列内容变化时会拒绝生成快速包，并
+提示使用 `--full`：
+
+- APT/Python 依赖清单；
+- 前端 `package.json` 或 `package-lock.json`；
+- 项目固定的 RKNN 文件。
+
+如果 CMake 或 `build.sh` 发生变化，脚本会给出提示但允许继续；若该变化引入了新的外部系统库，
+应主动使用 `--full`。全新设备始终使用完整包，不能只安装源码更新包。
 
 ## 安装了什么
 
@@ -60,6 +95,10 @@ Web 上传，或使用 `vision_analysis/install_app.sh` 明确安装。默认完
 /usr/local/lib/nodejs/node-v*/            离线 Node.js/npm 工具链
 /opt/vision-analysis/rockchip             固定的 Rockchip 用户态文件
 /lib/systemd/system/rk3588-console.service Web 控制台服务
+/usr/local/bin/rk3588-gpioctl             GPIO 正式控制命令
+/usr/local/bin/gpio_test                  旧命令兼容入口
+/usr/local/sbin/rk3588-gpio-daemon        GPIO 实时控制后台
+/etc/systemd/system/rk3588-gpio-*.service GPIO 控制与电平保持服务
 /userdata/rk3588_visual_analysis_framework 源码固定入口
 ```
 
@@ -71,7 +110,8 @@ Web 上传，或使用 `vision_analysis/install_app.sh` 明确安装。默认完
 
 固定入口 `/userdata/rk3588_visual_analysis_framework` 是指向最新版的符号链接。在板端修改过的
 旧版本源码目录不会在升级时被删除或覆盖；如果这个固定入口原本就是用户自己的真实目录，安装器
-也不会覆盖它，而会在安装结束时显示新版源码的实际目录。
+也不会覆盖它，而会在安装结束时显示新版源码的实际目录。安装结束打印的统一管理和升级命令
+始终使用该实际版本目录，因此不会误操作原有同名目录。
 
 完整包安装后可以在目标机编译，编译结果仍需由用户明确上传或安装：
 
@@ -100,23 +140,30 @@ npm run build
 5. 构建 React 前端，并封装 ARM64 Node.js/npm 工具链；
 6. 生成不含默认 C++ 程序的 Web 控制台 deb，以及携带 `node_modules` 的源码 deb；
 7. 生成依赖元包和本地 APT 索引；
-8. 在空 dpkg 状态下验证依赖能够闭合，然后原子替换上一版仓库。
+8. 验证源码包一定包含统一安装入口和完整 GPIO 子系统；
+9. 在空 dpkg 状态下验证依赖能够闭合，然后原子替换上一版仓库。
 
-脚本会自动安装 `dpkg-repack` 等制包工具；APT、PyPI 和 npm 源需要可用。已有且与锁文件
-一致的 `node_modules` 会直接复用。制包入口不接受模式参数，固定输出：
+完整模式会自动安装 `dpkg-repack` 等制包工具；APT、PyPI 和 npm 源需要可用。已有且与锁文件
+一致的 `node_modules` 会直接复用。两个模式的输出为：
 
 ```text
-offline_install_env_debian/output/full-bundle
+create_bundle.sh --full        -> offline_install_env_debian/output/full-bundle
+create_bundle.sh --source-only -> offline_install_env_debian/output/source-update
 ```
 
-生成失败时不会破坏上一版仓库。`output/`、`frontend/dist/` 和 `node_modules/` 都是生成物，
-不需要提交 GitHub；发布时只需压缩或复制 `full-bundle` 目录。
+两种模式均采用临时目录和原子替换，生成失败不会破坏上一版产物。`output/`、`frontend/dist/`
+和 `node_modules/` 都是生成物，不需要提交 GitHub。
+
+`output/full-bundle` 和 `output/source-update` 都不会随 Git 提交或源码修改自动变化。依赖、工具链、
+Web 控制台部署包或安装器发生生产变更时使用 `--full`；普通源码迭代使用 `--source-only`。
+可以通过 `BUNDLE_INFO` 或 `UPDATE_INFO` 确认生成时间和版本，避免部署旧产物。
 
 ## 升级、修复与卸载
 
-项目代码或依赖变化后，在开发机重新运行 `create_bundle.sh`，再把新版生成目录复制到设备，
-进入该目录重新运行 `install_offline.sh`，即可完成升级。安装器会强制重装项目自有环境和
-控制台软件包，所以即使目标机误删了控制台文件，也能恢复并重新核验系统 Python 依赖。
+只修改项目源码时，生成并安装 `source-update` 即可。依赖或完整环境变化后，在开发机运行
+`create_bundle.sh --full`，再把新版 `full-bundle` 复制到设备并重新运行 `install_offline.sh`。
+完整安装器会强制重装项目自有环境和控制台软件包，所以即使目标机误删了控制台文件，也能
+恢复并重新核验系统 Python 依赖。
 
 升级时会保留：
 

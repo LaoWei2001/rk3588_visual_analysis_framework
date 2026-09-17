@@ -22,7 +22,14 @@ def sample_event() -> Dict[str, Any]:
             "trigger_unix_ms": 1700000000000, "snap_time": "2023-11-14 22:13:20",
             "end_time": "2023-11-14 22:13:20", "trigger_count": 1,
         },
-        "source": {"channel_id": 0, "parameters": {"device_id": "camera-01"}},
+        "source": {
+            "channel_id": 0,
+            "image_selection_mode": "event_evidence",
+            "requested_image_channel_ids": [0, 2],
+            "image_channel_ids": [0, 2],
+            "missing_image_channel_ids": [],
+            "parameters": {"device_id": "camera-01"},
+        },
         "fields": {"score": 0.95, "person_count": 2, "region": "demo-zone"},
         "media": {
             "annotated_image": "/preview/annotated.jpg",

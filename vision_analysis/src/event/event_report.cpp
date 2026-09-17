@@ -76,14 +76,11 @@ struct CompositeImage
     int height = 0;
     int rows = 0;
     int cols = 0;
+    std::string selection_mode;
+    std::vector<int> requested_channel_ids;
+    std::vector<int> missing_channel_ids;
     std::vector<ImageJob::Pane> panes;
 };
-
-static const cv::Mat *borrowed_mat_frame(void *opaque)
-{
-    const cv::Mat *frame = static_cast<const cv::Mat *>(opaque);
-    return frame && !frame->empty() ? frame : nullptr;
-}
 
 struct ActiveEvent
 {
@@ -339,7 +336,17 @@ static void enforce_outbox_cap()
     }
 }
 
-static std::string make_event_id(int channel_id)
+static std::string event_scope_token(const std::string &scope)
+{
+    std::string token = scope.empty() ? "event" : scope;
+    for (char &ch : token)
+        if (!(ch >= 'a' && ch <= 'z') && !(ch >= 'A' && ch <= 'Z') && !(ch >= '0' && ch <= '9') && ch != '-' &&
+            ch != '_')
+            ch = '_';
+    return token;
+}
+
+static std::string make_event_id(const std::string &scope)
 {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -349,7 +356,8 @@ static std::string make_event_id(int channel_id)
     char stamp[32];
     strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tmv);
     char id[128];
-    snprintf(id, sizeof(id), "ch%d_%s_%03ld_%lu", channel_id, stamp, ts.tv_nsec / 1000000L, ++g_seq);
+    snprintf(id, sizeof(id), "%s_%s_%03ld_%lu", event_scope_token(scope).c_str(), stamp,
+             ts.tv_nsec / 1000000L, ++g_seq);
     return id;
 }
 
@@ -922,6 +930,72 @@ static std::string policy_string(cJSON *policy, const char *key, const char *fal
     return cJSON_IsString(item) ? item->valuestring : fallback;
 }
 
+static void append_unique_channel(std::vector<int> &channels, int channel_id)
+{
+    if (channel_id >= 0 && std::find(channels.begin(), channels.end(), channel_id) == channels.end())
+        channels.push_back(channel_id);
+}
+
+static cJSON *channel_ids_to_json(const std::vector<int> &channels)
+{
+    cJSON *array = cJSON_CreateArray();
+    for (int channel_id : channels)
+        cJSON_AddItemToArray(array, cJSON_CreateNumber(channel_id));
+    return array;
+}
+
+struct ImageSelectionPolicy
+{
+    std::string mode = "connected";
+    std::vector<int> channel_ids;
+};
+
+static bool parse_image_selection(cJSON *policy, ImageSelectionPolicy *out, std::string *error)
+{
+    if (!out)
+        return false;
+    *out = ImageSelectionPolicy();
+    cJSON *selection = cJSON_GetObjectItemCaseSensitive(policy, "image_selection");
+    if (!selection)
+        return true; /* 旧配置继续使用全部画布输入。 */
+    if (!cJSON_IsObject(selection))
+    {
+        if (error)
+            *error = "report policy image_selection must be an object";
+        return false;
+    }
+
+    cJSON *mode = cJSON_GetObjectItemCaseSensitive(selection, "mode");
+    if (cJSON_IsString(mode) && mode->valuestring && mode->valuestring[0])
+        out->mode = mode->valuestring;
+    if (out->mode != "connected" && out->mode != "selected" && out->mode != "event_evidence")
+    {
+        if (error)
+            *error = "report policy image_selection.mode is invalid";
+        return false;
+    }
+
+    cJSON *channel_ids = cJSON_GetObjectItemCaseSensitive(selection, "channel_ids");
+    if (channel_ids && !cJSON_IsArray(channel_ids))
+    {
+        if (error)
+            *error = "report policy image_selection.channel_ids must be an array";
+        return false;
+    }
+    cJSON *item = nullptr;
+    cJSON_ArrayForEach(item, channel_ids)
+    {
+        if (!cJSON_IsNumber(item) || item->valuedouble != static_cast<double>(item->valueint))
+        {
+            if (error)
+                *error = "report policy image_selection.channel_ids must contain integers";
+            return false;
+        }
+        append_unique_channel(out->channel_ids, item->valueint);
+    }
+    return true;
+}
+
 } // namespace
 
 const char *event_report_status_name(EventReportStatus status)
@@ -948,9 +1022,15 @@ const char *event_report_status_name(EventReportStatus status)
     return "unknown";
 }
 
+struct EventIdentity
+{
+    std::string scope;
+    int source_channel_id = -1;
+    int video_source_channel_id = -1;
+};
+
 static EventReportResult report_event_impl(ChannelContext *ctx, const EventRequest &input,
-                                           const CompositeImage *composite_image,
-                                           int video_source_channel_id = -1)
+                                           const CompositeImage *composite_image, const EventIdentity &identity)
 {
     auto result = [](EventReportStatus status, const std::string &event_id, const std::string &detail) {
         EventReportResult value;
@@ -983,8 +1063,7 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
         return result(EventReportStatus::NO_DELIVERY, "", "no enabled delivery matches this event type");
     }
     const uint32_t media_flags = requirements.media_flags;
-    const int resolved_video_source_channel_id =
-        video_source_channel_id >= 0 ? video_source_channel_id : ctx->chnId;
+    const int resolved_video_source_channel_id = identity.video_source_channel_id;
     if ((media_flags & EVENT_MEDIA_VIDEO) && !app_ctrl_has_channel(resolved_video_source_channel_id))
     {
         cJSON_Delete(policy);
@@ -997,7 +1076,7 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
     const float video_post_sec = cfg.event_video.post_sec;
     const int video_fps = cfg.event_video.fps;
     const std::string image_overlay = policy_string(policy, "image_overlay", "custom");
-    std::string merge_key = std::to_string(ctx->chnId) + ":" + input.event_type;
+    std::string merge_key = identity.scope + ":" + input.event_type;
     uint64_t now_ms = steady_now_ms();
     const bool allow_merge = input.merge_mode == EventMergeMode::POLICY && merge_sec > 0.0f;
 
@@ -1029,7 +1108,7 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
         cJSON_Delete(policy);
         return result(EventReportStatus::MERGED, existing, "merge queued for local persistence");
     }
-    std::string event_id = make_event_id(ctx->chnId);
+    std::string event_id = make_event_id(identity.scope);
     if (allow_merge)
     {
         ActiveEvent active;
@@ -1066,9 +1145,23 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
     cJSON_AddItemToObject(root, "event", event);
 
     cJSON *source = cJSON_CreateObject();
-    cJSON_AddNumberToObject(source, "channel_id", ctx->chnId);
+    if (identity.source_channel_id >= 0)
+        cJSON_AddNumberToObject(source, "channel_id", identity.source_channel_id);
     if (media_flags & EVENT_MEDIA_VIDEO)
         cJSON_AddNumberToObject(source, "video_channel_id", resolved_video_source_channel_id);
+    if (composite_image)
+    {
+        std::vector<int> actual_channel_ids;
+        actual_channel_ids.reserve(composite_image->panes.size());
+        for (const ImageJob::Pane &pane : composite_image->panes)
+            actual_channel_ids.push_back(pane.channel_id);
+        cJSON_AddStringToObject(source, "image_selection_mode", composite_image->selection_mode.c_str());
+        cJSON_AddItemToObject(source, "requested_image_channel_ids",
+                             channel_ids_to_json(composite_image->requested_channel_ids));
+        cJSON_AddItemToObject(source, "image_channel_ids", channel_ids_to_json(actual_channel_ids));
+        cJSON_AddItemToObject(source, "missing_image_channel_ids",
+                             channel_ids_to_json(composite_image->missing_channel_ids));
+    }
     cJSON_AddItemToObject(source, "parameters", parse_object_or_empty(cfg.report_parameters_json));
     cJSON_AddItemToObject(root, "source", source);
 
@@ -1227,7 +1320,14 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
 
 EventReportResult report_event(ChannelContext *ctx, const EventRequest &request)
 {
-    return report_event_impl(ctx, request, nullptr);
+    EventIdentity identity;
+    if (ctx)
+    {
+        identity.scope = "ch" + std::to_string(ctx->chnId);
+        identity.source_channel_id = ctx->chnId;
+        identity.video_source_channel_id = ctx->chnId;
+    }
+    return report_event_impl(ctx, request, nullptr, identity);
 }
 
 EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
@@ -1241,36 +1341,24 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
 
     if (!gctx || !gctx->config)
         return invalid("global ctx/config is null");
-
-    int source_channel_id = request.source_channel_id;
-    if (source_channel_id < 0)
-        source_channel_id = gctx->config->media_source_channel_id;
-    if (source_channel_id < 0 && gctx->connected_channel_count() > 0)
-    {
-        const ChannelLogicSnapshot *first_connected = gctx->connected_channel_at(0);
-        if (first_connected)
-            source_channel_id = first_connected->channel_id;
-    }
-    if (source_channel_id < 0 && gctx->channel_count() > 0)
-        source_channel_id = gctx->channel_at(0)->channel_id;
-
-    const ChannelLogicSnapshot *source_logic = gctx->channel(source_channel_id);
-    if (source_channel_id < 0 || !source_logic)
+    if (request.source_channel_id >= 0 && !gctx->contains_channel(request.source_channel_id))
         return invalid("global event source channel is not available in this application");
 
     auto runtime = app_ctrl_get_runtime_snapshot();
-    const ChannelConfig *source_config = app_ctrl_runtime_channel_config(runtime, source_channel_id);
-    if (!runtime || !source_config)
-        return invalid("global event media source channel is not configured");
+    if (!runtime)
+        return invalid("global event runtime config is not available");
 
     cJSON *policy = parse_object_or_empty(gctx->config->report_policy_json);
     const DeliveryRequirements requirements = delivery_requirements(policy, request.event_type);
+    ImageSelectionPolicy image_selection;
+    std::string image_selection_error;
+    const bool image_selection_valid = parse_image_selection(policy, &image_selection, &image_selection_error);
     cJSON_Delete(policy);
+    if (!image_selection_valid)
+        return invalid(image_selection_error);
     const bool need_image = (requirements.media_flags & EVENT_MEDIA_IMAGE) != 0;
 
     CompositeImage composite;
-    ChannelFrameSnapshot source_frame;
-    bool source_frame_loaded = false;
 
     /*
      * GlobalContext carries the lightweight snapshots sampled at the beginning of
@@ -1296,24 +1384,42 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
     if (need_image)
     {
         std::vector<int> image_channel_ids;
-        if (gctx->connected_channel_ids && !gctx->connected_channel_ids->empty())
-            image_channel_ids = *gctx->connected_channel_ids;
-        else
-            image_channel_ids.push_back(source_channel_id);
+        if (image_selection.mode == "selected")
+        {
+            for (int channel_id : image_selection.channel_ids)
+                append_unique_channel(image_channel_ids, channel_id);
+        }
+        else if (image_selection.mode == "event_evidence")
+        {
+            for (int channel_id : request.evidence_channel_ids)
+                append_unique_channel(image_channel_ids, channel_id);
+        }
+        else if (gctx->connected_channel_ids)
+        {
+            for (int channel_id : *gctx->connected_channel_ids)
+                append_unique_channel(image_channel_ids, channel_id);
+        }
+
+        /* 旧全局 Logic 可能尚未填写 evidence_channel_ids；这时使用全部连入通道，
+         * 但绝不再挑其中一路冒充“主通道”。selected 为空则让图片明确失败。 */
+        if (image_channel_ids.empty() && image_selection.mode == "event_evidence" && gctx->connected_channel_ids)
+            for (int channel_id : *gctx->connected_channel_ids)
+                append_unique_channel(image_channel_ids, channel_id);
 
         composite.width = runtime->config.disp_width & ~3;
         composite.height = runtime->config.disp_height & ~1;
-        composite.cols = std::max(1, std::min(runtime->config.tile_cols,
-                                              static_cast<int>(image_channel_ids.size())));
-        composite.rows = std::max(1, (static_cast<int>(image_channel_ids.size()) + composite.cols - 1) /
-                                         composite.cols);
+        composite.selection_mode = image_selection.mode;
+        composite.requested_channel_ids = image_channel_ids;
         composite.panes.reserve(image_channel_ids.size());
 
         for (int channel_id : image_channel_ids)
         {
             ChannelFrameSnapshot snapshot;
             if (!capture_report_frame(channel_id, &snapshot))
-                return invalid("global event channel has no compatible image snapshot");
+            {
+                composite.missing_channel_ids.push_back(channel_id);
+                continue;
+            }
 
             ImageJob::Pane pane;
             pane.channel_id = channel_id;
@@ -1332,53 +1438,33 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
             pane.render_params.target_mask = static_cast<uint8_t>(DrawCommand::DISPLAY | DrawCommand::IMAGE);
             pane.render_params.show_system_overlays = true;
             pane.render_params.show_custom_overlays = true;
-            if (channel_id == source_channel_id)
-            {
-                source_frame = snapshot;
-                source_frame_loaded = true;
-            }
             composite.panes.push_back(std::move(pane));
         }
 
-        if (!source_frame_loaded)
-        {
-            if (!capture_report_frame(source_channel_id, &source_frame))
-                return invalid("global event source channel has no compatible image snapshot");
-            source_frame_loaded = true;
-        }
+        /* 缺失通道采用紧凑跳过策略；任意一路可用就继续生成图片。全部不可用时仍进入
+         * 本地事件箱，由 report_event_impl 将图片明确标记为 failed，而不是丢弃告警。 */
+        const int pane_count = static_cast<int>(composite.panes.size());
+        composite.cols = std::max(1, std::min(runtime->config.tile_cols, std::max(1, pane_count)));
+        composite.rows = std::max(1, (std::max(1, pane_count) + composite.cols - 1) / composite.cols);
     }
 
-    /* report_policy/report_parameters 来自全局节点；来源通道可以由 C++、参数或画布决定。 */
-    ChannelConfig report_config = *source_config;
+    /* 全局事件直接使用全局节点的上报配置，不借用任意通道充当事件身份。 */
+    ChannelConfig report_config;
     report_config.report_policy_json = gctx->config->report_policy_json;
     report_config.report_parameters_json = gctx->config->report_parameters_json;
     report_config.event_video = gctx->config->event_video;
 
     ChannelContext ctx{};
-    ctx.chnId = source_channel_id;
-    if (source_frame_loaded && !source_frame.frame.empty())
-    {
-        ctx.model_frame_getter = borrowed_mat_frame;
-        ctx.frame_getter_opaque = &source_frame.frame;
-    }
-    ctx.src_width = source_logic->src_width;
-    ctx.src_height = source_logic->src_height;
-    ctx.frame_id = source_frame_loaded ? source_frame.logic.frame_seq : source_logic->frame_seq;
-    ctx.timestamp_ms = source_frame_loaded && source_frame.logic.frame_steady_ms != 0
-                           ? source_frame.logic.frame_steady_ms
-                           : (source_logic->frame_steady_ms != 0 ? source_logic->frame_steady_ms : gctx->timestamp_ms);
-    ctx.unix_ms = source_frame_loaded && source_frame.logic.frame_unix_ms != 0
-                      ? source_frame.logic.frame_unix_ms
-                      : (source_logic->frame_unix_ms != 0 ? source_logic->frame_unix_ms : gctx->unix_ms);
-    ctx.results = source_frame_loaded ? &source_frame.results : nullptr;
+    ctx.chnId = -1;
+    ctx.timestamp_ms = gctx->timestamp_ms;
+    ctx.unix_ms = gctx->unix_ms;
     ctx.config = &report_config;
-    ctx.rois = source_frame_loaded ? &source_frame.rois : nullptr;
-    ctx.draw_cmds = source_frame_loaded ? &source_frame.draw_cmds : nullptr;
-    ctx.infer_fps = source_frame_loaded ? source_frame.logic.infer_fps : source_logic->infer_fps;
-    ctx.disp_fps = source_frame_loaded ? source_frame.logic.disp_fps : source_logic->disp_fps;
-    return report_event_impl(&ctx, request,
-                             need_image && gctx->connected_channel_count() > 0 ? &composite : nullptr,
-                             gctx->config->media_source_channel_id);
+
+    EventIdentity identity;
+    identity.scope = "global_" + gctx->config->instance_id;
+    identity.source_channel_id = request.source_channel_id;
+    identity.video_source_channel_id = gctx->config->media_source_channel_id;
+    return report_event_impl(&ctx, request, need_image ? &composite : nullptr, identity);
 }
 
 void event_report_video_ready(const std::string &event_id, const std::string &video_path)

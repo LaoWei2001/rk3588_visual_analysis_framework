@@ -10,15 +10,16 @@
 #include "control/logic_control.h"
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
+#include "runtime/publication_signal.h"
 #include "logic_parameters.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 #include <utility>
 #include <pthread.h>
-#include <unistd.h>
 
 /*======================== 单个实例的线程上下文 ========================*/
 struct GlobalLogicThread
@@ -45,6 +46,7 @@ struct GlobalLogicThread
 
 static std::vector<GlobalLogicThread *> g_threads;
 static pthread_mutex_t g_threads_mtx = PTHREAD_MUTEX_INITIALIZER;
+static constexpr int GLOBAL_LOGIC_MIN_DISPATCH_INTERVAL_MS = 5;
 
 /*======================== 全局逻辑分发表 ========================*/
 struct GlobalLogicEntry
@@ -176,9 +178,9 @@ static uint64_t system_now_ms(void)
     return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 }
 
-/* 通道 Logic 由视频帧驱动，而全局 Logic 独立轮询。底层统一淘汰长期没有更新的
- * “最后一次值”，避免每个业务模块各自计算数据年龄。至少容忍 2 秒；全局轮询本身
- * 较慢时则容忍 3 个轮询周期。该策略属于运行时健康机制，不是业务参数。 */
+/* 通道 Logic 由视频帧驱动，全局 Logic 由新发布立即唤醒并按配置周期兜底。底层统一淘汰
+ * 长期没有更新的“最后一次值”，避免每个业务模块各自计算数据年龄。至少容忍 2 秒；
+ * 兜底周期较长时则容忍 3 个兜底周期。该策略属于运行时健康机制，不是业务参数。 */
 static int64_t automatic_input_timeout_ms(int poll_ms)
 {
     constexpr int64_t minimum_timeout_ms = 2000;
@@ -257,6 +259,9 @@ void *global_logic_thread_func(void *arg)
         if (!t->running.load())
             break;
 
+        /* 先记住发布序号。取快照或执行 Logic 期间若又有新帧发布，下面的等待会
+         * 立即返回，确保该更新不会因为错过条件变量通知而延迟到下一轮兜底周期。 */
+        const uint64_t observed_publication = publication_signal_sequence();
         const uint64_t tick_begin_ms = steady_now_ms();
         const uint64_t tick_unix_ms = system_now_ms();
         const float dt_ms = t->last_tick_steady_ms == 0
@@ -345,16 +350,14 @@ void *global_logic_thread_func(void *arg)
             break;
 
         uint64_t elapsed_ms = steady_now_ms() - tick_begin_ms;
-        if (elapsed_ms < (uint64_t)poll_ms)
+        if (elapsed_ms < static_cast<uint64_t>(GLOBAL_LOGIC_MIN_DISPATCH_INTERVAL_MS))
         {
-            int remaining_ms = poll_ms - static_cast<int>(elapsed_ms);
-            while (remaining_ms > 0 && t->running.load())
-            {
-                const int slice_ms = std::min(remaining_ms, 50);
-                usleep(static_cast<unsigned int>(slice_ms * 1000));
-                remaining_ms -= slice_ms;
-            }
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(GLOBAL_LOGIC_MIN_DISPATCH_INTERVAL_MS - elapsed_ms));
+            elapsed_ms = steady_now_ms() - tick_begin_ms;
         }
+        if (elapsed_ms < (uint64_t)poll_ms)
+            publication_signal_wait(observed_publication, poll_ms - static_cast<int>(elapsed_ms));
     }
 
     printf("[GlobalLogic] Thread exited: id=%s logic=%s\n", t->config.instance_id.c_str(),
@@ -409,6 +412,7 @@ static void stop_one(GlobalLogicThread *t)
         return;
     t->stop_requested.store(true);
     t->running.store(false);
+    publication_signal_notify();
     pause_ctrl::notify_waiters();
     pthread_join(t->tid, nullptr);
 }

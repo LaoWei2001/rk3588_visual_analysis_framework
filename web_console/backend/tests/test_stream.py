@@ -11,7 +11,8 @@ def test_build_ffmpeg_args_uses_zero_transcode_fragmented_mp4():
     assert args[args.index("-i") + 1] == "rtsp://127.0.0.1:9554/preview"
     assert args[args.index("-c:v") + 1] == "copy"
     assert args[args.index("-f") + 1] == "mp4"
-    assert args[args.index("-movflags") + 1] == "frag_keyframe+empty_moov+default_base_moof"
+    assert args[args.index("-movflags") + 1] == "empty_moov+default_base_moof"
+    assert args[args.index("-frag_duration") + 1] == "200000"
     assert args[-1] == "pipe:1"
 
 

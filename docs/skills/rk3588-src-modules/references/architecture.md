@@ -61,8 +61,9 @@ pipeline 初始化过程中启动；图片/录像 worker 按需创建。
 ## 通道快照与全局逻辑
 
 轻量 `ChannelLogicSnapshot` 不复制图像，包含发布版本、帧时间、配置 generation、在线状态、尺寸、
-FPS、logic 名和不可变 outputs。全局实例每 tick 分别原子读取各通道，因此每一路内部一致，但多路不
-保证同一采集时刻。
+FPS、logic 名和不可变 outputs。通道提交新版本时递增 publication seq 并立即唤醒全局实例；没有
+新发布时，全局实例按 `poll_interval_ms` 兜底运行。每次分发分别原子读取各通道，因此每一路内部
+一致，但多路不保证同一采集时刻。快速连续发布可以合并为一次最新状态读取，而不是无损帧队列。
 
 带图 `ChannelFrameSnapshot` 深拷贝模型帧、results、ROI 和 draw commands。全局的 exact snapshot
 接口会核对 publication seq，通道在抓图前已进入下一版时返回 false，不拼接不同版本。

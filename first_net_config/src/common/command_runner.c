@@ -4,6 +4,7 @@
 #include "common/cli_io.h"
 
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -183,6 +184,83 @@ int run_cmd_silent(const char *const argv[])
     }
 
     return -1;
+}
+
+int run_cmd_with_input_silent(const char *const argv[],
+                              const char *input, size_t input_size)
+{
+    int pipefd[2];
+    pid_t pid;
+    int status = 0;
+    size_t written = 0;
+    struct sigaction ignore_pipe;
+    struct sigaction previous_pipe;
+    bool signal_changed = false;
+
+    if (!argv || !argv[0] || (!input && input_size != 0) || pipe(pipefd) != 0)
+    {
+        return -1;
+    }
+
+    pid = fork();
+    if (pid < 0)
+    {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
+
+    if (pid == 0)
+    {
+        FILE *devnull;
+
+        close(pipefd[1]);
+        if (dup2(pipefd[0], STDIN_FILENO) < 0)
+        {
+            _exit(126);
+        }
+        close(pipefd[0]);
+        (void)setenv("LC_ALL", "C", 1);
+        devnull = fopen("/dev/null", "w");
+        if (devnull)
+        {
+            (void)dup2(fileno(devnull), STDOUT_FILENO);
+            (void)dup2(fileno(devnull), STDERR_FILENO);
+        }
+        execvp(argv[0], (char *const *)argv);
+        _exit(127);
+    }
+
+    close(pipefd[0]);
+    memset(&ignore_pipe, 0, sizeof(ignore_pipe));
+    ignore_pipe.sa_handler = SIG_IGN;
+    sigemptyset(&ignore_pipe.sa_mask);
+    signal_changed = sigaction(SIGPIPE, &ignore_pipe, &previous_pipe) == 0;
+    while (written < input_size)
+    {
+        ssize_t count = write(pipefd[1], input + written, input_size - written);
+
+        if (count < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            break;
+        }
+        written += (size_t)count;
+    }
+    close(pipefd[1]);
+    if (signal_changed)
+    {
+        (void)sigaction(SIGPIPE, &previous_pipe, NULL);
+    }
+
+    if (waitpid(pid, &status, 0) < 0 || written != input_size)
+    {
+        return -1;
+    }
+    return child_exit_code(status);
 }
 
 int capture_cmd(const char *const argv[], char *out, size_t out_size)

@@ -8,5 +8,5 @@ cmake --build "${project_dir}/build" --parallel
 
 echo "构建完成：${project_dir}/build/relay_test"
 echo "读取继电器：${project_dir}/build/relay_test get"
-echo "吸合继电器：${project_dir}/build/relay_test set 1"
-echo "释放继电器：${project_dir}/build/relay_test set 0"
+echo "吸合继电器：${project_dir}/build/relay_test output 1"
+echo "释放继电器：${project_dir}/build/relay_test output 0"

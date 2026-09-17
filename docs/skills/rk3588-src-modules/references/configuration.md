@@ -127,7 +127,7 @@ delivery 见[事件与上报开发](../../rk3588-console-ops/references/event-re
 - 必填且唯一 `instance_id`；
 - `enable`、`logic`；
 - `channels`（非空时限定画布输入；空时当前调度器使用全部应用通道）；
-- `poll_interval_ms`，最低 10；
+- `poll_interval_ms`，最低 10，仅表示没有通道新发布时的兜底周期，不是固定回调周期；
 - `logic_parameters`；
 - `report_policy`、`report_parameters`；
 - `media_source_channel_id`。
