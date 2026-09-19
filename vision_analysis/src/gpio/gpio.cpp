@@ -3,7 +3,7 @@
  * @brief 视觉主程序 GPIO 公共接口实现（libgpiod 1.x）
  */
 
-#include "gpio/gpio.h"
+#include <rkvision/gpio.h>
 
 #include <gpiod.h>
 

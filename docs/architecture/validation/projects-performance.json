@@ -1,0 +1,50 @@
+[
+  {
+    "label": "baseline",
+    "trial": 0,
+    "channels": 3,
+    "samples": 15,
+    "fps_per_channel": 43.36666666666667,
+    "inference_total_ms": 22.947333333333333,
+    "cpu_percent": 108.69275462961635,
+    "rss_mb": 104.76128472222223,
+    "exit_code": 0,
+    "log": "/tmp/rkvision-projects-performance-hardware/0-baseline.log"
+  },
+  {
+    "label": "refactor",
+    "trial": 1,
+    "channels": 3,
+    "samples": 15,
+    "fps_per_channel": 43.71333333333333,
+    "inference_total_ms": 22.287333333333333,
+    "cpu_percent": 104.43589681735432,
+    "rss_mb": 104.81076388888889,
+    "exit_code": 0,
+    "log": "/tmp/rkvision-projects-performance-hardware/1-refactor.log"
+  },
+  {
+    "label": "refactor",
+    "trial": 2,
+    "channels": 3,
+    "samples": 15,
+    "fps_per_channel": 42.75333333333333,
+    "inference_total_ms": 22.81,
+    "cpu_percent": 107.63049602881564,
+    "rss_mb": 104.92013888888889,
+    "exit_code": 0,
+    "log": "/tmp/rkvision-projects-performance-hardware/2-refactor.log"
+  },
+  {
+    "label": "baseline",
+    "trial": 3,
+    "channels": 3,
+    "samples": 15,
+    "fps_per_channel": 43.10666666666667,
+    "inference_total_ms": 22.644666666666666,
+    "cpu_percent": 107.29535060089322,
+    "rss_mb": 105.25462962962963,
+    "exit_code": 0,
+    "log": "/tmp/rkvision-projects-performance-hardware/3-baseline.log"
+  }
+]

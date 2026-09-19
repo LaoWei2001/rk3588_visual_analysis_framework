@@ -1,6 +1,6 @@
 # Logic-only 写入边界
 
-本页定义 `develop_feature` 对原仓库的机械写入边界。目标是让代理可以自动开发，同时保证向导不会把
+本页定义 `vision develop` 对原仓库的机械写入边界。目标是让代理可以自动开发，同时保证向导不会把
 Web、服务、配置、引擎核心、文档或其他文件的改动带回原仓库。
 
 ## 唯一写回白名单
@@ -8,15 +8,15 @@ Web、服务、配置、引擎核心、文档或其他文件的改动带回原�
 只允许以下两个根目录的普通文件发生新增、修改或按明确需求删除：
 
 ```text
-vision_analysis/src/logic/modules/**
-vision_analysis/src/logic/global_modules/**
+logic/modules/**
+logic/global_modules/**
 ```
 
 典型模块产物是 `logic.cpp`、`logic.json`，以及确有远端契约时放在同一模块目录下的
 `report_templates/*.json`。不得创建符号链接、子模块或特殊文件。
 
-`vision_analysis/src/logic/core/**` 不在白名单内。虽然它位于 `src/logic` 下，但属于公共框架代码，向导
-只能读取，不能修改。
+引擎 SDK、源码和文档在隔离副本的 `.engine/` 下；整个 `.engine/**` 均只读。
+原始引擎仓库不会接收业务向导的回写。
 
 ## 明确禁止写回
 
@@ -53,5 +53,5 @@ vision_analysis/src/logic/global_modules/**
 Adapter、自定义 Web 页面、修改配置解析或修复框架缺陷。向导可以说明缺少的公共能力和建议由人工另开
 一次受控开发任务，但本次不得产生越界代码。
 
-直接把 `SKILL.md` 交给模型时只能形成行为约束；只有通过仓库根目录的 `develop_feature` 或
-`develop_feature.cmd` 启动，才会执行隔离副本和白名单回写检查。
+直接把 `SKILL.md` 交给模型时只能形成行为约束；只有通过仓库根目录的 `vision develop` 或
+`vision.cmd develop` 启动，才会执行隔离副本和白名单回写检查。

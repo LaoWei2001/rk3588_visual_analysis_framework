@@ -4,7 +4,7 @@
  */
 #pragma once
 
-#include "third_party/json/cJSON.h"
+#include <rkvision/json.h>
 #include <cstddef>
 #include <functional>
 #include <string>

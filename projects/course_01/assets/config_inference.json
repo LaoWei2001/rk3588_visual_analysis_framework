@@ -1,0 +1,36 @@
+{
+  "global": {
+    "enable_display": false,
+    "enable_rtsp": false,
+    "max_fps": 25
+  },
+  "channels": [
+    {
+      "id": 0,
+      "enable": true,
+      "infer_enable": true,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/input.mp4",
+        "loop": true
+      },
+      "models": [
+        {
+          "id": "model_0",
+          "enable": true,
+          "model_type": "yolov8_det",
+          "model_path": "assets/yolov8n.rknn",
+          "label_path": "assets/labels.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 2
+        }
+      ],
+      "logic": "logic_course_01",
+      "logic_parameters": {},
+      "roi_zones": []
+    }
+  ]
+}

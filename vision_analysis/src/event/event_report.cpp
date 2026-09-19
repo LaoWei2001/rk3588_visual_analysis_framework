@@ -1,11 +1,12 @@
-#include "event_report.h"
+#include <rkvision/events.h>
 
 #include "config/config.h"
 #include "display/display.h"
 #include "recorder/event_video_recorder.h"
-#include "third_party/json/cJSON.h"
-#include "logic/core/channel_logic.h"
-#include "logic/core/global_logic.h"
+#include <rkvision/json.h>
+#include <rkvision/channel_context.h>
+#include "logic/core/global_logic_runtime.h"
+#include "runtime/app_ctrl.h"
 
 #include <algorithm>
 #include <cerrno>

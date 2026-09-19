@@ -2,9 +2,9 @@
  * @file logic_parameters.cpp
  * @brief 嵌入式模块 Schema 的解析、配置规范化与热重载差异计算。
  */
-#include "logic_parameters.h"
+#include <rkvision/parameters.h>
 
-#include "third_party/json/cJSON.h"
+#include <rkvision/json.h>
 
 #include <algorithm>
 #include <cmath>
@@ -13,8 +13,14 @@
 #include <unordered_set>
 #include <utility>
 
-/* 由 build/generated/logic_catalog_embedded.cpp 提供。 */
-extern const char *logic_embedded_catalog_json();
+#include "runtime/application_internal.h"
+
+// Set once by rkvision_run, before configuration parsing or worker startup.
+static const char *application_catalog = nullptr;
+void rkvision_set_application_catalog(const char *catalog)
+{
+    application_catalog = catalog;
+}
 
 namespace
 {
@@ -178,7 +184,7 @@ class LogicSchemaRegistry
 
     void load()
     {
-        const char *catalog_text = logic_embedded_catalog_json();
+        const char *catalog_text = application_catalog;
         cJSON *root = catalog_text ? cJSON_Parse(catalog_text) : nullptr;
         if (!root)
         {

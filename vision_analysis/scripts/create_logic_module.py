@@ -14,7 +14,7 @@ IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def channel_source(name: str) -> str:
-    return f'''#include "logic/core/logic_common.h"
+    return f'''#include <rkvision/logic.h>
 
 namespace
 {{
@@ -34,7 +34,7 @@ REGISTER_LOGIC({name});
 
 
 def global_source(name: str) -> str:
-    return f'''#include "logic/core/global_logic.h"
+    return f'''#include <rkvision/global_context.h>
 
 namespace
 {{
@@ -85,8 +85,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--project-root",
         type=Path,
-        default=project_root,
-        help="vision_analysis project root",
+        required=True,
+        help="external application project root",
     )
     return parser.parse_args(argv)
 
@@ -97,7 +97,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         raise SystemExit(f"invalid logic name: {args.name}")
 
     collection = "modules" if args.kind == "channel" else "global_modules"
-    module_dir = args.project_root.resolve() / "src" / "logic" / collection / args.name
+    module_dir = args.project_root.resolve() / "logic" / collection / args.name
     if module_dir.exists():
         raise SystemExit(f"module already exists: {module_dir}")
     module_dir.mkdir(parents=True)

@@ -81,5 +81,5 @@
 | Web 选择“本次触发告警的通道” | 拼接证据通道，不选择主通道 |
 | 上传失败 | 本地 outbox 保留并重试，不能记作远端成功 |
 
-实际实现以 `vision_analysis/src/logic/modules/logic_roi_person_count_demo/` 和
-`vision_analysis/src/logic/global_modules/global_person_count_alarm_demo/` 为准。
+实际实现以 `projects/person_count/logic/modules/logic_roi_person_count_demo/` 和
+`projects/person_count/logic/global_modules/global_person_count_alarm_demo/` 为准。

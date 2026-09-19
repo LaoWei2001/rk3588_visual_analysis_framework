@@ -21,7 +21,7 @@
 
 ```bash
 cd /userdata/rk3588_visual_analysis_framework
-sudo ./install.sh online
+sudo ./setup/install.sh online
 ```
 
 下面的独立入口只用于不安装 Web 控制台的设备或故障修复：
@@ -43,7 +43,7 @@ sudo ./service/gpio_state/install.sh
 如果其他板卡的继电器不在 `GPIO6_A2`，首次安装时可以指定实际引脚：
 
 ```bash
-sudo RK3588_RELAY_PIN=GPIO7_A0 ./install.sh online
+sudo RK3588_RELAY_PIN=GPIO7_A0 ./setup/install.sh online
 ```
 
 恢复服务挂载到 `sysinit.target`，并排在声音服务、Web 控制台和视觉程序之前。恢复服务是

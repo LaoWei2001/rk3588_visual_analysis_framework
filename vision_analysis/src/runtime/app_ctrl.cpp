@@ -15,7 +15,7 @@
 #include <cstring>
 
 #include "capturer/decChannel.h"
-#include "logic/core/global_logic.h"
+#include "logic/core/global_logic_runtime.h"
 
 /*======================== 全局变量 ========================*/
 APP_CTRL *g_pCtrl = nullptr;

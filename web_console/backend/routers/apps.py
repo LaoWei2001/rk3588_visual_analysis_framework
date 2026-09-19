@@ -23,6 +23,7 @@ from starlette.concurrency import run_in_threadpool
 
 from services import process_manager as pm
 from services import runtime_state
+from services.package_install import replace_application
 from services.app_scanner import scan_apps
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
@@ -92,13 +93,16 @@ def _resolve_root(staging: Path) -> Path:
     return staging
 
 
-def _install_pkg(tmp_archive: Path, name: str) -> Dict[str, Any]:
+def _install_pkg(tmp_archive: Path, name: str, preserve_assets: bool = True) -> Dict[str, Any]:
     dest = APPS_ROOT / name
     staging = Path(tempfile.mkdtemp(prefix=f".staging_{name}_", dir=str(APPS_ROOT)))
     dest_new = APPS_ROOT / f".{name}.new"
     try:
         _extract(tmp_archive, staging)
         root = _resolve_root(staging)
+
+        if not (root / BINARY_NAME).is_file() or not (root / "assets").is_dir():
+            raise ValueError("程序包必须包含可执行文件和 assets 目录")
 
         # 二进制补可执行权限(zip 不保留 Unix 权限)
         binp = root / BINARY_NAME
@@ -115,9 +119,7 @@ def _install_pkg(tmp_archive: Path, name: str) -> Dict[str, Any]:
         # 恰好启动程序，也避免覆盖仍被旧进程占用的可执行文件/工作目录。
         with pm.runtime_lock():
             stopped_apps = pm.stop_all_apps_for_install_unlocked()
-            if dest.exists():
-                shutil.rmtree(dest)
-            shutil.move(str(dest_new), str(dest))
+            replace_application(dest_new, dest, preserve_assets=preserve_assets, binary_name=BINARY_NAME)
 
         return {
             "name": name,
@@ -133,7 +135,7 @@ def _install_pkg(tmp_archive: Path, name: str) -> Dict[str, Any]:
 
 
 @router.post("/apps/upload")
-async def upload_app(file: UploadFile = File(...), name: str = Form("")):
+async def upload_app(file: UploadFile = File(...), name: str = Form(""), preserve_assets: bool = Form(True)):
     # 程序名：优先用表单 name，否则取归档文件名去扩展
     raw = name or Path(file.filename or "").name
     for ext in (".tar.gz", ".tgz", ".tar", ".zip"):
@@ -153,7 +155,7 @@ async def upload_app(file: UploadFile = File(...), name: str = Form("")):
     await run_in_threadpool(_save)
 
     try:
-        info = await run_in_threadpool(_install_pkg, tmp, app_name)
+        info = await run_in_threadpool(_install_pkg, tmp, app_name, preserve_assets)
     except HTTPException:
         raise
     except Exception as e:

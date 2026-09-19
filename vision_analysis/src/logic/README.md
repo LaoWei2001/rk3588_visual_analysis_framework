@@ -3,20 +3,20 @@
 通道逻辑和全局逻辑都按“每种逻辑一个模块目录”组织：
 
 ```text
-src/logic/
-├── core/                       # 注册表、ChannelContext、全局逻辑框架
-├── modules/
-│   └── logic_xxx/
-│       ├── logic.cpp           # 入口、动作处理和 REGISTER_LOGIC
-│       ├── logic.json          # 参数、动作、上报字段等模块元数据
-│       └── ...                 # 复杂逻辑可继续添加 state/engine/render 等文件
-├── global_modules/
-│   └── global_xxx/
-│       ├── logic.cpp           # 入口和 REGISTER_GLOBAL_LOGIC
-│       ├── logic.json          # 参数 Schema 和 Web 元数据
-│       └── ...
-└── catalog.json                # 模型类型等非模块共享能力
+引擎 vision_analysis/
+├── include/rkvision/             # 对业务公开的 SDK 声明
+└── src/logic/core/               # 框架实现、私有生命周期接口
+
+业务项目/
+└── logic/
+    ├── modules/<logic_id>/       # 通道业务及 logic.json
+    ├── global_modules/<id>/      # 全局业务及 logic.json
+    └── common/                   # 可选项目公共代码
 ```
+
+独立应用位于 `projects/`。在具体项目内通过 `./build.sh` / `./build.sh package` 构建与发布，
+生成器显式接受 `--logic-root <项目>/logic`，框架能力从 `vision_analysis/metadata/catalog.json` 读取。
+
 
 这里的一个模块对应一种逻辑类型，不对应某个实际视频通道。多个通道可以同时使用同一个
 `logic_xxx` 模块，各通道的运行状态仍由框架独立管理。
@@ -28,7 +28,7 @@ src/logic/
 ## 新增通道逻辑
 
 1. 新建 `modules/logic_xxx/`（目录名建议与入口函数同名，但外部 logic ID 不从目录名取）。
-2. 在 `logic.cpp` 中包含 `logic/core/logic_common.h`，实现逻辑入口，并通过
+2. 在 `logic.cpp` 中包含 `rkvision/logic.h`，实现逻辑入口，并通过
    `REGISTER_LOGIC(logic_xxx)` 注册。宏会把函数名自动转为 config/Web/外部 API 的 logic ID。
 3. 新建 `logic.json`，声明 `label`、参数、动作和上报字段；不要手写 `name`。
 4. 重新运行 CMake 和构建脚本。CMake 会递归收集模块源码，打包脚本会聚合模块清单。

@@ -1,0 +1,94 @@
+{
+  "course_01": {
+    "channel_logics": [
+      "logic_course_01"
+    ],
+    "cmake_configure": "passed",
+    "application_compile": "passed",
+    "executable_sections": "identical to original baseline"
+  },
+  "course_02": {
+    "channel_logics": [
+      "logic_course_02"
+    ],
+    "cmake_configure": "passed",
+    "application_compile": "passed",
+    "executable_sections": "identical to original baseline"
+  },
+  "course_03": {
+    "channel_logics": [
+      "logic_course_03"
+    ],
+    "cmake_configure": "passed",
+    "application_compile": "passed",
+    "executable_sections": "identical to original baseline"
+  },
+  "course_04": {
+    "channel_logics": [
+      "logic_course_04"
+    ],
+    "cmake_configure": "passed",
+    "application_compile": "passed",
+    "executable_sections": "identical to original baseline"
+  },
+  "course_05": {
+    "channel_logics": [
+      "logic_course_05"
+    ],
+    "cmake_configure": "passed",
+    "application_compile": "passed",
+    "executable_sections": "identical to original baseline"
+  },
+  "course_06": {
+    "channel_logics": [
+      "logic_course_06"
+    ],
+    "cmake_configure": "passed",
+    "application_compile": "passed",
+    "executable_sections": "identical to original baseline"
+  },
+  "course_07": {
+    "channel_logics": [
+      "logic_course_07"
+    ],
+    "cmake_configure": "passed",
+    "application_compile": "passed",
+    "executable_sections": "identical to original baseline"
+  },
+  "course_08": {
+    "channel_logics": [
+      "logic_course_08"
+    ],
+    "cmake_configure": "passed",
+    "application_compile": "passed",
+    "executable_sections": "identical to original baseline",
+    "full_package": "passed",
+    "runtime_registry": "only logic_course_08",
+    "configuration": "valid",
+    "report_template": "logic_course_08.jnu_object_invade"
+  },
+  "course_09": {
+    "channel_logics": [
+      "logic_course_09"
+    ],
+    "cmake_configure": "passed",
+    "application_compile": "passed",
+    "executable_sections": "identical to original baseline"
+  },
+  "course_10": {
+    "channel_logics": [
+      "logic_course_10"
+    ],
+    "cmake_configure": "passed",
+    "application_compile": "passed",
+    "executable_sections": "identical to original baseline"
+  },
+  "course_gpio": {
+    "channel_logics": [
+      "logic_course_gpio"
+    ],
+    "cmake_configure": "passed",
+    "application_compile": "passed",
+    "executable_sections": "identical to original baseline"
+  }
+}

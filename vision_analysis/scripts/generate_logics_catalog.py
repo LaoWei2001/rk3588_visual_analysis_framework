@@ -700,8 +700,8 @@ def validate_named_list(catalog_path: Path, value: Any, key: str) -> List[Any]:
     return value
 
 
-def build_catalog(logic_root: Path) -> Dict[str, Any]:
-    catalog_path = logic_root / "catalog.json"
+def build_catalog(logic_root: Path, engine_catalog: Optional[Path] = None) -> Dict[str, Any]:
+    catalog_path = engine_catalog or Path(__file__).resolve().parents[1] / "metadata" / "catalog.json"
     shared = load_object(catalog_path)
     if "channel_logics" in shared:
         raise ManifestError(
@@ -728,7 +728,7 @@ def build_catalog(logic_root: Path) -> Dict[str, Any]:
     return {
         "_comment": (
             "Generated from channel/global registration macros, module logic.json "
-            "files and src/logic/catalog.json; do not edit the generated file."
+            "files and engine metadata/catalog.json; do not edit the generated file."
         ),
         "channel_logics": modules,
         "global_logics": global_logics,
@@ -816,8 +816,8 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument(
         "--logic-root",
         type=Path,
-        default=project_root / "src" / "logic",
-        help="logic source root (default: project src/logic)",
+        default=project_root.parent / "projects" / "person_count" / "logic",
+        help="external project logic root (default: projects/person_count/logic)",
     )
     parser.add_argument(
         "--output",

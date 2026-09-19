@@ -1,6 +1,6 @@
 # GlobalContext API
 
-本文对应当前 `logic/core/global_logic.h/.cpp` 和 `runtime/app_ctrl.h`。
+本文对应当前 公开的 `rkvision/global_context.h`、`rkvision/snapshots.h` 和引擎实现 `logic/core/global_logic.cpp`。
 
 ## Tick 和实例字段
 

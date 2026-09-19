@@ -1,6 +1,6 @@
 #pragma once
 
-#include "inference/inference_types.h"
+#include <rkvision/types.h>
 #include <opencv2/opencv.hpp>
 #include <pthread.h>
 #include <string>

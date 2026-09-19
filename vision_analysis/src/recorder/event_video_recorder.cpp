@@ -1,6 +1,6 @@
 #include "event_video_recorder.h"
 
-#include "event/event_report.h"
+#include <rkvision/events.h>
 #include "inference/inference_engine.h"
 #include "pipeline/frame_transform.h"
 #include "config/config.h"

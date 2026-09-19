@@ -1,0 +1,84 @@
+{
+  "crane_safety": {
+    "channel_logics": [
+      "logic_crane_helmet",
+      "logic_crane_hook",
+      "logic_crane_intrusion",
+      "logic_crane_motion"
+    ],
+    "global_logics": [
+      "global_crane_safety_controller"
+    ],
+    "configurations": {
+      "config.json": "requires enabling configured channels"
+    }
+  },
+  "person_count": {
+    "channel_logics": [
+      "logic_roi_person_count_demo"
+    ],
+    "global_logics": [
+      "global_person_count_alarm_demo"
+    ],
+    "configurations": {
+      "config_global.json": "valid"
+    }
+  },
+  "object_detection": {
+    "channel_logics": [
+      "logic_default"
+    ],
+    "global_logics": [],
+    "configurations": {
+      "config_test.json": "valid"
+    }
+  },
+  "tutorials": {
+    "channel_logics": [
+      "logic_course_01",
+      "logic_course_02",
+      "logic_course_03",
+      "logic_course_04",
+      "logic_course_05",
+      "logic_course_06",
+      "logic_course_07",
+      "logic_course_08",
+      "logic_course_09",
+      "logic_course_10",
+      "logic_course_gpio"
+    ],
+    "global_logics": [],
+    "configurations": {
+      "config.json": "valid",
+      "logic_course_01.json": "valid",
+      "logic_course_02.json": "valid",
+      "logic_course_03.json": "valid",
+      "logic_course_04.json": "valid",
+      "logic_course_05.json": "valid",
+      "logic_course_06.json": "valid",
+      "logic_course_07.json": "valid",
+      "logic_course_08.json": "valid",
+      "logic_course_09.json": "valid",
+      "logic_course_10.json": "valid",
+      "logic_course_gpio.json": "requires enabling configured channels"
+    }
+  },
+  "dify": {
+    "channel_logics": [
+      "logic_dify"
+    ],
+    "global_logics": [],
+    "configurations": {
+      "config.json": "valid"
+    }
+  },
+  "relay_control": {
+    "channel_logics": [
+      "logic_relay"
+    ],
+    "global_logics": [],
+    "configurations": {
+      "config.json": "requires enabling configured channels"
+    }
+  }
+}

@@ -2,7 +2,7 @@
 
 ## 三个环境必须分开
 
-- **开发宿主**：当前运行 `develop_feature` 及所选 Codex/Claude 编程代理的系统，由启动器自动检测；
+- **开发宿主**：当前运行 `vision develop` 及所选 Codex/Claude 编程代理的系统，由启动器自动检测；
 - **部署目标**：最终安装视觉程序的系统，通常但不强制是 RK3588 Linux；
 - **验收环境**：能够接触模型、视频源、NPU、GPIO、网络和远端服务的测试位置。
 
@@ -24,11 +24,11 @@
 
 | 开发宿主 | 启动入口 | 当前主机适合执行 | 必须按条件转移或保留 |
 |---|---|---|---|
-| RK3588 Linux | `./develop_feature` | 通用检查；依赖和设备齐备时可板端构建/运行 | 未接入的模型、视频、GPIO、远端服务仍不可声称验证 |
-| Linux x86_64 | `./develop_feature` | 文档、清单、Python、Web；已有镜像时交叉编译 | RKNN/RGA/GPIO 和视频硬件放到板端 |
-| Windows WSL2 | `./develop_feature` | Linux 命令、源码、Python、Web 和非硬件检查 | 设备能力取决于透传；通常保留板端验收 |
-| 原生 Windows | `develop_feature.cmd` 或 `py .\develop_feature` | 源码、文档及已安装依赖支持的 Python/Web 检查 | 不直接运行 `build.sh`、systemd 或 RKNN/RGA 板端验证 |
-| macOS | `./develop_feature` | 源码、文档及已安装依赖支持的 Python/Web 检查 | Linux 服务、交叉编译和硬件验证另选环境 |
+| RK3588 Linux | `./vision develop` | 通用检查；依赖和设备齐备时可板端构建/运行 | 未接入的模型、视频、GPIO、远端服务仍不可声称验证 |
+| Linux x86_64 | `./vision develop` | 文档、清单、Python、Web；已有镜像时交叉编译 | RKNN/RGA/GPIO 和视频硬件放到板端 |
+| Windows WSL2 | `./vision develop` | Linux 命令、源码、Python、Web 和非硬件检查 | 设备能力取决于透传；通常保留板端验收 |
+| 原生 Windows | `vision.cmd develop` 或 `py tools\project\vision.py develop` | 源码、文档及已安装依赖支持的 Python/Web 检查 | 不直接运行 `build.sh`、systemd 或 RKNN/RGA 板端验证 |
+| macOS | `./vision develop` | 源码、文档及已安装依赖支持的 Python/Web 检查 | Linux 服务、交叉编译和硬件验证另选环境 |
 | 未识别系统 | `--plan-only` 优先 | 只读检查和需求合同 | 确认 shell、工具链和沙箱后才允许自动实现 |
 
 所有平台都从当前项目目录复制源码、文档和必要资源到系统临时目录；构建目录、依赖缓存、编辑器状态及

@@ -6,12 +6,12 @@
  * instance_id 只替换发生变化的实例，避免一个节点改参数导致其它全局状态被清空。
  */
 
-#include "global_logic.h"
+#include "global_logic_runtime.h"
 #include "control/logic_control.h"
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
 #include "runtime/publication_signal.h"
-#include "logic_parameters.h"
+#include <rkvision/parameters.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>

@@ -49,7 +49,7 @@ Bearer header 时也接受 `?token=`，供原生 `<img>/<video>` 资源使用；
 4. 在 `frontend/src/pages/` 或 `components/` 实现 UI。
 5. 在 `App.tsx` 增加 Route；需要侧栏入口时同时增加 NavLink。
 6. 加后端 pytest，运行 `python3 -m pytest`；再运行前端 `npm run build`。
-7. 在项目根目录用 `sudo ./install.sh upgrade online` 更新已安装控制台，不要只改源码后期待
+7. 在项目根目录用 `sudo ./setup/install.sh upgrade online` 更新已安装控制台，不要只改源码后期待
    板端实例自动变化；已经预构建前端时可用 `upgrade offline`。
 
 ## 编辑器开发边界

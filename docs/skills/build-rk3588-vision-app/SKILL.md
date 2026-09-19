@@ -3,6 +3,9 @@ name: build-rk3588-vision-app
 description: Build or revise an end-to-end feature in this RK3588 visual-analysis repository. Use when a request spans requirement analysis, channel or global C++ Logic, module manifests, event reporting, delivery contracts, Web configuration, validation, packaging, or documentation, and when changes must match the repository's current implementation rather than inferred APIs.
 ---
 
+> 独立项目：业务根目录由 `--project` 选择，模块位于该项目 `logic/`；公开 API 位于引擎 `vision_analysis/include/rkvision/`。向导隔离副本中引擎和本文档位于只读 `.engine/`。使用生成器时显式传 `--logic-root <项目>/logic`；省略参数只检查框架参考项目。
+
+
 # Build an RK3588 vision feature
 
 Treat current source as the contract. Inspect before editing; never resurrect a removed path, field, module, or helper from memory.
@@ -18,9 +21,9 @@ Read [`references/requirement-contract.md`](references/requirement-contract.md) 
 
 ## Logic-only wizard override
 
-When the startup prompt identifies a `develop_feature` isolated session, its allowlist overrides this Skill's broader
-end-to-end scope. Write only below `vision_analysis/src/logic/modules/` and
-`vision_analysis/src/logic/global_modules/`. Treat engine, config, tests, Web, services, documentation, scripts, and
+When the startup prompt identifies a `vision develop` isolated session, its allowlist overrides this Skill's broader
+end-to-end scope. Write only below `logic/modules/` and
+`logic/global_modules/`. Treat engine, config, tests, Web, services, documentation, scripts, and
 generated files as read-only. Steps below that would change those locations become unsupported in that session; report
 the missing capability and stop instead of asking for wider access. Read the wizard's
 [`write-boundary.md`](../rk3588-feature-wizard/references/write-boundary.md) before editing.
@@ -32,7 +35,7 @@ the missing capability and stop instead of asking for wider access. Read the wiz
 3. Inspect the target module's C++ and `logic.json` together.
 4. Inspect the public header that owns the API being used.
 5. For Web behavior, inspect both the FastAPI route and the React caller.
-6. For reporting, inspect `vision_analysis/src/event/event_report.h/.cpp`, the module template, Adapter catalog,
+6. For reporting, inspect `vision_analysis/include/rkvision/events.h` 与 `vision_analysis/src/event/event_report.cpp`, the module template, Adapter catalog,
    and delivery service.
 7. Compare any referenced example name against actual `REGISTER_*` macros or run the built binary's list command.
 
@@ -42,8 +45,8 @@ Current registered source modules do not include `logic_path_sop`, `logic_period
 
 | Need | Extension point |
 |---|---|
-| One channel, each business frame | `src/logic/modules/<logic>/` |
-| Cross-channel or periodic aggregation | `src/logic/global_modules/<logic>/` |
+| One channel, each business frame | `logic/modules/<logic>/` |
+| Cross-channel or periodic aggregation | `logic/global_modules/<logic>/` |
 | Logic-specific user parameter | Module `logic.json.parameters` plus `param_*()` |
 | Shared engine configuration | `src/config/` plus runtime/Web propagation |
 | Button for one Logic | Module `actions` plus `REGISTER_LOGIC_ACTION` or `REGISTER_GLOBAL_LOGIC_ACTION` |
@@ -63,7 +66,7 @@ Do not hardcode endpoints or credentials in a Logic. Do not add a central config
 4. Add Action handlers only when runtime control is required.
 5. Add `report_event()` only after the event type and field contract are defined.
 6. Add or revise a report template only when the remote protocol is part of the requirement.
-7. Outside an isolated `develop_feature` session, change Web/framework code only when metadata-driven behavior cannot
+7. Outside an isolated `vision develop` session, change Web/framework code only when metadata-driven behavior cannot
    express the requirement; inside that session, stop without changing it.
 8. Outside the isolated wizard, update the matching Skill/reference when a public contract or workflow changes; inside
    it, report the documentation follow-up without editing files outside the allowlist.
@@ -74,12 +77,14 @@ Always run the manifest check after Logic changes:
 
 ```bash
 cd vision_analysis
-python3 scripts/generate_logics_catalog.py --check
+python3 scripts/generate_logics_catalog.py --logic-root ../projects/person_count/logic --check
 ```
 
 Then use the task-specific commands in [`references/acceptance-checklist.md`](references/acceptance-checklist.md). Generated App `logics.json` and `report_templates/` must come from the same source revision as the binary; never patch generated package files as source.
 
-The Python files under this Skill's `scripts/` directory predate the 2026-08-22 source refactor. In particular, `validate_logic.py` incorrectly rejects currently supported global Actions; the other scripts do not cover the complete current contract. Read [`references/legacy-scripts.md`](references/legacy-scripts.md), and do not use any one of them as validation or scaffolding authority. They are unchanged because repository code was explicitly out of scope for this documentation audit.
+The helper scripts accept `--project /path/to/app` and `--repo /path/to/engine`.
+`validate_logic.py` supports both channel and global Action registration. The catalog generator
+remains authoritative for manifests; static helpers do not replace compilation or hardware checks.
 
 ## Handoff
 

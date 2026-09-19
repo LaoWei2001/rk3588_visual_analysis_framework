@@ -1,0 +1,14 @@
+{
+  "label": "Example",
+  "report_templates": [],
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "report_fields": [],
+  "actions": [],
+  "business_fields": [],
+  "outputs": []
+}

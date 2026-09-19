@@ -257,7 +257,7 @@ def repository_root(start: Path) -> Path:
     resolved = start.resolve()
     for candidate in (resolved, *resolved.parents):
         if (
-            (candidate / "develop_feature").is_file()
+            (candidate / "vision").is_file()
             and (candidate / "vision_analysis" / "src").is_dir()
             and (candidate / "docs" / "skills").is_dir()
         ):
@@ -302,7 +302,7 @@ def build_prompt(
     }
     prompt = f"""你正在为 rk3588_visual_analysis_framework 启动交互式功能开发向导。
 
-首先完整读取 `{SKILL_RELATIVE.as_posix()}` 并严格执行。它是本仓库的总控工作流；即使当前代理不会
+首先完整读取 `.engine/{SKILL_RELATIVE.as_posix()}` 并严格执行。它是本仓库的总控工作流；即使当前代理不会
 自动发现或调用名为 `rk3588-feature-wizard` 的 Skill，也必须按文件内容执行，不得简化流程。
 {mode_rules[mode]}
 
@@ -320,8 +320,9 @@ def build_prompt(
 摄像头、NPU、GPIO 或远端服务清单，也不要给长篇回答模板。用户只答“否”时，最多再给一个短选项题。
 在环境确认前不要询问业务功能或修改文件。
 
-这是一个 Logic-only 隔离开发会话。原仓库唯一允许写回的路径是：{allowed_roots_text()}。可以只读检查
-仓库其他位置，但禁止修改 `vision_analysis/src/logic/core/**`、配置、测试、文档、Web、服务、脚本、
+这是一个 Logic-only 隔离开发会话。原项目唯一允许写回的路径是：{allowed_roots_text()}。
+业务代码位于 `logic/`，SDK、引擎源码和文档的只读副本位于 `.engine/`。文档中的框架路径以 `.engine/` 为前缀。
+可以只读检查其他位置，但禁止修改 `.engine/**`、配置、测试、文档、Web、服务、脚本、
 生成物或任何其他路径；也禁止创建符号链接。这个限制高于其他 Skill 中关于同步 Web、框架或文档的建议。
 如果需求无法完全通过现有公共 API、模块 `logic.json` 和模块内 `report_templates/` 实现，明确说明受限原因
 并停止，不得请求扩大权限或尝试越界。代理运行在一次性隔离副本中；不要查找、访问或修改其他仓库副本。
@@ -345,8 +346,8 @@ danger-full-access、bypassPermissions 或任何权限升级；命令被边界�
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     entry_command = (
-        "develop_feature.cmd" if platform.system().lower() == "windows"
-        else "./develop_feature"
+        "vision.cmd develop" if platform.system().lower() == "windows"
+        else "./vision develop"
     )
     parser = argparse.ArgumentParser(
         description="用少量确认明确需求，并让 Codex 或 Claude Code 只生成通道/全局 Logic。",
@@ -358,6 +359,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
   {entry_command} --agent claude --plan-only "评估新增模型类型需要改哪些模块"
 """,
     )
+    parser.add_argument("--project", type=Path, help="独立业务项目路径；默认 projects/person_count")
     parser.add_argument("description", nargs="*", help="可选的初始需求描述")
     parser.add_argument(
         "--agent",
@@ -509,7 +511,7 @@ def dry_run_agent_label(requested: str) -> str:
 def verify_write_guard(repo: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="rk3588-guard-self-test-") as holder:
         source = Path(holder) / "source"
-        allowed = source / "vision_analysis/src/logic/modules/existing/logic.cpp"
+        allowed = source / "logic/modules/existing/logic.cpp"
         outside = source / "web_console/app.ts"
         excluded = source / "node_modules/cached/package.js"
         allowed.parent.mkdir(parents=True)
@@ -525,12 +527,12 @@ def verify_write_guard(repo: Path) -> None:
                 raise WriteBoundaryError("隔离副本错误复制了排除的依赖缓存。")
             generated = (
                 isolated.path
-                / "vision_analysis/src/logic/modules/generated/logic.cpp"
+                / "logic/modules/generated/logic.cpp"
             )
             generated.parent.mkdir(parents=True)
             generated.write_text("generated\n", encoding="utf-8")
             promoted = isolated.promote()
-            expected = "vision_analysis/src/logic/modules/generated/logic.cpp"
+            expected = "logic/modules/generated/logic.cpp"
             if promoted.changed_paths != (expected,):
                 raise WriteBoundaryError("允许路径回写自检结果不一致。")
         if not (source / expected).is_file():
@@ -549,7 +551,7 @@ def verify_write_guard(repo: Path) -> None:
             assert isolated.path is not None
             isolated_allowed = (
                 isolated.path
-                / "vision_analysis/src/logic/modules/existing/logic.cpp"
+                / "logic/modules/existing/logic.cpp"
             )
             isolated_outside = isolated.path / "web_console/app.ts"
             isolated_allowed.write_text("must-not-land\n", encoding="utf-8")
@@ -568,7 +570,7 @@ def verify_write_guard(repo: Path) -> None:
             assert isolated.path is not None
             isolated_allowed = (
                 isolated.path
-                / "vision_analysis/src/logic/modules/existing/logic.cpp"
+                / "logic/modules/existing/logic.cpp"
             )
             isolated_allowed.write_text("agent-change\n", encoding="utf-8")
             allowed.write_text("concurrent-change\n", encoding="utf-8")
@@ -599,26 +601,15 @@ def verify_write_guard(repo: Path) -> None:
 
 def validate_isolated_catalog(workspace: Path, environment: dict[str, str]) -> None:
     result = subprocess.run(
-        (
-            sys.executable,
-            "-I",
-            "-B",
-            "scripts/generate_logics_catalog.py",
-            "--check",
-        ),
-        cwd=workspace / "vision_analysis",
-        env=environment,
-        check=False,
-        capture_output=True,
-    )
-    stdout = decode_process_output(result.stdout)
-    stderr = decode_process_output(result.stderr)
-    if result.returncode != 0:
-        detail = stderr.strip() or stdout.strip() or "未知错误"
+        (sys.executable, "-I", "-B",
+         str(workspace / ".engine/vision_analysis/scripts/generate_logics_catalog.py"),
+         "--logic-root", str(workspace / "logic"), "--check"),
+        cwd=workspace, env=environment, check=False, capture_output=True)
+    detail = decode_process_output(result.stderr).strip() or decode_process_output(result.stdout).strip()
+    if result.returncode:
         raise WriteBoundaryError(f"Logic manifest 校验失败：\n{detail}")
-    success_output = stdout.strip() or stderr.strip()
-    if success_output:
-        print(success_output)
+    if detail:
+        print(detail)
 
 
 def _parse_claude_turn(output: str) -> tuple[str, str]:
@@ -733,6 +724,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"错误：{exc}", file=sys.stderr)
         return 2
 
+    project = (args.project or repo / "projects/person_count").resolve()
+    if not (project / "project.json").is_file():
+        print(f"错误：缺少项目清单：{project / 'project.json'}", file=sys.stderr)
+        return 2
+
     missing = missing_skill_files(repo)
     if missing:
         for path in missing:
@@ -764,7 +760,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.check:
         try:
-            verify_write_guard(repo)
+            verify_write_guard(project)
         except WriteBoundaryError as exc:
             print(f"错误：Logic 写回保护检查失败：{exc}", file=sys.stderr)
             return 2
@@ -804,7 +800,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("正在创建一次性隔离工作副本；代理不会直接在原仓库中开发。\n")
 
     try:
-        with IsolatedLogicWorkspace(repo) as isolated:
+        with IsolatedLogicWorkspace(project, support_engine=repo) as isolated:
             assert isolated.path is not None
             child_environment = dict(isolated.child_environment())
             if runtime.key == "claude":

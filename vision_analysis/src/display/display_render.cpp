@@ -21,7 +21,7 @@
 #include "display.h"
 #include "display_pipeline.h"
 #include "pipeline/frame_transform.h"
-#include "logic/core/channel_logic.h" /* DrawCommand, RenderParams */
+#include <rkvision/channel_context.h> /* DrawCommand, RenderParams */
 
 #include <algorithm>
 #include <atomic>

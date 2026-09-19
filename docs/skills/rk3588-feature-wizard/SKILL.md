@@ -1,7 +1,10 @@
 ---
 name: rk3588-feature-wizard
-description: Interactively discover, formalize, implement, and validate a channel or global Logic feature in this RK3588 visual-analysis repository through Codex CLI or Claude Code. Use when a user wants one guided entry point with short environment and requirement confirmations, automatic no-prompt permissions inside an isolated copy, and a mechanically enforced write-back allowlist limited to vision_analysis/src/logic/modules and global_modules.
+description: Interactively discover, formalize, implement, and validate a channel or global Logic feature in this RK3588 visual-analysis repository through Codex CLI or Claude Code. Use when a user wants one guided entry point with short environment and requirement confirmations, automatic no-prompt permissions inside an isolated copy, and a mechanically enforced write-back allowlist limited to logic/modules and global_modules.
 ---
+
+> 独立项目：业务根目录由 `--project` 选择，模块位于该项目 `logic/`；公开 API 位于引擎 `vision_analysis/include/rkvision/`。向导隔离副本中引擎和本文档位于只读 `.engine/`。使用生成器时显式传 `--logic-root <项目>/logic`；省略参数只检查框架参考项目。
+
 
 # RK3588 功能开发向导
 
@@ -21,11 +24,11 @@ description: Interactively discover, formalize, implement, and validate a channe
 
 ## 不可扩大的写入边界
 
-完整读取 [`references/write-boundary.md`](references/write-boundary.md)。通过 `develop_feature` 运行时，
+完整读取 [`references/write-boundary.md`](references/write-boundary.md)。通过 `vision develop` 运行时，
 唯一允许回写原仓库的路径是：
 
-- `vision_analysis/src/logic/modules/**`；
-- `vision_analysis/src/logic/global_modules/**`。
+- `logic/modules/**`；
+- `logic/global_modules/**`。
 
 仓库其他位置只读，包括 `vision_analysis/src/logic/core/**`、配置、测试、文档、Web、服务、脚本和生成物。
 不得请求用户扩大白名单，不得要求切换 Full Access、`danger-full-access` 或 `bypassPermissions`，不得创建
@@ -33,7 +36,7 @@ description: Interactively discover, formalize, implement, and validate a channe
 
 启动器在一次性隔离副本中运行代理，并只在会话正常结束、manifest 校验通过且全部改动都位于白名单时
 回写；发现任意越界改动就拒绝整批结果。因此，需要修改其他源码才能成立的需求不是本向导可实现的需求，
-只能说明缺失能力并停止。直接手工调用本文件只有指令约束；需要机械保证时必须使用 `develop_feature`。
+只能说明缺失能力并停止。直接手工调用本文件只有指令约束；需要机械保证时必须使用 `vision develop`。
 
 ## 阶段零：确认环境
 
@@ -139,6 +142,6 @@ description: Interactively discover, formalize, implement, and validate a channe
 也不得把事件进入本地队列写成远端投递成功。
 
 终端入口由 [`scripts/start_wizard.py`](scripts/start_wizard.py) 提供，Codex/Claude 的参数差异只维护在
-[`scripts/agent_adapters.py`](scripts/agent_adapters.py)；仓库根目录的 `./develop_feature` 只是稳定的
+[`scripts/agent_adapters.py`](scripts/agent_adapters.py)；仓库根目录的 `./vision develop` 只是稳定的
 短命令包装器。隔离复制、改动分类和白名单回写由 [`scripts/write_guard.py`](scripts/write_guard.py)
 确定性执行，不能用提示词判断代替。

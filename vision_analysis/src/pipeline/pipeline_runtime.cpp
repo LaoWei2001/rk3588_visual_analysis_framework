@@ -36,8 +36,8 @@
 #include "inference/inference_engine.h"
 #include "pipeline_runtime.h"
 #include "pipeline_internal.h" /* DisplayTask/DisplayQueue 定义、extern 声明、时间辅助 */
-#include "logic/core/channel_logic.h"
-#include "logic/core/global_logic.h"
+#include <rkvision/channel_context.h>
+#include "logic/core/global_logic_runtime.h"
 #include "runtime/app_ctrl.h"
 #include "common/logging.h"
 

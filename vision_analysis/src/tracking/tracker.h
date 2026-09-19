@@ -11,7 +11,7 @@
  */
 #pragma once
 
-#include "inference/inference_types.h"
+#include <rkvision/types.h>
 #include <memory>
 #include <vector>
 

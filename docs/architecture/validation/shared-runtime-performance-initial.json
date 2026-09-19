@@ -1,0 +1,70 @@
+{
+  "conditions": "Default ondemand governors; no CPU affinity; 4 x 32 seconds ABBA; first five-second sample excluded per channel",
+  "records": [
+    {
+      "label": "baseline",
+      "trial": 0,
+      "channels": 3,
+      "samples": 15,
+      "fps_per_channel": 45.166666666666664,
+      "inference_total_ms": 21.721333333333334,
+      "cpu_percent": 98.43248399131235,
+      "rss_mb": 104.21383101851852,
+      "exit_code": 0,
+      "log": "/tmp/rkvision-shared-performance/0-baseline.log"
+    },
+    {
+      "label": "refactor",
+      "trial": 1,
+      "channels": 3,
+      "samples": 15,
+      "fps_per_channel": 42.086666666666666,
+      "inference_total_ms": 23.294666666666668,
+      "cpu_percent": 112.78585241867405,
+      "rss_mb": 104.71021412037037,
+      "exit_code": 0,
+      "log": "/tmp/rkvision-shared-performance/1-refactor.log"
+    },
+    {
+      "label": "refactor",
+      "trial": 2,
+      "channels": 3,
+      "samples": 15,
+      "fps_per_channel": 41.28,
+      "inference_total_ms": 23.412666666666667,
+      "cpu_percent": 113.53256867148926,
+      "rss_mb": 104.54644097222223,
+      "exit_code": 0,
+      "log": "/tmp/rkvision-shared-performance/2-refactor.log"
+    },
+    {
+      "label": "baseline",
+      "trial": 3,
+      "channels": 3,
+      "samples": 15,
+      "fps_per_channel": 43.85333333333333,
+      "inference_total_ms": 23.394000000000002,
+      "cpu_percent": 112.85757759906711,
+      "rss_mb": 104.46498842592592,
+      "exit_code": 0,
+      "log": "/tmp/rkvision-shared-performance/3-baseline.log"
+    }
+  ],
+  "summary": {
+    "baseline": {
+      "fps_per_channel": 44.51,
+      "inference_total_ms": 22.55766666666667,
+      "cpu_percent": 105.64503079518974,
+      "rss_mb": 104.33940972222223,
+      "total_fps": 133.53
+    },
+    "refactor": {
+      "fps_per_channel": 41.68333333333334,
+      "inference_total_ms": 23.35366666666667,
+      "cpu_percent": 113.15921054508166,
+      "rss_mb": 104.6283275462963,
+      "total_fps": 125.05000000000001
+    }
+  },
+  "total_fps_change_percent": -6.350632816595514
+}

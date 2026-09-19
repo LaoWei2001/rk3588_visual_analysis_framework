@@ -25,6 +25,7 @@ def find_repo(start: Path) -> Path:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--project", type=Path, help="external application project root")
     parser.add_argument("--repo", type=Path, help="repository root (auto-detected by default)")
     parser.add_argument("--kind", choices=("channel", "global"), required=True)
     parser.add_argument("--name", required=True, help="logic_xxx or global_xxx registration name")
@@ -35,7 +36,7 @@ def parse_args() -> argparse.Namespace:
 
 def module_content(kind: str, name: str, label: str) -> tuple[str, str]:
     if kind == "channel":
-        cpp = f'''#include "logic/core/logic_common.h"
+        cpp = f'''#include <rkvision/logic.h>
 
 static void {name}(ChannelContext *ctx)
 {{
@@ -56,7 +57,7 @@ REGISTER_LOGIC({name});
             "report_fields": [],
         }
     else:
-        cpp = f'''#include "logic/core/global_logic.h"
+        cpp = f'''#include <rkvision/global_context.h>
 
 static void {name}(GlobalContext *gctx)
 {{
@@ -82,14 +83,15 @@ REGISTER_GLOBAL_LOGIC({name});
 
 def main() -> int:
     args = parse_args()
-    repo = args.repo.resolve() if args.repo else find_repo(Path.cwd())
+    repo = args.repo.resolve() if args.repo else find_repo(Path(__file__))
+    project = args.project.resolve() if args.project else repo / "projects/person_count"
     expected_prefix = "logic_" if args.kind == "channel" else "global_"
     if not re.fullmatch(r"[a-z][a-z0-9_]*", args.name) or not args.name.startswith(expected_prefix):
         raise SystemExit(f"error: {args.kind} name must match {expected_prefix}[a-z0-9_]+")
     if not args.label.strip():
         raise SystemExit("error: label must not be empty")
 
-    parent = repo / "vision_analysis/src/logic" / (
+    parent = project / "logic" / (
         "modules" if args.kind == "channel" else "global_modules"
     )
     if not parent.is_dir():
@@ -99,7 +101,7 @@ def main() -> int:
         raise SystemExit(f"error: refusing to overwrite existing path: {target}")
 
     cpp, manifest = module_content(args.kind, args.name, args.label.strip())
-    print(f"module: {target.relative_to(repo)}")
+    print(f"module: {target.relative_to(project)}")
     print("files: logic.cpp, logic.json")
     if args.dry_run:
         return 0

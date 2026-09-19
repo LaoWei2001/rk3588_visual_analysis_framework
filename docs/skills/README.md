@@ -13,7 +13,7 @@
 
 ## 组合使用
 
-- 不知道该选哪个 Skill：从仓库根目录运行 `./develop_feature`；向导会选择可用的 Codex/Claude，但只会实施能完全放在通道/全局 Logic 模块目录内的功能。
+- 不知道该选哪个 Skill：从仓库根目录运行 `./vision develop`；向导会选择可用的 Codex/Claude，但只会实施能完全放在通道/全局 Logic 模块目录内的功能。
 - 新增“单通道检测并上报”：先用 `build-rk3588-vision-app` 定边界，再读 `rk3588-channel-logic` 和 `rk3588-console-ops` 的上报参考。
 - 新增“多通道组合告警”：使用 `rk3588-global-logic`，并让上游通道通过 `outputs`/`publish_*()` 提供契约。
 - 修改引擎公共 API 或配置：使用 `rk3588-src-modules`，再回看所有受影响的业务 Skill。

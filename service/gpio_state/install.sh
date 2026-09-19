@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# GPIO 子系统内部组件安装器。正常部署由项目根目录 install.sh 调用。
+# GPIO 子系统内部组件安装器。正常部署由 setup/install.sh 调用。
 set -euo pipefail
 
 service_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${service_dir}/../.." && pwd)"
-gpio_test_dir="${repo_root}/gpio_test"
+gpio_test_dir="${repo_root}/tools/hardware/gpio_test"
 daemon_build_dir="${service_dir}/build"
 gpioctl_path="/usr/local/bin/rk3588-gpioctl"
 gpioctl_compat_path="/usr/local/bin/gpio_test"

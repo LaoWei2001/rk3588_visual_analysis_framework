@@ -5,7 +5,7 @@
  * 画面文字统一用 OpenCV freetype 模块渲染(中英文)。freetype 为必需(CMake 已强制),
  * 不再回退 Hershey。字体加载失败会打印明显错误, 文字将不绘制。
  */
-#include "text_overlay.h"
+#include <rkvision/text.h>
 
 #include <atomic>
 #include <algorithm>

@@ -1,0 +1,111 @@
+{
+  "date": "2026-09-19",
+  "platform": "RK3588/AArch64, native GCC 10.2.1",
+  "project_and_shared_integration_tests": 12,
+  "installation_tests": 5,
+  "all_projects_native_build_and_package": 16,
+  "all_packages_same_runtime": true,
+  "external_direct_cmake_build_and_package": true,
+  "no_bundle_libs_keeps_engine": true,
+  "runtime_abi_mismatch_rejected": true,
+  "cmake_sdk_mismatch_rejected": true,
+  "relocated_package_and_compatible_runtime_swap": true,
+  "rtsp_decode_npu_reconnect": true,
+  "invalid_reload_retains_active_config": true,
+  "valid_reload_snapshot_generation": 2,
+  "global_logic_execution": true,
+  "graceful_exit_code": 0,
+  "runtime_log": "/tmp/rkvision-shared-runtime-acceptance/runtime.log",
+  "docker_cross_build_tested": false,
+  "performance_baseline": "monolithic person_count before shared runtime conversion",
+  "performance_baseline_sha256": "d77086625a86ddf2bccc546a93977473ca4dc2dbbbc12aa16f4528bac3f1bdd9",
+  "build_records": [
+    {
+      "project": "course_01",
+      "exit_code": 0,
+      "seconds": 9.28
+    },
+    {
+      "project": "course_02",
+      "exit_code": 0,
+      "seconds": 9.58
+    },
+    {
+      "project": "course_03",
+      "exit_code": 0,
+      "seconds": 12.88
+    },
+    {
+      "project": "course_04",
+      "exit_code": 0,
+      "seconds": 15.89
+    },
+    {
+      "project": "course_05",
+      "exit_code": 0,
+      "seconds": 12.67
+    },
+    {
+      "project": "course_06",
+      "exit_code": 0,
+      "seconds": 17.24
+    },
+    {
+      "project": "course_07",
+      "exit_code": 0,
+      "seconds": 14.05
+    },
+    {
+      "project": "course_08",
+      "exit_code": 0,
+      "seconds": 17.38
+    },
+    {
+      "project": "course_09",
+      "exit_code": 0,
+      "seconds": 15.06
+    },
+    {
+      "project": "course_10",
+      "exit_code": 0,
+      "seconds": 14.64
+    },
+    {
+      "project": "course_gpio",
+      "exit_code": 0,
+      "seconds": 15.07
+    },
+    {
+      "project": "crane_safety",
+      "exit_code": 0,
+      "seconds": 35.77
+    },
+    {
+      "project": "dify",
+      "exit_code": 0,
+      "seconds": 16.08
+    },
+    {
+      "project": "object_detection",
+      "exit_code": 0,
+      "seconds": 27.9
+    },
+    {
+      "project": "person_count",
+      "exit_code": 0,
+      "seconds": 6.9
+    },
+    {
+      "project": "relay_control",
+      "exit_code": 0,
+      "seconds": 17.46
+    }
+  ],
+  "performance_trials_completed": 12,
+  "governors_restored": true,
+  "performance_records": [
+    "shared-runtime-performance-initial.json",
+    "shared-runtime-performance-controlled.json",
+    "shared-runtime-performance-default.json"
+  ]
+}

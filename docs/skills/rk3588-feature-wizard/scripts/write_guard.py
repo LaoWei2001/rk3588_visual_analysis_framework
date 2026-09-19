@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import os
+import shutil
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
@@ -14,8 +15,8 @@ from typing import Mapping, Sequence
 
 
 ALLOWED_WRITE_ROOTS = (
-    PurePosixPath("vision_analysis/src/logic/modules"),
-    PurePosixPath("vision_analysis/src/logic/global_modules"),
+    PurePosixPath("logic/modules"),
+    PurePosixPath("logic/global_modules"),
 )
 
 # Keep generated dependencies, editor state, and large media out of the disposable
@@ -88,8 +89,9 @@ def allowed_roots_text() -> str:
 class IsolatedLogicWorkspace:
     """Run an agent in a disposable project copy and promote allowlisted files."""
 
-    def __init__(self, source_repo: Path):
+    def __init__(self, source_repo: Path, support_engine: Path | None = None):
         self.source_repo = source_repo.resolve()
+        self.support_engine = support_engine
         self.path: Path | None = None
         self._baseline_snapshot: TreeSnapshot | None = None
         self._temporary: tempfile.TemporaryDirectory[str] | None = None
@@ -100,6 +102,16 @@ class IsolatedLogicWorkspace:
         self.path.mkdir()
         try:
             self._copy_current_project()
+            if self.support_engine is not None:
+                support = self.path / ".engine"
+                if support.exists():
+                    raise WriteBoundaryError("项目中的 .engine 路径为向导保留。")
+                for relative in ("docs", "vision_analysis/src", "vision_analysis/include",
+                                 "vision_analysis/scripts", "vision_analysis/metadata", "tools/project",
+                                 "service", "web_console/backend", "web_console/frontend/src"):
+                    shutil.copytree(self.support_engine / relative, support / relative,
+                                    ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", "build", "dist", "node_modules"))
+                shutil.copy2(self.support_engine / "VERSION", support / "VERSION")
             self._baseline_snapshot = self._scan_tree(self.path)
         except Exception:
             self._temporary.cleanup()

@@ -6,8 +6,8 @@ dist
 *.tsbuildinfo
 .rknn
 node_modules
-/offline_install_env_debian/output/
-/offline_install_env_ubuntu/output/
+/setup/offline/debian/output/
+/setup/offline/ubuntu/output/
 .claude
 .vscode
 
@@ -16,3 +16,7 @@ node_modules
 
 # 编译后的单元测试二进制（由 tests/**/build.sh 重新生成）
 *_queue_producer_test
+
+# Independent applications and generated build products
+engine.local.cmake
+*.tar.gz

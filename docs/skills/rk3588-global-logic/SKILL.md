@@ -8,13 +8,16 @@ description: >-
   verify behavior against the current global scheduler and module manifests.
 ---
 
+> 独立项目：业务根目录由 `--project` 选择，模块位于该项目 `logic/`；公开 API 位于引擎 `vision_analysis/include/rkvision/`。向导隔离副本中引擎和本文档位于只读 `.engine/`。使用生成器时显式传 `--logic-root <项目>/logic`；省略参数只检查框架参考项目。
+
+
 # RK3588 全局逻辑开发
 
 本 Skill 面向跨通道组合判断和独立周期任务。当前权威源码是：
 
-- `vision_analysis/src/logic/core/global_logic.h/.cpp`；
+- `vision_analysis/include/rkvision/global_context.h 和 vision_analysis/src/logic/core/global_logic.cpp`；
 - `vision_analysis/src/runtime/app_ctrl.h` 中的通道快照；
-- `vision_analysis/src/logic/global_modules/`；
+- `logic/global_modules/`；
 - `vision_analysis/src/config/config.h/.cpp` 中的 `GlobalLogicConfig`。
 
 每个启用的全局实例拥有一个 pthread 和一份独立 state。任一通道发布新业务快照时立即唤醒实例；
@@ -34,8 +37,8 @@ description: >-
 
 ## Logic-only 写入规则
 
-通过 `develop_feature` 运行时，只能写入 `vision_analysis/src/logic/modules/**` 和
-`vision_analysis/src/logic/global_modules/**`。全局模块及其 manifest/模板必须放在所属
+通过 `vision develop` 运行时，只能写入 `logic/modules/**` 和
+`logic/global_modules/**`。全局模块及其 manifest/模板必须放在所属
 `global_modules/<global_logic_id>/`；需要新增上游输出时，只能修改或新增 `modules/<logic_id>/`。
 公共 `logic/core`、运行配置、测试、Web、服务、文档、脚本和生成物全部只读。现有接口不足时立即停止，
 不请求扩大权限。机械执行规则见
@@ -44,20 +47,20 @@ description: >-
 ## 开发工作流
 
 1. 明确每个上游通道要发布的 key、类型、缺失语义，并在上游 manifest 的 `outputs[]` 声明。
-2. 在 `vision_analysis/src/logic/global_modules/<global_logic_id>/` 创建 `logic.cpp` 和 `logic.json`。
+2. 在 `logic/global_modules/<global_logic_id>/` 创建 `logic.cpp` 和 `logic.json`。
 3. 实现 `static void global_xxx(GlobalContext *gctx)`，末尾写
    `REGISTER_GLOBAL_LOGIC(global_xxx);`。
 4. 普通业务从 `gctx->inputs()` 读取框架已经过滤的输入，不直接依赖通道私有 state。
 5. 跨 tick 状态放 `gctx->state`；周期基于 `timestamp_ms`/`dt_ms`，现实时间基于 `unix_ms`。
 6. 参数、事件、上报字段、Action 和模板声明遵循与通道模块相同的 manifest 规则。
 7. 给出在 `global.global_logics[]` 创建稳定唯一 `instance_id`、输入通道、兜底周期和视频来源的配置说明；
-   `develop_feature` 不修改示例或应用配置文件。
+   `vision develop` 不修改示例或应用配置文件。
 8. 校验 catalog、配置和运行日志，再覆盖断流、数据过期、热重载和事件失败测试。
 
 最小骨架：
 
 ```cpp
-#include "logic/core/global_logic.h"
+#include <rkvision/global_context.h>
 
 struct TotalState
 {
@@ -160,14 +163,14 @@ handler 的结果写视觉程序日志。队列当前最多 64 条，溢出会�
 
 ```bash
 cd vision_analysis
-python3 scripts/generate_logics_catalog.py --check
+python3 scripts/generate_logics_catalog.py --logic-root ../projects/person_count/logic --check
 ```
 
 仓库当前没有提交预编译二进制。仅在已经用当前源码得到 `./vision_analysis` 后再运行：
 
 ```bash
 ./vision_analysis --list-global-logics
-./vision_analysis --validate-config ./assets/config_global.json
+./vision_analysis --validate-config ../projects/person_count/assets/config_global.json
 ```
 
 `config_global.json` 是仓库当前的全局逻辑示例；验收具体应用时应换成实际运行配置。运行时还应确认

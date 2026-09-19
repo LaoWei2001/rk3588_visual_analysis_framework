@@ -2,7 +2,7 @@
 Description=RK3588 persistent real-time GPIO controller
 DefaultDependencies=no
 After=systemd-udev-trigger.service
-Before=rk3588-gpio-restore.service sysinit.target sound.target bootanim.service vision_app.service rk3588-console.service
+Before=rk3588-gpio-restore.service sysinit.target sound.target bootanim.service vision_app.service rk3588-console.service，
 
 [Service]
 Type=simple
@@ -14,6 +14,7 @@ RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=restart
 KillMode=control-group
 TimeoutStopSec=3
+
 
 [Install]
 WantedBy=sysinit.target

@@ -36,6 +36,7 @@ def find_repo(start: Path) -> Path:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("module", help="registration name, e.g. logic_helmet or global_demo")
+    parser.add_argument("--project", type=Path, help="external application project root")
     parser.add_argument("--repo", type=Path, help="repository root (auto-detected by default)")
     return parser.parse_args()
 
@@ -48,18 +49,19 @@ def string_set(items: object, key: str) -> set[str]:
 
 def main() -> int:
     args = parse_args()
-    repo = args.repo.resolve() if args.repo else find_repo(Path.cwd())
+    repo = args.repo.resolve() if args.repo else find_repo(Path(__file__))
+    project = args.project.resolve() if args.project else repo / "projects/person_count"
     is_global = args.module.startswith("global_")
     if not is_global and not args.module.startswith("logic_"):
         raise SystemExit("error: module must start with logic_ or global_")
-    parent = repo / "vision_analysis/src/logic" / ("global_modules" if is_global else "modules")
+    parent = project / "logic" / ("global_modules" if is_global else "modules")
     target = parent / args.module
     entry_path, json_path = target / "logic.cpp", target / "logic.json"
     errors: list[str] = []
     warnings: list[str] = []
     for path in (entry_path, json_path):
         if not path.is_file():
-            errors.append(f"missing {path.relative_to(repo)}")
+            errors.append(f"missing {path.relative_to(project)}")
     if errors:
         for item in errors:
             print(f"ERROR: {item}")
@@ -72,7 +74,7 @@ def main() -> int:
     try:
         manifest = json.loads(json_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"ERROR: invalid {json_path.relative_to(repo)}: {exc}")
+        print(f"ERROR: invalid {json_path.relative_to(project)}: {exc}")
         return 1
 
     macro = "REGISTER_GLOBAL_LOGIC" if is_global else "REGISTER_LOGIC"
@@ -131,18 +133,16 @@ def main() -> int:
     if used_params - declared_params:
         errors.append(f"undeclared logic parameter(s): {sorted(used_params - declared_params)}")
     declared_actions = string_set(manifest.get("actions"), "id")
-    has_action_registration = "REGISTER_LOGIC_ACTION" in cpp
-    if is_global and declared_actions:
-        errors.append("global logic actions are not supported by the current control path")
-    elif declared_actions and not has_action_registration:
-        errors.append("logic.json declares actions but C++ has no REGISTER_LOGIC_ACTION")
+    action_macro = "REGISTER_GLOBAL_LOGIC_ACTION" if is_global else "REGISTER_LOGIC_ACTION"
+    if declared_actions and action_macro not in cpp:
+        errors.append(f"logic.json declares actions but C++ has no {action_macro}")
     for pattern, message in BLOCKING_PATTERNS.items():
         if re.search(pattern, cpp):
             warnings.append(message)
 
     catalog = repo / "vision_analysis/scripts/generate_logics_catalog.py"
     result = subprocess.run(
-        [sys.executable, str(catalog), "--check"],
+        [sys.executable, str(catalog), "--logic-root", str(project / "logic"), "--check"],
         cwd=repo / "vision_analysis",
         text=True,
         capture_output=True,

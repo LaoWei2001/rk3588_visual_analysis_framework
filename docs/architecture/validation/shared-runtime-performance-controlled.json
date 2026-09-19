@@ -1,0 +1,87 @@
+{
+  "environment": {
+    "original_governors": {
+      "/sys/devices/system/cpu/cpufreq/policy0/scaling_governor": "ondemand",
+      "/sys/devices/system/cpu/cpufreq/policy4/scaling_governor": "ondemand",
+      "/sys/devices/system/cpu/cpufreq/policy6/scaling_governor": "ondemand",
+      "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand"
+    },
+    "benchmark_governor": "performance",
+    "cpu_affinity": "4-7",
+    "seconds_per_trial": 62,
+    "restored": true,
+    "active_governors": {
+      "/sys/devices/system/cpu/cpufreq/policy0/scaling_governor": "performance",
+      "/sys/devices/system/cpu/cpufreq/policy4/scaling_governor": "performance",
+      "/sys/devices/system/cpu/cpufreq/policy6/scaling_governor": "performance",
+      "/sys/class/devfreq/fdab0000.npu/governor": "performance"
+    }
+  },
+  "records": [
+    {
+      "label": "baseline",
+      "trial": 0,
+      "channels": 3,
+      "samples": 33,
+      "fps_per_channel": 57.448484848484846,
+      "inference_total_ms": 17.315151515151516,
+      "cpu_percent": 35.42329606347758,
+      "rss_mb": 105.22299890350877,
+      "exit_code": 0,
+      "log": "/tmp/rkvision-shared-performance-controlled/0-baseline.log"
+    },
+    {
+      "label": "refactor",
+      "trial": 1,
+      "channels": 3,
+      "samples": 33,
+      "fps_per_channel": 57.224242424242426,
+      "inference_total_ms": 17.385757575757577,
+      "cpu_percent": 35.88891075543159,
+      "rss_mb": 104.97944078947368,
+      "exit_code": 0,
+      "log": "/tmp/rkvision-shared-performance-controlled/1-refactor.log"
+    },
+    {
+      "label": "refactor",
+      "trial": 2,
+      "channels": 3,
+      "samples": 33,
+      "fps_per_channel": 57.342424242424244,
+      "inference_total_ms": 17.374242424242425,
+      "cpu_percent": 35.62042444089373,
+      "rss_mb": 104.27227247807018,
+      "exit_code": 0,
+      "log": "/tmp/rkvision-shared-performance-controlled/2-refactor.log"
+    },
+    {
+      "label": "baseline",
+      "trial": 3,
+      "channels": 3,
+      "samples": 33,
+      "fps_per_channel": 57.21818181818182,
+      "inference_total_ms": 17.365454545454543,
+      "cpu_percent": 35.389435930481945,
+      "rss_mb": 104.19784813596492,
+      "exit_code": 0,
+      "log": "/tmp/rkvision-shared-performance-controlled/3-baseline.log"
+    }
+  ],
+  "summary": {
+    "baseline": {
+      "fps_per_channel": 57.33333333333333,
+      "inference_total_ms": 17.34030303030303,
+      "cpu_percent": 35.40636599697976,
+      "rss_mb": 104.71042351973685,
+      "total_fps": 172.0
+    },
+    "refactor": {
+      "fps_per_channel": 57.28333333333333,
+      "inference_total_ms": 17.380000000000003,
+      "cpu_percent": 35.754667598162655,
+      "rss_mb": 104.62585663377193,
+      "total_fps": 171.85
+    }
+  },
+  "total_fps_change_percent": -0.08720930232558599
+}

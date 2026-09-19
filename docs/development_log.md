@@ -10,13 +10,13 @@
 - 将四份重复的顶层长文合并到 Skill 参考页；
 - 移除已不存在的逻辑示例和旧源码目录说明；
 - 把 `rk3588-src-modules` 改为可触发的标准 Skill；
-- 新增 `rk3588-feature-wizard` 总控 Skill 和根目录 `develop_feature` 入口，支持精简确认后自动路由、开发和验证；
+- 新增 `rk3588-feature-wizard` 总控 Skill 和根目录 `vision develop` 入口，支持精简确认后自动路由、开发和验证；
 - 将入口拆为模型无关向导与代理适配层，只正式支持 Codex CLI/Claude Code 的自动探测、选择、参数检查和权限映射；
 - 将访谈收敛为一次环境“是/否”确认和通常 2–3 个业务主问题，业务问题硬上限为 4；详细合同由源码核对和用户确认的推荐方案补全；
 - 启动器自动检测开发宿主、RK3588 设备树和可用工具，只让用户简短确认检测结果与默认 RK3588 部署目标，再选择平台适配命令和验证边界；
 - 将自动实现收敛为 Logic-only：代理在一次性仓库副本中工作，原仓库只回写通道/全局模块根目录；任意越界改动整批拒绝；
 - Codex 使用隔离 workspace 的 `never` 审批；Claude 使用 `dontAsk` 工具白名单、`-p`/`--resume` 多轮转发并在支持平台强制 Bash 沙箱，用户不再手动切换最高权限或确认临时目录信任；
-- 新增 Windows `develop_feature.cmd` 入口，保留 WSL2/Linux/macOS 的 `./develop_feature` 入口；两者使用相同的 Codex/Claude 选择逻辑；
+- 新增 Windows `vision.cmd develop` 入口，保留 WSL2/Linux/macOS 的 `./vision develop` 入口；两者使用相同的 Codex/Claude 选择逻辑；
 - 明确 Web SOP 节点与当前 C++ 能力不匹配；
 - 明确事件接受、异步落盘、远端投递和成功后清理的实际语义；
 - 未修改视觉引擎、Web 或服务源码；除 Markdown/YAML 外只新增开发向导包装器、Skill 启动脚本和双代理适配器。

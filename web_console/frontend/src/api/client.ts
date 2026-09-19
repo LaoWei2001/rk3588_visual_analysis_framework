@@ -113,6 +113,7 @@ export const uploadAsset = (
   file: File,
   overwrite: boolean,
   onProgress?: (pct: number) => void,
+  preserveAssets = true,
 ) => {
   const fd = new FormData()
   fd.append('file', file)
@@ -726,10 +727,12 @@ export const uploadApp = (
   file: File,
   name: string | undefined,
   onProgress?: (pct: number) => void,
+  preserveAssets = true,
 ) => {
   const fd = new FormData()
   fd.append('file', file)
   if (name) fd.append('name', name)
+  fd.append('preserve_assets', String(preserveAssets))
   return api.post<{
     ok: boolean
     name: string

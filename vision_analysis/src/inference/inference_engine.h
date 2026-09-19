@@ -1,6 +1,6 @@
 #pragma once
 #include "config/config.h"
-#include "inference/inference_types.h"
+#include <rkvision/types.h>
 #include <memory>
 #include <vector>
 

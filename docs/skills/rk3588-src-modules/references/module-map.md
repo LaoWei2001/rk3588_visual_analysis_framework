@@ -12,9 +12,7 @@
 | `event/` | EventRequest、本地 schema v3、图片任务、投递初始状态 | `event_report.h/.cpp` |
 | `gpio/` | libgpiod 引脚解析、输入输出 | `gpio.h/.cpp` |
 | `inference/` | 模型实例、任务队列、RKNN worker、同帧结果发布与热换 | `inference_engine.h` |
-| `logic/core/` | Channel/Global Context、注册表、参数、outputs | `channel_logic.h`、`global_logic.h` |
-| `logic/modules/` | 单通道可插拔业务 | 每模块 `logic.cpp + logic.json` |
-| `logic/global_modules/` | 全局可插拔业务 | 每模块 `logic.cpp + logic.json` |
+| `logic/core/` | Channel/Global Context、注册表、参数、outputs | `rkvision/channel_context.h`、`rkvision/global_context.h` |
 | `pipeline/` | 帧入口、惰性转换、tracker 后业务调用、显示/结果分发 | `pipeline_runtime.h` |
 | `recorder/` | 事件视频源帧环形缓冲、叠加和 MP4 编码 | `event_video_recorder.h/.cpp` |
 | `rtsp/` | 拼接画面 RTSP 输出 | `rtsp_streamer.h/.cpp` |
@@ -23,6 +21,8 @@
 | `third_party/json/` | vendored cJSON | `cJSON.h/.c` |
 | `tracking/` | 每通道 tracker | `tracker.h/.cpp` |
 | `yolo/` | YOLOv5/seg/v8 det/pose 的模型封装和后处理 | `model_base.h`、`composite_model.h` |
+
+业务模块位于外部项目的 `logic/modules` 和 `logic/global_modules`；公共声明位于引擎 `include/rkvision`。
 
 顶层 `main.cpp` 只负责编排生命周期、信号和线程，不应吸收业务规则。
 
@@ -43,7 +43,7 @@
 ## 构建收集与依赖
 
 `CMakeLists.txt` 显式收集 config/runtime/capturer/pipeline/inference/tracking/control/gpio/display/rtsp/yolo/
-recorder/event，并递归收集整个 `src/logic`。logic manifest 会在构建时验证并嵌入二进制。
+recorder/event，收集 `src/logic/core`，再从 `VISION_PROJECT_DIR/logic` 收集业务并通过 SDK 单独编译。logic manifest 会在构建时验证并嵌入二进制。
 
 当前必需库包括 OpenCV（必须有 `opencv2/freetype.hpp`）、GTK3、Threads、RGA、RKNN runtime 和
 libgpiod，以及 GStreamer helper 所需库。找不到 OpenCV freetype 时 CMake 明确失败，不会回退到

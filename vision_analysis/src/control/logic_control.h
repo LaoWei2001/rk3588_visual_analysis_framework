@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-#include "logic/core/channel_logic.h"
+#include <rkvision/channel_context.h>
 
 int logic_control_init(void);
 void logic_control_deinit(void);

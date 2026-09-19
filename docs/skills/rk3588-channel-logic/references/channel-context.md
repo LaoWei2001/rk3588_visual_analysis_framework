@@ -1,6 +1,6 @@
 # ChannelContext API
 
-本文只描述当前 `vision_analysis/src/logic/core/channel_logic.h` 暴露的通道接口。修改公共头文件后，
+本文只描述当前 `vision_analysis/include/rkvision/channel_context.h` 暴露的通道接口。修改公共头文件后，
 必须同步复核本文。
 
 ## 目录

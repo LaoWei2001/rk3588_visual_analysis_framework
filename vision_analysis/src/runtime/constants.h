@@ -3,12 +3,13 @@
  * @brief 系统常量定义
  */
 #pragma once
+#include <rkvision/config_types.h>
 
 namespace constants
 {
 
 // 通道相关
-constexpr int MAX_CHANNELS = 15;
+// MAX_CHANNELS is defined by the public configuration types.
 
 // 实时预览：按源帧自动更新，超过此速率时丢弃旧帧保护 RGA/内存带宽
 constexpr int PREVIEW_MAX_FPS = 30;

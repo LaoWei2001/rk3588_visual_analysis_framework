@@ -12,50 +12,43 @@
 
 ## 构建一个完整视觉 App
 
-```bash
-cd vision_analysis
-python3 scripts/generate_logics_catalog.py --check
-./build.sh my_app
-```
-
-`build.sh my_app` 按主机架构选择板端原生或 Docker 交叉编译，并把二进制、assets、依赖库、两项
-Python 服务、生成的 `logics.json` 和 `report_templates/` 放到当前 `vision_analysis/` 下的 `my_app/`。
-
-快速调试：
+进入独立项目，使用它自己的 Shell 和 CMake 入口：
 
 ```bash
-./build.sh --debug
+cd projects/person_count
+./build.sh
+./build.sh package
+# 调试编译
+./build.sh --build-type Debug
 ```
 
-该模式只生成 Debug 二进制到 `vision_analysis/`，不产生可安装完整包。输出目录名必须是单层名字；
-`--clean` 会清除构建缓存后重编。
+发布包生成到本项目 `dist/person-count/`，同级 `person-count.tar.gz` 可上传 Web。
+包含二进制、assets、依赖库、公共 Python 服务、logics.json 和上报模板。
+`--clean` 清理当前构建配置；每个项目只编译自己 logic 目录下的业务。
+直接 CMake 编译可使用 `cmake -S . -B build/direct -DCMAKE_BUILD_TYPE=Release`。
 
 ## 安装 App 与控制台
 
-命令行安装包：
+在框架根目录安装应用：
 
 ```bash
-cd vision_analysis
-sudo ./install_app.sh my_app
+sudo ./vision install projects/person_count/dist/person-count
 ```
 
-目标默认 `/opt/ai_apps/my_app`。同名覆盖会删除旧 App 目录后复制新包，但不会清理包外的
-`/opt/ai_apps/.data/my_app`。
+同名升级默认保留现场 assets、run.config 和包外 `.data`，需要明确覆盖资源时使用
+`--replace-assets`。安装会停止当前视觉应用，安装后在 Web 重新启动。
+不同项目通过 project.json 的 ID 区分，在 Web 显示为不同应用。
 
-部署控制台：
+在框架根目录部署或升级控制台：
 
 ```bash
-cd web_console
-bash install.sh
+sudo ./setup/install.sh online
+# 已准备好依赖和前端产物时
+sudo ./setup/install.sh offline
 ```
 
-默认安装到 `/opt/ai_apps/_console`，生成并启用 `rk3588-console.service`，端口 8080。可在命令前
-设置 `APPS_ROOT`/`INSTALL_DIR` 更改位置。普通模式有 Node/npm 时会锁定依赖并重新构建，没有时使用
-源码目录已有的 `frontend/dist`。无公网现场应先在项目根执行过 `install_deps.sh`，再用
-`sudo env OFFLINE=1 bash install.sh`，此时只使用已安装的 Python 包和预构建前端。
-
-Web“上传程序”与 `install_app.sh` 写入同一 App 根，但 Web 接受归档并做路径安全检查。Web 上传时
-会停止全部托管视觉 App，避免替换正在执行的文件。
+默认地址 `http://<设备IP>:8080`，应用根目录 `/opt/ai_apps/`。
+也可在 Web 的“程序管理 → 上传程序”中上传应用 tar.gz，选择启动配置后运行。
 
 ## 运行模式
 
@@ -134,7 +127,7 @@ OTA 指令按 `channels[].id + models[].id` 定位；`channel` 缺失时当前�
 | 改动 | 生效动作 |
 |---|---|
 | C++、logic manifest、模块模板、打包服务代码 | 重建完整包、重新安装、重启 App/相关服务 |
-| Web 前端/后端 | 在项目根目录运行 `sudo ./install.sh upgrade online`（已备好依赖与前端时可用 `offline`） |
+| Web 前端/后端 | 在项目根目录运行 `sudo ./setup/install.sh upgrade online`（已备好依赖与前端时可用 `offline`） |
 | 当前运行 JSON 普通可热更字段 | Web 保存后观察 C++ config monitor；被拒绝时重启 App |
 | `connections.yaml`、活动契约 | 上传 worker 下一轮重新加载；测试仍需真实事件 |
 | `ota_config.json` | 重启 OTA 服务，因为模块启动时读取 |

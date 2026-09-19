@@ -4,7 +4,7 @@
 #include "runtime/pause_ctrl.h"
 #include "runtime/process_signals.h"
 #include "common/logging.h"
-#include "text_overlay.h"
+#include <rkvision/text.h>
 #include <array>
 #include <chrono>
 #include <cmath>

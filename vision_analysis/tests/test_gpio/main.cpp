@@ -1,4 +1,4 @@
-  #include "gpio/gpio.h"
+  #include <rkvision/gpio.h>
 
   #include <cstdio>
   #include <cstring>

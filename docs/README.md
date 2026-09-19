@@ -8,10 +8,10 @@
 不熟悉框架时，直接从仓库根目录运行交互式开发向导：
 
 ```bash
-./develop_feature
+./vision develop
 ```
 
-原生 Windows 可运行 `develop_feature.cmd` 或 `py .\develop_feature`。启动器只正式适配 Codex CLI 与
+原生 Windows 可运行 `vision.cmd develop` 或 `py tools\project\vision.py develop`。启动器只正式适配 Codex CLI 与
 Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` 或 Git 命令。自动探测后选择唯一可用
 代理，或在两者都可用时请用户选择；也可用 `--agent codex`、
 `--agent claude` 显式指定。选定代理后检测 Windows、WSL2、macOS、Linux、CPU 架构、RK3588 设备树和
@@ -19,8 +19,8 @@ Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` �
 只问 2–3 轮、最多 4 轮；向导先核对源码，再给出合并后的具体方案让用户简短确认，不会要求逐项填写
 硬件和内部合同字段。需求合同完整后，只在通道/全局 Logic 模块中实现并按平台能力验证。需要先确认或
 只生成计划时，分别使用 `--confirm-before-code`、`--plan-only`。自动实现采用硬写入边界：
-代理在一次性副本中无提示执行，启动器通过文件快照和哈希比较，仅回写 `vision_analysis/src/logic/modules/**` 和
-`vision_analysis/src/logic/global_modules/**`，发现其他改动便整批拒绝；选择和权限差异见
+代理在一次性副本中无提示执行，启动器通过文件快照和哈希比较，仅回写 `<项目>/logic/modules/**` 和
+`<项目>/logic/global_modules/**`，发现其他改动便整批拒绝；选择和权限差异见
 [`agent-adapters.md`](skills/rk3588-feature-wizard/references/agent-adapters.md)。
 
 本文档最初按仓库提交 `6bd2b94dbbdd8787753b90d1527a6882e3a70aa2`（2026-08-23）整理；
@@ -40,14 +40,14 @@ Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` �
 
 | 主题 | 真源 |
 |---|---|
-| 通道 API | `vision_analysis/src/logic/core/channel_logic.h`、`logic_action.h` |
-| 全局 API | `vision_analysis/src/logic/core/global_logic.h/.cpp` |
-| 逻辑清单 | `vision_analysis/src/logic/modules/*/logic.json`、`global_modules/*/logic.json` |
+| 通道 API | `vision_analysis/include/rkvision/channel_context.h`、`logic_action.h` |
+| 全局 API | `vision_analysis/include/rkvision/global_context.h 和 vision_analysis/src/logic/core/global_logic.cpp` |
+| 逻辑清单 | `projects/person_count/logic/modules/*/logic.json`、`global_modules/*/logic.json` |
 | 配置与热重载 | `vision_analysis/src/config/`、`src/runtime/app_ctrl.cpp` |
-| 事件与媒体 | `vision_analysis/src/event/event_report.h/.cpp`、`src/recorder/` |
+| 事件与媒体 | `vision_analysis/include/rkvision/events.h` 与 `vision_analysis/src/event/event_report.cpp`、`src/recorder/` |
 | 网络投递 | `service/upload/` |
 | Web 行为 | `web_console/backend/`、`web_console/frontend/src/` |
-| 打包产物 | `vision_analysis/build.sh` 和两个生成器 |
+| 打包产物 | `vision package <项目>` 和两个生成器 |
 
 ## 按任务进入
 
@@ -150,3 +150,8 @@ cd vision_analysis
 - 改变 Web 路由、页面入口、鉴权例外或操作语义。
 
 文档示例只能使用当前源码中存在的名称。无法从源码确认的行为应标成“待验证”，不得补写推测结论。
+
+## 独立项目开发
+
+- [独立项目、SDK、共享引擎与升级说明](development/independent-projects.md)
+- [重构与性能验收记录](architecture/refactor-validation.md)

@@ -3,10 +3,10 @@
  * @brief JSON 配置解析与热加载
  */
 #include "config.h"
-#include "third_party/json/cJSON.h"
+#include <rkvision/json.h>
 #include "config_registry.h"
 #include "config_validator.h"
-#include "logic/core/logic_parameters.h"
+#include <rkvision/parameters.h>
 #include <algorithm>
 #include <cctype>
 #include <fstream>

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10.2)
+cmake_minimum_required(VERSION 3.12)
 
 # 导出 compile_commands.json：让 VS Code / clangd 的 IntelliSense 用与编译器完全相同的 -I（含 OpenCV），
 # 从根上消除 cv:: 的红波浪线，且永远和真实编译保持一致（不用再往 third_party 拷 opencv2）。
@@ -13,7 +13,7 @@ message(STATUS "architecture: " ${arch_value})
 #   1. 命令行 -DCROSS_CMAKE_FILE=<path>
 #   2. 环境变量 CROSS_CMAKE_FILE
 # 如需在正点原子 / Radxa / PINE64 等板子上直接板端编译，无需任何工具链文件。
-if((NOT "${arch_value}" STREQUAL "armv7l") AND (NOT "${arch_value}" STREQUAL "aarch64"))
+if(NOT CMAKE_TOOLCHAIN_FILE AND (NOT "${arch_value}" STREQUAL "armv7l") AND (NOT "${arch_value}" STREQUAL "aarch64"))
     if(DEFINED CROSS_CMAKE_FILE AND EXISTS "${CROSS_CMAKE_FILE}")
         message(STATUS "Cross-compile toolchain (via -DCROSS_CMAKE_FILE): ${CROSS_CMAKE_FILE}")
         include("${CROSS_CMAKE_FILE}")
@@ -32,7 +32,20 @@ endif()
 # ===================== 交叉编译工具链 END =====================
 
 project(vision_analysis LANGUAGES C CXX)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
 add_definitions(-Wall -Wpointer-arith -O3 -ffast-math)
+file(STRINGS "${PROJECT_SOURCE_DIR}/../VERSION" RKVISION_VERSION LIMIT_COUNT 1)
+set(RKVISION_ABI 1)
+# Reject SDK layout/compiler mismatches when importing or replacing a runtime.
+file(GLOB_RECURSE sdk_headers CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/include/rkvision/*.h")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${sdk_headers} "${PROJECT_SOURCE_DIR}/../VERSION")
+set(abi_inputs "${RKVISION_ABI};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION};${CMAKE_SYSTEM_PROCESSOR};${CMAKE_CXX_FLAGS};${CMAKE_CXX_STANDARD}")
+foreach(header IN LISTS sdk_headers)
+    file(SHA256 "${header}" header_hash)
+    string(APPEND abi_inputs ";${header_hash}")
+endforeach()
 
 # ======================== pinned RKNN Runtime =========================
 # RKNN 的头文件和用户态 Runtime 随源码锁定，避免不同构建机上的
@@ -132,7 +145,7 @@ set(custom_inc
     ${OpenCV_INCLUDE_DIRS}
     ${GTK3_INCLUDE_DIRS}
     ${PROJECT_SOURCE_DIR}/src
-    ${PROJECT_SOURCE_DIR}/src/third_party/json
+    ${PROJECT_SOURCE_DIR}/include
 )
 
 set(custom_libs
@@ -153,54 +166,11 @@ aux_source_directory(${PROJECT_SOURCE_DIR}/src/inference                dir_srcs
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/tracking                 dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/control                  dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/gpio                     dir_srcs)
-# 通道逻辑位于 src/logic/modules/<logic_name>/，全局逻辑位于
-# src/logic/global_modules/<logic_name>/，框架位于 src/logic/core/。
-# 递归收集让新增/删除逻辑模块无需再修改 CMakeLists.txt；重新运行 cmake 即可刷新列表。
-file(GLOB_RECURSE logic_srcs
-    "${PROJECT_SOURCE_DIR}/src/logic/*.cpp"
-    "${PROJECT_SOURCE_DIR}/src/logic/*.cc"
-    "${PROJECT_SOURCE_DIR}/src/logic/*.cxx"
-)
-list(APPEND dir_srcs ${logic_srcs})
-
-# 模块 logic.json 是参数 Schema 的唯一真源。构建时将聚合后的能力清单嵌入二进制，
-# 因此 --debug 直接运行也能完成参数默认值、类型和热重载策略校验，不依赖外部 logics.json。
-find_program(PYTHON3_EXECUTABLE NAMES python3)
-if(NOT PYTHON3_EXECUTABLE)
-    message(FATAL_ERROR "生成逻辑参数能力需要 python3")
-endif()
-file(GLOB logic_manifest_files
-    "${PROJECT_SOURCE_DIR}/src/logic/modules/*/logic.json"
-    "${PROJECT_SOURCE_DIR}/src/logic/global_modules/*/logic.json"
-)
-file(GLOB_RECURSE logic_validation_files
-    "${PROJECT_SOURCE_DIR}/src/logic/modules/*.cpp"
-    "${PROJECT_SOURCE_DIR}/src/logic/modules/*.cc"
-    "${PROJECT_SOURCE_DIR}/src/logic/modules/*.cxx"
-    "${PROJECT_SOURCE_DIR}/src/logic/modules/*.h"
-    "${PROJECT_SOURCE_DIR}/src/logic/modules/*.hpp"
-    "${PROJECT_SOURCE_DIR}/src/logic/global_modules/*.cpp"
-    "${PROJECT_SOURCE_DIR}/src/logic/global_modules/*.cc"
-    "${PROJECT_SOURCE_DIR}/src/logic/global_modules/*.cxx"
-    "${PROJECT_SOURCE_DIR}/src/logic/global_modules/*.h"
-    "${PROJECT_SOURCE_DIR}/src/logic/global_modules/*.hpp"
-)
-set(logic_catalog_cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/logic_catalog_embedded.cpp")
-add_custom_command(
-    OUTPUT "${logic_catalog_cpp}"
-    COMMAND "${PYTHON3_EXECUTABLE}"
-            "${PROJECT_SOURCE_DIR}/scripts/generate_logics_catalog.py"
-            --logic-root "${PROJECT_SOURCE_DIR}/src/logic"
-            --cpp-output "${logic_catalog_cpp}"
-    DEPENDS
-            "${PROJECT_SOURCE_DIR}/scripts/generate_logics_catalog.py"
-            "${PROJECT_SOURCE_DIR}/src/logic/catalog.json"
-            ${logic_manifest_files}
-            ${logic_validation_files}
-    COMMENT "Validating and embedding per-logic parameter schemas"
-    VERBATIM
-)
-list(APPEND dir_srcs "${logic_catalog_cpp}")
+file(GLOB_RECURSE core_logic_srcs CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/src/logic/core/*.cpp"
+    "${PROJECT_SOURCE_DIR}/src/logic/core/*.cc"
+    "${PROJECT_SOURCE_DIR}/src/logic/core/*.cxx")
+list(APPEND dir_srcs ${core_logic_srcs})
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/display                  dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/rtsp                     dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/yolo                     dir_srcs)
@@ -209,13 +179,104 @@ aux_source_directory(${PROJECT_SOURCE_DIR}/src/event                    dir_srcs
 set(cjson_src ${PROJECT_SOURCE_DIR}/src/third_party/json/cJSON.c)
 # ========================== custom ============================
 
-add_executable(vision_analysis ${dir_srcs} ${api_srcs} ${cjson_src})
-target_include_directories(vision_analysis PRIVATE ${custom_inc} ${api_inc})
-target_link_libraries(vision_analysis ${custom_libs} ${sysLib_list})
+# Public SDK plus a shared engine. Direct project CMake builds the runtime locally;
+# build.sh supplies RKVISION_RUNTIME_DIR to reuse one engine build across projects.
+string(SHA256 RKVISION_ABI_TAG "${abi_inputs};${OpenCV_VERSION}")
+set(runtime_metadata "${CMAKE_CURRENT_BINARY_DIR}/rkvision-runtime.cmake")
+file(WRITE "${runtime_metadata}"
+    "set(RKVISION_BUILT_ABI_TAG \"${RKVISION_ABI_TAG}\")\nset(RKVISION_BUILT_VERSION \"${RKVISION_VERSION}\")\nset(RKVISION_BUILT_TYPE \"${CMAKE_BUILD_TYPE}\")\n")
+if(RKVISION_RUNTIME_DIR)
+    get_filename_component(RKVISION_RUNTIME_DIR "${RKVISION_RUNTIME_DIR}" ABSOLUTE)
+    include("${RKVISION_RUNTIME_DIR}/rkvision-runtime.cmake")
+    if(NOT RKVISION_BUILT_ABI_TAG STREQUAL RKVISION_ABI_TAG OR
+       NOT RKVISION_BUILT_VERSION STREQUAL RKVISION_VERSION OR
+       NOT RKVISION_BUILT_TYPE STREQUAL CMAKE_BUILD_TYPE)
+        message(FATAL_ERROR "Shared runtime SDK/compiler/version/build type mismatch; rebuild the engine")
+    endif()
+    add_library(rkvision SHARED IMPORTED GLOBAL)
+    set_target_properties(rkvision PROPERTIES
+        IMPORTED_LOCATION "${RKVISION_RUNTIME_DIR}/librkvision.so.${RKVISION_ABI}"
+        IMPORTED_SONAME "librkvision.so.${RKVISION_ABI}")
+    # Copy actual files (not symlinks) so build products and archives are relocatable.
+    add_custom_target(rkvision_stage ALL
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_BINARY_DIR}/libs"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "$<TARGET_FILE:rkvision>" "${CMAKE_BINARY_DIR}/libs/librkvision.so.${RKVISION_ABI}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${runtime_metadata}" "${CMAKE_BINARY_DIR}/libs/rkvision-runtime.cmake"
+        VERBATIM)
+else()
+    add_library(rkvision SHARED ${dir_srcs} ${api_srcs} ${cjson_src})
+    target_include_directories(rkvision PRIVATE ${custom_inc} ${api_inc})
+    target_compile_definitions(rkvision PRIVATE
+        RKVISION_ENGINE_VERSION="${RKVISION_VERSION}" RKVISION_BUILD_ABI_TAG="${RKVISION_ABI_TAG}")
+    # Preserve direct internal function calls despite the shared-library boundary.
+    target_compile_options(rkvision PRIVATE -fno-semantic-interposition)
+    target_link_libraries(rkvision PRIVATE ${custom_libs} ${sysLib_list})
+    set_target_properties(rkvision PROPERTIES
+        VERSION "${RKVISION_VERSION}" SOVERSION "${RKVISION_ABI}"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/libs"
+        LINK_FLAGS "-Wl,--no-undefined,-Bsymbolic-functions"
+        BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "$ORIGIN")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/libs")
+    configure_file("${runtime_metadata}" "${CMAKE_BINARY_DIR}/libs/rkvision-runtime.cmake" COPYONLY)
+endif()
+add_library(rkvision::runtime ALIAS rkvision)
 
-# 发布包即使不经过 run.sh 启动，也优先从可执行文件旁的 libs/ 加载依赖。
-# BUILD_WITH_INSTALL_RPATH 避免把构建机上的 vendor 绝对路径写入最终 ELF。
+if(NOT VISION_PROJECT_DIR)
+    return() # Standalone engine build: cmake -S vision_analysis -B build/runtime/...
+endif()
+get_filename_component(VISION_PROJECT_DIR "${VISION_PROJECT_DIR}" ABSOLUTE)
+set(VISION_LOGIC_ROOT "${VISION_PROJECT_DIR}/logic")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${VISION_PROJECT_DIR}/project.json" "${PROJECT_SOURCE_DIR}/../VERSION")
+if(NOT EXISTS "${VISION_PROJECT_DIR}/project.json")
+    message(FATAL_ERROR "Missing application project.json: ${VISION_PROJECT_DIR}")
+endif()
+find_program(PYTHON3_EXECUTABLE NAMES python3)
+if(NOT PYTHON3_EXECUTABLE)
+    message(FATAL_ERROR "Project validation requires python3")
+endif()
+execute_process(COMMAND "${PYTHON3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/../tools/project/vision.py"
+    check "${VISION_PROJECT_DIR}" RESULT_VARIABLE project_check)
+if(NOT project_check EQUAL 0)
+    message(FATAL_ERROR "Application validation failed")
+endif()
+file(GLOB_RECURSE app_logic_srcs CONFIGURE_DEPENDS
+    "${VISION_LOGIC_ROOT}/*.cpp" "${VISION_LOGIC_ROOT}/*.cc" "${VISION_LOGIC_ROOT}/*.cxx")
+# Public SDK is the only engine include path visible to application compilation.
+add_library(rkvision_sdk INTERFACE)
+add_library(rkvision::sdk ALIAS rkvision_sdk)
+target_include_directories(rkvision_sdk INTERFACE "${PROJECT_SOURCE_DIR}/include" ${OpenCV_INCLUDE_DIRS})
+if(app_logic_srcs)
+    add_library(vision_app OBJECT ${app_logic_srcs})
+    target_link_libraries(vision_app PRIVATE rkvision::sdk)
+    target_include_directories(vision_app PRIVATE "${VISION_PROJECT_DIR}")
+    list(APPEND app_sources $<TARGET_OBJECTS:vision_app>)
+endif()
+file(GLOB_RECURSE logic_validation_files CONFIGURE_DEPENDS "${VISION_LOGIC_ROOT}/*")
+# A changed file list invalidates the embedded catalog when a module is removed too.
+# Depending only on surviving manifests would leave the old catalog up to date.
+set(logic_input_list "${CMAKE_CURRENT_BINARY_DIR}/generated/logic_inputs.txt")
+file(GENERATE OUTPUT "${logic_input_list}" CONTENT "${logic_validation_files}\n")
+set(logic_catalog_cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/logic_catalog_embedded.cpp")
+add_custom_command(
+    OUTPUT "${logic_catalog_cpp}"
+    COMMAND "${PYTHON3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/scripts/generate_logics_catalog.py"
+            --logic-root "${VISION_LOGIC_ROOT}"
+            --cpp-output "${logic_catalog_cpp}"
+    DEPENDS "${PROJECT_SOURCE_DIR}/scripts/generate_logics_catalog.py"
+            "${PROJECT_SOURCE_DIR}/metadata/catalog.json" "${logic_input_list}" ${logic_validation_files}
+    COMMENT "Validating and embedding application parameter schemas" VERBATIM)
+list(APPEND app_sources "${logic_catalog_cpp}")
+
+add_executable(vision_analysis "${PROJECT_SOURCE_DIR}/application/main.cpp" ${app_sources})
+target_compile_definitions(vision_analysis PRIVATE RKVISION_BUILD_ABI_TAG="${RKVISION_ABI_TAG}")
+target_link_libraries(vision_analysis PRIVATE rkvision::sdk rkvision::runtime ${OpenCV_LIBS})
+if(TARGET rkvision_stage)
+    add_dependencies(vision_analysis rkvision_stage)
+endif()
 set_target_properties(vision_analysis PROPERTIES
-    BUILD_WITH_INSTALL_RPATH TRUE
-    INSTALL_RPATH "$ORIGIN/libs"
-)
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "$ORIGIN/libs")

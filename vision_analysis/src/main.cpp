@@ -60,10 +60,10 @@
 #include "control/logic_control.h"
 #include "display/display.h"
 #include "display/display_pipeline.h"
-#include "event/event_report.h"
-#include "gpio/gpio.h"
-#include "logic/core/channel_logic.h"
-#include "logic/core/global_logic.h"
+#include <rkvision/events.h>
+#include <rkvision/gpio.h>
+#include <rkvision/channel_context.h>
+#include "logic/core/global_logic_runtime.h"
 #include "pipeline/pipeline_runtime.h"
 #include "recorder/event_video_recorder.h"
 #include "rtsp/rtsp_streamer.h"
@@ -178,7 +178,7 @@ static void *fd_monitor_thread_func(void *arg)
 }
 
 /*======================== main ========================*/
-int main(int argc, char **argv)
+int rkvision_engine_main(int argc, char **argv)
 {
     /* Web 控制台通过 PIPE 捕获日志。stdout 连到管道时 libc 默认使用块缓冲，
      * 冷启动/重连日志可能长时间不显示；统一改为逐行刷新。 */

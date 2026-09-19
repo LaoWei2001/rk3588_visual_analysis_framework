@@ -1,0 +1,23 @@
+{
+  "global": {
+    "enable_display": false,
+    "enable_rtsp": false,
+    "max_fps": 25
+  },
+  "channels": [
+    {
+      "id": 0,
+      "enable": false,
+      "infer_enable": false,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/input.mp4",
+        "loop": true
+      },
+      "models": [],
+      "logic": "logic_relay",
+      "logic_parameters": {},
+      "roi_zones": []
+    }
+  ]
+}

@@ -23,7 +23,7 @@
 #include "pipeline_runtime.h"
 #include "pipeline_internal.h"
 #include "frame_transform.h"
-#include "logic/core/channel_logic.h"
+#include <rkvision/channel_context.h>
 #include "tracking/tracker.h"
 
 /*======================== 跟踪器 (每通道一个实例) ========================*/

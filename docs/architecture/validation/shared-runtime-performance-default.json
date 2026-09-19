@@ -1,0 +1,74 @@
+{
+  "conditions": "Default ondemand governors restored; no CPU affinity; 4 x 62 seconds ABBA; 20-second warmup excluded per trial",
+  "records": [
+    {
+      "label": "baseline",
+      "trial": 0,
+      "channels": 3,
+      "samples": 24,
+      "fps_per_channel": 42.7875,
+      "inference_total_ms": 23.227083333333333,
+      "cpu_percent": 113.32181929650874,
+      "rss_mb": 105.19587053571429,
+      "warmup_seconds": 20,
+      "exit_code": 0,
+      "log": "/tmp/rkvision-shared-performance-default-steady/0-baseline.log"
+    },
+    {
+      "label": "refactor",
+      "trial": 1,
+      "channels": 3,
+      "samples": 24,
+      "fps_per_channel": 44.45,
+      "inference_total_ms": 22.5975,
+      "cpu_percent": 107.35649277102807,
+      "rss_mb": 105.67513020833333,
+      "warmup_seconds": 20,
+      "exit_code": 0,
+      "log": "/tmp/rkvision-shared-performance-default-steady/1-refactor.log"
+    },
+    {
+      "label": "refactor",
+      "trial": 2,
+      "channels": 3,
+      "samples": 24,
+      "fps_per_channel": 43.854166666666664,
+      "inference_total_ms": 22.617916666666666,
+      "cpu_percent": 107.10075561244588,
+      "rss_mb": 105.0859375,
+      "warmup_seconds": 20,
+      "exit_code": 0,
+      "log": "/tmp/rkvision-shared-performance-default-steady/2-refactor.log"
+    },
+    {
+      "label": "baseline",
+      "trial": 3,
+      "channels": 3,
+      "samples": 24,
+      "fps_per_channel": 42.3875,
+      "inference_total_ms": 23.48125,
+      "cpu_percent": 114.23046937777974,
+      "rss_mb": 105.76013764880952,
+      "warmup_seconds": 20,
+      "exit_code": 0,
+      "log": "/tmp/rkvision-shared-performance-default-steady/3-baseline.log"
+    }
+  ],
+  "summary": {
+    "baseline": {
+      "fps_per_channel": 42.587500000000006,
+      "inference_total_ms": 23.354166666666664,
+      "cpu_percent": 113.77614433714425,
+      "rss_mb": 105.4780040922619,
+      "total_fps": 127.76250000000002
+    },
+    "refactor": {
+      "fps_per_channel": 44.15208333333334,
+      "inference_total_ms": 22.607708333333335,
+      "cpu_percent": 107.22862419173697,
+      "rss_mb": 105.38053385416666,
+      "total_fps": 132.45625
+    }
+  },
+  "total_fps_change_percent": 3.6738088249681944
+}

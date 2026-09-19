@@ -21,7 +21,7 @@ description: >-
 - 运行状态与热更：`src/runtime/app_ctrl.h/.cpp`；
 - 帧管线：`src/pipeline/`；
 - 推理：`src/inference/` 和 `src/yolo/`；
-- 业务扩展：`src/logic/`；
+- 业务扩展：外部项目 `logic/`，公开声明在 `vision_analysis/include/rkvision/`；
 - 构建：`vision_analysis/CMakeLists.txt`、`build.sh`。
 
 ## 修改前的架构判断
@@ -73,7 +73,7 @@ channel publication（frame/results/outputs/draw/state 元信息）
 - ROI 配置为归一化 `roi_zones[]`，运行快照发布时转换到模型坐标。
 - 无 logic 仍提交帧/结果；无推理但有 logic 时以空 results 调用。
 - 当前配置快照整代不可变，callback 期间不能观察到半更新值。
-- 新增 logic 目录由 CMake 递归收集，但需要重新运行 CMake/构建并生成 catalog。
+- 新增外部项目 logic 目录由 CMake 递归收集，但需要重新运行 CMake/构建并生成 catalog。
 - 不直接编辑打包输出中的 `logics.json` 或 `report_templates/` 代替源码修改。
 
 ## 验证
@@ -82,7 +82,7 @@ channel publication（frame/results/outputs/draw/state 元信息）
 
 ```bash
 cd vision_analysis
-python3 scripts/generate_logics_catalog.py --check
+python3 scripts/generate_logics_catalog.py --logic-root ../projects/person_count/logic --check
 ```
 
 仓库当前没有提交预编译二进制；仅在已经用当前源码得到 `./vision_analysis` 后再做运行时能力探测：
@@ -90,16 +90,17 @@ python3 scripts/generate_logics_catalog.py --check
 ```bash
 ./vision_analysis --list-logics
 ./vision_analysis --list-global-logics
-./vision_analysis --validate-config ./assets/config_6.json
+./vision_analysis --validate-config ../projects/person_count/assets/config_global.json
 ```
 
-`config_6.json` 只是仓库现存示例；验收具体应用时应换成实际运行配置。
+`config_global.json` 只是仓库现存示例；验收具体应用时应换成实际运行配置。
 
 编译验证：
 
 ```bash
-./build.sh --debug
+cd projects/person_count
+./build.sh --build-type Debug
 ```
 
-完整交付再运行 `./build.sh my_app`（把 `my_app` 换成单层输出目录名）。公共接口、线程或热重载变更还必须做板端真实流、
+完整交付在应用目录运行 `./build.sh package`。公共接口、线程或热重载变更还必须做板端真实流、
 断流重连、多通道、退出和失败回滚测试。

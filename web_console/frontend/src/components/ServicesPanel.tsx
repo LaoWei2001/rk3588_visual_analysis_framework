@@ -198,7 +198,7 @@ export default function ServicesPanel({ apps, onToast }: Props) {
               {needsInstall ? (
                 <span
                   title={isSystemService
-                    ? '请先在项目根目录执行 sudo ./install.sh online 安装平台服务'
+                    ? '请先在项目根目录执行 sudo ./setup/install.sh online 安装平台服务'
                     : (runningApp ? `将自动绑定到 ${runningApp.name}` : '请先在「程序管理」中启动视觉程序，后台服务会自动绑定后再启动')}
                   style={{ display: 'inline-flex', cursor: !isSystemService && runningApp ? 'default' : 'not-allowed' }}
                 >

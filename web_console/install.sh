@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # RK3588 Web Console 内部组件安装脚本。
-# 正常部署请从项目根目录执行 ./install.sh；本脚本仅供根安装器和单项故障修复调用。
+# 正常部署请从项目根目录执行 ./setup/install.sh；本脚本仅供根安装器和单项故障修复调用。
 set -Eeuo pipefail
 
 usage() {
     echo "用法：sudo bash web_console/install.sh <online|offline>"
     echo "  online   联网安装 Python 依赖，并用 npm 重新构建前端"
     echo "  offline  使用已由离线包配置好的系统 Python 和预构建前端"
-    echo "推荐：在项目根目录执行 sudo ./install.sh <online|offline>"
+    echo "推荐：在项目根目录执行 sudo ./setup/install.sh <online|offline>"
 }
 
 if [ "$#" -ne 1 ]; then
@@ -46,8 +46,8 @@ trap cleanup EXIT
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "[错误] 安装 systemd 服务需要 root 权限。"
-    echo "       联网安装请执行: sudo $PROJECT_ROOT/install.sh online"
-    echo "       离线部署请执行: sudo $PROJECT_ROOT/install.sh offline"
+    echo "       联网安装请执行: sudo $PROJECT_ROOT/setup/install.sh online"
+    echo "       离线部署请执行: sudo $PROJECT_ROOT/setup/install.sh offline"
     exit 1
 fi
 
@@ -59,14 +59,14 @@ echo "=== RK3588 Web Console 安装 ==="
 echo "[1/5] 安装 GPIO 控制与电平保持服务..."
 if [ ! -f "$GPIO_SERVICE_INSTALLER" ]; then
     echo "[错误] 项目中缺少 GPIO 服务安装器: $GPIO_SERVICE_INSTALLER" >&2
-    echo "       请复制完整项目后从项目根目录运行 ./install.sh。" >&2
+    echo "       请复制完整项目后从项目根目录运行 ./setup/install.sh。" >&2
     exit 1
 fi
 bash "$GPIO_SERVICE_INSTALLER"
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
     echo "[错误] 未找到 ffmpeg，网页实时画面无法进行 RTSP 零转码封装。" >&2
-    echo "       请先在项目根目录运行 install_deps.sh。" >&2
+    echo "       请先在项目根目录运行 setup/install_deps.sh。" >&2
     exit 1
 fi
 
@@ -75,7 +75,7 @@ fi
 if [ "$OFFLINE" = "1" ]; then
     if [ ! -x "$PYTHON_BIN" ]; then
         echo "[错误] 未找到系统 Python: $PYTHON_BIN" >&2
-        echo "       请先运行 offline_install_env_debian/install_offline.sh。" >&2
+        echo "       请先运行 setup/offline/debian/install_offline.sh。" >&2
         exit 1
     fi
     echo "    模式: 离线部署（使用系统 Python 和预构建前端）"
@@ -113,12 +113,12 @@ if errors:
 PY
     then
         echo "[错误] 系统 Python 环境不完整。" >&2
-        echo "       请先运行 offline_install_env_debian/install_offline.sh，再重新部署 Web 控制台。" >&2
+        echo "       请先运行 setup/offline/debian/install_offline.sh，再重新部署 Web 控制台。" >&2
         exit 1
     fi
     if ! "$PYTHON_BIN" -m pip check; then
         echo "[错误] 系统 Python 环境存在依赖冲突。" >&2
-        echo "       请先运行 offline_install_env_debian/install_offline.sh 修复环境。" >&2
+        echo "       请先运行 setup/offline/debian/install_offline.sh 修复环境。" >&2
         exit 1
     fi
     echo "    离线模式：Python 模块和依赖关系检查通过，未执行 pip install。"
@@ -160,7 +160,7 @@ if [ "$OFFLINE" = "1" ]; then
 else
     if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
         echo "  [错误] 联网模式需要 Node.js 和 npm 来执行锁定构建。" >&2
-        echo "         请先在项目根目录运行 install_deps.sh，然后重新执行本脚本。" >&2
+        echo "         请先在项目根目录运行 setup/install_deps.sh，然后重新执行本脚本。" >&2
         echo "         如果目标设备没有网络，请使用 offline 参数。" >&2
         exit 1
     fi

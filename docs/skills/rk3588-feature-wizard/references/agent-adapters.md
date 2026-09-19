@@ -6,7 +6,7 @@
 
 ## 选择规则
 
-运行 `./develop_feature` 或 `develop_feature.cmd` 时：
+运行 `./vision develop` 或 `vision.cmd develop` 时：
 
 1. 同时探测 `codex` 和 `claude` 是否在 `PATH` 中；
 2. 在每条探测命令 15 秒超时内调用 `--version` 和 `--help`，确认当前版本仍包含适配器依赖的参数；
@@ -55,18 +55,18 @@ Claude Code 写入它自己的配置目录，不属于项目仓库写回。
 Linux、macOS 或 WSL2：
 
 ```bash
-./develop_feature --check
-./develop_feature --agent codex "新增人员区域告警"
-./develop_feature --agent claude "新增人员区域告警"
-./develop_feature --agent claude --plan-only "评估跨通道聚合"
+./vision develop --check
+./vision develop --agent codex "新增人员区域告警"
+./vision develop --agent claude "新增人员区域告警"
+./vision develop --agent claude --plan-only "评估跨通道聚合"
 ```
 
 原生 Windows PowerShell 或 CMD：
 
 ```powershell
-develop_feature.cmd --check
-develop_feature.cmd --agent codex "新增人员区域告警"
-develop_feature.cmd --agent claude "新增人员区域告警"
+vision.cmd develop --check
+vision.cmd develop --agent codex "新增人员区域告警"
+vision.cmd develop --agent claude "新增人员区域告警"
 ```
 
 使用 `--dry-run` 只查看启动提示，不检查或启动代理。使用 `--check --agent claude` 可把“Claude Code
@@ -89,8 +89,8 @@ develop_feature.cmd --agent claude "新增人员区域告警"
 | `scripts/agent_adapters.py` | `AGENT_DEFINITIONS`、可执行文件探测、无提示权限映射与安全 argv 拼装 |
 | `scripts/start_wizard.py` | 系统环境检测、双代理选择、模型无关启动提示和会话生命周期 |
 | `scripts/write_guard.py` | 当前项目隔离复制、文件哈希、路径分类、越界整批拒绝和 Logic 白名单文件回写 |
-| 仓库根目录 `develop_feature` | 用当前 Python 定位并运行向导，不包含代理或框架知识 |
-| `develop_feature.cmd` | 在原生 Windows 依次尝试 `py -3` 与 `python` |
+| 仓库根目录 `vision develop` | 用当前 Python 定位并运行向导，不包含代理或框架知识 |
+| `vision.cmd develop` | 在原生 Windows 依次尝试 `py -3` 与 `python` |
 
 维护适配器时，只把命令拼装和权限差异放在 `agent_adapters.py`；框架事实继续只维护在各 Skill 参考页。
 新增或改变参数后必须模拟两种代理的命令、测试允许/越界文件变化，并在实际安装了对应 CLI 的环境运行

@@ -1,0 +1,170 @@
+{
+  "baseline_commit": "e7f171b85aaa0da44eab4b67f3ae14cfc2531c47",
+  "seconds_per_run": 32,
+  "order": [
+    "baseline",
+    "refactor",
+    "refactor",
+    "baseline"
+  ],
+  "normal": [
+    {
+      "channels": 1,
+      "label": "baseline",
+      "index": 0,
+      "fps_per_channel": 25.14,
+      "inference_total_ms": 26.432,
+      "cpu_percent": 34.15699083079327,
+      "rss_mb": 80.5925925925926,
+      "samples": 5,
+      "exit_code": 0,
+      "log": "1-0-baseline.log",
+      "scenario": "normal-video"
+    },
+    {
+      "channels": 1,
+      "label": "refactor",
+      "index": 1,
+      "fps_per_channel": 24.68,
+      "inference_total_ms": 25.87,
+      "cpu_percent": 32.693448678022996,
+      "rss_mb": 81.18258101851852,
+      "samples": 5,
+      "exit_code": 0,
+      "log": "1-1-refactor.log",
+      "scenario": "normal-video"
+    },
+    {
+      "channels": 1,
+      "label": "refactor",
+      "index": 2,
+      "fps_per_channel": 24.82,
+      "inference_total_ms": 26.352,
+      "cpu_percent": 33.886876309827215,
+      "rss_mb": 81.05208333333333,
+      "samples": 5,
+      "exit_code": 0,
+      "log": "1-2-refactor.log",
+      "scenario": "normal-video"
+    },
+    {
+      "channels": 1,
+      "label": "baseline",
+      "index": 3,
+      "fps_per_channel": 25.099999999999998,
+      "inference_total_ms": 26.116,
+      "cpu_percent": 33.46011039420681,
+      "rss_mb": 80.99001736111111,
+      "samples": 5,
+      "exit_code": 0,
+      "log": "1-3-baseline.log",
+      "scenario": "normal-video"
+    },
+    {
+      "channels": 3,
+      "label": "baseline",
+      "index": 0,
+      "fps_per_channel": 24.793333333333333,
+      "inference_total_ms": 26.83533333333333,
+      "cpu_percent": 85.57295531365241,
+      "rss_mb": 103.75188078703704,
+      "samples": 15,
+      "exit_code": 0,
+      "log": "3-0-baseline.log",
+      "scenario": "normal-video"
+    },
+    {
+      "channels": 3,
+      "label": "refactor",
+      "index": 1,
+      "fps_per_channel": 24.86,
+      "inference_total_ms": 26.990666666666666,
+      "cpu_percent": 87.14753607769268,
+      "rss_mb": 103.68229166666667,
+      "samples": 15,
+      "exit_code": 0,
+      "log": "3-1-refactor.log",
+      "scenario": "normal-video"
+    },
+    {
+      "channels": 3,
+      "label": "refactor",
+      "index": 2,
+      "fps_per_channel": 24.919999999999998,
+      "inference_total_ms": 26.900666666666666,
+      "cpu_percent": 86.801115032225,
+      "rss_mb": 103.3605324074074,
+      "samples": 15,
+      "exit_code": 0,
+      "log": "3-2-refactor.log",
+      "scenario": "normal-video"
+    },
+    {
+      "channels": 3,
+      "label": "baseline",
+      "index": 3,
+      "fps_per_channel": 24.64,
+      "inference_total_ms": 26.978,
+      "cpu_percent": 87.08150362546527,
+      "rss_mb": 104.38527199074075,
+      "samples": 15,
+      "exit_code": 0,
+      "log": "3-3-baseline.log",
+      "scenario": "normal-video"
+    }
+  ],
+  "stress": [
+    {
+      "label": "baseline",
+      "trial": 0,
+      "channels": 3,
+      "samples": 15,
+      "fps_per_channel": 42.406666666666666,
+      "inference_total_ms": 23.281333333333333,
+      "cpu_percent": 113.04439228174729,
+      "rss_mb": 104.52575231481481,
+      "exit_code": 0,
+      "log": "0-baseline.log",
+      "scenario": "accelerated-video"
+    },
+    {
+      "label": "refactor",
+      "trial": 1,
+      "channels": 3,
+      "samples": 15,
+      "fps_per_channel": 44.72,
+      "inference_total_ms": 22.238666666666667,
+      "cpu_percent": 105.20637580023727,
+      "rss_mb": 105.28732638888889,
+      "exit_code": 0,
+      "log": "1-refactor.log",
+      "scenario": "accelerated-video"
+    },
+    {
+      "label": "refactor",
+      "trial": 2,
+      "channels": 3,
+      "samples": 15,
+      "fps_per_channel": 41.24666666666667,
+      "inference_total_ms": 23.288,
+      "cpu_percent": 113.75660569570103,
+      "rss_mb": 105.22366898148148,
+      "exit_code": 0,
+      "log": "2-refactor.log",
+      "scenario": "accelerated-video"
+    },
+    {
+      "label": "baseline",
+      "trial": 3,
+      "channels": 3,
+      "samples": 15,
+      "fps_per_channel": 43.78666666666667,
+      "inference_total_ms": 22.21666666666667,
+      "cpu_percent": 103.95945854390156,
+      "rss_mb": 104.7214988425926,
+      "exit_code": 0,
+      "log": "3-baseline.log",
+      "scenario": "accelerated-video"
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # 通道模块 `logic.json`
 
-生成器以每个 `vision_analysis/src/logic/modules/<目录>/logic.json` 和同目录 C++ 注册宏共同生成
+生成器以每个 `projects/person_count/logic/modules/<目录>/logic.json` 和同目录 C++ 注册宏共同生成
 `logics.json`。源码 manifest 是真源，App 根目录中的聚合文件是构建产物，不应手改。
 
 ## 最小结构
@@ -90,7 +90,7 @@ manifest 声明的 key 也必须确实由 C++ 赋值。
 
 ```bash
 cd vision_analysis
-python3 scripts/generate_logics_catalog.py --check
+python3 scripts/generate_logics_catalog.py --logic-root ../projects/person_count/logic --check
 ```
 
 常规构建会生成并打包 catalog；源码改动应提交 `logic.cpp`、`logic.json` 和模块自带模板，而不是

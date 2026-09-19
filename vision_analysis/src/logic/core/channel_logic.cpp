@@ -7,17 +7,23 @@
  *   - draw_* 绘制辅助函数
  *   - 逻辑分发表 (注册 / 查询)
  *
- * 各个具体业务逻辑位于 src/logic/modules/logic_xxx/, logic.cpp 末尾用
+ * 各个具体业务逻辑位于 <project>/logic/modules/logic_xxx/, logic.cpp 末尾用
  *   REGISTER_LOGIC(logic_xxx);
  * 自注册到分发表 —— 注册在 main() 之前(静态初始化阶段)完成。
  *
  * 新增逻辑: 新建一个模块目录及 logic.cpp/logic.json 即可
- *           (src/logic 下的 .cpp/.cc/.cxx 由 CMake 递归收集编译), 无需改动本文件。
+ *           (项目 logic 下的 .cpp/.cc/.cxx 由 CMake 递归收集编译), 无需改动本文件。
  * 删除逻辑: 删掉对应模块目录即可, 不牵连其它模块。
  */
 
-#include "logic_common.h"
-#include "logic_parameters.h"
+#include <rkvision/logic.h>
+#include "inference/inference_engine.h"
+#include "runtime/app_ctrl.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <rkvision/parameters.h>
 #include <ctime>
 #include <utility>
 
@@ -99,7 +105,7 @@ int ChannelContext::channel_has_logic(int configuredId, const char *logicName) c
 }
 
 /*======================== ChannelContext 便捷查询方法实现 ========================
- * 这些方法原先内联在 channel_logic.h 的结构体定义里, 现统一挪到此处。好处:
+ * 这些方法原先内联在 rkvision/channel_context.h 的结构体定义里, 现统一挪到此处。好处:
  *   - 头文件回归「纯 API 清单」, 一眼看清 ctx 能干啥;
  *   - 改任何函数体只需重编本文件, 不再波及 30+ 个 logic_*.cpp (原先内联时全得重编)。
  * 这些都是每帧级调用, 内部 string 比较 / pointPolygonTest 远重于一次函数调用,
@@ -119,7 +125,7 @@ int ChannelContext::has_target(const char *label) const
 }
 
 /*======================== ROI 查询自由函数 (C 风格) ========================
- * 见 channel_logic.h 结构体下方说明: 用一个 int idx 选区域, 单/多区域同一函数, 不用重载。
+ * 见 rkvision/channel_context.h 结构体下方说明: 用一个 int idx 选区域, 单/多区域同一函数, 不用重载。
  *   idx==ROI_ALL → 所有区域(并集; 无区域=整帧); idx>=0 → 第 idx 区; 其它 → 无此区域=0。 */
 
 int roi_find(const ChannelContext *ctx, const char *name)

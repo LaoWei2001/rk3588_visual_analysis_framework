@@ -21,6 +21,7 @@ target_compile_options(gpio_api_test PRIVATE
 )
 target_include_directories(gpio_api_test PRIVATE
     ../../src
+    ../../include
 )
 target_link_libraries(gpio_api_test PRIVATE
     ${GPIOD_LIBRARY}

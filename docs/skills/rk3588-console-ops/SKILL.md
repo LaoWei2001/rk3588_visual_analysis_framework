@@ -54,8 +54,8 @@ description: >-
 ## 端到端工作顺序
 
 1. 在源码侧运行 logic catalog 与配置校验，确认程序包能力真实存在。
-2. 用 `vision_analysis/build.sh my_app`（`my_app` 替换为单层包名）生成完整包；`--debug` 仅快速编译二进制，不打包。
-3. 用 `install_app.sh` 或 Web“上传程序”安装包，再选择实际配置与部署/调试模式启动。
+2. 用 `./vision package <项目目录>` 生成完整包；开发调试使用 `./vision build <项目目录> --build-type Debug`。
+3. 用 `vision install <包目录>` 或 Web“上传程序”安装包，再选择实际配置与部署/调试模式启动。
 4. 在画布保存配置；若有投递，在“应用集成”先配置连接和接口契约，再把上报节点连到 logic。
 5. 先验证 logic 的 `EventReportResult`，再查 `.data/<App>/event_store`，最后查上传服务日志和远端。
 6. 实时预览、Action、记录页和服务页都以当前唯一运行 App 为准。
@@ -98,16 +98,16 @@ python3 -m pytest
 
 ```bash
 cd vision_analysis
-python3 scripts/generate_logics_catalog.py --check
+python3 scripts/generate_logics_catalog.py --logic-root ../projects/person_count/logic --check
 ```
 
 仓库当前没有提交预编译二进制；仅在已经用当前源码得到 `./vision_analysis` 后再运行：
 
 ```bash
-./vision_analysis --validate-config ./assets/config_6.json
+./vision_analysis --validate-config ../projects/person_count/assets/config_global.json
 ```
 
-`config_6.json` 只是仓库现存示例；验收具体应用时应换成实际运行配置。
+`config_global.json` 只是仓库现存示例；验收具体应用时应换成实际运行配置。
 
 测试环境缺少板端 systemd、GStreamer、摄像头或 RKNN 时，应明确区分“静态/单元测试通过”和“板端
 实机链路通过”，不能用前者替代后者。

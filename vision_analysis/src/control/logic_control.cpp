@@ -21,8 +21,8 @@
 #include <unistd.h>
 
 #include "runtime/app_ctrl.h"
-#include "logic/core/global_logic.h"
-#include "third_party/json/cJSON.h"
+#include "logic/core/global_logic_runtime.h"
+#include <rkvision/json.h>
 
 namespace
 {

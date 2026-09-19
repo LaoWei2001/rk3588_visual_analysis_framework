@@ -1,0 +1,219 @@
+{
+  "project_count": 16,
+  "shared_runtime_identical": true,
+  "engine_build_sha256": "28e1c6cc9dfd13598a6b97ca75d189cf37bae01cb19f6f7e65b09dbe4a1a4ed7",
+  "projects": [
+    {
+      "project": "course_01",
+      "channel_modules": 1,
+      "global_modules": 0,
+      "configuration_checks": [
+        {
+          "config": "config.json",
+          "result": "valid"
+        },
+        {
+          "config": "config_inference.json",
+          "result": "valid"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 39320
+    },
+    {
+      "project": "course_02",
+      "channel_modules": 1,
+      "global_modules": 0,
+      "configuration_checks": [
+        {
+          "config": "config.json",
+          "result": "valid"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 39352
+    },
+    {
+      "project": "course_03",
+      "channel_modules": 1,
+      "global_modules": 0,
+      "configuration_checks": [
+        {
+          "config": "config.json",
+          "result": "valid"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 39320
+    },
+    {
+      "project": "course_04",
+      "channel_modules": 1,
+      "global_modules": 0,
+      "configuration_checks": [
+        {
+          "config": "config.json",
+          "result": "valid"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 39328
+    },
+    {
+      "project": "course_05",
+      "channel_modules": 1,
+      "global_modules": 0,
+      "configuration_checks": [
+        {
+          "config": "config.json",
+          "result": "valid"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 39360
+    },
+    {
+      "project": "course_06",
+      "channel_modules": 1,
+      "global_modules": 0,
+      "configuration_checks": [
+        {
+          "config": "config.json",
+          "result": "valid"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 43432
+    },
+    {
+      "project": "course_07",
+      "channel_modules": 1,
+      "global_modules": 0,
+      "configuration_checks": [
+        {
+          "config": "config.json",
+          "result": "valid"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 43480
+    },
+    {
+      "project": "course_08",
+      "channel_modules": 1,
+      "global_modules": 0,
+      "configuration_checks": [
+        {
+          "config": "config.json",
+          "result": "valid"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 51728
+    },
+    {
+      "project": "course_09",
+      "channel_modules": 1,
+      "global_modules": 0,
+      "configuration_checks": [
+        {
+          "config": "config.json",
+          "result": "valid"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 39304
+    },
+    {
+      "project": "course_10",
+      "channel_modules": 1,
+      "global_modules": 0,
+      "configuration_checks": [
+        {
+          "config": "config.json",
+          "result": "valid"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 39304
+    },
+    {
+      "project": "course_gpio",
+      "channel_modules": 1,
+      "global_modules": 0,
+      "configuration_checks": [
+        {
+          "config": "config.json",
+          "result": "dormant: no enabled channels"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 43464
+    },
+    {
+      "project": "crane_safety",
+      "channel_modules": 4,
+      "global_modules": 1,
+      "configuration_checks": [
+        {
+          "config": "config.json",
+          "result": "dormant: no enabled channels"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 129992
+    },
+    {
+      "project": "dify",
+      "channel_modules": 1,
+      "global_modules": 0,
+      "configuration_checks": [
+        {
+          "config": "config.json",
+          "result": "valid"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 55904
+    },
+    {
+      "project": "object_detection",
+      "channel_modules": 1,
+      "global_modules": 0,
+      "configuration_checks": [
+        {
+          "config": "config_test.json",
+          "result": "valid"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 39304
+    },
+    {
+      "project": "person_count",
+      "channel_modules": 1,
+      "global_modules": 1,
+      "configuration_checks": [
+        {
+          "config": "config_global.json",
+          "result": "valid"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 51768
+    },
+    {
+      "project": "relay_control",
+      "channel_modules": 1,
+      "global_modules": 0,
+      "configuration_checks": [
+        {
+          "config": "config.json",
+          "result": "dormant: no enabled channels"
+        }
+      ],
+      "engine_sha256": "3d769a404c408deacee648c3b657939438743a079b0a3f5bf1b68ce0667e5822",
+      "executable_bytes": 47616
+    }
+  ]
+}

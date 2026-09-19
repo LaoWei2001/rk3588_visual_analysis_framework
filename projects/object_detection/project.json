@@ -1,0 +1,9 @@
+{
+  "id": "object-detection",
+  "version": "1.0.0",
+  "engine": {
+    "version": "1.0.0",
+    "sdk_api": 1
+  },
+  "default_config": "assets/config_test.json"
+}

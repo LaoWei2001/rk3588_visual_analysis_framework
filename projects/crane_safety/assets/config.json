@@ -1,0 +1,77 @@
+{
+  "global": {
+    "enable_display": false,
+    "enable_rtsp": false,
+    "max_fps": 25,
+    "global_logics": [
+      {
+        "instance_id": "crane",
+        "enable": false,
+        "logic": "global_crane_safety_controller",
+        "channels": [],
+        "poll_interval_ms": 100,
+        "logic_parameters": {
+          "hardware_enabled": false
+        }
+      }
+    ]
+  },
+  "channels": [
+    {
+      "id": 0,
+      "enable": false,
+      "infer_enable": false,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/input.mp4",
+        "loop": true
+      },
+      "models": [],
+      "logic": "logic_crane_motion",
+      "logic_parameters": {},
+      "roi_zones": []
+    },
+    {
+      "id": 1,
+      "enable": false,
+      "infer_enable": false,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/input.mp4",
+        "loop": true
+      },
+      "models": [],
+      "logic": "logic_crane_hook",
+      "logic_parameters": {},
+      "roi_zones": []
+    },
+    {
+      "id": 2,
+      "enable": false,
+      "infer_enable": false,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/input.mp4",
+        "loop": true
+      },
+      "models": [],
+      "logic": "logic_crane_helmet",
+      "logic_parameters": {},
+      "roi_zones": []
+    },
+    {
+      "id": 3,
+      "enable": false,
+      "infer_enable": false,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/input.mp4",
+        "loop": true
+      },
+      "models": [],
+      "logic": "logic_crane_intrusion",
+      "logic_parameters": {},
+      "roi_zones": []
+    }
+  ]
+}

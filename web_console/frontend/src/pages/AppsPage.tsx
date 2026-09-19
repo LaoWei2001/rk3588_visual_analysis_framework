@@ -34,6 +34,7 @@ export default function AppsPage() {
   const [autostartBusy, setAutostartBusy] = useState<Record<string, boolean>>({})
   const [toast, setToast]     = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
   const [crashInfo, setCrashInfo] = useState<{ name: string; lines: string[] } | null>(null)
+  const [preserveAssets, setPreserveAssets] = useState(true)
   const fileRef   = useRef<HTMLInputElement>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [uploading, setUploading] = useState<{ name: string; pct: number } | null>(null)
@@ -137,7 +138,7 @@ export default function AppsPage() {
     if (!f) return
     setUploading({ name: f.name, pct: 0 })
     try {
-      const r = await uploadApp(f, undefined, pct => setUploading({ name: f.name, pct }))
+      const r = await uploadApp(f, undefined, pct => setUploading({ name: f.name, pct }), preserveAssets)
       const warn = `${r.has_binary ? '' : '（缺少可执行文件）'}${r.has_config ? '' : '（尚无 config.json）'}`
       const stopped = r.stopped_apps.length > 0
         ? `；已停止视觉程序：${r.stopped_apps.join('、')}`
@@ -190,6 +191,11 @@ export default function AppsPage() {
       <div className="apps-header">
         <h2>程序管理</h2>
         <div style={{ display: 'flex', gap: 8 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input type="checkbox" checked={preserveAssets} disabled={!!uploading}
+              onChange={e => setPreserveAssets(e.target.checked)} />
+            升级时保留现场配置和资源
+          </label>
           <button className="reload-btn" disabled={!!uploading}
             onClick={() => fileRef.current?.click()}>上传程序</button>
           <button className="reload-btn" onClick={load}>刷新</button>

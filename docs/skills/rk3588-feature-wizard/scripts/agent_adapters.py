@@ -81,8 +81,8 @@ CLAUDE_SANDBOX_HOSTS = {
     "linux-other",
 }
 CLAUDE_LOGIC_EDIT_RULES = (
-    "Edit(/vision_analysis/src/logic/modules/**)",
-    "Edit(/vision_analysis/src/logic/global_modules/**)",
+    "Edit(/logic/modules/**)",
+    "Edit(/logic/global_modules/**)",
 )
 CODEX_ISOLATION_OVERRIDES = (
     "sandbox_workspace_write.writable_roots=[]",
