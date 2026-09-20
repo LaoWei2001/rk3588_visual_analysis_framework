@@ -14,7 +14,7 @@
     └── common/                   # 可选项目公共代码
 ```
 
-独立应用位于 `projects/`。在具体项目内通过 `./build.sh` / `./build.sh package` 构建与发布，
+独立应用位于 `projects/`。在框架根目录通过 `./rkvision build <项目>` / `./rkvision package <项目>` 构建与发布，
 生成器显式接受 `--logic-root <项目>/logic`，框架能力从 `vision_analysis/metadata/catalog.json` 读取。
 
 

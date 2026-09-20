@@ -125,7 +125,7 @@ mkdir -p "$APT_DIR" "$WORK_DIR"
 echo ">>> [1/8] 编译主程序依赖检测产物..."
 APP_BUILD_DIR="$WORK_DIR/person-count"
 # 项目可能从另一发行版复制而来，不能复用其中的 CMakeCache 和旧目标文件。
-bash "$APP_PROJECT/build.sh" package \
+"$PROJECT_ROOT/rkvision" package "$APP_PROJECT" \
     --output "$APP_BUILD_DIR" --clean --no-bundle-libs
 [ -x "$APP_BUILD_DIR/vision_analysis" ] \
     || { echo "[错误] 项目构建没有生成 vision_analysis。" >&2; exit 1; }
@@ -878,12 +878,12 @@ if [ "$WANT_BUILD" = true ]; then
 固定入口: /userdata/rk3588_visual_analysis_framework
 统一管理命令:
   cd /userdata/rk3588_visual_analysis_framework
-  ./setup/install.sh status
-  sudo ./setup/install.sh upgrade offline
+  ./rkvision platform status
+  sudo ./rkvision platform upgrade offline
 
 编译命令:
   cd /userdata/rk3588_visual_analysis_framework
-  ./vision package projects/person_count
+  ./rkvision package projects/person_count
 
 前端构建命令（Node.js、npm 和 node_modules 已离线提供）:
   cd /userdata/rk3588_visual_analysis_framework/web_console/frontend

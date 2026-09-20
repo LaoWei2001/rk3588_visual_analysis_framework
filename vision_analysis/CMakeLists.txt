@@ -237,7 +237,7 @@ find_program(PYTHON3_EXECUTABLE NAMES python3)
 if(NOT PYTHON3_EXECUTABLE)
     message(FATAL_ERROR "Project validation requires python3")
 endif()
-execute_process(COMMAND "${PYTHON3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/../tools/project/vision.py"
+execute_process(COMMAND "${PROJECT_SOURCE_DIR}/../rkvision"
     check "${VISION_PROJECT_DIR}" RESULT_VARIABLE project_check)
 if(NOT project_check EQUAL 0)
     message(FATAL_ERROR "Application validation failed")

@@ -30,7 +30,7 @@ http://<RK3588-IP>:8080
 
 无需再运行 `web_console/install.sh`，也无需手工执行 pip/npm 安装依赖。安装器会在目标机上
 实际运行一次前端构建作为验收。安装完成后的程序列表为空；需要运行的程序由用户之后通过
-Web 上传，或使用 `vision install <包目录>` 明确安装。默认完整包还会自动安装 GPIO
+Web 上传，或使用 `rkvision install <包目录>` 明确安装。默认完整包还会自动安装 GPIO
 实时控制与电平保持服务，并在首次安装时将继电器 `GPIO6_A2` 设置为低电平。安装器会进一步
 验收 GPIO 正式命令、旧命令兼容入口、实时控制后台及两个 systemd 单元；缺少任一项都会
 终止安装并明确报错。
@@ -117,7 +117,7 @@ sudo bash install_source_update.sh
 
 ```bash
 cd /userdata/rk3588_visual_analysis_framework
-./vision package projects/person_count
+./rkvision package projects/person_count
 sudo ./install_app.sh dist
 
 cd /userdata/rk3588_visual_analysis_framework/web_console/frontend

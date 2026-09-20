@@ -10,7 +10,6 @@
 ```text
 projects/my_app/
 ├── CMakeLists.txt       # 本项目的 CMake 根工程，引用共享引擎
-├── build.sh             # 编译、打包和清理入口
 ├── project.json         # 应用 ID、版本、引擎契约、默认配置
 ├── logic/
 │   ├── modules/         # 通道业务
@@ -30,15 +29,14 @@ projects/my_app/
 从框架根目录创建：
 
 ```bash
-./vision create projects/my_app
-cd projects/my_app
-./build.sh                       # Release
-./build.sh --build-type Debug     # 调试构建
-./build.sh package               # 生成 dist/my_app 与 dist/my_app.tar.gz
-./build.sh clean                 # 清理本项目当前 Release 缓存，保留共享引擎缓存
+./rkvision create projects/my_app
+./rkvision build my_app                         # Release
+./rkvision build my_app --profile debug         # 调试构建
+./rkvision package my_app                       # 生成 dist/my_app 与 dist/my_app.tar.gz
+./rkvision clean my_app                         # 清理当前 Release 缓存，保留共享引擎缓存
 ```
 
-`build.sh` 调用共用的 Shell 构建流程，先用 CMake 在框架 `build/runtime/` 增量编译
+`rkvision` 调用唯一的内部构建流程，先用 CMake 在框架 `build/runtime/` 增量编译
 `librkvision.so.1`，再编译本项目的业务、入口和参数清单，链接成 `vision_analysis`。
 多个项目复用同一份引擎构建缓存；构建期间使用文件锁保护共享库的生成与复制。
 本项目的 `build/<构建标识>/libs/` 保存匹配的运行库，方便直接运行和打包。
@@ -51,11 +49,11 @@ Python 用于清单校验、项目生成和打包；原 `build.py` 已删除。
 cmake -S . -B build/direct -DRKVISION_ENGINE=/path/to/framework -DCMAKE_BUILD_TYPE=Release
 cmake --build build/direct --parallel 4
 # 将上述构建打包；会核对项目、引擎和构建类型
-/path/to/framework/vision package . --build-dir build/direct
+/path/to/framework/rkvision package . --build-dir build/direct
 ```
 
-新增模块可执行 `/path/to/framework/vision new-logic . channel logic_custom`。
-`./vision check <项目>` 检查版本和模块 schema，不代替摄像头、模型及运行配置验收。
+新增模块可执行 `/path/to/framework/rkvision logic add channel logic_custom .`。
+`./rkvision check <项目>` 检查版本和模块 schema，不代替摄像头、模型及运行配置验收。
 SDK 业务目标为 `vision_app`，最终链接目标为 `vision_analysis`。项目额外依赖直接添加到本项目
 `CMakeLists.txt` 对应目标；只给业务公开 SDK、项目及 OpenCV 的 include 路径。
 
@@ -64,14 +62,14 @@ SDK 业务目标为 `vision_app`，最终链接目标为 `vision_analysis`。项
 项目目录可以放在任何位置，使用独立 Git 仓库：
 
 ```bash
-/path/to/framework/vision create /userdata/my_app
+/path/to/framework/rkvision create /userdata/my_app
 cd /userdata/my_app
-./build.sh --engine /path/to/framework
-./build.sh package --engine /path/to/framework
+/path/to/framework/rkvision build .
+/path/to/framework/rkvision package .
 ```
 
-选择优先级：显式 `--engine` / CMake `-DRKVISION_ENGINE`，环境变量 `RKVISION_ENGINE`，
-创建工具写入的本机 `engine.local.cmake`，最后尝试仓库 `projects/<应用>` 的相对位置。
+使用哪个框架目录下的 `rkvision`，就使用哪个引擎；直接 CMake 仍可通过
+`-DRKVISION_ENGINE` 或环境变量 `RKVISION_ENGINE` 显式选择引擎。
 `engine.local.cmake` 不提交 Git；它只保存本机引擎路径，项目版本要求保存于 `project.json`。
 构建缓存按引擎路径、提交、工具链、镜像和构建类型隔离。
 
@@ -112,10 +110,11 @@ framework/
 │   ├── application/main.cpp   # 每个应用编译一次的启动入口
 │   ├── metadata/catalog.json  # 通用模型类型元数据
 │   └── CMakeLists.txt          # rkvision 共享库及应用目标
-├── build/runtime/             # build.sh 共用的引擎构建缓存
+├── build/runtime/             # rkvision 共用的引擎构建缓存
 ├── projects/                  # 每个业务项目直接并列
 ├── templates/basic_project/   # 新项目模板
-├── tools/project/             # 共用构建、打包和安装工具
+├── tools/rkvision/            # 统一命令实现
+├── tools/project/             # 内部构建、打包和安装实现
 └── web_console/               # 独立 Web 管理平台
 ```
 
@@ -144,7 +143,7 @@ person-count/
 
 ## 单独构建、复用和更新引擎
 
-通常只需在项目执行 `./build.sh package`，脚本会自动更新共享缓存。也可以独立构建引擎：
+通常只需执行 `./rkvision package <项目>`，命令会自动更新共享缓存。也可以独立构建引擎：
 
 ```bash
 # 框架根目录；只生成公共引擎，不含任何项目 logic
@@ -156,11 +155,11 @@ cmake -S projects/person_count -B projects/person_count/build/manual \
   -DRKVISION_ENGINE="$PWD" -DRKVISION_RUNTIME_DIR="$PWD/build/runtime-manual/libs" \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build projects/person_count/build/manual --parallel 4
-./vision package projects/person_count --build-dir projects/person_count/build/manual
+./rkvision package projects/person_count --build-dir projects/person_count/build/manual
 ```
 
 不传 `RKVISION_RUNTIME_DIR` 时，直接 CMake 会在当前项目构建目录生成引擎共享库，
-不会复用 `build.sh` 的中央缓存；两种方式产物结构相同。
+不会复用 `rkvision` 的中央缓存；两种方式产物结构相同。
 
 仅修复引擎内部实现、保持 ABI 及运行依赖兼容时，可以停止应用后替换其
 `libs/librkvision.so.1` 并重启，业务源码和 assets 无需搬动，应用可执行文件无需重编译。
@@ -168,15 +167,15 @@ cmake --build projects/person_count/build/manual --parallel 4
 修改 SDK 布局、函数签名或编译环境时要重新构建项目。修改 Web 页面则单独更新 Web，页面不在引擎 `.so` 内。
 共享库更新需要重启进程；现有的 JSON 配置热重载仍照常使用。
 
-开发时可从框架根目录执行 `./vision run projects/person_count`（会先增量构建），
+开发时可从框架根目录执行 `./rkvision run projects/person_count`（会先增量构建），
 或进入发布目录执行 `./run.sh`。先按现场情况设置视频源、模型和硬件参数。
 
 ## Web 部署
 
 ```bash
 cd projects/person_count
-./build.sh package
-sudo ../../vision install dist/person-count
+../../rkvision package .
+sudo ../../rkvision install dist/person-count
 ```
 
 或把 `dist/person-count.tar.gz` 上传 Web「程序管理」，选择配置、检查视频源和模型后启动。

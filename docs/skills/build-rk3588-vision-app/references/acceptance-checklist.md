@@ -12,7 +12,7 @@
 
 ## 所有改动
 
-- [ ] 通过 `vision develop` 实施时，全部变更只位于 `<项目>/logic/modules/**` 或
+- [ ] 通过 `rkvision develop` 实施时，全部变更只位于 `<项目>/logic/modules/**` 或
       `<项目>/logic/global_modules/**`；出现任何其他路径时整批拒绝回写。
 - [ ] 白名单内没有符号链接、子模块或特殊文件。
 - [ ] `git status --short` 中没有意外文件；没有覆盖用户已有改动。

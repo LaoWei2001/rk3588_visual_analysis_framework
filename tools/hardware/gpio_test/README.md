@@ -19,7 +19,7 @@ GPIO API 均不变，二次开发代码无需增加参数或初始化步骤。
 ./build.sh
 ```
 
-正常部署时，在项目根目录执行 `sudo ./setup/install.sh online`，不需要再进入
+正常部署时，在项目根目录执行 `sudo ./rkvision platform install online`，不需要再进入
 `service/gpio_state/`。本目录的 `build.sh` 只用于单独开发和测试；首次安装会
 启用 `rk3588-gpio-restore.service`；再次安装会保留网页中已有的开启/关闭状态。服务在
 系统初始化和声音服务之前恢复所有已保存的 GPIO 输出。

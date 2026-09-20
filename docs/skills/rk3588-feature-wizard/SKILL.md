@@ -24,7 +24,7 @@ description: Interactively discover, formalize, implement, and validate a channe
 
 ## 不可扩大的写入边界
 
-完整读取 [`references/write-boundary.md`](references/write-boundary.md)。通过 `vision develop` 运行时，
+完整读取 [`references/write-boundary.md`](references/write-boundary.md)。通过 `rkvision develop` 运行时，
 唯一允许回写原仓库的路径是：
 
 - `logic/modules/**`；
@@ -36,7 +36,7 @@ description: Interactively discover, formalize, implement, and validate a channe
 
 启动器在一次性隔离副本中运行代理，并只在会话正常结束、manifest 校验通过且全部改动都位于白名单时
 回写；发现任意越界改动就拒绝整批结果。因此，需要修改其他源码才能成立的需求不是本向导可实现的需求，
-只能说明缺失能力并停止。直接手工调用本文件只有指令约束；需要机械保证时必须使用 `vision develop`。
+只能说明缺失能力并停止。直接手工调用本文件只有指令约束；需要机械保证时必须使用 `rkvision develop`。
 
 ## 阶段零：确认环境
 
@@ -142,6 +142,6 @@ description: Interactively discover, formalize, implement, and validate a channe
 也不得把事件进入本地队列写成远端投递成功。
 
 终端入口由 [`scripts/start_wizard.py`](scripts/start_wizard.py) 提供，Codex/Claude 的参数差异只维护在
-[`scripts/agent_adapters.py`](scripts/agent_adapters.py)；仓库根目录的 `./vision develop` 只是稳定的
+[`scripts/agent_adapters.py`](scripts/agent_adapters.py)；仓库根目录的 `./rkvision develop` 只是稳定的
 短命令包装器。隔离复制、改动分类和白名单回写由 [`scripts/write_guard.py`](scripts/write_guard.py)
 确定性执行，不能用提示词判断代替。

@@ -8,10 +8,10 @@
 不熟悉框架时，直接从仓库根目录运行交互式开发向导：
 
 ```bash
-./vision develop
+./rkvision develop
 ```
 
-原生 Windows 可运行 `vision.cmd develop` 或 `py tools\project\vision.py develop`。启动器只正式适配 Codex CLI 与
+原生 Windows 可运行 `rkvision.cmd develop` 或 `py -m tools.rkvision develop`。启动器只正式适配 Codex CLI 与
 Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` 或 Git 命令。自动探测后选择唯一可用
 代理，或在两者都可用时请用户选择；也可用 `--agent codex`、
 `--agent claude` 显式指定。选定代理后检测 Windows、WSL2、macOS、Linux、CPU 架构、RK3588 设备树和
@@ -47,7 +47,7 @@ Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` �
 | 事件与媒体 | `vision_analysis/include/rkvision/events.h` 与 `vision_analysis/src/event/event_report.cpp`、`src/recorder/` |
 | 网络投递 | `service/upload/` |
 | Web 行为 | `web_console/backend/`、`web_console/frontend/src/` |
-| 打包产物 | `vision package <项目>` 和两个生成器 |
+| 打包产物 | `rkvision package <项目>` 和两个生成器 |
 
 ## 按任务进入
 
@@ -133,7 +133,8 @@ cd vision_analysis
 
 - 每个 Skill 的 `SKILL.md` 只保留执行流程和参考路由；详细 API、Schema、示例和操作手册放在其 `references/`。
 - `development_log.md` 只记录可由 Git 和源码核对的架构节点，不作为当前 API 说明。
-- `build-rk3588-vision-app/scripts/` 中的三个辅助脚本创建于 2026-08-14，本轮因“不修改代码”的约束未改；其中 `validate_logic.py` 会错误拒绝当前已支持的全局 Action，另外两个也不覆盖完整的当前契约。限制详见 [`legacy-scripts.md`](skills/build-rk3588-vision-app/references/legacy-scripts.md)；权威验证入口仍是各 Skill 列出的源码生成器和项目测试。
+- Logic 脚手架与清单校验统一使用 `rkvision logic add` 和 `rkvision check`；
+  `build-rk3588-vision-app/scripts/` 仅保留文档审计工具。
 - `rk3588-feature-wizard/scripts/start_wizard.py` 是模型无关的交互入口，`scripts/agent_adapters.py` 封装
   Codex/Claude 的无提示权限差异，`scripts/write_guard.py` 机械执行隔离副本和 Logic 白名单回写；框架
   业务契约仍只来自对应源码与参考页。

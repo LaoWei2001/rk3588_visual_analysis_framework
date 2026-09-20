@@ -1,7 +1,7 @@
 """
 log_streamer.py — WebSocket 日志推送
 
-从内存缓冲（log_buffer.AppLogBuffer）读取日志，不依赖任何磁盘文件。
+从 journal reader 填充的内存缓冲订阅新日志；历史 tail 直接读取 systemd journal。
 """
 
 import asyncio

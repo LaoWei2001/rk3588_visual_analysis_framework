@@ -17,39 +17,39 @@
 不想手工填写模板时，在仓库根目录运行：
 
 ```bash
-./vision develop
+./rkvision develop
 ```
 
 原生 Windows 使用：
 
 ```powershell
-vision.cmd develop
+rkvision.cmd develop
 ```
 
 也可以直接附带一句初始描述：
 
 ```bash
-./vision develop "新增人员越界报警，并通过 HTTP 上报带标注图片"
+./rkvision develop "新增人员越界报警，并通过 HTTP 上报带标注图片"
 ```
 
 向导正式支持 Codex CLI 和 Claude Code。只安装一个时自动使用，两个都可用时启动菜单让用户选择；也可
 明确指定：
 
 ```bash
-./vision develop --agent codex "新增人员越界报警"
-./vision develop --agent claude "新增人员越界报警"
+./rkvision develop --agent codex "新增人员越界报警"
+./rkvision develop --agent claude "新增人员越界报警"
 ```
 
 选定代理后，向导检测当前开发宿主，第一题只让用户用“是”或“否 + 简短纠正”确认检测结果和默认
 RK3588 部署目标。业务需求通常只问 2–3 轮、最多 4 轮：向导先核对源码，再给出合并后的行为与交付
 方案供用户简短确认，不逐项盘问内部合同字段。满足需求完整性门后默认自动开发。使用
-`./vision develop --confirm-before-code` 可在写代码前审阅合同；使用 `--plan-only` 只输出合同和计划，
+`./rkvision develop --confirm-before-code` 可在写代码前审阅合同；使用 `--plan-only` 只输出合同和计划，
 使用 `--check` 检查两个代理的可执行文件、版本参数和全部 Skill。
 
 自动开发在一次性隔离副本中进行，不要求用户切换 `/permissions`。原仓库只接受
 `<项目>/logic/modules/**` 和 `<项目>/logic/global_modules/**` 的文件变化；任何越界
 改动都会让整批结果被拒绝。需要 Web、服务、配置解析或公共引擎修改的需求不由此入口实施。
-直接复制本页后续提示词给模型不具备机械写回保护；要求文件保证时必须使用 `vision develop`。
+直接复制本页后续提示词给模型不具备机械写回保护；要求文件保证时必须使用 `rkvision develop`。
 
 ## 通用前缀
 

@@ -54,8 +54,8 @@ description: >-
 ## 端到端工作顺序
 
 1. 在源码侧运行 logic catalog 与配置校验，确认程序包能力真实存在。
-2. 用 `./vision package <项目目录>` 生成完整包；开发调试使用 `./vision build <项目目录> --build-type Debug`。
-3. 用 `vision install <包目录>` 或 Web“上传程序”安装包，再选择实际配置与部署/调试模式启动。
+2. 用 `./rkvision package <项目目录>` 生成完整包；开发调试使用 `./rkvision build <项目目录> --profile debug`。
+3. 用 `rkvision install <项目名>` 自动构建并安装，或在 Web“上传程序”中安装包，再选择实际配置与部署/调试模式启动。
 4. 在画布保存配置；若有投递，在“应用集成”先配置连接和接口契约，再把上报节点连到 logic。
 5. 先验证 logic 的 `EventReportResult`，再查 `.data/<App>/event_store`，最后查上传服务日志和远端。
 6. 实时预览、Action、记录页和服务页都以当前唯一运行 App 为准。
@@ -67,7 +67,7 @@ description: >-
 - 连接参数当前写入 `connections.yaml`；不存在旧文档中的 `upload_config.yaml`/`config.yaml` 运行契约。
 - 接口模板在 App `report_templates/`，用户新建模板在 `.data/<App>/report_contracts/`。
 - 全部 delivery 成功后事件目录会删除；“事件投递”页是 outbox，不是成功历史库。
-- Web“部署”模式会把所选配置的 `global.enable_display` 写为 0，“调试”模式写为 1。
+- Web“部署”/“调试”模式仅覆盖本次进程的 `global.enable_display`，不改写项目 JSON。
 - 实时画面要求运行配置启用 RTSP 且 codec 为 H264/AVC；它不是逐通道 MJPEG。
 - SOP 编辑器仍会生成 `logic_path_sop`，但当前 C++ 未注册该模块，不能作为可运行能力。
 

@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+RK_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export PYTHONPATH="$RK_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m tools.rkvision "$@"

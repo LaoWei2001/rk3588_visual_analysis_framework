@@ -9,6 +9,7 @@
 #include <rkvision/parameters.h>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -190,6 +191,25 @@ bool load_config(const std::string &path, AppConfig &cfg)
         fprintf(stderr, "[Config] parse global failed\n");
         cJSON_Delete(root);
         return false;
+    }
+
+    /* CLI/Web 启动模式可以只覆盖本次进程的显示开关，不改写项目配置文件。
+     * 热重载会再次经过这里，因此覆盖值在整个进程生命周期内保持一致。 */
+    if (const char *display_override = std::getenv("RKVISION_ENABLE_DISPLAY"))
+    {
+        const std::string value = config_utils::to_lower_copy(display_override);
+        if (value == "1" || value == "true" || value == "yes" || value == "on")
+            cfg.enable_display = true;
+        else if (value == "0" || value == "false" || value == "no" || value == "off")
+            cfg.enable_display = false;
+        else
+        {
+            fprintf(stderr,
+                    "[Config] invalid RKVISION_ENABLE_DISPLAY='%s' (expected 0/1, false/true, no/yes or off/on)\n",
+                    display_override);
+            cJSON_Delete(root);
+            return false;
+        }
     }
 
     /* 解析 global_logics 数组 (可选, 缺省为空列表) */

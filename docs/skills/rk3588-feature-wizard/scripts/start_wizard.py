@@ -346,8 +346,8 @@ danger-full-access、bypassPermissions 或任何权限升级；命令被边界�
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     entry_command = (
-        "vision.cmd develop" if platform.system().lower() == "windows"
-        else "./vision develop"
+        "rkvision.cmd develop" if platform.system().lower() == "windows"
+        else "./rkvision develop"
     )
     parser = argparse.ArgumentParser(
         description="用少量确认明确需求，并让 Codex 或 Claude Code 只生成通道/全局 Logic。",
@@ -363,8 +363,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("description", nargs="*", help="可选的初始需求描述")
     parser.add_argument(
         "--agent",
-        "--provider",
-        dest="agent",
         choices=AGENT_CHOICES,
         default="auto",
         help="编程代理：auto（默认）、codex 或 claude",

@@ -28,7 +28,10 @@ def _sync_background_services():
 async def app_status(name: str, response: Response):
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     response.headers["Pragma"] = "no-cache"
-    return pm.get_status(name)
+    status = pm.get_status(name)
+    if status.get("status") == "running":
+        pm.ensure_log_reader(name)
+    return status
 
 
 @router.post("/apps/{name}/start")

@@ -33,7 +33,7 @@ curl -s http://127.0.0.1:8080/health
 ```
 
 登录使用 Linux 系统凭据；后端 session 仅在内存中，控制台重启或 8 小时过期后需重新登录。若前端
-源码已改但页面没变，在项目根目录执行 `sudo ./setup/install.sh upgrade online`，并确认安装目录的
+源码已改但页面没变，在项目根目录执行 `sudo ./rkvision platform upgrade online`，并确认安装目录的
 `frontend/dist` 时间；已经预构建前端时可使用 `upgrade offline`。
 
 ## App 启动失败或异常退出
@@ -50,7 +50,8 @@ cat run.config
 cat run.systemd_unit
 ```
 
-程序日志来自控制台内存缓冲，不再有 `run.log`。打开 Web“完整日志”；若进程刚异常退出，程序页会
+程序日志来自 CLI/Web 共用的 systemd journal，不再有 `run.log`。打开 Web“完整日志”或执行
+`rkvision logs <应用>`；若进程刚异常退出，程序页会
 显示最后日志。控制台重启后无法恢复旧 pipe 日志，必要时按 `run.systemd_unit` 查询对应 systemd
 service 的 journal。
 

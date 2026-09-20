@@ -37,7 +37,7 @@ description: >-
 
 ## Logic-only 写入规则
 
-通过 `vision develop` 运行时，只能写入 `logic/modules/**` 和
+通过 `rkvision develop` 运行时，只能写入 `logic/modules/**` 和
 `logic/global_modules/**`。全局模块及其 manifest/模板必须放在所属
 `global_modules/<global_logic_id>/`；需要新增上游输出时，只能修改或新增 `modules/<logic_id>/`。
 公共 `logic/core`、运行配置、测试、Web、服务、文档、脚本和生成物全部只读。现有接口不足时立即停止，
@@ -54,7 +54,7 @@ description: >-
 5. 跨 tick 状态放 `gctx->state`；周期基于 `timestamp_ms`/`dt_ms`，现实时间基于 `unix_ms`。
 6. 参数、事件、上报字段、Action 和模板声明遵循与通道模块相同的 manifest 规则。
 7. 给出在 `global.global_logics[]` 创建稳定唯一 `instance_id`、输入通道、兜底周期和视频来源的配置说明；
-   `vision develop` 不修改示例或应用配置文件。
+   `rkvision develop` 不修改示例或应用配置文件。
 8. 校验 catalog、配置和运行日志，再覆盖断流、数据过期、热重载和事件失败测试。
 
 最小骨架：

@@ -283,10 +283,10 @@ if [ "$WANT_BUILD" = true ]; then
     if [ -L /userdata/rk3588_visual_analysis_framework ]; then
         echo "     源码入口: /userdata/rk3588_visual_analysis_framework"
     fi
-    echo "     统一状态: cd $SOURCE_INSTALL_PATH && ./setup/install.sh status"
-    echo "     源码升级: cd $SOURCE_INSTALL_PATH && sudo ./setup/install.sh upgrade offline"
+    echo "     统一状态: cd $SOURCE_INSTALL_PATH && ./rkvision platform status"
+    echo "     源码升级: cd $SOURCE_INSTALL_PATH && sudo ./rkvision platform upgrade offline"
     echo "     GPIO工具: $GPIOCTL_PATH"
-    echo "     编译方法: cd $SOURCE_INSTALL_PATH && ./vision package projects/person_count"
+    echo "     编译方法: cd $SOURCE_INSTALL_PATH && ./rkvision package projects/person_count"
     echo "     Node.js/npm: $NODE_TOOLCHAIN_ROOT/bin"
     echo "     前端构建: cd $SOURCE_INSTALL_PATH/web_console/frontend && PATH=$NODE_TOOLCHAIN_ROOT/bin:\$PATH $NODE_TOOLCHAIN_ROOT/bin/npm run build"
 fi

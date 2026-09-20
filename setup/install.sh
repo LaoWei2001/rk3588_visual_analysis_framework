@@ -11,11 +11,11 @@ GPIO_RESTORE_UNIT="rk3588-gpio-restore.service"
 usage() {
     cat <<'EOF'
 用法：
-  sudo ./setup/install.sh online              联网准备全部依赖并安装/升级平台
-  sudo ./setup/install.sh offline             使用已准备好的离线环境和前端产物安装平台
-  sudo ./setup/install.sh upgrade [模式]      升级平台；模式为 online 或 offline，默认 offline
-  ./setup/install.sh status                   查看平台、GPIO和Web服务状态
-  sudo ./setup/install.sh uninstall [--yes]   卸载平台服务，保留应用和GPIO持久状态
+  sudo ./rkvision platform install online              联网准备全部依赖并安装/升级平台
+  sudo ./rkvision platform install offline             使用已准备好的离线环境和前端产物安装平台
+  sudo ./rkvision platform upgrade [模式]               升级平台；默认 offline
+  ./rkvision platform status                            查看平台、GPIO和Web服务状态
+  sudo ./rkvision platform uninstall [--yes]            卸载平台服务，保留应用和GPIO持久状态
 
 说明：
   online 适合仍可访问 APT、PyPI 和 npm 镜像的新设备。
@@ -115,7 +115,7 @@ install_platform() {
 
     echo
     echo "[完成] 平台安装成功。以后统一使用："
-    echo "  $PROJECT_ROOT/setup/install.sh status"
+    echo "  $PROJECT_ROOT/rkvision platform status"
     show_status
 }
 

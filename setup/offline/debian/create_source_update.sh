@@ -237,7 +237,7 @@ cat > "$PACKAGE_SHARE/README.txt" <<EOF
 
 主程序编译与安装：
   cd $SOURCE_INSTALL_PATH
-  ./vision package projects/person_count
+  ./rkvision package projects/person_count
   sudo ./install_app.sh dist
 
 首次网络配置工具编译：

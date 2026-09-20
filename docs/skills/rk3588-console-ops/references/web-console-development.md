@@ -49,7 +49,7 @@ Bearer header 时也接受 `?token=`，供原生 `<img>/<video>` 资源使用；
 4. 在 `frontend/src/pages/` 或 `components/` 实现 UI。
 5. 在 `App.tsx` 增加 Route；需要侧栏入口时同时增加 NavLink。
 6. 加后端 pytest，运行 `python3 -m pytest`；再运行前端 `npm run build`。
-7. 在项目根目录用 `sudo ./setup/install.sh upgrade online` 更新已安装控制台，不要只改源码后期待
+7. 在项目根目录用 `sudo ./rkvision platform upgrade online` 更新已安装控制台，不要只改源码后期待
    板端实例自动变化；已经预构建前端时可用 `upgrade offline`。
 
 ## 编辑器开发边界
@@ -78,7 +78,7 @@ Python worker 会各持一份不同协议。
 
 - `stream.py` 只接受 H264/AVC RTSP，GStreamer 零转码封装为 fMP4；前端用 MSE 解析真实 avc codec。
 - 同 App 新流会终止旧 GStreamer session，页面重连代码必须避免并发重试风暴。
-- App 日志由 `systemd-run --pipe` 读入内存 ring；`/api/apps/{name}/log` 取 tail，
+- App 日志统一进入 systemd journal，journal reader 将新日志送入内存 ring；`/api/apps/{name}/log` 取 journal tail，
   `/ws/logs/{name}` 推送。
 - Terminal 后端为每条 `/ws/terminal` 建 PTY 登录 shell；前端模块级 session registry 在路由切换时
   保留会话，关闭/注销时显式释放。前端 `MAX_TERMINALS=4` 只约束一个前端运行实例，后端路由没有

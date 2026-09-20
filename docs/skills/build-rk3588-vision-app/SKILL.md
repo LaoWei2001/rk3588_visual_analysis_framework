@@ -21,7 +21,7 @@ Read [`references/requirement-contract.md`](references/requirement-contract.md) 
 
 ## Logic-only wizard override
 
-When the startup prompt identifies a `vision develop` isolated session, its allowlist overrides this Skill's broader
+When the startup prompt identifies an `rkvision develop` isolated session, its allowlist overrides this Skill's broader
 end-to-end scope. Write only below `logic/modules/` and
 `logic/global_modules/`. Treat engine, config, tests, Web, services, documentation, scripts, and
 generated files as read-only. Steps below that would change those locations become unsupported in that session; report
@@ -66,25 +66,23 @@ Do not hardcode endpoints or credentials in a Logic. Do not add a central config
 4. Add Action handlers only when runtime control is required.
 5. Add `report_event()` only after the event type and field contract are defined.
 6. Add or revise a report template only when the remote protocol is part of the requirement.
-7. Outside an isolated `vision develop` session, change Web/framework code only when metadata-driven behavior cannot
+7. Outside an isolated `rkvision develop` session, change Web/framework code only when metadata-driven behavior cannot
    express the requirement; inside that session, stop without changing it.
 8. Outside the isolated wizard, update the matching Skill/reference when a public contract or workflow changes; inside
    it, report the documentation follow-up without editing files outside the allowlist.
 
 ## Validate proportionally
 
-Always run the manifest check after Logic changes:
+Always run the unified project check after Logic changes:
 
 ```bash
-cd vision_analysis
-python3 scripts/generate_logics_catalog.py --logic-root ../projects/person_count/logic --check
+./rkvision check person_count
 ```
 
 Then use the task-specific commands in [`references/acceptance-checklist.md`](references/acceptance-checklist.md). Generated App `logics.json` and `report_templates/` must come from the same source revision as the binary; never patch generated package files as source.
 
-The helper scripts accept `--project /path/to/app` and `--repo /path/to/engine`.
-`validate_logic.py` supports both channel and global Action registration. The catalog generator
-remains authoritative for manifests; static helpers do not replace compilation or hardware checks.
+Use `rkvision logic add` for scaffolding and `rkvision check` for the authoritative manifest check.
+These checks do not replace compilation or hardware validation.
 
 ## Handoff
 

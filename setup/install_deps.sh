@@ -1041,6 +1041,6 @@ else
     echo "  到达断网现场后，可运行以下命令复检环境："
     echo "    bash setup/install_deps.sh --check$([ "$WANT_BUILD" = false ] && echo ' --runtime-only' || true)"
     echo "  继续统一部署或升级 Web 控制台与 GPIO 服务："
-    echo "    sudo ./setup/install.sh upgrade offline"
+    echo "    sudo ./rkvision platform upgrade offline"
 fi
 echo "  说明：Rockchip RKNPU内核驱动/RGA/MPP 由厂家系统提供；librknnrt.so 由应用包固定。"

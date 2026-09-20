@@ -118,7 +118,7 @@ RSS 为 104.71 → 104.63 MiB。默认调频的两组结果方向相反，说明
 - 公开头文件逐个仅使用 SDK 和 OpenCV include 路径通过 C++14 语法编译。
 - 增量构建验证：新增全局模块后注册及嵌入 schema 出现；删除后两者均自动移除。
 - 参考项目完整打包，生成 4 个上报模板；包内程序能解析随包运行库并列出模块。
-- 旧构建/安装入口、旧头文件转发层和引擎目录中的旧构建缓存已删除；离线制包统一调用 `vision package`。
+- 旧构建/安装入口、旧头文件转发层和引擎目录中的旧构建缓存已删除；离线制包统一调用 `rkvision package`。
 - GPIO SDK 示例单独编译通过（仅编译，没有操作硬件输出）。
 - Python 项目/SDK/向导测试：7 项通过。
 - Web 后端：60 项通过，包括资产保留、明确替换、安装失败回滚。
@@ -128,7 +128,7 @@ RSS 为 104.71 → 104.63 MiB。默认调频的两组结果方向相反，说明
 ## 目录整合复验（2026-09-19）
 
 - 删除 11 个旧头文件，SDK 成为公共接口的唯一定义；全局线程生命周期声明归入私有的 `global_logic_runtime.h`。
-- 删除旧构建/安装脚本、兼容构建实现和独立开发向导启动器。统一使用 `vision build/package/install/develop`。
+- 删除旧构建/安装脚本、兼容构建实现和独立开发向导启动器。统一使用 `rkvision build/package/install/develop`。
 - 网络与硬件工具迁入 `tools/`，平台安装及 Debian/Ubuntu 离线工具迁入 `setup/`，原位置不留副本或链接。
 - 删除引擎与已迁移硬件工具中的旧 CMake 缓存；应用产物保存在项目的 `build/`、`dist/`。
 - 全量参考应用重新编译、打包通过；框架仓库外的应用重新编译通过。
@@ -183,12 +183,12 @@ RSS 为 104.71 → 104.63 MiB。默认调频的两组结果方向相反，说明
 
 ```bash
 # 对比原版与六个项目的目标文件；任一副本不一致或原模块缺失时退出非零
-python3 tools/project/compare_code.py /path/to/baseline/build projects/*/build/<配置目录>
+./rkvision bench compare /path/to/baseline/build projects/*/build/<配置目录>
 
 # config 应启用 performance_display，模型/视频用绝对路径或选择正确 cwd
 # 两个程序使用同一份 RKNN 库；输出目录必须尚不存在
 LD_LIBRARY_PATH=/path/to/framework/vision_analysis/vendor/rknn/2.4.2a2/lib/aarch64 \
-python3 tools/project/benchmark.py \
+./rkvision bench run \
   --before /path/to/baseline/vision_analysis \
   --after /path/to/new/vision_analysis \
   --config /path/to/test-config.json --cwd /path/to/project \

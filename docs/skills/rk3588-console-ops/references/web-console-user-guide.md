@@ -21,7 +21,7 @@
 | `/` | 程序管理 | 安装包、配置选择、部署/调试、启停、自启、编辑、日志、事件 |
 | `/live-view` | 实时画面 | 当前唯一运行 App 的拼接视频、实时日志和 logic Actions |
 | `/editor/:appName` | 配置编辑器 | 图形化生成 `assets/*.json` |
-| `/logs/:appName` | 程序日志 | 当前控制台会话内存日志 |
+| `/logs/:appName` | 程序日志 | systemd journal 历史日志与实时跟随 |
 | `/records/:appName` | 事件投递 | 本地 outbox、媒体、JSON、重试与删除 |
 | `/services` | 系统服务 | OTA/统一上传状态、启停、自启意图和 journal |
 | `/system-settings` | 系统设置 | 存储、网络、时区与定时重启 |

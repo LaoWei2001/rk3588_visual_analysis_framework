@@ -61,16 +61,16 @@
 安装并登录 Codex CLI 或 Claude Code 后，可在仓库根目录运行：
 
 ```bash
-./vision develop
+./rkvision develop
 ```
 
-Windows 可使用 `vision.cmd develop`。向导只允许回写通道和全局 Logic 目录；涉及 Web、服务、
+Windows 可使用 `rkvision.cmd develop`。向导只允许回写通道和全局 Logic 目录；涉及 Web、服务、
 配置格式或引擎核心的需求会报告超出边界。常用参数：
 
 ```bash
-./vision develop --check
-./vision develop --plan-only
-./vision develop --confirm-before-code
+./rkvision develop --check
+./rkvision develop --plan-only
+./rkvision develop --confirm-before-code
 ```
 
 详细边界见 [AI 开发向导](docs/skills/rk3588-feature-wizard/SKILL.md)。报警、图片/视频及 HTTP/Dify
@@ -202,7 +202,7 @@ GStreamer appsink
 ```text
 .
 ├── VERSION                     # 引擎版本
-├── vision / vision.cmd         # 外部项目创建、检查、构建、打包入口
+├── rkvision / rkvision.cmd     # 唯一公开的项目、构建、运行和部署入口
 ├── vision_analysis/
 │   ├── include/rkvision/       # 公开的源码级 SDK
 │   ├── src/                   # 引擎实现；logic/core 不含业务模块
@@ -221,7 +221,8 @@ GStreamer appsink
 │   └── relay_control/          # 继电器业务
 ├── templates/basic_project/    # 最小新项目模板
 ├── tools/                      # 开发和设备工具
-│   ├── project/                # 项目管理、构建、打包、安装
+│   ├── rkvision/               # 统一命令的分层实现
+│   ├── project/                # 内部构建、打包和安装实现
 │   ├── first_net_config/       # 首次网络配置
 │   └── hardware/              # GPIO、继电器诊断
 ├── setup/                      # 平台安装与环境准备
@@ -233,29 +234,79 @@ GStreamer appsink
 └── docs/                       # 架构、开发、运维与技能文档
 ```
 
-业务工程可以放在任意目录、使用独立 Git 仓库。各项目与外部项目使用相同的 build.sh / CMake 构建流程。
-平台安装与环境准备工具位于 `setup/`，硬件与网络工具位于 `tools/`；旧入口与转发头已删除。
+业务工程可以放在任意目录、使用独立 Git 仓库。仓库内外项目都通过 `rkvision` 使用相同的构建流程，
+同时保留标准 CMake 入口。
+平台安装与环境准备工具位于 `setup/`，硬件与网络工具位于 `tools/`。
+
+## RKVision 统一命令
+
+仓库只向使用者暴露 `rkvision`（Windows 为 `rkvision.cmd`）。项目参数可以使用目录名、
+`project.json` 中的应用 ID 或完整路径；位于项目目录中时还可以省略：
+
+```bash
+./rkvision list
+./rkvision check person_count
+./rkvision build person_count --profile release
+./rkvision run person_count --display
+./rkvision package person_count
+./rkvision clean person_count
+```
+
+安装后的应用由命令行和 Web 共用同一套 systemd 进程管理与 journal 日志：
+
+```bash
+sudo ./rkvision start person-count --mode deploy --config config_global.json
+./rkvision status person-count
+./rkvision logs person-count --follow
+sudo ./rkvision restart person-count --mode debug
+sudo ./rkvision stop person-count
+sudo ./rkvision autostart person-count enable
+```
+
+因此从命令行启动的后台应用可以在 Web 查看、停止或重启，从 Web 启动的应用也能用
+`rkvision status/logs/stop` 管理。设备仍执行全局单视觉应用约束，避免两种入口抢占 NPU、摄像头或显示资源。
+
+课程项目可一次校验或编译：
+
+```bash
+./rkvision check --all --type example
+./rkvision build --all --type example
+```
+
+环境、平台及板级工具也使用同一入口：
+
+```bash
+./rkvision doctor
+sudo ./rkvision platform install online
+./rkvision platform status
+./rkvision hardware build gpio
+./rkvision network build
+sudo ./rkvision network configure
+```
+
+`rkvision run` 在终端前台运行源码构建产物，`Ctrl+C` 退出；`rkvision start` 与 Web
+用于后台运行已安装应用。三种入口使用相同的应用包、配置格式和运行库。
+`--display`/`--no-display` 与 `--mode debug|deploy` 只覆盖本次运行的显示开关，不会改写项目 JSON。
 
 ## 独立业务项目开发
 
 ```bash
 # 在框架仓库执行；目标目录必须尚不存在
-./vision create /userdata/projects/my-app
-./vision check /userdata/projects/my-app
-./vision new-logic /userdata/projects/my-app channel logic_custom
-cd /userdata/projects/my-app
-./build.sh
-./build.sh package
+./rkvision create /userdata/projects/my-app
+./rkvision check /userdata/projects/my-app
+./rkvision logic add channel logic_custom /userdata/projects/my-app
+./rkvision build /userdata/projects/my-app
+./rkvision package /userdata/projects/my-app
 ```
 
-新项目包含 `CMakeLists.txt`、`build.sh`、`project.json`、`logic/` 和 `assets/`。
+新项目包含 `CMakeLists.txt`、`project.json`、`logic/` 和 `assets/`，不再复制项目级构建脚本。
 `project.json` 锁定引擎版本和 SDK API；`engine.local.cmake` 保存本机引擎路径，不提交 Git。
 每个项目都可以直接执行 `cmake -S . -B build/direct && cmake --build build/direct`。
 模板配置使用 `assets/input.mp4`，运行前需要提供视频或修改输入源。
 
 业务仅包含 `<rkvision/logic.h>`、`<rkvision/global_context.h>` 等公开头文件，
 构建为本项目的可执行程序，并链接公共引擎 `librkvision.so.1`。
-`build.sh` 复用框架 `build/runtime/` 的引擎缓存，发布包在 `libs/` 携带匹配版本。
+`rkvision build` 复用框架 `build/runtime/` 的引擎缓存，发布包在 `libs/` 携带匹配版本。
 默认使用 Release，保留原有 `-O3 -ffast-math`；帧处理没有增加跨进程调用或额外拷贝。
 
 产物位于项目 `build/`、`dist/`；升级引擎只需修改项目声明的版本，重新构建与验证。
@@ -330,17 +381,17 @@ ARM64 制作。不要把 Debian bundle 强制安装到 Ubuntu，也不要通过�
 电平保持服务：
 
 ```bash
-sudo ./setup/install.sh online
+sudo ./rkvision platform install online
 ```
 
 后续更新源码后可统一升级，也可以随时查看安装状态：
 
 ```bash
-sudo ./setup/install.sh upgrade online
-./setup/install.sh status
+sudo ./rkvision platform upgrade online
+./rkvision platform status
 ```
 
-`setup/install.sh` 是面向使用者的唯一源码安装入口；`setup/install_deps.sh`、
+`rkvision platform` 是面向使用者的统一平台管理入口；`setup/install.sh`、`setup/install_deps.sh`、
 `web_console/install.sh` 和 `service/gpio_state/install.sh` 是内部组件脚本，仅用于制包、
 开发或单项故障修复。
 
@@ -431,13 +482,13 @@ Python/通用动态库、Rockchip GStreamer 硬件插件，以及项目和 `/opt
 可以使用严格断网模式完成统一安装：
 
 ```bash
-sudo ./setup/install.sh offline
+sudo ./rkvision platform install offline
 ```
 
 卸载统一安装的系统服务和控制台时使用：
 
 ```bash
-sudo ./setup/install.sh uninstall
+sudo ./rkvision platform uninstall
 ```
 
 卸载前会要求明确确认；应用包和 GPIO 保存状态会保留，已安装的控制台目录会移动到带时间戳
@@ -454,7 +505,7 @@ Rockchip GStreamer 和 RKNN 等用户态组件，但不会尝试用用户态 `.s
 ### 2.1 固定的 RKNN Runtime
 
 编译和发布统一使用 `vision_analysis/vendor/rknn/2.4.2a2/` 中的 AArch64 Runtime，
-不再根据构建设备的 `ldconfig` 顺序选择 `librknnrt.so`。CMake 和 `build.sh` 都会校验
+不再根据构建设备的 `ldconfig` 顺序选择 `librknnrt.so`。CMake 和 `rkvision` 都会校验
 头文件及 Runtime 的 SHA-256；文件缺失、被替换、架构或版本不符时构建会直接失败。
 
 当前锁定并在 RK3588 / RKNPU driver v0.9.0 上验证的 Runtime 为：
@@ -469,9 +520,9 @@ SHA-256: bf50d51705ae433013927a13520ae781b534fdb1481c47bdddbc726f63ed4970
 在框架根目录执行：
 
 ```bash
-./projects/person_count/build.sh --build-type Debug
+./rkvision build person_count --profile debug
 # 配置好参考项目的视频源后，前台运行；Ctrl+C 退出
-./vision run projects/person_count --build-type Debug --config assets/config_global.json
+./rkvision run person_count --profile debug --config assets/config_global.json --display
 ```
 
 普通业务开发将 `projects/person_count` 换成独立项目路径即可。调试构建不代表发布性能；
@@ -480,7 +531,7 @@ SHA-256: bf50d51705ae433013927a13520ae781b534fdb1481c47bdddbc726f63ed4970
 ### 4. 构建发布包
 
 ```bash
-./projects/person_count/build.sh package
+./rkvision package person_count
 ```
 
 发布包位于 `projects/person_count/dist/person-count/`，压缩包位于同级 `person-count.tar.gz`。
@@ -492,24 +543,26 @@ cd projects/person_count/dist/person-count
 ./run.sh
 ```
 
-可以通过 Web 上传压缩包，或使用命令行安装：
+可以通过 Web 上传压缩包，或只给出项目目录名，让 RKVision 自动定位、构建、打包并安装：
 
 ```bash
-sudo ./vision install projects/person_count/dist/person-count
+sudo ./rkvision install person_count
 ```
 
+项目参数也可以是 `project.json` 中的应用 ID（如 `person-count`）或项目路径。
+传入已生成的完整发布包目录时会跳过构建，直接安装。
 同名应用升级默认保留现场配置和模型；需要明确替换时使用 `--replace-assets`，或取消 Web 的保留选项。
-持久运行数据位于 `/opt/ai_apps/.data/<应用名>/`。离线制包同样调用 `vision package`。
+持久运行数据位于 `/opt/ai_apps/.data/<应用名>/`。离线制包同样调用 `rkvision package`。
 
 ### 5. 安装 Web 管理平台
 
 ```bash
 cd /userdata/rk3588_visual_analysis_framework
-sudo ./setup/install.sh online
+sudo ./rkvision platform install online
 ```
 
 该统一入口也会安装 GPIO 子系统；已经完成依赖准备且不允许联网时改用
-`sudo ./setup/install.sh offline`。
+`sudo ./rkvision platform install offline`。
 
 安装完成后访问：
 
@@ -520,7 +573,7 @@ http://<RK3588-IP>:8080
 控制台默认从 `/opt/ai_apps/` 扫描应用包。将刚构建的应用包安装到控制台：
 
 ```bash
-sudo ./vision install projects/person_count/dist/person-count
+sudo ./rkvision install person_count
 ```
 
 离线环境包不会自动执行这一步，也不会预装名为 `vision_analysis` 的程序。Web 程序列表只显示

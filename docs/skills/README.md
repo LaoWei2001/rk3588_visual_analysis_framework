@@ -13,7 +13,7 @@
 
 ## 组合使用
 
-- 不知道该选哪个 Skill：从仓库根目录运行 `./vision develop`；向导会选择可用的 Codex/Claude，但只会实施能完全放在通道/全局 Logic 模块目录内的功能。
+- 不知道该选哪个 Skill：从仓库根目录运行 `./rkvision develop`；向导会选择可用的 Codex/Claude，但只会实施能完全放在通道/全局 Logic 模块目录内的功能。
 - 新增“单通道检测并上报”：先用 `build-rk3588-vision-app` 定边界，再读 `rk3588-channel-logic` 和 `rk3588-console-ops` 的上报参考。
 - 新增“多通道组合告警”：使用 `rk3588-global-logic`，并让上游通道通过 `outputs`/`publish_*()` 提供契约。
 - 修改引擎公共 API 或配置：使用 `rk3588-src-modules`，再回看所有受影响的业务 Skill。
@@ -27,10 +27,3 @@
 4. 通道私有状态放 `ctx->state`，全局实例状态放 `gctx->state`；不使用无保护的可变全局或 `static` 业务状态。
 5. 当前不存在的模块不得写入配置或作为可运行示例。
 6. 若源码和本目录冲突，以源码为准，并在同一改动中修复文档。
-
-## 关于保留的旧辅助脚本
-
-`build-rk3588-vision-app/scripts/` 下三个 Python 文件创建于 2026-08-14，本次按用户要求未修改。
-`validate_logic.py` 会错误拒绝当前已支持的全局 Action，另外两个也没有覆盖完整的当前契约；具体见
-[旧辅助脚本边界](build-rk3588-vision-app/references/legacy-scripts.md)。它们不得单独作为验收依据，当前
-权威校验命令写在各 `SKILL.md` 中。

@@ -2,15 +2,14 @@
 process_manager.py — App 进程生命周期管理
 
 变更说明：
-  - 日志不再写入任何文件（run.log 已移除）；
-    systemd-run --pipe 捕获 stdout+stderr，由后台线程推入内存缓冲（log_buffer）。
+  - 日志不再写入应用目录（run.log 已移除）；
+    systemd journal 是 CLI 与 Web 共用的持久日志源，Web 用跟随线程推入内存缓冲。
   - 运行配置统一位于 assets/ 子目录，ROI 保存在 channels[].roi_zones；
     启动时把 assets/config.json 作为命令行参数传给二进制。
 """
 
 import fcntl
 import hashlib
-import json
 import os
 import re
 import signal
@@ -39,7 +38,7 @@ class ManagedProcess:
     proc:       Optional[subprocess.Popen]  # None when recovered or managed by systemd
     config:     str = "config.json"  # 本次启动所用的配置文件名（assets/ 下）
     unit_name:  Optional[str] = None
-    launcher:   Optional[subprocess.Popen] = None  # systemd-run --pipe 日志代理
+    launcher:   Optional[subprocess.Popen] = None  # journalctl 跟随进程
 
 
 _processes: Dict[str, ManagedProcess] = {}
@@ -259,38 +258,6 @@ def _normalize_config_name(config_name: Optional[str]) -> str:
     return name
 
 
-def _patch_display(config_path: Path, enable: bool) -> None:
-    """原子修改 config.json 中 global.enable_display 字段。
-
-    deploy 模式启动时调用（enable=False），确保推理程序不尝试输出 HDMI，
-    即使用户在编辑器里误勾选了「HDMI 显示」也不会影响无显示器环境。
-    """
-    try:
-        cfg = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return  # 读取失败不阻断启动
-
-    target = 1 if enable else 0
-
-    global_config = cfg.get("global")
-    if not isinstance(global_config, dict):
-        return
-    changed = global_config.get("enable_display") != target
-    if changed:
-        global_config["enable_display"] = target
-
-    if not changed:
-        return
-
-    # 原子写：先写 .tmp 再 replace，防止写到一半崩溃损坏配置
-    tmp = config_path.with_suffix(".tmp")
-    try:
-        tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=4), encoding="utf-8")
-        os.replace(tmp, config_path)
-    except OSError:
-        tmp.unlink(missing_ok=True)  # 清理残留临时文件，不阻断启动
-
-
 # ── 启动时恢复上次未退出的进程 ───────────────────────────────────────────────
 
 def recover_processes() -> None:
@@ -302,7 +269,9 @@ def recover_processes() -> None:
             continue
         if not (entry / "run.pid").exists():
             continue
-        _recover_process(entry.name, announce=True)
+        managed = _recover_process(entry.name, announce=True)
+        if managed is not None:
+            ensure_log_reader(entry.name)
 
 
 # ── 启动 ─────────────────────────────────────────────────────────────────────
@@ -381,17 +350,18 @@ def _wait_for_systemd_main_pid(
 ) -> Optional[int]:
     """等待 transient service 进入运行态，但不等待视觉程序退出。
 
-    ``systemd-run --pipe`` 会在服务整个生命周期内保持运行，用来把 stdout/stderr
-    转发到控制台的内存日志缓冲。不能对 launcher 调用 ``wait(timeout=...)`` 来
-    判断“启动完成”，否则所有正常的长驻视觉程序都会被误判为启动超时。
+    ``systemd-run`` 提交 transient unit 后通常立即成功退出；应用的 MainPID 由
+    systemd 异步建立。因此 launcher 成功退出不代表应用停止，仍需轮询 MainPID。
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if launcher.poll() is not None:
-            return None
         pid = _systemd_main_pid(unit_name)
         if pid is not None:
             return pid
+        # systemd-run normally exits successfully as soon as the unit is
+        # submitted. Only a non-zero launcher exit means startup failed.
+        if launcher.poll() not in (None, 0):
+            return None
         time.sleep(0.1)
     return None
 
@@ -465,10 +435,11 @@ def _start_systemd_app(binary: Path, config: Path, app_dir: Path, env: dict, uni
         f"--unit={unit_name}",
         "--collect",
         "--quiet",
-        "--pipe",
         "--service-type=exec",
         "--property=KillMode=control-group",
         "--property=TimeoutStopSec=10",
+        "--property=StandardOutput=journal",
+        "--property=StandardError=journal",
         f"--working-directory={app_dir}",
     ]
     for key, value in sorted(env.items()):
@@ -484,7 +455,44 @@ def _start_systemd_app(binary: Path, config: Path, app_dir: Path, env: dict, uni
     )
 
 
-def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> int:
+def _start_journal_reader(unit_name: str, app_name: str) -> Optional[subprocess.Popen]:
+    """Follow one managed unit and feed new journal lines to Web subscribers."""
+    from services.log_buffer import get_log_buffer
+
+    try:
+        follower = subprocess.Popen(
+            [
+                "journalctl", "--quiet", "--follow", "--lines=0", "--output=cat",
+                "--unit", unit_name,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+        )
+    except OSError:
+        return None
+
+    buf = get_log_buffer(app_name)
+
+    def read() -> None:
+        try:
+            for line in follower.stdout:  # type: ignore[union-attr]
+                buf.push(line.rstrip("\n"))
+        except Exception:
+            pass
+
+    threading.Thread(target=read, daemon=True, name=f"journal-reader-{app_name}").start()
+    return follower
+
+
+def start_app(
+    app_name: str,
+    mode: str,
+    config_name: Optional[str] = None,
+    *,
+    follow_logs: bool = True,
+) -> int:
     app_dir     = _app_path(app_name)
     binary      = app_dir / BINARY_NAME
     assets_dir  = app_dir / "assets"
@@ -511,9 +519,6 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
         # 同一个 App 再次启动仍保持原来的“重启”语义，不会与其他 App 并存。
         _stop_app_unlocked(app_name)
 
-        # 根据启动模式自动同步 enable_display：部署=0，调试=1
-        _patch_display(config, enable=(mode == "debug"))
-
         # 清空内存日志缓冲，准备新一轮输出
         from services.log_buffer import get_log_buffer
         buf = get_log_buffer(app_name)
@@ -522,6 +527,8 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
         env = os.environ.copy()
         control_sock.unlink(missing_ok=True)
         env["RK_LOGIC_CONTROL_SOCKET"] = str(control_sock)
+        # 部署模式关闭 HDMI，调试模式开启 HDMI；只影响本次进程，不改写 JSON。
+        env["RKVISION_ENABLE_DISPLAY"] = "1" if mode == "debug" else "0"
         env["ASSETS_DIR"] = str(assets_dir)
         env["EVENT_STORE_DIR"] = str(data_dir(app_name) / "event_store")
         env.update(storage_manager.vision_environment())
@@ -548,20 +555,6 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
         except FileNotFoundError as exc:
             raise RuntimeError("找不到 systemd-run，无法启动独立视觉进程服务") from exc
 
-        def _pipe_reader() -> None:
-            try:
-                for line in launcher.stdout:        # type: ignore[union-attr]
-                    buf.push(line.rstrip("\n"))
-            except Exception:
-                pass
-            try:
-                launcher.wait(timeout=1)
-            except (subprocess.TimeoutExpired, ProcessLookupError):
-                pass
-            buf.push("[进程已停止]")
-
-        threading.Thread(target=_pipe_reader, daemon=True, name=f"log-reader-{app_name}").start()
-
         pid = _wait_for_systemd_main_pid(unit_name, launcher)
         if pid is None:
             launcher.poll()
@@ -576,10 +569,11 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
             raise RuntimeError("视觉进程已启动，但其可执行文件或工作目录与当前程序包不一致")
 
         started_at = time.time()
+        journal_reader = _start_journal_reader(unit_name, app_name) if follow_logs else None
         _processes[app_name] = ManagedProcess(
             app_name=app_name, pid=pid, mode=mode,
             started_at=started_at, proc=None, config=config_name,
-            unit_name=unit_name, launcher=launcher,
+            unit_name=unit_name, launcher=journal_reader,
         )
 
         try:
@@ -593,6 +587,8 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
             runtime_state.mark_vision_started(app_name, mode, config_name)
         except Exception:
             _processes.pop(app_name, None)
+            if journal_reader is not None and journal_reader.poll() is None:
+                journal_reader.terminate()
             _stop_systemd_unit(unit_name)
             (app_dir / "run.pid").unlink(missing_ok=True)
             control_sock.unlink(missing_ok=True)
@@ -639,6 +635,8 @@ def _stop_app_unlocked(app_name: str) -> bool:
     except ProcessLookupError:
         stopped = True
     finally:
+        if mp.launcher is not None and mp.launcher.poll() is None:
+            mp.launcher.terminate()
         _processes.pop(app_name, None)
         _clear_runtime_files_if_pid(app_name, mp.pid)
 
@@ -729,3 +727,39 @@ def get_status(app_name: str) -> dict:
         "uptime_seconds": int(time.time() - mp.started_at),
         "config":         mp.config,
     }
+
+
+def get_logs(app_name: str, lines: int = 200) -> list[str]:
+    """Read recent logs from the shared systemd journal, with memory fallback."""
+    unit_name = _read_unit_name(app_name) or _app_unit_name(app_name)
+    try:
+        result = subprocess.run(
+            [
+                "journalctl", "--quiet", "--no-pager", "--output=cat", "--unit", unit_name,
+                "--lines", str(max(1, min(int(lines), 5000))),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.splitlines()
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    from services.log_buffer import get_log_buffer
+    return get_log_buffer(app_name).get_tail(lines)
+
+
+def app_unit_name(app_name: str) -> str:
+    """Return the stable systemd unit used by CLI and Web for an application."""
+    return _app_unit_name(app_name)
+
+
+def ensure_log_reader(app_name: str) -> None:
+    """Attach the current Web worker to journal output for a running app."""
+    managed = _processes.get(app_name) or _recover_process(app_name)
+    if managed is None or managed.unit_name is None:
+        return
+    if managed.launcher is not None and managed.launcher.poll() is None:
+        return
+    managed.launcher = _start_journal_reader(managed.unit_name, app_name)

@@ -98,9 +98,8 @@ python3 scripts/generate_logics_catalog.py --logic-root ../projects/person_count
 编译验证：
 
 ```bash
-cd projects/person_count
-./build.sh --build-type Debug
+./rkvision build person_count --profile debug
 ```
 
-完整交付在应用目录运行 `./build.sh package`。公共接口、线程或热重载变更还必须做板端真实流、
+完整交付运行 `./rkvision package person_count`。公共接口、线程或热重载变更还必须做板端真实流、
 断流重连、多通道、退出和失败回滚测试。

@@ -51,6 +51,9 @@ def scan_apps() -> List[Dict[str, Any]]:
                 pass
 
         status_info = get_status(entry.name)
+        if status_info.get("status") == "running":
+            from services.process_manager import ensure_log_reader
+            ensure_log_reader(entry.name)
         runtime_settings = get_vision_settings(entry.name)
 
         # 待上报记录数 = 统一事件目录数，以 event.json 为完成标记。

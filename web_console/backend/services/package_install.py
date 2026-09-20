@@ -12,9 +12,9 @@ def replace_application(staged: Path, destination: Path, preserve_assets: bool =
     operation. Explicit replacement is available to installers via preserve_assets.
     """
     if not (staged / binary_name).is_file():
-        raise ValueError('Application package is missing vision_analysis')
+        raise ValueError('应用发布包缺少 vision_analysis')
     if not (staged / 'assets').is_dir():
-        raise ValueError('Application package is missing assets/')
+        raise ValueError('应用发布包缺少 assets/ 目录')
     if destination.exists() and preserve_assets:
         old_assets = destination / 'assets'
         if old_assets.is_dir():

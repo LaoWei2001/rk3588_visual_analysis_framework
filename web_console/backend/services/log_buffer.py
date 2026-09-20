@@ -2,8 +2,8 @@
 log_buffer.py — 每个 App 独立的内存日志环形缓冲区，支持 WebSocket 订阅推送。
 
 设计原则：
-  - 不写任何磁盘文件；所有日志仅存活于本次 Web 控制台进程的内存中。
-  - reader 线程（process_manager 里的 _pipe_reader）通过 push() 把行写入 deque，
+  - systemd journal 是 CLI/Web 共用的日志源；本缓冲只负责 WebSocket 实时分发。
+  - journal reader 线程通过 push() 把新行写入 deque，
     同时通过 asyncio.run_coroutine_threadsafe 把行投递到所有已订阅的 asyncio.Queue。
   - WebSocket handler 在 subscribe() 时捕获当前事件循环（async 上下文），
     此后 push() 即可跨线程推送。

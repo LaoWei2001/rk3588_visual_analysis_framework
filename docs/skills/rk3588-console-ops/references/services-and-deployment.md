@@ -12,14 +12,13 @@
 
 ## 构建一个完整视觉 App
 
-进入独立项目，使用它自己的 Shell 和 CMake 入口：
+在框架根目录使用统一入口：
 
 ```bash
-cd projects/person_count
-./build.sh
-./build.sh package
+./rkvision build person_count
+./rkvision package person_count
 # 调试编译
-./build.sh --build-type Debug
+./rkvision build person_count --profile debug
 ```
 
 发布包生成到本项目 `dist/person-count/`，同级 `person-count.tar.gz` 可上传 Web。
@@ -32,9 +31,11 @@ cd projects/person_count
 在框架根目录安装应用：
 
 ```bash
-sudo ./vision install projects/person_count/dist/person-count
+sudo ./rkvision install person_count
 ```
 
+命令会按项目目录名、`project.json` 应用 ID 或路径定位源项目，自动构建、打包并安装。
+传入完整发布包目录时会直接安装，不重新构建。
 同名升级默认保留现场 assets、run.config 和包外 `.data`，需要明确覆盖资源时使用
 `--replace-assets`。安装会停止当前视觉应用，安装后在 Web 重新启动。
 不同项目通过 project.json 的 ID 区分，在 Web 显示为不同应用。
@@ -42,9 +43,9 @@ sudo ./vision install projects/person_count/dist/person-count
 在框架根目录部署或升级控制台：
 
 ```bash
-sudo ./setup/install.sh online
+sudo ./rkvision platform install online
 # 已准备好依赖和前端产物时
-sudo ./setup/install.sh offline
+sudo ./rkvision platform install offline
 ```
 
 默认地址 `http://<设备IP>:8080`，应用根目录 `/opt/ai_apps/`。
@@ -52,7 +53,8 @@ sudo ./setup/install.sh offline
 
 ## 运行模式
 
-Web 通过 `systemd-run --pipe` 启动二进制，工作目录是 App 根，参数是所选 `assets/<config>.json`。
+Web 与 `rkvision start` 通过同一套 `systemd-run` transient unit 启动二进制，工作目录是 App 根，
+参数是所选 `assets/<config>.json`，日志统一进入 systemd journal。
 它设置：
 
 - `RK_LOGIC_CONTROL_SOCKET=<App>/run.control.sock`；
@@ -61,8 +63,8 @@ Web 通过 `systemd-run --pipe` 启动二进制，工作目录是 App 根，参�
 - `LD_LIBRARY_PATH=<App>/libs...`；
 - 存储管理器生成的运行环境。
 
-部署模式把 `global.enable_display` 原子写为 0；调试模式写为 1，并补 `DISPLAY=:0` 与可能的
-Xauthority。`run.pid/run.mode/run.config/run.started_at/run.systemd_unit` 是运行标记，不是源码配置。
+部署模式通过进程环境关闭 `global.enable_display`；调试模式开启它，并补 `DISPLAY=:0` 与可能的
+Xauthority。这些覆盖不会改写项目 JSON。`run.pid/run.mode/run.config/run.started_at/run.systemd_unit` 是运行标记。
 
 ## 两个后台服务
 
@@ -127,7 +129,7 @@ OTA 指令按 `channels[].id + models[].id` 定位；`channel` 缺失时当前�
 | 改动 | 生效动作 |
 |---|---|
 | C++、logic manifest、模块模板、打包服务代码 | 重建完整包、重新安装、重启 App/相关服务 |
-| Web 前端/后端 | 在项目根目录运行 `sudo ./setup/install.sh upgrade online`（已备好依赖与前端时可用 `offline`） |
+| Web 前端/后端 | 在项目根目录运行 `sudo ./rkvision platform upgrade online`（已备好依赖与前端时可用 `offline`） |
 | 当前运行 JSON 普通可热更字段 | Web 保存后观察 C++ config monitor；被拒绝时重启 App |
 | `connections.yaml`、活动契约 | 上传 worker 下一轮重新加载；测试仍需真实事件 |
 | `ota_config.json` | 重启 OTA 服务，因为模块启动时读取 |

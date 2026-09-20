@@ -121,6 +121,7 @@ done
     || { echo "[错误] 缺少安装器模板: $INSTALLER_TEMPLATE" >&2; exit 1; }
 
 required_project_files=(
+    "rkvision"
     "$PLATFORM_MANAGER_REL"
     "setup/offline/debian/create_source_update.sh"
     "setup/offline/debian/templates/install_source_update.sh"
@@ -147,6 +148,8 @@ for required_project_file in "${required_project_files[@]}"; do
 done
 [ -x "$PROJECT_ROOT/$PLATFORM_MANAGER_REL" ] \
     || { echo "[错误] 统一安装入口没有执行权限: $PLATFORM_MANAGER_REL" >&2; exit 1; }
+[ -x "$PROJECT_ROOT/rkvision" ] \
+    || { echo "[错误] RKVision 命令没有执行权限: rkvision" >&2; exit 1; }
 [ -x "$PROJECT_ROOT/$GPIO_SERVICE_INSTALLER_REL" ] \
     || { echo "[错误] GPIO 服务安装器没有执行权限: $GPIO_SERVICE_INSTALLER_REL" >&2; exit 1; }
 
@@ -219,7 +222,7 @@ mkdir -p "$APT_DIR" "$WORK_DIR"
 echo ">>> [1/8] 编译主程序依赖检测产物..."
 APP_BUILD_DIR="$WORK_DIR/person-count"
 # 项目可能从另一发行版复制而来，不能复用其中的 CMakeCache 和旧目标文件。
-bash "$APP_PROJECT/build.sh" package \
+"$PROJECT_ROOT/rkvision" package "$APP_PROJECT" \
     --output "$APP_BUILD_DIR" --clean --no-bundle-libs
 [ -x "$APP_BUILD_DIR/vision_analysis" ] \
     || { echo "[错误] 项目构建没有生成 vision_analysis。" >&2; exit 1; }
@@ -985,8 +988,8 @@ if [ "$WANT_BUILD" = true ]; then
     fi
     [ -f "$SOURCE_TREE/vision_analysis/CMakeLists.txt" ] \
         || { echo "[错误] 源码包缺少 vision_analysis/CMakeLists.txt。" >&2; exit 1; }
-    [ -f "$SOURCE_TREE/vision" ] \
-        || { echo "[错误] 源码包缺少 vision。" >&2; exit 1; }
+    [ -x "$SOURCE_TREE/rkvision" ] \
+        || { echo "[错误] 源码包缺少可执行的 rkvision。" >&2; exit 1; }
     for required_project_file in "${required_project_files[@]}"; do
         [ -f "$SOURCE_TREE/$required_project_file" ] \
             || { echo "[错误] 源码包遗漏发布必需文件: $required_project_file" >&2; exit 1; }
@@ -1008,12 +1011,12 @@ if [ "$WANT_BUILD" = true ]; then
 固定入口: /userdata/rk3588_visual_analysis_framework
 统一管理命令:
   cd $SOURCE_INSTALL_PATH
-  ./setup/install.sh status
-  sudo ./setup/install.sh upgrade offline
+  ./rkvision platform status
+  sudo ./rkvision platform upgrade offline
 
 编译命令:
   cd $SOURCE_INSTALL_PATH
-  ./vision package projects/person_count
+  ./rkvision package projects/person_count
 
 前端构建命令（Node.js、npm 和 node_modules 已离线提供）:
   cd $SOURCE_INSTALL_PATH/web_console/frontend

@@ -88,66 +88,66 @@ def json_value_matches_type(value: Any, schema_type: str) -> bool:
 
 def validate_parameter_schema(manifest_path: Path, schema: Any) -> Dict[str, Any]:
     if not isinstance(schema, dict):
-        raise ManifestError(f"{manifest_path}: parameters must be a JSON Schema object")
+        raise ManifestError(f"{manifest_path}：parameters 必须是 JSON Schema 对象")
     if schema.get("type") != "object":
-        raise ManifestError(f"{manifest_path}: parameters.type must be 'object'")
+        raise ManifestError(f"{manifest_path}：parameters.type 必须是 'object'")
     if schema.get("additionalProperties") is not False:
         raise ManifestError(
-            f"{manifest_path}: parameters.additionalProperties must be false"
+            f"{manifest_path}：parameters.additionalProperties 必须是 false"
         )
     properties = schema.get("properties", {})
     if not isinstance(properties, dict):
-        raise ManifestError(f"{manifest_path}: parameters.properties must be an object")
+        raise ManifestError(f"{manifest_path}：parameters.properties 必须是对象")
 
     for key, spec in properties.items():
         prefix = f"{manifest_path}: parameters.properties.{key}"
         if not isinstance(key, str) or not key:
-            raise ManifestError(f"{manifest_path}: parameter keys must be non-empty strings")
+            raise ManifestError(f"{manifest_path}：参数键必须是非空字符串")
         if not isinstance(spec, dict):
-            raise ManifestError(f"{prefix} must be an object")
+            raise ManifestError(f"{prefix} 必须是对象")
         schema_type = spec.get("type")
         if schema_type not in SCHEMA_TYPES:
             raise ManifestError(
-                f"{prefix}.type must be one of {', '.join(sorted(SCHEMA_TYPES))}"
+                f"{prefix}.type 必须是以下值之一：{', '.join(sorted(SCHEMA_TYPES))}"
             )
         if "default" not in spec:
-            raise ManifestError(f"{prefix}.default is required")
+            raise ManifestError(f"{prefix}.default 为必填项")
         if not json_value_matches_type(spec["default"], schema_type):
-            raise ManifestError(f"{prefix}.default does not match type '{schema_type}'")
+            raise ManifestError(f"{prefix}.default 与类型 '{schema_type}' 不匹配")
 
         policy = spec.get("x-hot-reload", "preserve_state")
         if policy not in RELOAD_POLICIES:
             raise ManifestError(
-                f"{prefix}.x-hot-reload must be one of {', '.join(sorted(RELOAD_POLICIES))}"
+                f"{prefix}.x-hot-reload 必须是以下值之一：{', '.join(sorted(RELOAD_POLICIES))}"
             )
 
         for field in ("title", "description", "x-placeholder", "x-unit"):
             if field in spec and not isinstance(spec[field], str):
-                raise ManifestError(f"{prefix}.{field} must be a string")
+                raise ManifestError(f"{prefix}.{field} 必须是字符串")
         if "x-ui-hidden" in spec and not isinstance(spec["x-ui-hidden"], bool):
-            raise ManifestError(f"{prefix}.x-ui-hidden must be a boolean")
+            raise ManifestError(f"{prefix}.x-ui-hidden 必须是布尔值")
         if "x-step" in spec:
             if schema_type not in {"number", "integer"}:
-                raise ManifestError(f"{prefix}.x-step requires a numeric type")
+                raise ManifestError(f"{prefix}.x-step 要求参数为数值类型")
             if not json_value_matches_type(spec["x-step"], "number") or spec["x-step"] <= 0:
-                raise ManifestError(f"{prefix}.x-step must be a positive finite number")
+                raise ManifestError(f"{prefix}.x-step 必须是有限正数")
         if "x-widget" in spec and not (
             schema_type == "string" and spec["x-widget"] == "textarea"
         ):
             raise ManifestError(
-                f"{prefix}.x-widget currently only supports 'textarea' for strings"
+                f"{prefix}.x-widget 当前仅支持字符串类型的 'textarea'"
             )
 
         enum = spec.get("enum")
         if enum is not None:
             if schema_type != "string":
-                raise ManifestError(f"{prefix}.enum currently supports string parameters only")
+                raise ManifestError(f"{prefix}.enum 当前仅支持字符串参数")
             if not isinstance(enum, list) or not enum:
-                raise ManifestError(f"{prefix}.enum must be a non-empty array")
+                raise ManifestError(f"{prefix}.enum 必须是非空数组")
             if any(not json_value_matches_type(value, schema_type) for value in enum):
-                raise ManifestError(f"{prefix}.enum contains a value of the wrong type")
+                raise ManifestError(f"{prefix}.enum 包含类型错误的值")
             if spec["default"] not in enum:
-                raise ManifestError(f"{prefix}.default must be present in enum")
+                raise ManifestError(f"{prefix}.default 必须存在于 enum 中")
 
         minimum = spec.get("minimum")
         maximum = spec.get("maximum")
@@ -155,17 +155,17 @@ def validate_parameter_schema(manifest_path: Path, schema: Any) -> Dict[str, Any
             "number",
             "integer",
         }:
-            raise ManifestError(f"{prefix}: minimum/maximum require a numeric type")
+            raise ManifestError(f"{prefix}：minimum/maximum 要求参数为数值类型")
         if minimum is not None and not json_value_matches_type(minimum, "number"):
-            raise ManifestError(f"{prefix}.minimum must be a number")
+            raise ManifestError(f"{prefix}.minimum 必须是数字")
         if maximum is not None and not json_value_matches_type(maximum, "number"):
-            raise ManifestError(f"{prefix}.maximum must be a number")
+            raise ManifestError(f"{prefix}.maximum 必须是数字")
         if minimum is not None and maximum is not None and minimum > maximum:
-            raise ManifestError(f"{prefix}.minimum must not exceed maximum")
+            raise ManifestError(f"{prefix}.minimum 不能大于 maximum")
         if minimum is not None and spec["default"] < minimum:
-            raise ManifestError(f"{prefix}.default is below minimum")
+            raise ManifestError(f"{prefix}.default 小于 minimum")
         if maximum is not None and spec["default"] > maximum:
-            raise ManifestError(f"{prefix}.default is above maximum")
+            raise ManifestError(f"{prefix}.default 大于 maximum")
 
     return schema
 
@@ -235,11 +235,15 @@ def load_object(path: Path) -> Dict[str, Any]:
             object_pairs_hook=reject_duplicate_keys,
         )
     except DuplicateJsonKeyError as exc:
-        raise ManifestError(f"{path}: duplicate JSON key: {exc}") from exc
+        raise ManifestError(f"{path}：JSON 键重复：{exc}") from exc
     except (OSError, json.JSONDecodeError) as exc:
-        raise ManifestError(f"{path}: invalid JSON: {exc}") from exc
+        if isinstance(exc, json.JSONDecodeError):
+            raise ManifestError(
+                f"{path}：JSON 格式错误（第 {exc.lineno} 行，第 {exc.colno} 列）"
+            ) from exc
+        raise ManifestError(f"{path}：无法读取 JSON 文件") from exc
     if not isinstance(value, dict):
-        raise ManifestError(f"{path}: top level must be a JSON object")
+        raise ManifestError(f"{path}：顶层必须是 JSON 对象")
     return value
 
 
@@ -252,22 +256,22 @@ def require_unique_strings(
     if items is None:
         return
     if not isinstance(items, list):
-        raise ManifestError(f"{manifest_path}: {collection_name} must be an array")
+        raise ManifestError(f"{manifest_path}：{collection_name} 必须是数组")
 
     seen = set()
     for index, item in enumerate(items):
         if not isinstance(item, dict):
             raise ManifestError(
-                f"{manifest_path}: {collection_name}[{index}] must be an object"
+                f"{manifest_path}：{collection_name}[{index}] 必须是对象"
             )
         value = item.get(key)
         if not isinstance(value, str) or not value:
             raise ManifestError(
-                f"{manifest_path}: {collection_name}[{index}].{key} must be a non-empty string"
+                f"{manifest_path}：{collection_name}[{index}].{key} 必须是非空字符串"
             )
         if value in seen:
             raise ManifestError(
-                f"{manifest_path}: duplicate {collection_name} {key}: {value}"
+                f"{manifest_path}：{collection_name} 中的 {key} 重复：{value}"
             )
         seen.add(value)
 
@@ -277,7 +281,7 @@ def validate_event_types(
 ) -> None:
     if event_types is None:
         raise ManifestError(
-            f"{manifest_path}: event_types is required; use [] when the logic never reports events"
+            f"{manifest_path}：event_types 为必填项；Logic 不上报事件时请使用 []"
         )
     require_unique_strings(manifest_path, event_types, "event_types", "id")
     declared = {item["id"] for item in event_types}
@@ -285,7 +289,7 @@ def validate_event_types(
         for field in ("label", "help"):
             if field in item and not isinstance(item[field], str):
                 raise ManifestError(
-                    f"{manifest_path}: event_types[{index}].{field} must be a string"
+                    f"{manifest_path}：event_types[{index}].{field} 必须是字符串"
                 )
 
     source_text = ""
@@ -293,15 +297,15 @@ def validate_event_types(
         try:
             source_text += source.read_text(encoding="utf-8") + "\n"
         except OSError as exc:
-            raise ManifestError(f"{source}: cannot read source: {exc}") from exc
+            raise ManifestError(f"{source}：无法读取源文件") from exc
     if REPORT_EVENT_CALL_RE.search(source_text) and not event_types:
         raise ManifestError(
-            f"{manifest_path}: logic calls report_event() but event_types is empty"
+            f"{manifest_path}：Logic 调用了 report_event()，但 event_types 为空"
         )
     undeclared_literals = sorted(set(EVENT_TYPE_LITERAL_RE.findall(source_text)) - declared)
     if undeclared_literals:
         raise ManifestError(
-            f"{manifest_path}: C++ uses undeclared event type(s): "
+            f"{manifest_path}：C++ 使用了未声明的事件类型："
             f"{', '.join(undeclared_literals)}"
         )
 
@@ -314,13 +318,13 @@ def validate_logic_outputs(manifest_path: Path, outputs: Any) -> None:
         output_type = item.get("type")
         if output_type not in LOGIC_OUTPUT_TYPES:
             raise ManifestError(
-                f"{manifest_path}: outputs[{index}].type must be one of "
+                f"{manifest_path}：outputs[{index}].type 必须是以下值之一："
                 f"{', '.join(sorted(LOGIC_OUTPUT_TYPES))}"
             )
         for field in ("label", "help"):
             if field in item and not isinstance(item[field], str):
                 raise ManifestError(
-                    f"{manifest_path}: outputs[{index}].{field} must be a string"
+                    f"{manifest_path}：outputs[{index}].{field} 必须是字符串"
                 )
 
 
@@ -341,16 +345,16 @@ def validate_output_publications(
         try:
             text = source.read_text(encoding="utf-8")
         except OSError as exc:
-            raise ManifestError(f"{source}: cannot read source: {exc}") from exc
+            raise ManifestError(f"{source}：无法读取源文件") from exc
         for accessor, key in OUTPUT_PUBLISH_RE.findall(text):
             declared = declarations.get(key)
             if declared is None:
                 raise ManifestError(
-                    f'{source}: publish_{accessor}("{key}") has no matching outputs entry'
+                    f'{source}：publish_{accessor}("{key}") 没有匹配的 outputs 条目'
                 )
             if declared != expected_types[accessor]:
                 raise ManifestError(
-                    f'{source}: publish_{accessor}("{key}") does not match output type '
+                    f'{source}：publish_{accessor}("{key}") 与输出类型不匹配：'
                     f"'{declared}'"
                 )
 
@@ -369,7 +373,7 @@ def registered_logic_names(module_dir: Path) -> List[str]:
         try:
             names.extend(REGISTER_LOGIC_RE.findall(source.read_text(encoding="utf-8")))
         except OSError as exc:
-            raise ManifestError(f"{source}: cannot read source: {exc}") from exc
+            raise ManifestError(f"{source}：无法读取源文件") from exc
     return names
 
 
@@ -381,7 +385,7 @@ def registered_action_logic_names(module_dir: Path) -> List[str]:
                 REGISTER_LOGIC_ACTION_RE.findall(source.read_text(encoding="utf-8"))
             )
         except OSError as exc:
-            raise ManifestError(f"{source}: cannot read source: {exc}") from exc
+            raise ManifestError(f"{source}：无法读取源文件") from exc
     return names
 
 
@@ -393,7 +397,7 @@ def registered_global_logic_names(module_dir: Path) -> List[str]:
                 REGISTER_GLOBAL_LOGIC_RE.findall(source.read_text(encoding="utf-8"))
             )
         except OSError as exc:
-            raise ManifestError(f"{source}: cannot read source: {exc}") from exc
+            raise ManifestError(f"{source}：无法读取源文件") from exc
     return names
 
 
@@ -407,7 +411,7 @@ def registered_global_action_logic_names(module_dir: Path) -> List[str]:
                 )
             )
         except OSError as exc:
-            raise ManifestError(f"{source}: cannot read source: {exc}") from exc
+            raise ManifestError(f"{source}：无法读取源文件") from exc
     return names
 
 
@@ -434,16 +438,16 @@ def validate_parameter_accesses(
         try:
             text = source.read_text(encoding="utf-8")
         except OSError as exc:
-            raise ManifestError(f"{source}: cannot read source: {exc}") from exc
+            raise ManifestError(f"{source}：无法读取源文件") from exc
         for accessor, key in PARAM_ACCESS_RE.findall(text):
             spec = properties.get(key)
             if not isinstance(spec, dict):
                 raise ManifestError(
-                    f"{source}: param_{accessor}(\"{key}\") has no matching parameters.properties entry"
+                    f"{source}：param_{accessor}(\"{key}\") 没有匹配的 parameters.properties 条目"
                 )
             if spec.get("type") not in expected_types[accessor]:
                 raise ManifestError(
-                    f"{source}: param_{accessor}(\"{key}\") does not match Schema type '{spec.get('type')}'"
+                    f"{source}：param_{accessor}(\"{key}\") 与 Schema 类型 '{spec.get('type')}' 不匹配"
                 )
 
 
@@ -457,13 +461,13 @@ def validate_report_fields(
     for index, item in enumerate(report_fields or []):
         if item.get("type") not in {"string", "number", "boolean", "json"}:
             raise ManifestError(
-                f"{manifest_path}: report_fields[{index}].type must be one of "
+                f"{manifest_path}：report_fields[{index}].type 必须是以下值之一："
                 "boolean, json, number, string"
             )
         for field in ("label", "help"):
             if field in item and not isinstance(item[field], str):
                 raise ManifestError(
-                    f"{manifest_path}: report_fields[{index}].{field} must be a string"
+                    f"{manifest_path}：report_fields[{index}].{field} 必须是字符串"
                 )
 
     used = set()
@@ -471,17 +475,17 @@ def validate_report_fields(
         try:
             used.update(EVENT_FIELD_LITERAL_RE.findall(source.read_text(encoding="utf-8")))
         except OSError as exc:
-            raise ManifestError(f"{source}: cannot read source: {exc}") from exc
+            raise ManifestError(f"{source}：无法读取源文件") from exc
     undeclared = sorted(used - declared)
     unassigned = sorted(declared - used)
     if undeclared:
         raise ManifestError(
-            f"{manifest_path}: C++ assigns undeclared report field(s): "
+            f"{manifest_path}：C++ 赋值了未声明的上报字段："
             f"{', '.join(undeclared)}"
         )
     if unassigned:
         raise ManifestError(
-            f"{manifest_path}: report_fields not assigned by C++ event_field(): "
+            f"{manifest_path}：以下 report_fields 未由 C++ event_field() 赋值："
             f"{', '.join(unassigned)}"
         )
 
@@ -495,29 +499,29 @@ def declared_report_template_ids(
     """Resolve only the templates explicitly declared by this Logic module."""
     entries = manifest.get("report_templates", [])
     if not isinstance(entries, list):
-        raise ManifestError(f"{manifest_path}: report_templates must be an array")
+        raise ManifestError(f"{manifest_path}：report_templates 必须是数组")
     result: List[str] = []
     seen = set()
     module_root = module_dir.resolve()
     for index, relative in enumerate(entries):
         if not isinstance(relative, str) or not relative.strip():
             raise ManifestError(
-                f"{manifest_path}: report_templates[{index}] must be a non-empty string"
+                f"{manifest_path}：report_templates[{index}] 必须是非空字符串"
             )
         template_path = (module_dir / relative).resolve()
         if module_root not in template_path.parents or not template_path.is_file():
             raise ManifestError(
-                f"{manifest_path}: missing report template {relative}"
+                f"{manifest_path}：找不到上报模板 {relative}"
             )
         template = load_object(template_path)
         template_id = resolved_report_template_id(template_path, template, logic_name)
         if template.get("owner_logic") != logic_name:
             raise ManifestError(
-                f"{template_path}: owner_logic must be {logic_name}"
+                f"{template_path}：owner_logic 必须是 {logic_name}"
             )
         if template_id in seen:
             raise ManifestError(
-                f"{manifest_path}: duplicate report template id {template_id}"
+                f"{manifest_path}：上报模板 ID 重复：{template_id}"
             )
         seen.add(template_id)
         result.append(template_id)
@@ -537,7 +541,7 @@ def resolved_report_template_id(
             safe_stem = f"template_{digest}"
         template_id = f"{logic_name}.{safe_stem}"
     if not REPORT_TEMPLATE_ID_RE.fullmatch(template_id):
-        raise ManifestError(f"{template_path}: derived template key is invalid")
+        raise ManifestError(f"{template_path}：生成的模板键无效")
     return template_id
 
 
@@ -550,26 +554,24 @@ def load_channel_manifests(logic_root: Path) -> List[Dict[str, Any]]:
     for module_dir in module_dirs:
         manifest_path = module_dir / "logic.json"
         if not manifest_path.is_file():
-            raise ManifestError(f"{module_dir}: channel logic module is missing logic.json")
+            raise ManifestError(f"{module_dir}：通道 Logic 模块缺少 logic.json")
 
         manifest = load_object(manifest_path)
         if "name" in manifest:
             raise ManifestError(
-                f"{manifest_path}: name is generated from "
-                "REGISTER_LOGIC(func); remove it"
+                f"{manifest_path}：name 由 REGISTER_LOGIC(func) 自动生成，请删除该字段"
             )
 
         registrations = registered_logic_names(module_dir)
         if len(registrations) != 1:
-            found = ", ".join(sorted(registrations)) or "none"
+            found = ", ".join(sorted(registrations)) or "无"
             raise ManifestError(
-                f"{manifest_path}: module must contain exactly one "
-                "REGISTER_LOGIC(func) "
-                f"(found: {found})"
+                f"{manifest_path}：模块必须且只能包含一个 REGISTER_LOGIC(func) "
+                f"（实际找到：{found}）"
             )
         name = registrations[0]
         if name in seen_names:
-            raise ManifestError(f"{manifest_path}: duplicate channel logic function: {name}")
+            raise ManifestError(f"{manifest_path}：通道 Logic 函数重复：{name}")
         seen_names.add(name)
 
         action_registrations = registered_action_logic_names(module_dir)
@@ -578,13 +580,13 @@ def load_channel_manifests(logic_root: Path) -> List[Dict[str, Any]]:
         ):
             found = ", ".join(sorted(action_registrations))
             raise ManifestError(
-                f"{manifest_path}: REGISTER_LOGIC_ACTION must reference function "
-                f"'{name}' (found: {found})"
+                f"{manifest_path}：REGISTER_LOGIC_ACTION 必须引用函数 "
+                f"'{name}'（实际找到：{found}）"
             )
         require_unique_strings(manifest_path, manifest.get("actions"), "actions", "id")
         if bool(manifest.get("actions")) != bool(action_registrations):
             raise ManifestError(
-                f"{manifest_path}: actions and REGISTER_LOGIC_ACTION must either both exist or both be absent"
+                f"{manifest_path}：actions 与 REGISTER_LOGIC_ACTION 必须同时存在或同时不存在"
             )
 
         parameter_schema = validate_parameter_schema(
@@ -592,8 +594,7 @@ def load_channel_manifests(logic_root: Path) -> List[Dict[str, Any]]:
         )
         if "params" in manifest:
             raise ManifestError(
-                f"{manifest_path}: top-level params is not supported; "
-                "declare parameters.properties only"
+                f"{manifest_path}：不支持顶层 params，请仅声明 parameters.properties"
             )
         validate_parameter_accesses(manifest_path, module_dir, parameter_schema)
         manifest["report_template_ids"] = declared_report_template_ids(
@@ -615,7 +616,7 @@ def load_channel_manifests(logic_root: Path) -> List[Dict[str, Any]]:
 def load_global_manifests(logic_root: Path) -> List[Dict[str, Any]]:
     module_root = logic_root / "global_modules"
     if not module_root.is_dir():
-        raise ManifestError(f"{module_root}: global logic module root is missing")
+        raise ManifestError(f"{module_root}：找不到全局 Logic 模块根目录")
     module_dirs = sorted(path for path in module_root.iterdir() if path.is_dir())
 
     result: List[Dict[str, Any]] = []
@@ -623,24 +624,24 @@ def load_global_manifests(logic_root: Path) -> List[Dict[str, Any]]:
     for module_dir in module_dirs:
         manifest_path = module_dir / "logic.json"
         if not manifest_path.is_file():
-            raise ManifestError(f"{module_dir}: global logic module is missing logic.json")
+            raise ManifestError(f"{module_dir}：全局 Logic 模块缺少 logic.json")
 
         manifest = load_object(manifest_path)
         if "name" in manifest:
             raise ManifestError(
-                f"{manifest_path}: name is generated from REGISTER_GLOBAL_LOGIC(func); remove it"
+                f"{manifest_path}：name 由 REGISTER_GLOBAL_LOGIC(func) 自动生成，请删除该字段"
             )
 
         registrations = registered_global_logic_names(module_dir)
         if len(registrations) != 1:
-            found = ", ".join(sorted(registrations)) or "none"
+            found = ", ".join(sorted(registrations)) or "无"
             raise ManifestError(
-                f"{manifest_path}: module must contain exactly one "
-                f"REGISTER_GLOBAL_LOGIC(func) (found: {found})"
+                f"{manifest_path}：模块必须且只能包含一个 "
+                f"REGISTER_GLOBAL_LOGIC(func)（实际找到：{found}）"
             )
         name = registrations[0]
         if name in seen_names:
-            raise ManifestError(f"{manifest_path}: duplicate global logic function: {name}")
+            raise ManifestError(f"{manifest_path}：全局 Logic 函数重复：{name}")
         seen_names.add(name)
 
         action_registrations = registered_global_action_logic_names(module_dir)
@@ -649,13 +650,13 @@ def load_global_manifests(logic_root: Path) -> List[Dict[str, Any]]:
         ):
             found = ", ".join(sorted(action_registrations))
             raise ManifestError(
-                f"{manifest_path}: REGISTER_GLOBAL_LOGIC_ACTION must reference function "
-                f"'{name}' (found: {found})"
+                f"{manifest_path}：REGISTER_GLOBAL_LOGIC_ACTION 必须引用函数 "
+                f"'{name}'（实际找到：{found}）"
             )
         require_unique_strings(manifest_path, manifest.get("actions"), "actions", "id")
         if bool(manifest.get("actions")) != bool(action_registrations):
             raise ManifestError(
-                f"{manifest_path}: actions and REGISTER_GLOBAL_LOGIC_ACTION must either both exist or both be absent"
+                f"{manifest_path}：actions 与 REGISTER_GLOBAL_LOGIC_ACTION 必须同时存在或同时不存在"
             )
 
         parameter_schema = validate_parameter_schema(
@@ -663,8 +664,7 @@ def load_global_manifests(logic_root: Path) -> List[Dict[str, Any]]:
         )
         if "params" in manifest:
             raise ManifestError(
-                f"{manifest_path}: top-level params is not supported; "
-                "declare parameters.properties only"
+                f"{manifest_path}：不支持顶层 params，请仅声明 parameters.properties"
             )
         validate_parameter_accesses(manifest_path, module_dir, parameter_schema)
         manifest["report_template_ids"] = declared_report_template_ids(
@@ -683,7 +683,7 @@ def load_global_manifests(logic_root: Path) -> List[Dict[str, Any]]:
 
 def validate_named_list(catalog_path: Path, value: Any, key: str) -> List[Any]:
     if not isinstance(value, list):
-        raise ManifestError(f"{catalog_path}: {key} must be an array")
+        raise ManifestError(f"{catalog_path}：{key} 必须是数组")
     seen = set()
     for index, item in enumerate(value):
         if isinstance(item, str):
@@ -693,9 +693,9 @@ def validate_named_list(catalog_path: Path, value: Any, key: str) -> List[Any]:
         else:
             name = None
         if not isinstance(name, str) or not name:
-            raise ManifestError(f"{catalog_path}: {key}[{index}] has no valid name")
+            raise ManifestError(f"{catalog_path}：{key}[{index}] 没有有效名称")
         if name in seen:
-            raise ManifestError(f"{catalog_path}: duplicate {key} name: {name}")
+            raise ManifestError(f"{catalog_path}：{key} 名称重复：{name}")
         seen.add(name)
     return value
 
@@ -705,11 +705,11 @@ def build_catalog(logic_root: Path, engine_catalog: Optional[Path] = None) -> Di
     shared = load_object(catalog_path)
     if "channel_logics" in shared:
         raise ManifestError(
-            f"{catalog_path}: channel_logics belongs in modules/*/logic.json"
+            f"{catalog_path}：channel_logics 应定义在 modules/*/logic.json 中"
         )
     if "global_logics" in shared:
         raise ManifestError(
-            f"{catalog_path}: global_logics belongs in global_modules/*/logic.json"
+            f"{catalog_path}：global_logics 应定义在 global_modules/*/logic.json 中"
         )
 
     modules = load_channel_manifests(logic_root)
@@ -719,7 +719,7 @@ def build_catalog(logic_root: Path, engine_catalog: Optional[Path] = None) -> Di
     collisions = sorted(channel_names & global_names)
     if collisions:
         raise ManifestError(
-            f"{logic_root}: channel/global logic IDs must be unique: {', '.join(collisions)}"
+            f"{logic_root}：通道/全局 Logic ID 必须唯一：{', '.join(collisions)}"
         )
     model_types = validate_named_list(
         catalog_path, shared.get("model_types", []), "model_types"

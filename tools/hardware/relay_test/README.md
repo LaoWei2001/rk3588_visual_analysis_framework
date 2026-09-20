@@ -8,7 +8,7 @@ libgpiod 线路，而是把命令交给统一的实时 GPIO 控制后台，因�
 
 ```bash
 cd /userdata/rk3588_visual_analysis_framework
-sudo ./setup/install.sh online
+sudo ./rkvision platform install online
 ```
 
 `service/gpio_state/install.sh` 只保留为内部组件安装和故障修复入口。
