@@ -14,9 +14,12 @@ import { normalizeRoiPolygon } from './roiPolygon'
 // 模型节点字段；通道里除这些(及 stream/logic/上报运行字段)之外的键视为逻辑参数。
 const MODEL_KEYS = new Set([
   'id', 'enable', 'infer_enable', 'threads',
-  'playback_fps', 'tracker_enable', 'tracker_iou_thresh', 'tracker_max_miss',
-  'tracker_min_hits', 'roi_zones', 'models',
+  'playback_fps', 'roi_zones', 'models',
 ])
+const TRACKER_KEYS = [
+  'tracker_enable', 'tracker_type', 'tracker_iou_thresh', 'tracker_max_miss',
+  'tracker_min_hits', 'bytetrack_low_thresh', 'bytetrack_low_iou_thresh',
+] as const
 
 
 export function configToGraph(
@@ -112,6 +115,9 @@ export function configToGraph(
     const streamId = uid('stream')
     const streamData: Record<string, unknown> = { ...stream, channel_id: origId }
     if (ch.max_fps != null) streamData.max_fps = ch.max_fps
+    TRACKER_KEYS.forEach(key => {
+      if (ch[key] != null) streamData[key] = ch[key]
+    })
     nodes.push({
       id: streamId, type: 'stream',
       position: pos('stream', STREAM_X, y),

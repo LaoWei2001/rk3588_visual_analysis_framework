@@ -219,3 +219,30 @@ set_target_properties(vision_analysis PROPERTIES
     BUILD_WITH_INSTALL_RPATH TRUE
     INSTALL_RPATH "$ORIGIN/libs"
 )
+
+# 跟踪器回归测试不依赖 RKNN/GStreamer 运行时，默认不纳入产品构建。
+option(BUILD_TRACKER_TESTS "Build standalone tracker regression tests" OFF)
+if(BUILD_TRACKER_TESTS)
+    enable_testing()
+    add_executable(tracker_tests
+        tests/tracking/test_tracker.cpp
+        src/tracking/tracker.cpp
+    )
+    target_include_directories(tracker_tests PRIVATE
+        ${OpenCV_INCLUDE_DIRS}
+        ${PROJECT_SOURCE_DIR}/src
+    )
+    target_link_libraries(tracker_tests PRIVATE ${OpenCV_LIBS})
+    add_test(NAME tracker_regression COMMAND tracker_tests)
+
+    add_executable(bytetrack_tests
+        tests/tracking/test_bytetrack.cpp
+        src/tracking/bytetrack.cpp
+    )
+    target_include_directories(bytetrack_tests PRIVATE
+        ${OpenCV_INCLUDE_DIRS}
+        ${PROJECT_SOURCE_DIR}/src
+    )
+    target_link_libraries(bytetrack_tests PRIVATE ${OpenCV_LIBS})
+    add_test(NAME bytetrack_regression COMMAND bytetrack_tests)
+endif()

@@ -18,8 +18,6 @@ struct HelmetConfig
     std::vector<std::string> helmet_labels;
     float person_min_score = 0.4f;
     float helmet_min_score = 0.3f;
-    float head_region_ratio = 0.4f;
-    float match_margin_ratio = 0.12f;
     uint64_t confirm_ms = 500;
     uint64_t clear_ms = 1000;
 };

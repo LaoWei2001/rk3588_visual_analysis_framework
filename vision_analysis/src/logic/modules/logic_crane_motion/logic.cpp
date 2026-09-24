@@ -13,8 +13,7 @@ namespace
 enum MotionSetting
 {
     DIFF_THRESHOLD = 0,
-    START_CHANGE_RATIO,
-    STOP_CHANGE_RATIO,
+    CHANGE_RATIO,
     MOVING_CONFIRM_TIME,
     STILL_CONFIRM_TIME,
     MOTION_SETTING_COUNT
@@ -25,8 +24,7 @@ struct MotionLogicState
     crane_safety::MotionDetector detector;
     bool controls_initialized = false;
     int diff_threshold = 25;
-    float start_ratio = 0.18f;
-    float stop_ratio = 0.06f;
+    float change_ratio = 0.18f;
     uint64_t moving_confirm_ms = 400;
     uint64_t still_confirm_ms = 2000;
     MotionSetting selected_setting = DIFF_THRESHOLD;
@@ -53,8 +51,7 @@ void initialize_controls(ChannelContext *ctx, MotionLogicState &state)
     if (state.controls_initialized)
         return;
     state.diff_threshold = static_cast<int>(ctx->param_int("diff_threshold"));
-    state.start_ratio = ctx->param_float("start_ratio");
-    state.stop_ratio = ctx->param_float("stop_ratio");
+    state.change_ratio = ctx->param_float("change_ratio");
     state.moving_confirm_ms = crane_safety::seconds_to_ms(ctx->param_float("moving_confirm_sec"));
     state.still_confirm_ms = crane_safety::seconds_to_ms(ctx->param_float("still_confirm_sec"));
     state.controls_initialized = true;
@@ -66,10 +63,8 @@ const char *motion_setting_name(MotionSetting setting)
     {
     case DIFF_THRESHOLD:
         return "帧差灰度阈值";
-    case START_CHANGE_RATIO:
-        return "运动变化比例";
-    case STOP_CHANGE_RATIO:
-        return "静止变化比例";
+    case CHANGE_RATIO:
+        return "运动/静止变化比例";
     case MOVING_CONFIRM_TIME:
         return "运动确认时间";
     case STILL_CONFIRM_TIME:
@@ -88,13 +83,9 @@ void format_selected_setting(const MotionLogicState &state, char *text, size_t s
         std::snprintf(text, size, "参数: %s = %d", motion_setting_name(state.selected_setting),
                       state.diff_threshold);
         break;
-    case START_CHANGE_RATIO:
+    case CHANGE_RATIO:
         std::snprintf(text, size, "参数: %s = %.1f%%", motion_setting_name(state.selected_setting),
-                      state.start_ratio * 100.0f);
-        break;
-    case STOP_CHANGE_RATIO:
-        std::snprintf(text, size, "参数: %s = %.1f%%", motion_setting_name(state.selected_setting),
-                      state.stop_ratio * 100.0f);
+                      state.change_ratio * 100.0f);
         break;
     case MOVING_CONFIRM_TIME:
         std::snprintf(text, size, "参数: %s = %.1fs", motion_setting_name(state.selected_setting),
@@ -118,11 +109,8 @@ void adjust_selected_setting(MotionLogicState &state, bool increase)
     case DIFF_THRESHOLD:
         state.diff_threshold = std::max(1, std::min(255, state.diff_threshold + (increase ? 5 : -5)));
         break;
-    case START_CHANGE_RATIO:
-        state.start_ratio = std::max(state.stop_ratio, std::min(1.0f, state.start_ratio + direction * 0.01f));
-        break;
-    case STOP_CHANGE_RATIO:
-        state.stop_ratio = std::max(0.0f, std::min(state.start_ratio, state.stop_ratio + direction * 0.01f));
+    case CHANGE_RATIO:
+        state.change_ratio = std::max(0.001f, std::min(1.0f, state.change_ratio + direction * 0.01f));
         break;
     case MOVING_CONFIRM_TIME:
         if (increase)
@@ -148,8 +136,7 @@ crane_safety::MotionConfig read_config(ChannelContext *ctx, MotionLogicState &st
     config.diff_threshold = state.diff_threshold;
     /* 预处理固定使用 MotionConfig 的默认值：5x5 高斯核并开启亮度归一化。
      * 这两项不再暴露给现场配置，避免误调后改变运动判断基础。 */
-    config.start_ratio = state.start_ratio;
-    config.stop_ratio = state.stop_ratio;
+    config.change_ratio = state.change_ratio;
     config.moving_confirm_ms = state.moving_confirm_ms;
     config.still_confirm_ms = state.still_confirm_ms;
     return config;
@@ -207,15 +194,14 @@ static void logic_crane_motion(ChannelContext *ctx)
     char line3[192];
     char line4[192];
     char line5[192];
-    char line6[192];
     std::snprintf(line1, sizeof(line1), "行车: %s  变化: %.2f%%",
                   result.moving ? "运动" : "静止", result.change_ratio * 100.0f);
     std::snprintf(line2, sizeof(line2), "帧差: %d", state.diff_threshold);
-    std::snprintf(line3, sizeof(line3), "运动比例: >= %.1f%%", state.start_ratio * 100.0f);
-    std::snprintf(line4, sizeof(line4), "静止比例: <= %.1f%%", state.stop_ratio * 100.0f);
-    std::snprintf(line5, sizeof(line5), "运动确认: %.1f/%.1fs",
+    std::snprintf(line3, sizeof(line3), "变化比例: %.2f%% / %.1f%%", result.change_ratio * 100.0f,
+                  state.change_ratio * 100.0f);
+    std::snprintf(line4, sizeof(line4), "运动确认: %.1f/%.1fs",
                   result.moving_candidate_elapsed_ms / 1000.0, state.moving_confirm_ms / 1000.0);
-    std::snprintf(line6, sizeof(line6), "静止确认: %.1f/%.1fs",
+    std::snprintf(line5, sizeof(line5), "静止确认: %.1f/%.1fs",
                   result.still_candidate_elapsed_ms / 1000.0, state.still_confirm_ms / 1000.0);
     const cv::Scalar normal_color(240, 240, 240);
     const cv::Scalar selected_color(0, 255, 255);
@@ -224,12 +210,10 @@ static void logic_crane_motion(ChannelContext *ctx)
     draw_outlined_status(ctx, line2, cv::Point(18, 62),
                          state.selected_setting == DIFF_THRESHOLD ? selected_color : normal_color);
     draw_outlined_status(ctx, line3, cv::Point(18, 92),
-                         state.selected_setting == START_CHANGE_RATIO ? selected_color : normal_color);
+                         state.selected_setting == CHANGE_RATIO ? selected_color : normal_color);
     draw_outlined_status(ctx, line4, cv::Point(18, 122),
-                         state.selected_setting == STOP_CHANGE_RATIO ? selected_color : normal_color);
-    draw_outlined_status(ctx, line5, cv::Point(18, 152),
                          state.selected_setting == MOVING_CONFIRM_TIME ? selected_color : normal_color);
-    draw_outlined_status(ctx, line6, cv::Point(18, 182),
+    draw_outlined_status(ctx, line5, cv::Point(18, 152),
                          state.selected_setting == STILL_CONFIRM_TIME ? selected_color : normal_color);
 }
 

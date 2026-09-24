@@ -80,17 +80,13 @@ export function graphToConfig(
     const logicEdge = modelLogicEdge ?? directLogicEdge
     const logicNode = logicEdge ? nodes.find(n => n.id === logicEdge.target) ?? null : null
 
-    const usedModelConfigIds = new Set<string>()
     const modelConfigs = modelNodes.map((node, modelIndex) => {
       const data = node.data as Record<string, unknown>
       const requestedId = String(data.id ?? '').trim()
-      const baseId = requestedId || `model_${modelIndex}`
-      let modelId = baseId
-      let suffix = 2
-      while (usedModelConfigIds.has(modelId)) modelId = `${baseId}_${suffix++}`
-      usedModelConfigIds.add(modelId)
       return {
-        id:             modelId,
+        // 唯一性由画布保存校验负责；这里必须保持用户填写的稳定 ID，
+        // 不能静默追加 _2 破坏 Logic/OTA 契约。
+        id:             requestedId || `model_${modelIndex}`,
         enable:         data.infer_enable !== false,
         model_type:     data.model_type ?? 'yolov8_det',
         model_path:     data.model_path ?? '',
@@ -238,11 +234,19 @@ export function graphToConfig(
     // 通道最大 FPS 属于视频流/通道本身；留空时不写入配置，由 C++ 继承全局 max_fps。
     if (streamData.max_fps != null) ch.max_fps = streamData.max_fps
 
-    // Per-channel tracker overrides (仅 YOLO 通道; 传统通道 m={} 自然跳过)
-    if (m.tracker_enable   != null) ch.tracker_enable   = m.tracker_enable
-    if (m.tracker_iou_thresh != null) ch.tracker_iou_thresh = m.tracker_iou_thresh
-    if (m.tracker_max_miss != null) ch.tracker_max_miss = m.tracker_max_miss
-    if (m.tracker_min_hits != null) ch.tracker_min_hits = m.tracker_min_hits
+    // Tracker 是视频流/通道级配置。m 回退仅用于兼容编辑器升级前已在内存中的旧画布。
+    const trackerValue = (key: string) => streamData[key] ?? m[key]
+    if (trackerValue('tracker_enable') != null) ch.tracker_enable = trackerValue('tracker_enable')
+    if (trackerValue('tracker_type') != null && trackerValue('tracker_type') !== '')
+      ch.tracker_type = trackerValue('tracker_type')
+    if (trackerValue('tracker_iou_thresh') != null)
+      ch.tracker_iou_thresh = trackerValue('tracker_iou_thresh')
+    if (trackerValue('tracker_max_miss') != null) ch.tracker_max_miss = trackerValue('tracker_max_miss')
+    if (trackerValue('tracker_min_hits') != null) ch.tracker_min_hits = trackerValue('tracker_min_hits')
+    if (trackerValue('bytetrack_low_thresh') != null)
+      ch.bytetrack_low_thresh = trackerValue('bytetrack_low_thresh')
+    if (trackerValue('bytetrack_low_iou_thresh') != null)
+      ch.bytetrack_low_iou_thresh = trackerValue('bytetrack_low_iou_thresh')
     if (m.threads          != null) ch.threads          = m.threads
 
     // ROI 唯一持久化入口；空数组明确表示本通道没有 ROI。
@@ -385,9 +389,12 @@ export function graphToConfig(
     queue_size:         g.queue_size         ?? 1,
     channel_threads:    g.channel_threads    ?? 3,
     tracker_enable:     g.tracker_enable     ?? 1,
+    tracker_type:       g.tracker_type       ?? 'sort',
     tracker_iou_thresh: g.tracker_iou_thresh ?? 0.3,
     tracker_max_miss:   g.tracker_max_miss   ?? 30,
     tracker_min_hits:   g.tracker_min_hits   ?? 3,
+    bytetrack_low_thresh: g.bytetrack_low_thresh ?? 0.1,
+    bytetrack_low_iou_thresh: g.bytetrack_low_iou_thresh ?? 0.2,
     performance_display: g.performance_display ?? 0,
     enable_pause_key:   g.enable_pause_key   ?? 0,
     enable_rtsp:        g.enable_rtsp        ?? 1,

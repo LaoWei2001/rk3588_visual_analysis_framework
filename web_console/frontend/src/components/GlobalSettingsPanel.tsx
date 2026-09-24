@@ -38,9 +38,12 @@ export interface GlobalSettingsData {
   queue_size: number
   channel_threads: number
   tracker_enable: number
+  tracker_type: string
   tracker_iou_thresh: number
   tracker_max_miss: number
   tracker_min_hits: number
+  bytetrack_low_thresh: number
+  bytetrack_low_iou_thresh: number
   performance_display: number
   enable_pause_key: number
   enable_rtsp: number
@@ -53,8 +56,9 @@ export const DEFAULT_GLOBAL_SETTINGS: GlobalSettingsData = {
   tile_rows: 1, tile_cols: 1,
   max_fps: 25, queue_size: 1,
   channel_threads: 3,
-  tracker_enable: 1, tracker_iou_thresh: 0.3,
+  tracker_enable: 1, tracker_type: 'sort', tracker_iou_thresh: 0.3,
   tracker_max_miss: 30, tracker_min_hits: 3,
+  bytetrack_low_thresh: 0.1, bytetrack_low_iou_thresh: 0.2,
   performance_display: 0, enable_pause_key: 0,
   enable_rtsp: 1, rtsp_codec: 'h264',
 }
@@ -90,9 +94,20 @@ export default function GlobalSettingsPanel({ settings: s, onChange }: Props) {
           </div>
 
           <div className="gs-row">
-            <NumField label="Tracker IOU" value={s.tracker_iou_thresh} def={0.3} step="0.05" min="0" max="1" onChange={v => set('tracker_iou_thresh', v)} />
+            <div className="gs-field">
+              <label>跟踪算法</label>
+              <select value={String(s.tracker_type ?? 'sort')} onChange={e => set('tracker_type', e.target.value)}>
+                <option value="sort">SORT</option>
+                <option value="bytetrack">ByteTrack</option>
+              </select>
+            </div>
+            <NumField label={s.tracker_type === 'bytetrack' ? '高分关联 IOU' : 'SORT 匹配 IOU'} value={s.tracker_iou_thresh} def={0.3} step="0.05" min="0" max="1" onChange={v => set('tracker_iou_thresh', v)} />
             <NumField label="最大丢失帧" value={s.tracker_max_miss}   def={30}   onChange={v => set('tracker_max_miss', v)} />
             <NumField label="最小命中"   value={s.tracker_min_hits}   def={3}    onChange={v => set('tracker_min_hits', v)} />
+            {s.tracker_type === 'bytetrack' && <>
+              <NumField label="低分阈值" value={s.bytetrack_low_thresh} def={0.1} step="0.05" min="0" max="1" onChange={v => set('bytetrack_low_thresh', v)} />
+              <NumField label="低分 IOU" value={s.bytetrack_low_iou_thresh} def={0.2} step="0.05" min="0" max="1" onChange={v => set('bytetrack_low_iou_thresh', v)} />
+            </>}
           </div>
 
           <div className="gs-row gs-toggles">

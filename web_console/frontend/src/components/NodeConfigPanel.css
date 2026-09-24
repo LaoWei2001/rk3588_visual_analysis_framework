@@ -90,6 +90,18 @@
   line-height: 1.6;
 }
 
+.ncp-input-error {
+  border-color: #ef4444 !important;
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.2);
+}
+
+.ncp-field-error {
+  margin-top: -5px;
+  color: #fca5a5;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 /* 上报投递任务编辑器 */
 .report-delivery-card {
   padding: 12px;

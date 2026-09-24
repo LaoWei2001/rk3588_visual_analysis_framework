@@ -32,8 +32,12 @@ static uint64_t steady_now_ms(void)
 
 static bool model_runtime_changed(const ChannelConfig &old_channel, const ChannelConfig &new_channel)
 {
+    const bool old_bytetrack = config_utils::is_bytetrack_enabled(old_channel);
+    const bool new_bytetrack = config_utils::is_bytetrack_enabled(new_channel);
     return old_channel.infer_enable != new_channel.infer_enable || old_channel.models != new_channel.models ||
-           old_channel.threads != new_channel.threads;
+           old_channel.threads != new_channel.threads || old_bytetrack != new_bytetrack ||
+           (old_bytetrack && new_bytetrack &&
+            old_channel.bytetrack_low_thresh != new_channel.bytetrack_low_thresh);
 }
 
 static void restore_model_runtime(ChannelConfig &channel, const ChannelConfig &old_channel)
@@ -41,6 +45,9 @@ static void restore_model_runtime(ChannelConfig &channel, const ChannelConfig &o
     channel.infer_enable = old_channel.infer_enable;
     channel.models = old_channel.models;
     channel.threads = old_channel.threads;
+    channel.tracker_enable = old_channel.tracker_enable;
+    channel.tracker_type = old_channel.tracker_type;
+    channel.bytetrack_low_thresh = old_channel.bytetrack_low_thresh;
 }
 
 static bool roi_config_equal(const std::vector<RoiZoneConfig> &lhs, const std::vector<RoiZoneConfig> &rhs)

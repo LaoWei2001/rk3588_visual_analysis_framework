@@ -6,6 +6,7 @@ import re
 import shutil
 import time
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
@@ -72,11 +73,27 @@ def _event_dir(name: str, event_id: str) -> Path:
 
 
 @router.get("/apps/{name}/records")
-async def list_records(name: str, limit: int = 500):
+async def list_records(
+    name: str,
+    limit: int = 500,
+    start_unix_ms: Optional[int] = None,
+    end_unix_ms: Optional[int] = None,
+):
+    if start_unix_ms is not None and start_unix_ms < 0:
+        raise HTTPException(400, "开始时间无效")
+    if end_unix_ms is not None and end_unix_ms < 0:
+        raise HTTPException(400, "结束时间无效")
+    if start_unix_ms is not None and end_unix_ms is not None and start_unix_ms > end_unix_ms:
+        raise HTTPException(400, "开始时间不能晚于结束时间")
+
     store = _store_dir(name)
     if not store.exists():
-        return {"records": [], "count": 0, "total_bytes": 0, "cap_bytes": CAP_BYTES}
+        return {
+            "records": [], "count": 0, "filtered_count": 0,
+            "total_bytes": 0, "cap_bytes": CAP_BYTES,
+        }
     records = []
+    record_count = 0
     total = 0
     try:
         entries = list(store.iterdir())
@@ -90,8 +107,17 @@ async def list_records(name: str, limit: int = 500):
             size = sum(item.stat().st_size for item in path.iterdir() if item.is_file())
         except (OSError, ValueError, TypeError):
             continue
+        record_count += 1
         total += size
         event, source, media = meta["event"], meta["source"], meta["media"]
+        trigger_unix_ms = event.get("trigger_unix_ms")
+        if not isinstance(trigger_unix_ms, (int, float)) or trigger_unix_ms <= 0:
+            created_unix_sec = event.get("created_unix_sec", 0)
+            trigger_unix_ms = created_unix_sec * 1000 if isinstance(created_unix_sec, (int, float)) else 0
+        if start_unix_ms is not None and trigger_unix_ms < start_unix_ms:
+            continue
+        if end_unix_ms is not None and trigger_unix_ms > end_unix_ms:
+            continue
         required_media = {
             str(kind)
             for delivery in meta["deliveries"] if isinstance(delivery, dict)
@@ -117,7 +143,8 @@ async def list_records(name: str, limit: int = 500):
     records.sort(key=lambda item: item.get("created_unix_sec") or 0, reverse=True)
     return {
         "records": records[:max(0, limit)],
-        "count": len(records),
+        "count": record_count,
+        "filtered_count": len(records),
         "total_bytes": total,
         "cap_bytes": CAP_BYTES,
     }

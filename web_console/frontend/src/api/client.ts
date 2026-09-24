@@ -770,12 +770,22 @@ export interface EventRecord {
 export interface RecordsResp {
   records: EventRecord[]
   count: number
+  filtered_count: number
   total_bytes: number
   cap_bytes: number
 }
 
-export const fetchRecords = (name: string, limit = 500) =>
-  api.get<RecordsResp>(`/apps/${name}/records`, { params: { limit } }).then(r => r.data)
+export const fetchRecords = (
+  name: string,
+  limit = 500,
+  timeRange?: { startUnixMs?: number; endUnixMs?: number },
+) => api.get<RecordsResp>(`/apps/${name}/records`, {
+  params: {
+    limit,
+    start_unix_ms: timeRange?.startUnixMs,
+    end_unix_ms: timeRange?.endUnixMs,
+  },
+}).then(r => r.data)
 
 export interface RecordJsonResponse {
   schema_version: number

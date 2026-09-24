@@ -234,7 +234,6 @@ GStreamer appsink
 ├── offline_install_env_debian/  # Debian 离线仓库制作与安装
 ├── offline_install_env_ubuntu/  # Ubuntu 离线仓库制作入口与依赖清单
 ├── gpio_test/                   # GPIO 独立测试工具
-├── relay_test/                  # 继电器独立测试工具
 ├── docs/                        # 开发、运维和模块文档
 ├── develop_feature              # Codex/Claude 隔离式 Logic 需求澄清与自动开发入口
 ├── develop_feature.cmd          # 原生 Windows 的同一向导入口

@@ -27,12 +27,23 @@ const deliveryStatusText: Record<string, string> = {
   invalid: '配置无效',
 }
 
+type TimePreset = 'all' | 'today' | '24h' | '7d' | 'custom'
+
+function toLocalDateTime(value: Date): string {
+  const offset = value.getTimezoneOffset() * 60_000
+  return new Date(value.getTime() - offset).toISOString().slice(0, 16)
+}
+
 export default function RecordsPage() {
   const { appName } = useParams()
   const navigate = useNavigate()
   const [records, setRecords] = useState<EventRecord[]>([])
   const [stats, setStats] = useState({ count: 0, total: 0, cap: 0 })
   const [filter, setFilter] = useState<'all' | 'data' | 'image' | 'video'>('all')
+  const [timePreset, setTimePreset] = useState<TimePreset>('all')
+  const [startTime, setStartTime] = useState('')
+  const [endTime, setEndTime] = useState('')
+  const [filteredCount, setFilteredCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [clearing, setClearing] = useState(false)
   const [error, setError] = useState('')
@@ -43,19 +54,24 @@ export default function RecordsPage() {
   const [mediaRecord, setMediaRecord] = useState<EventRecord | null>(null)
   const [showRawImage, setShowRawImage] = useState(false)
 
+  const startUnixMs = startTime ? new Date(startTime).getTime() : undefined
+  const endUnixMs = endTime ? new Date(endTime).getTime() : undefined
+  const timeRangeInvalid = startUnixMs !== undefined && endUnixMs !== undefined && startUnixMs > endUnixMs
+
   const load = useCallback(async () => {
-    if (!appName) return
+    if (!appName || timeRangeInvalid) return
     try {
-      const result = await fetchRecords(appName)
+      const result = await fetchRecords(appName, 500, { startUnixMs, endUnixMs })
       setRecords(result.records)
       setStats({ count: result.count, total: result.total_bytes, cap: result.cap_bytes })
+      setFilteredCount(result.filtered_count ?? result.count)
       setError('')
     } catch {
       setError('读取告警记录失败')
     } finally {
       setLoading(false)
     }
-  }, [appName])
+  }, [appName, endUnixMs, startUnixMs, timeRangeInvalid])
 
   useEffect(() => {
     load()
@@ -77,6 +93,20 @@ export default function RecordsPage() {
     || (filter === 'data' && record.required_media.length === 0)
     || (filter === 'image' && record.required_media.some(item => item.endsWith('_image')))
     || (filter === 'video' && record.required_media.includes('video')))
+
+  const chooseTimePreset = (preset: Exclude<TimePreset, 'custom'>) => {
+    const now = new Date()
+    setTimePreset(preset)
+    setEndTime('')
+    if (preset === 'all') setStartTime('')
+    if (preset === 'today') {
+      const today = new Date(now.getTime())
+      today.setHours(0, 0, 0, 0)
+      setStartTime(toLocalDateTime(today))
+    }
+    if (preset === '24h') setStartTime(toLocalDateTime(new Date(now.getTime() - 24 * 60 * 60 * 1000)))
+    if (preset === '7d') setStartTime(toLocalDateTime(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)))
+  }
 
   const openDetail = async (record: EventRecord) => {
     if (!appName) return
@@ -126,11 +156,39 @@ export default function RecordsPage() {
             {{ all: '全部', data: '仅数据', image: '图片', video: '视频' }[item]}
           </button>)}
       </div>
+      <div className="records-time-filter">
+        <span className="records-time-label">时间</span>
+        <div className="records-time-presets">
+          {([
+            ['all', '全部时间'], ['today', '今天'], ['24h', '近24小时'], ['7d', '近7天'],
+          ] as const).map(([value, label]) =>
+            <button key={value} className={`rec-btn rec-btn-secondary ${timePreset === value ? 'active' : ''}`}
+              onClick={() => chooseTimePreset(value)}>{label}</button>)}
+        </div>
+        <label className="records-time-input">
+          <span>开始</span>
+          <input type="datetime-local" value={startTime}
+            onChange={event => { setStartTime(event.target.value); setTimePreset('custom') }} />
+        </label>
+        <span className="records-time-separator">至</span>
+        <label className="records-time-input">
+          <span>结束</span>
+          <input type="datetime-local" value={endTime}
+            onChange={event => { setEndTime(event.target.value); setTimePreset('custom') }} />
+        </label>
+        {(startTime || endTime) && <button className="rec-btn rec-btn-secondary"
+          onClick={() => chooseTimePreset('all')}>清除时间</button>}
+        <span className={`records-filter-summary ${timeRangeInvalid ? 'err' : ''}`}>
+          {timeRangeInvalid ? '开始时间不能晚于结束时间'
+            : `显示 ${shown.length} / ${filteredCount} 条`}
+        </span>
+      </div>
     </div>
 
-    {loading ? <div className="records-empty">加载中…</div>
+    {timeRangeInvalid ? <div className="records-empty err">请调整时间范围后再查询。</div>
+      : loading ? <div className="records-empty">加载中…</div>
       : error ? <div className="records-empty err">{error}</div>
-        : shown.length === 0 ? <div className="records-empty">当前没有告警记录。</div>
+        : shown.length === 0 ? <div className="records-empty">当前筛选条件下没有告警记录。</div>
           : <div className="records-grid">{shown.map(record => {
             const failed = Object.entries(record.media_statuses ?? {})
               .filter(([, state]) => state.status === 'failed')

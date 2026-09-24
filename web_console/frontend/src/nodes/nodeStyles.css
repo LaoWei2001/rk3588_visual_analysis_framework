@@ -155,6 +155,18 @@
   white-space: nowrap;
 }
 
+.model-node-id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.model-node-id.unset {
+  color: #fca5a5;
+}
+
 .node-divider {
   border: none;
   border-top: 1px solid var(--border);

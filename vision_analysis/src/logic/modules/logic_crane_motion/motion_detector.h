@@ -13,8 +13,7 @@ struct MotionConfig
     int diff_threshold = 25;
     int blur_kernel = 5;
     bool normalize_brightness = true;
-    float start_ratio = 0.18f;
-    float stop_ratio = 0.06f;
+    float change_ratio = 0.18f;
     uint64_t moving_confirm_ms = 400;
     uint64_t still_confirm_ms = 2000;
 };

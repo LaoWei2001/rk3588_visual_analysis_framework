@@ -31,9 +31,12 @@ void init_config_fields(AppConfig &cfg)
     REG_G("local_default_fps", INT, local_default_fps);
     REG_G("queue_size", INT, queue_size);
     REG_G("tracker_enable", INT, tracker_enable);
+    REG_G("tracker_type", STRING, tracker_type);
     REG_G("tracker_iou_thresh", FLOAT, tracker_iou_thresh);
     REG_G("tracker_max_miss", INT, tracker_max_miss);
     REG_G("tracker_min_hits", INT, tracker_min_hits);
+    REG_G("bytetrack_low_thresh", FLOAT, bytetrack_low_thresh);
+    REG_G("bytetrack_low_iou_thresh", FLOAT, bytetrack_low_iou_thresh);
 
     // 通道配置
     REG_C("id", INT, id);
@@ -46,9 +49,12 @@ void init_config_fields(AppConfig &cfg)
     REG_C("playback_fps", INT, playback_fps);
     REG_C("max_fps", INT, max_fps);
     REG_C("tracker_enable", INT, tracker_enable);
+    REG_C("tracker_type", STRING, tracker_type);
     REG_C("tracker_iou_thresh", FLOAT, tracker_iou_thresh);
     REG_C("tracker_max_miss", INT, tracker_max_miss);
     REG_C("tracker_min_hits", INT, tracker_min_hits);
+    REG_C("bytetrack_low_thresh", FLOAT, bytetrack_low_thresh);
+    REG_C("bytetrack_low_iou_thresh", FLOAT, bytetrack_low_iou_thresh);
 
     REG_C("report_policy", JSON, report_policy_json);
     REG_C("report_parameters", JSON, report_parameters_json);

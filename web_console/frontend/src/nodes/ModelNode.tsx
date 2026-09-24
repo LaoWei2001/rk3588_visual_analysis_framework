@@ -4,6 +4,7 @@ import './nodeStyles.css'
 export default function ModelNode({ data, selected }: NodeProps) {
   const d = data as Record<string, unknown>
   const enabled   = d.infer_enable !== false   // YOLO 推理开关（不再是整条通道的 enable）
+  const modelId   = String(d.id ?? '').trim()
   const modelPath = String(d.model_path ?? '')
   const modelType = String(d.model_type ?? 'yolov8_det')
   const basename  = modelPath ? modelPath.split('/').pop()! : '（未配置）'
@@ -15,7 +16,10 @@ export default function ModelNode({ data, selected }: NodeProps) {
 
       <div className="rf-node-header header-model">
         <span>🧠</span>
-        <span>YOLO 推理</span>
+        <span className={`model-node-id${modelId ? '' : ' unset'}`}
+          title={modelId || '模型业务 ID 未设置'}>
+          {modelId || '未设置 ID'}
+        </span>
         <span className="node-status-badge" style={{
           marginLeft: 'auto',
           color:  enabled ? '#86efac' : '#94a3b8',

@@ -60,6 +60,7 @@
 .records-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   padding: 9px 16px;
   color: #94a3b8;
@@ -73,6 +74,59 @@
   flex-wrap: wrap;
   gap: 8px;
 }
+
+.records-time-filter {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.records-time-label {
+  margin-left: 4px;
+  color: #cbd5e1;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.records-time-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.records-time-input {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.records-time-input input {
+  min-width: 184px;
+  padding: 5px 8px;
+  color: #e5e7eb;
+  color-scheme: dark;
+  background: #111827;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.records-time-input input:focus {
+  outline: 2px solid rgba(96, 165, 250, .45);
+  border-color: #60a5fa;
+}
+
+.records-time-separator,
+.records-filter-summary {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.records-filter-summary.err { color: #f87171; }
 
 .records-empty {
   padding: 48px;
@@ -433,6 +487,10 @@ video.rec-thumb:fullscreen {
   }
 
   .records-toolbar { align-items: flex-start; flex-direction: column; }
+  .records-time-filter { width: 100%; }
+  .records-time-input { width: 100%; }
+  .records-time-input input { min-width: 0; flex: 1; }
+  .records-time-separator { display: none; }
   .rec-card { height: 320px; }
   .rec-media { flex-basis: 145px; }
   .record-modal-backdrop { padding: 10px; }

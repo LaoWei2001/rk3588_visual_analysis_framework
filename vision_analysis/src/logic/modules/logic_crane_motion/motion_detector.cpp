@@ -96,13 +96,14 @@ MotionResult MotionDetector::update(const cv::Mat &frame, const RoiZone *motion_
         return out;
     }
 
-    const bool above_start = out.change_ratio >= config.start_ratio;
-    const bool below_stop = out.change_ratio <= config.stop_ratio;
+    /* 运动和静止共用同一个变化比例阈值。用互补条件避免
+     * 变化比例恰好等于阈值时同时成为运动和静止候选。 */
+    const bool motion_detected = out.change_ratio >= config.change_ratio;
 
     if (!moving_)
     {
         stable_since_ms_ = 0;
-        if (above_start)
+        if (motion_detected)
         {
             if (candidate_since_ms_ == 0)
                 candidate_since_ms_ = now_ms;
@@ -121,7 +122,7 @@ MotionResult MotionDetector::update(const cv::Mat &frame, const RoiZone *motion_
     else
     {
         candidate_since_ms_ = 0;
-        if (below_stop)
+        if (!motion_detected)
         {
             if (stable_since_ms_ == 0)
                 stable_since_ms_ = now_ms;

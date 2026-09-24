@@ -2,9 +2,10 @@
  * @file tracker.h
  * @brief SORT (Simple Online Realtime Tracking) 多目标跟踪器
  *
- * 基于标准 SORT 算法:
+ * 基于 SORT 算法，增加带门控的运动恢复关联:
  * - 7维卡尔曼滤波 [cx, cy, area, aspect_ratio, vcx, vcy, va]
- * - IoU 距离矩阵 + 匈牙利算法最优匹配
+ * - IoU 门控 + 匈牙利算法最大基数/最小代价匹配
+ * - 已确认轨迹的预测中心、面积和宽高比二次关联
  * - 新轨迹需连续命中确认, 防止误检闪烁
  *
  * 每个通道应持有自己的 Tracker 实例, ID 独立分配。

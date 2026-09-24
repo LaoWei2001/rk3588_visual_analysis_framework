@@ -27,9 +27,9 @@ static void logic_course_03(ChannelContext *ctx)
     for (size_t i = 0; i < target_nums; i++)
     {
         const AlgoResult *single_result = &((*results)[i]);
-        printf("\t目标%zu 类别为%s 置信度%.2f 目标框左上角的坐标为(%d,%d) 高%d 宽%d\n", i + 1,
+        printf("\t目标%zu 类别为%s 置信度%.2f 目标框左上角的坐标为(%d,%d) 高%d 宽%d 模型id为%s\n", i + 1,
                single_result->label.c_str(), single_result->score, single_result->box.x, single_result->box.y,
-               single_result->box.height, single_result->box.width);
+               single_result->box.height, single_result->box.width, single_result->model_id.c_str());
     }
     printf("==================================================\n");
 }

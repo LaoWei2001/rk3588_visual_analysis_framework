@@ -9,13 +9,38 @@ namespace crane_safety
 namespace
 {
 
-cv::Rect head_region(const AlgoResult &person, float head_ratio, float margin_ratio)
+struct CellRange
 {
-    const int margin_x = static_cast<int>(person.box.width * margin_ratio + 0.5f);
-    const int margin_y = static_cast<int>(person.box.height * margin_ratio + 0.5f);
-    const int height = std::max(1, static_cast<int>(person.box.height * head_ratio + 0.5f));
-    return cv::Rect(person.box.x - margin_x, person.box.y - margin_y,
-                    person.box.width + margin_x * 2, height + margin_y * 2);
+    int x0 = 0;
+    int y0 = 0;
+    int x1 = 0;
+    int y1 = 0;
+};
+
+CellRange cell_range(const cv::Rect &box, int cell, int cols, int rows)
+{
+    CellRange range;
+    range.x0 = std::max(0, box.x / cell);
+    range.y0 = std::max(0, box.y / cell);
+    range.x1 = std::min(cols - 1, (box.x + box.width) / cell);
+    range.y1 = std::min(rows - 1, (box.y + box.height) / cell);
+    return range;
+}
+
+// 把人员框登记进均匀网格，安全帽只需查询自身覆盖的少数格子，
+// 使匹配复杂度从 O(P×H) 降为近似 O(P+H)。
+std::vector<std::vector<int>> build_person_grid(const std::vector<AlgoResult *> &persons,
+                                                int cols, int rows, int cell)
+{
+    std::vector<std::vector<int>> grid(static_cast<size_t>(cols) * rows);
+    for (size_t index = 0; index < persons.size(); ++index)
+    {
+        const CellRange cells = cell_range(persons[index]->box, cell, cols, rows);
+        for (int gy = cells.y0; gy <= cells.y1; ++gy)
+            for (int gx = cells.x0; gx <= cells.x1; ++gx)
+                grid[static_cast<size_t>(gy) * cols + gx].push_back(static_cast<int>(index));
+    }
+    return grid;
 }
 
 } // namespace
@@ -37,8 +62,12 @@ HelmetResult HelmetGuard::update(std::vector<AlgoResult> &results, const RoiZone
 
     std::vector<AlgoResult *> persons;
     std::vector<AlgoResult *> helmets;
+    int max_right = 0;
+    int max_bottom = 0;
     for (AlgoResult &result : results)
     {
+        max_right = std::max(max_right, result.box.x + result.box.width);
+        max_bottom = std::max(max_bottom, result.box.y + result.box.height);
         if (result_matches(result, config.person_labels, config.person_min_score) &&
             foot_point_in_polygon(result, zone))
             persons.push_back(&result);
@@ -47,34 +76,32 @@ HelmetResult HelmetGuard::update(std::vector<AlgoResult> &results, const RoiZone
     }
 
     out.person_count = static_cast<int>(persons.size());
-    std::vector<unsigned char> helmet_used(helmets.size(), 0);
-    for (AlgoResult *person : persons)
+    std::vector<unsigned char> helmeted(persons.size(), 0);
+    if (!persons.empty() && !helmets.empty())
     {
-        const cv::Rect region = head_region(*person, config.head_region_ratio, config.match_margin_ratio);
-        int best_index = -1;
-        int best_distance = 0;
-        const cv::Point expected(person->box.x + person->box.width / 2, person->box.y);
-        for (size_t index = 0; index < helmets.size(); ++index)
+        constexpr int kCell = 64;
+        const int cols = std::max(1, max_right / kCell + 1);
+        const int rows = std::max(1, max_bottom / kCell + 1);
+        const std::vector<std::vector<int>> grid = build_person_grid(persons, cols, rows, kCell);
+        for (const AlgoResult *helmet : helmets)
         {
-            if (helmet_used[index])
-                continue;
-            const cv::Point center = helmets[index]->box_center();
-            if (!region.contains(center))
-                continue;
-            const int dx = center.x - expected.x;
-            const int dy = center.y - expected.y;
-            const int distance = dx * dx + dy * dy;
-            if (best_index < 0 || distance < best_distance)
-            {
-                best_index = static_cast<int>(index);
-                best_distance = distance;
-            }
+            const CellRange cells = cell_range(helmet->box, kCell, cols, rows);
+            for (int gy = cells.y0; gy <= cells.y1; ++gy)
+                for (int gx = cells.x0; gx <= cells.x1; ++gx)
+                    for (int index : grid[static_cast<size_t>(gy) * cols + gx])
+                    {
+                        if (helmeted[index] || (persons[index]->box & helmet->box).area() == 0)
+                            continue;
+                        helmeted[index] = 1;
+                    }
         }
-        if (best_index >= 0)
-        {
-            helmet_used[static_cast<size_t>(best_index)] = 1;
+    }
+
+    for (size_t index = 0; index < persons.size(); ++index)
+    {
+        AlgoResult *person = persons[index];
+        if (helmeted[index])
             person->box_color = cv::Scalar(0, 200, 0);
-        }
         else
         {
             person->box_color = cv::Scalar(0, 0, 255);

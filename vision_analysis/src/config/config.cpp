@@ -60,6 +60,16 @@ bool is_channel_infer_enabled(const ChannelConfig &ch_cfg)
         return model.enable && !model.model_path.empty() && !model.model_type.empty();
     });
 }
+
+bool is_bytetrack_enabled(const ChannelConfig &ch_cfg)
+{
+    return ch_cfg.tracker_enable != 0 && to_lower_copy(ch_cfg.tracker_type) == "bytetrack";
+}
+
+float effective_model_obj_thresh(const ChannelConfig &ch_cfg, const ChannelModelConfig &model)
+{
+    return is_bytetrack_enabled(ch_cfg) ? std::min(model.obj_thresh, ch_cfg.bytetrack_low_thresh) : model.obj_thresh;
+}
 } // namespace config_utils
 
 namespace
@@ -161,9 +171,12 @@ bool load_config(const std::string &path, AppConfig &cfg)
     cfg.local_default_fps = 25;
     cfg.queue_size = 1;
     cfg.tracker_enable = 1;
+    cfg.tracker_type = "sort";
     cfg.tracker_iou_thresh = 0.3f;
     cfg.tracker_max_miss = 10;
     cfg.tracker_min_hits = 3;
+    cfg.bytetrack_low_thresh = 0.1f;
+    cfg.bytetrack_low_iou_thresh = 0.2f;
 
     cJSON *global = cJSON_GetObjectItemCaseSensitive(root, "global");
     if (!cJSON_IsObject(global))
@@ -191,6 +204,17 @@ bool load_config(const std::string &path, AppConfig &cfg)
         cJSON_Delete(root);
         return false;
     }
+
+    cfg.tracker_type = config_utils::to_lower_copy(cfg.tracker_type);
+    if (cfg.tracker_type != "sort" && cfg.tracker_type != "bytetrack")
+    {
+        fprintf(stderr, "[Config] unsupported global tracker_type '%s' (expected sort/bytetrack)\n",
+                cfg.tracker_type.c_str());
+        cJSON_Delete(root);
+        return false;
+    }
+    cfg.bytetrack_low_thresh = std::max(0.0f, std::min(cfg.bytetrack_low_thresh, 1.0f));
+    cfg.bytetrack_low_iou_thresh = std::max(0.01f, std::min(cfg.bytetrack_low_iou_thresh, 1.0f));
 
     /* 解析 global_logics 数组 (可选, 缺省为空列表) */
     cfg.global_logics.clear();
@@ -371,6 +395,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
         ch.playback_fps = -1;
         ch.max_fps = -1;
         ch.tracker_enable = -1;
+        ch.tracker_type.clear();
 
         // 解析stream对象
         cJSON *stream_obj = cJSON_GetObjectItemCaseSensitive(item, "stream");
@@ -608,17 +633,36 @@ bool load_config(const std::string &path, AppConfig &cfg)
         // 注意不要级联 playback_fps！ playback_fps = -1 对于实时流（RTSP/USB）表示不节流！
         // file 类型的播放器已在 decChannel.cpp 内部专门处理了 <=0 回落逻辑。
 
-        if (ch.tracker_enable == -1)
-        {
+        /* 跟踪字段逐项继承：允许某一路只覆盖 tracker_type 或某一个阈值，
+         * 不要求为了保留该覆盖而重复写 tracker_enable。 */
+        if (!cJSON_GetObjectItemCaseSensitive(item, "tracker_enable"))
             ch.tracker_enable = cfg.tracker_enable;
+        if (!cJSON_GetObjectItemCaseSensitive(item, "tracker_type") || ch.tracker_type.empty())
+            ch.tracker_type = cfg.tracker_type;
+        if (!cJSON_GetObjectItemCaseSensitive(item, "tracker_iou_thresh"))
             ch.tracker_iou_thresh = cfg.tracker_iou_thresh;
+        if (!cJSON_GetObjectItemCaseSensitive(item, "tracker_max_miss"))
             ch.tracker_max_miss = cfg.tracker_max_miss;
+        if (!cJSON_GetObjectItemCaseSensitive(item, "tracker_min_hits"))
             ch.tracker_min_hits = cfg.tracker_min_hits;
-        }
+        if (!cJSON_GetObjectItemCaseSensitive(item, "bytetrack_low_thresh"))
+            ch.bytetrack_low_thresh = cfg.bytetrack_low_thresh;
+        if (!cJSON_GetObjectItemCaseSensitive(item, "bytetrack_low_iou_thresh"))
+            ch.bytetrack_low_iou_thresh = cfg.bytetrack_low_iou_thresh;
 
         // 参数钳位
         if (ch.tracker_enable < 0)
             ch.tracker_enable = 1;
+        ch.tracker_type = config_utils::to_lower_copy(ch.tracker_type);
+        if (ch.tracker_type.empty())
+            ch.tracker_type = cfg.tracker_type;
+        if (ch.tracker_type != "sort" && ch.tracker_type != "bytetrack")
+        {
+            fprintf(stderr, "[Config] channel %d unsupported tracker_type '%s' (expected sort/bytetrack)\n", ch.id,
+                    ch.tracker_type.c_str());
+            cJSON_Delete(root);
+            return false;
+        }
         if (ch.tracker_iou_thresh < 0.01f)
             ch.tracker_iou_thresh = 0.01f;
         if (ch.tracker_iou_thresh > 1.0f)
@@ -631,6 +675,8 @@ bool load_config(const std::string &path, AppConfig &cfg)
             ch.tracker_min_hits = 1;
         if (ch.tracker_min_hits > 100)
             ch.tracker_min_hits = 100;
+        ch.bytetrack_low_thresh = std::max(0.0f, std::min(ch.bytetrack_low_thresh, 1.0f));
+        ch.bytetrack_low_iou_thresh = std::max(0.01f, std::min(ch.bytetrack_low_iou_thresh, 1.0f));
         if (ch.threads < 1)
             ch.threads = 1;
 

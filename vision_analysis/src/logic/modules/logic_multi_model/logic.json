@@ -1,0 +1,10 @@
+{
+    "label": "单通道多模型示例",
+    "event_types": [],
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+    },
+    "report_fields": []
+}

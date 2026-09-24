@@ -144,7 +144,7 @@ int inference_init(const AppConfig &cfg)
                 }
             if (!single)
                 continue;
-            g_inference.obj_thresh[channel_id] = single->obj_thresh;
+            g_inference.obj_thresh[channel_id] = config_utils::effective_model_obj_thresh(channel, *single);
             g_inference.nms_thresh[channel_id] = single->nms_thresh;
             const std::vector<std::string> &classes = single->detect_classes;
             const std::string &labels = single->label_path;
@@ -193,8 +193,9 @@ int inference_init(const AppConfig &cfg)
                     {
                         const auto &spec = active_models[model_index];
                         const int core_mask = configured_npu_core_mask(spec.npu_core);
+                        const float decode_thresh = config_utils::effective_model_obj_thresh(chn_cfg, spec);
                         auto child = create_inference_model(spec.model_type, spec.model_path, spec.label_path,
-                                                  core_mask, spec.obj_thresh, spec.nms_thresh);
+                                                  core_mask, decode_thresh, spec.nms_thresh);
                         if (!child)
                             throw std::runtime_error("unsupported model_type: " + spec.model_type);
                         child->set_result_source(spec.id.empty() ? "model_" + std::to_string(model_index) : spec.id,
@@ -203,7 +204,7 @@ int inference_init(const AppConfig &cfg)
                         entry.id = spec.id.empty() ? "model_" + std::to_string(model_index) : spec.id;
                         entry.type = spec.model_type;
                         entry.model = std::move(child);
-                        entry.obj_thresh = spec.obj_thresh;
+                        entry.obj_thresh = decode_thresh;
                         entry.nms_thresh = spec.nms_thresh;
                         entry.allowed_classes = names_to_class_ids(spec.detect_classes, spec.label_path);
                         entries.push_back(std::move(entry));
@@ -217,8 +218,9 @@ int inference_init(const AppConfig &cfg)
                 {
                     const ChannelModelConfig &spec = active_models[0];
                     const int mask = configured_npu_core_mask(spec.npu_core);
-                    model = create_inference_model(spec.model_type, spec.model_path, spec.label_path, mask, spec.obj_thresh,
-                                         spec.nms_thresh);
+                    const float decode_thresh = config_utils::effective_model_obj_thresh(chn_cfg, spec);
+                    model = create_inference_model(spec.model_type, spec.model_path, spec.label_path, mask,
+                                         decode_thresh, spec.nms_thresh);
                     if (!model)
                     {
                         printf("[Inference] Unsupported model_type '%s' for channel %d\n", spec.model_type.c_str(),
@@ -539,7 +541,7 @@ void inference_update_thresh(int chnId, const ChannelConfig &config)
             single = &model;
             break;
         }
-    const float obj_thresh = single ? single->obj_thresh : 0.0f;
+    const float obj_thresh = single ? config_utils::effective_model_obj_thresh(config, *single) : 0.0f;
     const float nms_thresh = single ? single->nms_thresh : 1.0f;
     printf("[AlgoProcess] Updating thresh for channel %d: obj=%.2f, nms=%.2f\n", chnId, obj_thresh, nms_thresh);
     g_inference.obj_thresh[chnId] = obj_thresh;
@@ -739,8 +741,9 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
                 {
                     const auto &spec = active_models[model_index];
                     const int core_mask = configured_npu_core_mask(spec.npu_core);
+                    const float decode_thresh = config_utils::effective_model_obj_thresh(new_cfg, spec);
                     auto child = create_inference_model(spec.model_type, spec.model_path, spec.label_path, core_mask,
-                                              spec.obj_thresh, spec.nms_thresh);
+                                              decode_thresh, spec.nms_thresh);
                     if (!child)
                         throw std::runtime_error("unsupported model_type: " + spec.model_type);
                     child->set_result_source(spec.id.empty() ? "model_" + std::to_string(model_index) : spec.id,
@@ -749,7 +752,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
                     entry.id = spec.id.empty() ? "model_" + std::to_string(model_index) : spec.id;
                     entry.type = spec.model_type;
                     entry.model = std::move(child);
-                    entry.obj_thresh = spec.obj_thresh;
+                    entry.obj_thresh = decode_thresh;
                     entry.nms_thresh = spec.nms_thresh;
                     entry.allowed_classes = names_to_class_ids(spec.detect_classes, spec.label_path);
                     entries.push_back(std::move(entry));
@@ -760,8 +763,9 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
             {
                 const ChannelModelConfig &spec = active_models[0];
                 const int core_mask = configured_npu_core_mask(spec.npu_core);
+                const float decode_thresh = config_utils::effective_model_obj_thresh(new_cfg, spec);
                 model = create_inference_model(spec.model_type, spec.model_path, spec.label_path, core_mask,
-                                     spec.obj_thresh, spec.nms_thresh);
+                                     decode_thresh, spec.nms_thresh);
                 if (model)
                     model->set_result_source(spec.id.empty() ? "model_0" : spec.id, spec.model_type, 0);
             }
@@ -790,7 +794,8 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
     else
     {
         const bool multi = active_models.size() > 1;
-        g_inference.obj_thresh[chnId] = multi ? 0.0f : active_models[0].obj_thresh;
+        g_inference.obj_thresh[chnId] =
+            multi ? 0.0f : config_utils::effective_model_obj_thresh(new_cfg, active_models[0]);
         g_inference.nms_thresh[chnId] = multi ? 1.0f : active_models[0].nms_thresh;
         pthread_mutex_lock(&g_inference.detect_classes_mtx);
         if (multi)

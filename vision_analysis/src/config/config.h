@@ -97,9 +97,12 @@ struct ChannelConfig
 
     /* 跟踪器 (全局默认, 可被通道覆盖) */
     int tracker_enable = -1;         /* -1=未指定(继承全局), 0=关闭, 1=开启 */
+    std::string tracker_type = "";   /* 空=继承全局, "sort"/"bytetrack" */
     float tracker_iou_thresh = 0.3f; /* IoU 匹配阈值 (0~1), 低于此值视为不匹配 */
     int tracker_max_miss = 10;       /* 连续丢失上限, 超限删除轨迹 */
     int tracker_min_hits = 3;        /* 确认轨迹所需的最小命中帧数 */
+    float bytetrack_low_thresh = 0.1f;     /* 低分检测的最低置信度 */
+    float bytetrack_low_iou_thresh = 0.2f; /* 第二轮低分关联的最小 IoU */
 
     /* 通用告警配置：Web 直接保存对象/数组，C++ 以 JSON 文本解析，新增参数无需改结构体。 */
     std::string report_policy_json = "{}";
@@ -167,9 +170,12 @@ struct AppConfig
     int queue_size = 1;                      /* 每核任务队列深度 */
     /* 跟踪器 (全局默认，可被通道覆盖) */
     int tracker_enable = 1; /* 0=关闭, 1=开启 */
+    std::string tracker_type = "sort";
     float tracker_iou_thresh = 0.3f;
     int tracker_max_miss = 10;
     int tracker_min_hits = 3;
+    float bytetrack_low_thresh = 0.1f;
+    float bytetrack_low_iou_thresh = 0.2f;
 
     /* 通道列表 */
     std::vector<ChannelConfig> channels;
@@ -189,6 +195,8 @@ std::string normalize_src_type(const StreamConfig &stream);
 std::string resolve_stream_location(const StreamConfig &stream, const std::string &src_type);
 bool is_supported_src_type(const std::string &src_type);
 bool is_channel_infer_enabled(const ChannelConfig &ch_cfg);
+bool is_bytetrack_enabled(const ChannelConfig &ch_cfg);
+float effective_model_obj_thresh(const ChannelConfig &ch_cfg, const ChannelModelConfig &model);
 } // namespace config_utils
 
 /*======================== 接口 ========================*/

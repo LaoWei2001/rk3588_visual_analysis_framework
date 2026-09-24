@@ -3,7 +3,7 @@
  * @brief 通道结果处理管线
  *
  * 职责:
- *   - 跟踪器管理 (SORT, 每通道独立实例)
+ *   - 跟踪器管理 (SORT/ByteTrack, 每通道独立选择、独立实例)
  *   - invoke_channel_logic(): 构造 ChannelContext, 调用已注册的 logic 函数,
  *     将结果和绘制指令写回共享状态 (持 chn_mtx 原子完成)
  *   - process_channel_results(): ROI 缩放 + tracker + invoke_channel_logic
@@ -17,6 +17,7 @@
 #include <opencv2/opencv.hpp>
 #include <pthread.h>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "control/logic_control.h"
@@ -24,58 +25,147 @@
 #include "pipeline_internal.h"
 #include "frame_transform.h"
 #include "logic/core/channel_logic.h"
+#include "tracking/bytetrack.h"
 #include "tracking/tracker.h"
 
 /*======================== 跟踪器 (每通道一个实例) ========================*/
 
-static std::unique_ptr<Tracker> g_trackers[MAX_CHANNEL_NUM];
-
-static Tracker *get_tracker(int chnId, const ChannelConfig *ch_cfg)
+struct ChannelTrackerSlot
 {
-    if (!ch_cfg || !ch_cfg->tracker_enable)
+    std::string type;
+    std::unique_ptr<Tracker> sort;
+    std::unique_ptr<ByteTracker> bytetrack;
+
+    void clear()
     {
-        g_trackers[chnId].reset();
-        return nullptr;
+        type.clear();
+        sort.reset();
+        bytetrack.reset();
     }
-    if (!g_trackers[chnId])
-        g_trackers[chnId] =
-            std::make_unique<Tracker>(ch_cfg->tracker_iou_thresh, ch_cfg->tracker_max_miss, ch_cfg->tracker_min_hits);
-    return g_trackers[chnId].get();
+};
+
+static ChannelTrackerSlot g_trackers[MAX_CHANNEL_NUM];
+
+static std::unordered_map<std::string, float> model_high_thresholds(const ChannelConfig &config)
+{
+    std::unordered_map<std::string, float> thresholds;
+    size_t active_index = 0;
+    for (const ChannelModelConfig &model : config.models)
+    {
+        if (!model.enable || model.model_path.empty() || model.model_type.empty())
+            continue;
+        const std::string model_id = model.id.empty() ? "model_" + std::to_string(active_index) : model.id;
+        thresholds[model_id] = model.obj_thresh;
+        ++active_index;
+    }
+    return thresholds;
+}
+
+static std::unique_ptr<ByteTracker> make_bytetrack(const ChannelConfig &config)
+{
+    auto tracker = std::make_unique<ByteTracker>(config.tracker_iou_thresh, config.bytetrack_low_iou_thresh,
+                                                 config.bytetrack_low_thresh, config.tracker_max_miss,
+                                                 config.tracker_min_hits);
+    tracker->setModelHighThresholds(model_high_thresholds(config));
+    return tracker;
+}
+
+static void update_tracking_results(int chnId, const ChannelConfig *config, std::vector<AlgoResult> &results)
+{
+    if (!config || !config->tracker_enable)
+    {
+        g_trackers[chnId].clear();
+        return;
+    }
+
+    ChannelTrackerSlot &slot = g_trackers[chnId];
+    if (config->tracker_type == "bytetrack")
+    {
+        if (slot.type != "bytetrack" || !slot.bytetrack)
+        {
+            slot.clear();
+            slot.type = "bytetrack";
+            slot.bytetrack = make_bytetrack(*config);
+            printf("[ChannelPipeline] ch%d tracker=bytetrack high_iou=%.2f low_iou=%.2f low_score=%.2f\n", chnId,
+                   config->tracker_iou_thresh, config->bytetrack_low_iou_thresh, config->bytetrack_low_thresh);
+        }
+        slot.bytetrack->update(results);
+        return;
+    }
+
+    if (slot.type != "sort" || !slot.sort)
+    {
+        slot.clear();
+        slot.type = "sort";
+        slot.sort =
+            std::make_unique<Tracker>(config->tracker_iou_thresh, config->tracker_max_miss, config->tracker_min_hits);
+        printf("[ChannelPipeline] ch%d tracker=sort iou=%.2f\n", chnId, config->tracker_iou_thresh);
+    }
+    slot.sort->update(results);
 }
 
 static void update_tracker_locked(int chnId, const ChannelConfig &next, const ChannelConfig *previous, bool force_reset)
 {
     if (!next.tracker_enable)
     {
-        g_trackers[chnId].reset();
+        if (g_trackers[chnId].sort || g_trackers[chnId].bytetrack)
+            printf("[ChannelPipeline] ch%d tracker=disabled\n", chnId);
+        g_trackers[chnId].clear();
+        return;
+    }
+
+    ChannelTrackerSlot &slot = g_trackers[chnId];
+    const bool type_changed = !previous || previous->tracker_type != next.tracker_type;
+    if (next.tracker_type == "bytetrack")
+    {
+        const bool config_changed = !previous || previous->tracker_iou_thresh != next.tracker_iou_thresh ||
+                                    previous->tracker_max_miss != next.tracker_max_miss ||
+                                    previous->tracker_min_hits != next.tracker_min_hits ||
+                                    previous->bytetrack_low_thresh != next.bytetrack_low_thresh ||
+                                    previous->bytetrack_low_iou_thresh != next.bytetrack_low_iou_thresh ||
+                                    previous->models != next.models;
+        if (slot.type != "bytetrack" || !slot.bytetrack || type_changed || config_changed)
+        {
+            slot.clear();
+            slot.type = "bytetrack";
+            slot.bytetrack = make_bytetrack(next);
+            printf("[ChannelPipeline] ch%d tracker=bytetrack high_iou=%.2f low_iou=%.2f low_score=%.2f\n", chnId,
+                   next.tracker_iou_thresh, next.bytetrack_low_iou_thresh, next.bytetrack_low_thresh);
+        }
+        else if (force_reset)
+        {
+            slot.bytetrack->reset();
+        }
         return;
     }
 
     const bool min_hits_changed = previous && previous->tracker_min_hits != next.tracker_min_hits;
-    if (!g_trackers[chnId] || min_hits_changed)
+    if (slot.type != "sort" || !slot.sort || type_changed || min_hits_changed)
     {
-        g_trackers[chnId] =
-            std::make_unique<Tracker>(next.tracker_iou_thresh, next.tracker_max_miss, next.tracker_min_hits);
+        slot.clear();
+        slot.type = "sort";
+        slot.sort = std::make_unique<Tracker>(next.tracker_iou_thresh, next.tracker_max_miss, next.tracker_min_hits);
+        printf("[ChannelPipeline] ch%d tracker=sort iou=%.2f\n", chnId, next.tracker_iou_thresh);
     }
     else
     {
-        g_trackers[chnId]->setTrackerIoUThresh(next.tracker_iou_thresh);
-        g_trackers[chnId]->setTrackerMaxMiss(next.tracker_max_miss);
+        slot.sort->setTrackerIoUThresh(next.tracker_iou_thresh);
+        slot.sort->setTrackerMaxMiss(next.tracker_max_miss);
         if (force_reset)
-            g_trackers[chnId]->reset();
+            slot.sort->reset();
     }
 }
 
 void trackers_init(void)
 {
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
-        g_trackers[i].reset();
+        g_trackers[i].clear();
 }
 
 void trackers_deinit(void)
 {
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
-        g_trackers[i].reset();
+        g_trackers[i].clear();
 }
 
 void pipeline_reset_tracker_ids(int chnId)
@@ -83,9 +173,13 @@ void pipeline_reset_tracker_ids(int chnId)
     if (chnId < 0 || chnId >= MAX_CHANNEL_NUM)
         return;
     pthread_mutex_lock(&g_process_mtx[chnId]);
-    if (g_trackers[chnId])
+    ChannelTrackerSlot &slot = g_trackers[chnId];
+    if (slot.sort || slot.bytetrack)
     {
-        g_trackers[chnId]->reset();
+        if (slot.sort)
+            slot.sort->reset();
+        if (slot.bytetrack)
+            slot.bytetrack->reset();
         printf("[ChannelPipeline] tracker state reset for ch%d\n", chnId);
     }
     pthread_mutex_unlock(&g_process_mtx[chnId]);
@@ -445,8 +539,7 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
     ch_state.last_logic_ts_ms = logic_time_ms;
     pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
 
-    if (Tracker *tracker = get_tracker(chnId, channel_config))
-        tracker->update(results);
+    update_tracking_results(chnId, channel_config, results);
 
     const int64_t frame_seq = result_frame_id;
     const uint64_t frame_ts = raw_frame.frame_steady_ms != 0

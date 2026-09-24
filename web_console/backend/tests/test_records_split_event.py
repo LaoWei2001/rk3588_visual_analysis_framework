@@ -17,6 +17,28 @@ from routers import records  # noqa: E402
 
 
 class RecordsSplitEventTest(unittest.TestCase):
+    @staticmethod
+    def _write_record(root: str, event_id: str, trigger_unix_ms: int):
+        event_dir = Path(root) / event_id
+        event_dir.mkdir()
+        (event_dir / "event.json").write_text(json.dumps({
+            "schema_version": 3,
+            "event": {
+                "id": event_id,
+                "type": "alarm",
+                "created_unix_sec": trigger_unix_ms // 1000,
+                "trigger_unix_ms": trigger_unix_ms,
+            },
+            "source": {"channel_id": 0},
+            "data": {"fields": {}},
+        }), encoding="utf-8")
+        (event_dir / "media_state.json").write_text(json.dumps({
+            "schema_version": 3, "status": "ready", "media": {},
+        }), encoding="utf-8")
+        (event_dir / "delivery_state.json").write_text(json.dumps({
+            "schema_version": 3, "deliveries": [],
+        }), encoding="utf-8")
+
     def test_media_statuses_are_exposed(self):
         with tempfile.TemporaryDirectory() as temporary:
             event_dir = Path(temporary) / "event-failed"
@@ -104,6 +126,21 @@ class RecordsSplitEventTest(unittest.TestCase):
                 response = asyncio.run(records.retry_record("ignored", "event-1"))
                 self.assertTrue(response["accepted"])
                 self.assertTrue((event_dir / records.RETRY_REQUEST_FILE).is_file())
+
+    def test_list_records_filters_by_trigger_time_before_limit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            self._write_record(temporary, "event-old", 1_000)
+            self._write_record(temporary, "event-middle", 2_000)
+            self._write_record(temporary, "event-new", 3_000)
+
+            with patch.dict(os.environ, {"EVENT_STORE_DIR": temporary}):
+                listing = asyncio.run(records.list_records(
+                    "ignored", limit=1, start_unix_ms=1_500, end_unix_ms=3_000,
+                ))
+
+            self.assertEqual(listing["count"], 3)
+            self.assertEqual(listing["filtered_count"], 2)
+            self.assertEqual([item["id"] for item in listing["records"]], ["event-new"])
 
 
 if __name__ == "__main__":

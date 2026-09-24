@@ -13,6 +13,7 @@ import {
   type LogicDef, type LogicParam,
 } from '../api/client'
 import { getSrcType, SRC_TYPES } from '../utils/streamSource'
+import { MODEL_ID_MAX_LENGTH, validateModelId } from '../utils/modelId'
 import AssetPicker         from './AssetPicker'
 import NumberField         from './NumberField'
 import ReportForm          from './ReportForm'
@@ -35,6 +36,9 @@ interface Props {
   globalInputs?: { channelId: number; logic: string }[]
   reportConfigJson?: string | null
   reportConfigPath?: string | null
+  modelIdError?: string | null
+  globalTrackerType?: string
+  globalTrackerEnable?: number
 }
 
 // ── Header label per type ────────────────────────────────────────────────────
@@ -60,7 +64,8 @@ const HEADER_CLASS: Record<string, string> = {
 
 export default function NodeConfigPanel({
   node, onUpdate, channelIds = [], allChannelIds = [], globalInputs = [],
-  reportConfigJson = null, reportConfigPath = null,
+  reportConfigJson = null, reportConfigPath = null, modelIdError = null,
+  globalTrackerType = 'sort', globalTrackerEnable = 1,
 }: Props) {
   if (!node) {
     return (
@@ -83,8 +88,10 @@ export default function NodeConfigPanel({
       </div>
 
       <div className="ncp-body">
-        {node.type === 'stream' && <StreamForm  node={node} onUpdate={onUpdate} />}
-        {node.type === 'model'  && <ModelForm   node={node} onUpdate={onUpdate} />}
+        {node.type === 'stream' && <StreamForm node={node} onUpdate={onUpdate}
+          globalTrackerType={globalTrackerType} globalTrackerEnable={globalTrackerEnable} />}
+        {node.type === 'model'  && <ModelForm   node={node} onUpdate={onUpdate}
+          duplicateIdError={modelIdError} />}
         {node.type === 'logic'  && <LogicForm   node={node} onUpdate={onUpdate} />}
         {node.type === 'sop'    && <SopInfo     node={node} onUpdate={onUpdate} />}
         {node.type === 'globalLogic' &&
@@ -259,11 +266,20 @@ function useAssetDelete(currentValue: string, onChange: (v: string) => void) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Stream form
 // ─────────────────────────────────────────────────────────────────────────────
-function StreamForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'] }) {
+function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: {
+  node: Node
+  onUpdate: Props['onUpdate']
+  globalTrackerType: string
+  globalTrackerEnable: number
+}) {
   const assets  = useEditorStore(s => s.assets)
   const { busy, progress, upload } = useAssetUpload()
   const d   = node.data as Record<string, unknown>
   const set = (k: string, v: unknown) => onUpdate(node.id, { [k]: v })
+  const configuredTrackerType = String(d.tracker_type ?? '')
+  const effectiveTrackerType = configuredTrackerType || globalTrackerType || 'sort'
+  const effectiveTrackerEnabled = d.tracker_enable == null
+    ? !!globalTrackerEnable : Number(d.tracker_enable) !== 0
 
   const deleteAsset_ = useAssetDelete(String(d.url ?? ''), v => set('url', v))
   const srcType = getSrcType(d)
@@ -377,6 +393,81 @@ function StreamForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'
           循环播放
         </label>
       </>}
+
+      <div className="ncp-divider" />
+      <div className="ncp-section-label">本视频流 Tracker（空 = 使用全局）</div>
+      <div className="node-row">
+        <F label="跟踪开关">
+          <select value={d.tracker_enable == null ? '' : String(d.tracker_enable)}
+            onChange={e => set('tracker_enable', e.target.value === '' ? undefined : Number(e.target.value))}>
+            <option value="">使用全局</option>
+            <option value="1">开启</option>
+            <option value="0">关闭</option>
+          </select>
+        </F>
+        <F label="跟踪算法">
+          <select value={String(d.tracker_type ?? '')} onChange={e => set('tracker_type', e.target.value || undefined)}>
+            <option value="">使用全局</option>
+            <option value="sort">SORT</option>
+            <option value="bytetrack">ByteTrack</option>
+          </select>
+        </F>
+      </div>
+      <div className="ncp-hint">
+        当前生效：{effectiveTrackerEnabled
+          ? `${effectiveTrackerType === 'bytetrack' ? 'ByteTrack' : 'SORT'}${configuredTrackerType ? '（本流覆盖）' : '（继承全局）'}`
+          : '跟踪已关闭'}
+      </div>
+
+      {effectiveTrackerEnabled && effectiveTrackerType === 'sort' && <>
+        <div className="ncp-section-label">SORT 参数</div>
+        <div className="node-row">
+          <F label="SORT 匹配 IOU">
+            <NumberField allowEmpty step="0.05" min="0" max="1" placeholder="全局"
+              value={d.tracker_iou_thresh} onChange={v => set('tracker_iou_thresh', v)} />
+          </F>
+          <F label="最大丢失帧">
+            <NumberField allowEmpty placeholder="全局"
+              value={d.tracker_max_miss} onChange={v => set('tracker_max_miss', v)} />
+          </F>
+        </div>
+        <F label="轨迹确认命中数">
+          <NumberField allowEmpty placeholder="全局"
+            value={d.tracker_min_hits} onChange={v => set('tracker_min_hits', v)} />
+        </F>
+        <div className="ncp-hint">SORT 使用高置信度检测框和卡尔曼运动预测进行关联。</div>
+      </>}
+
+      {effectiveTrackerEnabled && effectiveTrackerType === 'bytetrack' && <>
+        <div className="ncp-section-label">ByteTrack 参数</div>
+        <div className="node-row">
+          <F label="高分关联 IOU">
+            <NumberField allowEmpty step="0.05" min="0" max="1" placeholder="全局"
+              value={d.tracker_iou_thresh} onChange={v => set('tracker_iou_thresh', v)} />
+          </F>
+          <F label="轨迹缓冲帧数">
+            <NumberField allowEmpty placeholder="全局"
+              value={d.tracker_max_miss} onChange={v => set('tracker_max_miss', v)} />
+          </F>
+        </div>
+        <div className="node-row">
+          <F label="轨迹确认命中数">
+            <NumberField allowEmpty placeholder="全局"
+              value={d.tracker_min_hits} onChange={v => set('tracker_min_hits', v)} />
+          </F>
+          <F label="低分检测阈值">
+            <NumberField allowEmpty step="0.05" min="0" max="1" placeholder="全局"
+              value={d.bytetrack_low_thresh} onChange={v => set('bytetrack_low_thresh', v)} />
+          </F>
+        </div>
+        <F label="低分关联 IOU">
+          <NumberField allowEmpty step="0.05" min="0" max="1" placeholder="全局"
+            value={d.bytetrack_low_iou_thresh} onChange={v => set('bytetrack_low_iou_thresh', v)} />
+        </F>
+        <div className="ncp-hint">
+          高分阈值使用模型节点的“置信阈值”；低分框只续接已有轨迹，不会单独产生结果。
+        </div>
+      </>}
     </div>
   )
 }
@@ -384,7 +475,11 @@ function StreamForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'
 // ─────────────────────────────────────────────────────────────────────────────
 // Model form
 // ─────────────────────────────────────────────────────────────────────────────
-function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'] }) {
+function ModelForm({ node, onUpdate, duplicateIdError }: {
+  node: Node
+  onUpdate: Props['onUpdate']
+  duplicateIdError?: string | null
+}) {
   const assets     = useEditorStore(s => s.assets)
   const info       = useConsoleStore(s => s.info)
   const modelTypes = info?.known_model_types ?? ['yolov8_det', 'yolov5', 'yolov8_pose', 'yolo26_pose', 'yolov5_seg']
@@ -392,6 +487,8 @@ function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
 
   const d   = node.data as Record<string, unknown>
   const set = (k: string, v: unknown) => onUpdate(node.id, { [k]: v })
+  const modelId = String(d.id ?? '')
+  const modelIdError = validateModelId(modelId) ?? duplicateIdError
   const deleteModel = useAssetDelete(String(d.model_path ?? ''), v => set('model_path', v))
   const deleteLabel = useAssetDelete(String(d.label_path ?? ''), v => set('label_path', v))
 
@@ -404,6 +501,25 @@ function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
       <div style={{ fontSize: 12, color: '#94a3b8', marginTop: -6, marginBottom: 6 }}>
         关闭=该通道不进 NPU 推理（视频与逻辑照常运行，适合传统算法通道）
       </div>
+
+      <F label="模型业务 ID（OTA ID）">
+        <input
+          value={modelId}
+          maxLength={MODEL_ID_MAX_LENGTH}
+          spellCheck={false}
+          autoComplete="off"
+          aria-invalid={modelIdError ? 'true' : 'false'}
+          className={modelIdError ? 'ncp-input-error' : ''}
+          onChange={e => set('id', e.target.value)}
+          onBlur={e => set('id', e.currentTarget.value.trim())}
+          placeholder="person_detector"
+        />
+      </F>
+      {modelIdError
+        ? <div className="ncp-field-error">⚠ {modelIdError}</div>
+        : <div className="ncp-hint">
+            同一通道内必须唯一；修改后会重载模型、重置跟踪轨迹，并需同步平台 OTA 的 model_id。
+          </div>}
 
       <div className="node-row">
         <F label="NPU 核心">
@@ -468,30 +584,10 @@ function ModelForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
         />
       </F>
 
-      <div className="ncp-divider" />
-
-      {/* Tracker overrides */}
-      <div className="ncp-section-label">Tracker 覆盖（空 = 使用全局）</div>
-      <div className="node-row">
-        <F label="IOU 阈值">
-          <NumberField allowEmpty step="0.05" min="0" max="1" placeholder="全局"
-            value={d.tracker_iou_thresh} onChange={v => set('tracker_iou_thresh', v)} />
-        </F>
-        <F label="最大丢失帧">
-          <NumberField allowEmpty placeholder="全局"
-            value={d.tracker_max_miss} onChange={v => set('tracker_max_miss', v)} />
-        </F>
-      </div>
-      <div className="node-row">
-        <F label="最小命中">
-          <NumberField allowEmpty placeholder="全局"
-            value={d.tracker_min_hits} onChange={v => set('tracker_min_hits', v)} />
-        </F>
-        <F label="线程数">
-          <NumberField allowEmpty placeholder="全局"
-            value={d.threads} onChange={v => set('threads', v)} />
-        </F>
-      </div>
+      <F label="线程数（空 = 使用全局）">
+        <NumberField allowEmpty placeholder="全局"
+          value={d.threads} onChange={v => set('threads', v)} />
+      </F>
     </div>
   )
 }

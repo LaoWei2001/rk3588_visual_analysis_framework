@@ -4,7 +4,7 @@
     "disp_width": 1920,
     "disp_height": 1280,
     "tile_rows": 2,
-    "tile_cols": 3,
+    "tile_cols": 2,
     "max_fps": 25,
     "queue_size": 1,
     "channel_threads": 3,
@@ -21,34 +21,26 @@
     {
       "id": 0,
       "enable": true,
-      "infer_enable": true,
+      "infer_enable": false,
       "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
-        "video_enc": "h264"
+        "src_type": "usb",
+        "device": "/dev/video81"
       },
-      "models": [
-        {
-          "id": "model_0",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8n.rknn",
-          "label_path": "assets/labels.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": 2
-        }
-      ],
-      "logic": "logic_default",
+      "models": [],
+      "logic": "logic_crane_motion",
       "report_policy": {
         "enabled": false,
         "deliveries": [],
         "parameters": []
       },
       "report_parameters": {},
-      "logic_parameters": {},
+      "logic_parameters": {
+        "motion_roi_name": "",
+        "diff_threshold": 25,
+        "change_ratio": 0.18,
+        "moving_confirm_sec": 0.4,
+        "still_confirm_sec": 2
+      },
       "roi_zones": []
     },
     {
@@ -56,17 +48,17 @@
       "enable": true,
       "infer_enable": true,
       "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
-        "video_enc": "h264"
+        "src_type": "file",
+        "url": "assets/helmet1.mp4",
+        "loop": true
       },
       "models": [
         {
           "id": "model_0",
           "enable": true,
           "model_type": "yolov8_det",
-          "model_path": "assets/yolov8n.rknn",
-          "label_path": "assets/labels.txt",
+          "model_path": "assets/hangche_helmet.rknn",
+          "label_path": "assets/labels_helmet.txt",
           "version": "",
           "obj_thresh": 0.3,
           "nms_thresh": 0.45,
@@ -74,47 +66,83 @@
           "npu_core": 2
         }
       ],
-      "logic": "logic_default",
+      "logic": "logic_crane_helmet",
       "report_policy": {
         "enabled": false,
         "deliveries": [],
         "parameters": []
       },
       "report_parameters": {},
-      "logic_parameters": {},
-      "roi_zones": []
+      "logic_parameters": {
+        "roi_name": "loading_zone",
+        "person_labels": "person",
+        "helmet_labels": "helmet",
+        "person_min_score": 0.4,
+        "helmet_min_score": 0.3,
+        "confirm_sec": 0.5,
+        "clear_sec": 1
+      },
+      "roi_zones": [
+        {
+          "name": "loading_zone",
+          "polygon": [
+            [
+              0.55947,
+              0.08451
+            ],
+            [
+              0.54924,
+              0.98552
+            ],
+            [
+              0.79129,
+              0.98148
+            ],
+            [
+              0.78902,
+              0.08653
+            ]
+          ]
+        }
+      ]
     },
     {
       "id": 2,
       "enable": true,
       "infer_enable": true,
       "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
-        "video_enc": "h264"
+        "src_type": "usb",
+        "device": "/dev/video81"
       },
       "models": [
         {
-          "id": "model_0",
+          "id": "model_1",
           "enable": true,
           "model_type": "yolov8_det",
-          "model_path": "assets/yolov8n.rknn",
-          "label_path": "assets/labels.txt",
+          "model_path": "",
+          "label_path": "",
           "version": "",
           "obj_thresh": 0.3,
           "nms_thresh": 0.45,
           "detect_classes": [],
-          "npu_core": 2
+          "npu_core": -1
         }
       ],
-      "logic": "logic_default",
+      "logic": "logic_crane_hook",
       "report_policy": {
         "enabled": false,
         "deliveries": [],
         "parameters": []
       },
       "report_parameters": {},
-      "logic_parameters": {},
+      "logic_parameters": {
+        "hook_class_id": 0,
+        "min_score": 0.3,
+        "safe_radius": 150,
+        "confirm_sec": 0.5,
+        "clear_sec": 3,
+        "lost_tolerance_sec": 0.5
+      },
       "roi_zones": []
     },
     {
@@ -122,90 +150,95 @@
       "enable": true,
       "infer_enable": true,
       "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
-        "video_enc": "h264"
+        "src_type": "usb",
+        "device": "/dev/video81"
       },
       "models": [
         {
-          "id": "model_0",
+          "id": "model_2",
           "enable": true,
           "model_type": "yolov8_det",
-          "model_path": "assets/yolov8n.rknn",
-          "label_path": "assets/labels.txt",
+          "model_path": "",
+          "label_path": "",
           "version": "",
           "obj_thresh": 0.3,
           "nms_thresh": 0.45,
           "detect_classes": [],
-          "npu_core": 2
+          "npu_core": -1
         }
       ],
-      "logic": "logic_default",
+      "logic": "logic_crane_intrusion",
       "report_policy": {
         "enabled": false,
         "deliveries": [],
         "parameters": []
       },
       "report_parameters": {},
-      "logic_parameters": {},
+      "logic_parameters": {
+        "roi_name": "projection_zone",
+        "person_labels": "person",
+        "min_score": 0.4,
+        "confirm_sec": 0.3,
+        "clear_sec": 1
+      },
       "roi_zones": []
     }
   ],
   "_editor_layout": {
     "0": {
       "stream": {
-        "x": -350,
-        "y": 541
-      },
-      "model": {
-        "x": -39,
-        "y": 543
+        "x": -355,
+        "y": 245
       },
       "logic": {
-        "x": 197,
-        "y": 548
+        "x": 203,
+        "y": 244
       }
     },
     "1": {
       "stream": {
-        "x": -347,
-        "y": 626
+        "x": -351,
+        "y": 570
       },
       "model": {
-        "x": -36,
-        "y": 628
+        "x": -77,
+        "y": 570
+      },
+      "roi": {
+        "x": -369,
+        "y": 347
       },
       "logic": {
-        "x": 200,
-        "y": 633
+        "x": 209,
+        "y": 571
       }
     },
     "2": {
       "stream": {
-        "x": -343,
-        "y": 707
+        "x": -350,
+        "y": 673
       },
       "model": {
-        "x": -32,
-        "y": 709
+        "x": -53,
+        "y": 675
       },
       "logic": {
-        "x": 204,
-        "y": 714
+        "x": 213,
+        "y": 674
       }
     },
     "3": {
       "stream": {
         "x": -343,
-        "y": 793
+        "y": 774
       },
       "model": {
-        "x": -32,
-        "y": 795
+        "x": -52,
+        "y": 778
       },
       "logic": {
-        "x": 204,
-        "y": 800
+        "x": 216,
+        "y": 779
       }
     }
   }

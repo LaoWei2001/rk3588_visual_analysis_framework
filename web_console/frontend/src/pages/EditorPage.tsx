@@ -31,6 +31,7 @@ import { useSopUiStore }   from '../store/sopUiStore'
 import { graphToConfig }   from '../utils/graphToConfig'
 import { configToGraph }   from '../utils/configToGraph'
 import { saveLastConfig }  from '../utils/lastConfig'
+import { validateModelId } from '../utils/modelId'
 import {
   fetchConfig, saveConfig, saveConfigFile, deleteConfigFile,
   fetchConfigFiles, loadConfigFile,
@@ -106,7 +107,7 @@ const DEFAULT_RTSP_URL = 'rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels
 // ── Default node data when dropped ──
 const NODE_DEFAULTS: Record<string, Record<string, unknown>> = {
   stream: { src_type: 'rtsp', url: DEFAULT_RTSP_URL, video_enc: 'h264', channel_id: 0 },
-  model:  { enable: true, model_type: 'yolov8_det',
+  model:  { id: 'model_0', enable: true, model_type: 'yolov8_det',
             model_path: '', label_path: '', obj_thresh: 0.3, nms_thresh: 0.45,
             detect_classes: [], npu_core: -1 },
   roi:    {},
@@ -134,6 +135,16 @@ const NODE_DEFAULTS: Record<string, Record<string, unknown>> = {
 
 let _uid = 0
 const uid = (p: string) => `${p}-${++_uid}-${Date.now()}`
+
+const nextModelBusinessId = (nodes: Node[]): string => {
+  const used = new Set(nodes
+    .filter(node => node.type === 'model')
+    .map(node => String((node.data as Record<string, unknown>).id ?? '').trim())
+    .filter(Boolean))
+  let index = 0
+  while (used.has(`model_${index}`)) index++
+  return `model_${index}`
+}
 
 const channelInputForLogic = (
   logicNode: Node,
@@ -445,6 +456,20 @@ export default function EditorPage() {
       .map(logicNode => channelInputForLogic(logicNode, nodes, edges))
       .filter((input): input is { channelId: number; logic: string } => input != null)
     return inputs.sort((a, b) => a.channelId - b.channelId)
+  }, [selectedNode, nodes, edges])
+  const selectedModelIdError = useMemo(() => {
+    if (selectedNode?.type !== 'model') return null
+    const modelId = String((selectedNode.data as Record<string, unknown>).id ?? '').trim()
+    if (!modelId) return null // 空值/格式错误由输入框自身提示。
+    const streamEdge = edges.find(edge => edge.target === selectedNode.id && edge.targetHandle === 'stream-in')
+    if (!streamEdge) return null
+    const duplicate = edges
+      .filter(edge => edge.source === streamEdge.source && edge.sourceHandle === 'stream-out'
+        && edge.target !== selectedNode.id)
+      .map(edge => nodes.find(node => node.id === edge.target))
+      .some(node => node?.type === 'model'
+        && String((node.data as Record<string, unknown>).id ?? '').trim() === modelId)
+    return duplicate ? `同一通道内的模型业务 ID“${modelId}”重复` : null
   }, [selectedNode, nodes, edges])
   const selectedReportChannelIds = useMemo(() => {
     if (selectedNode?.type !== 'report') return channelIds
@@ -809,8 +834,10 @@ export default function EditorPage() {
     setNodes(ns => {
       const data = { ...(NODE_DEFAULTS[nodeType] ?? {}) }
       // 新增 YOLO 节点默认交给 RKNN runtime 自动调度；仍可在节点面板手工固定核心。
-      if (nodeType === 'model')
+      if (nodeType === 'model') {
+        data.id = nextModelBusinessId(ns)
         data.npu_core = -1
+      }
       // 一个上报节点固定一条投递，并使用节点级唯一 ID。
       if (nodeType === 'report') {
         data.report_policy = {
@@ -1171,14 +1198,30 @@ export default function EditorPage() {
 
     // 同一视频流下的模型可以全部不接后处理；若接，则必须全部汇入同一个逻辑节点。
     for (const stream of nodes.filter(n => n.type === 'stream')) {
-      const modelIds = edges
+      const streamModelNodes = edges
         .filter(e => e.source === stream.id && e.sourceHandle === 'stream-out')
         .map(e => nodes.find(n => n.id === e.target))
         .filter((n): n is Node => n?.type === 'model')
-        .map(n => n.id)
-      if (modelIds.length === 0) continue
-      const logicTargets = modelIds.map(modelId =>
-        edges.find(e => e.source === modelId && e.sourceHandle === 'logic-out')?.target ?? '')
+      if (streamModelNodes.length === 0) continue
+
+      const usedModelIds = new Set<string>()
+      for (const modelNode of streamModelNodes) {
+        const modelId = String((modelNode.data as Record<string, unknown>).id ?? '').trim()
+        const idError = validateModelId(modelId)
+        const channelId = Number((stream.data as Record<string, unknown>).channel_id ?? 0)
+        if (idError) {
+          showToast(`Ch.${channelId} 模型 ID 无效：${idError}`, false)
+          return null
+        }
+        if (usedModelIds.has(modelId)) {
+          showToast(`Ch.${channelId} 模型 ID 重复：${modelId} — 同一通道内必须唯一`, false)
+          return null
+        }
+        usedModelIds.add(modelId)
+      }
+
+      const logicTargets = streamModelNodes.map(modelNode =>
+        edges.find(e => e.source === modelNode.id && e.sourceHandle === 'logic-out')?.target ?? '')
       const connectedTargets = logicTargets.filter(Boolean)
       if (connectedTargets.length > 0 &&
           (connectedTargets.length !== logicTargets.length || new Set(connectedTargets).size !== 1)) {
@@ -1501,6 +1544,9 @@ export default function EditorPage() {
             globalInputs={selectedGlobalInputs}
             reportConfigJson={selectedReportConfig?.json ?? null}
             reportConfigPath={selectedReportConfig?.path ?? null}
+            modelIdError={selectedModelIdError}
+            globalTrackerType={String(globalSettings.tracker_type ?? 'sort')}
+            globalTrackerEnable={Number(globalSettings.tracker_enable ?? 1)}
           />
         </div>
       </div>
