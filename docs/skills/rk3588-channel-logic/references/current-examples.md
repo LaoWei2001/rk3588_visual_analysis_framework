@@ -1,6 +1,6 @@
 # 当前通道模块索引
 
-下表来自当前 `vision_analysis/src/logic/modules/`，用于选择真实存在的参考实现。由于用户可能增加或删除某些模块，所以模块集合会变化；
+下表来自当前 `projects/modules/`，用于选择真实存在的参考实现。由于用户可能增加或删除某些模块，所以模块集合会变化；
 使用前仍应运行 catalog 校验并同时阅读该目录的 `logic.cpp` 与 `logic.json`。
 
 | logic ID | 当前用途 | 参考注意事项 |
@@ -30,7 +30,6 @@
 查询当前清单：
 
 ```bash
-cd vision_analysis
-python3 scripts/generate_logics_catalog.py --check
+python3 tools/build/generate_logics_catalog.py --check
 ./vision_analysis --list-logics   # 仅在已有当前源码构建出的二进制时
 ```

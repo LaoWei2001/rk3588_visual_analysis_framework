@@ -7,13 +7,14 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONSOLE_UNIT="rk3588-console.service"
 GPIO_CONTROL_UNIT="rk3588-gpio-control.service"
 GPIO_RESTORE_UNIT="rk3588-gpio-restore.service"
+GPIO_SERVICE_INSTALLER="$PROJECT_ROOT/services/framework/gpio_state/install.sh"
+WEB_CONSOLE_DEPLOYER="$PROJECT_ROOT/web_console/deploy.sh"
 
 usage() {
     cat <<'EOF'
 用法：
-  sudo ./install.sh online              联网准备全部依赖并安装/升级平台
+  sudo ./install.sh online              联网准备全部依赖并部署平台
   sudo ./install.sh offline             使用已准备好的离线环境和前端产物安装平台
-  sudo ./install.sh upgrade [模式]      升级平台；模式为 online 或 offline，默认 offline
   ./install.sh status                   查看平台、GPIO和Web服务状态
   sudo ./install.sh uninstall [--yes]   卸载平台服务，保留应用和GPIO持久状态
 
@@ -100,18 +101,28 @@ install_platform() {
     echo "  安装模式：$mode"
     echo "============================================================"
 
+    if [ ! -x "$GPIO_SERVICE_INSTALLER" ]; then
+        echo "[错误] 缺少可执行的 GPIO 服务安装器：$GPIO_SERVICE_INSTALLER" >&2
+        exit 1
+    fi
+    if [ ! -x "$WEB_CONSOLE_DEPLOYER" ]; then
+        echo "[错误] 缺少可执行的 Web 控制台部署器：$WEB_CONSOLE_DEPLOYER" >&2
+        exit 1
+    fi
+
     if [ "$mode" = online ]; then
-        echo ">>> [1/2] 准备项目全部依赖和预构建前端..."
+        echo ">>> [1/3] 准备项目全部依赖和预构建前端..."
         bash "$PROJECT_ROOT/install_deps.sh"
     else
-        echo ">>> [1/2] 检查已经准备好的离线环境..."
+        echo ">>> [1/3] 检查已经准备好的离线环境..."
         check_offline_source_environment
     fi
 
-    # online 阶段已经统一安装 Python/npm 依赖并生成 dist；这里使用 offline 模式部署，
-    # 避免 Web 子安装器再次访问网络、重复 npm ci。GPIO服务也由它在最早阶段安装。
-    echo ">>> [2/2] 安装GPIO平台服务和Web控制台..."
-    bash "$PROJECT_ROOT/web_console/install.sh" offline
+    echo ">>> [2/3] 安装 GPIO 控制与电平保持服务..."
+    bash "$GPIO_SERVICE_INSTALLER"
+
+    echo ">>> [3/3] 部署 Web 控制台..."
+    bash "$WEB_CONSOLE_DEPLOYER"
 
     echo
     echo "[完成] 平台安装成功。以后统一使用："
@@ -167,15 +178,6 @@ case "$command_name" in
     online|offline)
         [ "$#" -eq 0 ] || { echo "[错误] $command_name 不接受额外参数。" >&2; exit 2; }
         install_platform "$command_name"
-        ;;
-    upgrade)
-        mode="${1:-offline}"
-        [ "$#" -eq 0 ] || shift
-        [ "$#" -eq 0 ] || { echo "[错误] upgrade 参数过多。" >&2; exit 2; }
-        case "$mode" in
-            online|offline) install_platform "$mode" ;;
-            *) echo "[错误] upgrade 模式只能是 online 或 offline。" >&2; exit 2 ;;
-        esac
         ;;
     status)
         [ "$#" -eq 0 ] || { echo "[错误] status 不接受额外参数。" >&2; exit 2; }

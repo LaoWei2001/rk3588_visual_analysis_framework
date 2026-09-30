@@ -12,8 +12,9 @@ from pathlib import Path
 
 
 REPO_MARKERS = (
-    "vision_analysis/src/logic",
-    "vision_analysis/scripts/generate_logics_catalog.py",
+    "engine/src/logic/core",
+    "projects/modules",
+    "tools/build/generate_logics_catalog.py",
     "docs/skills",
 )
 BLOCKING_PATTERNS = {
@@ -52,7 +53,7 @@ def main() -> int:
     is_global = args.module.startswith("global_")
     if not is_global and not args.module.startswith("logic_"):
         raise SystemExit("error: module must start with logic_ or global_")
-    parent = repo / "vision_analysis/src/logic" / ("global_modules" if is_global else "modules")
+    parent = repo / "projects" / ("global_modules" if is_global else "modules")
     target = parent / args.module
     entry_path, json_path = target / "logic.cpp", target / "logic.json"
     errors: list[str] = []
@@ -140,10 +141,10 @@ def main() -> int:
         if re.search(pattern, cpp):
             warnings.append(message)
 
-    catalog = repo / "vision_analysis/scripts/generate_logics_catalog.py"
+    catalog = repo / "tools/build/generate_logics_catalog.py"
     result = subprocess.run(
-        [sys.executable, str(catalog), "--check"],
-        cwd=repo / "vision_analysis",
+        [sys.executable, str(catalog), "--logic-root", str(repo / "projects"), "--check"],
+        cwd=repo,
         text=True,
         capture_output=True,
         check=False,

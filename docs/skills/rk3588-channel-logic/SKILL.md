@@ -13,10 +13,10 @@ description: >-
 
 本 Skill 是单通道业务逻辑的工作入口，同时服务大模型编程和二次开发者。它以当前源码为准：
 
-- 公共接口：`vision_analysis/src/logic/core/channel_logic.h`、`logic_action.h`、`logic_outputs.h`；
-- 模块目录：`vision_analysis/src/logic/modules/<logic_id>/`；
-- 注册与清单校验：`vision_analysis/scripts/generate_logics_catalog.py`；
-- 事件接口：`vision_analysis/src/event/event_report.h`。
+- 公共接口：`engine/src/logic/core/channel_logic.h`、`logic_action.h`、`logic_outputs.h`；
+- 模块目录：`projects/modules/<logic_id>/`；
+- 注册与清单校验：`tools/build/generate_logics_catalog.py`；
+- 事件接口：`engine/src/event/event_report.h`。
 
 不要从旧文档推断接口。当前 `ChannelContext` 没有 `frame` 成员；需要像素时调用
 `model_frame()` 或 `source_frame()`。
@@ -34,8 +34,8 @@ description: >-
 
 ## Logic-only 写入规则
 
-通过 `develop_feature` 运行时，只能写入 `vision_analysis/src/logic/modules/**` 和
-`vision_analysis/src/logic/global_modules/**`。本 Skill 的通道产物必须全部放在所属
+通过 `develop_feature` 运行时，只能写入 `projects/modules/**` 和
+`projects/global_modules/**`。本 Skill 的通道产物必须全部放在所属
 `modules/<logic_id>/` 内；上报模板也放在该目录的 `report_templates/`。公共 `logic/core`、配置、测试、
 Web、服务、文档、脚本和生成物全部只读。无法使用现有公共接口和 manifest 完成时立即停止，不新增公共
 API，也不请求扩大权限。机械执行规则见
@@ -51,7 +51,7 @@ API，也不请求扩大权限。机械执行规则见
 
 ## 新模块工作流
 
-1. 在 `vision_analysis/src/logic/modules/logic_xxx/` 新建 `logic.cpp` 和 `logic.json`。
+1. 在 `projects/modules/logic_xxx/` 新建 `logic.cpp` 和 `logic.json`。
 2. 实现 `static void logic_xxx(ChannelContext *ctx)`，包含 `logic/core/logic_common.h`。
 3. 文件末尾写 `REGISTER_LOGIC(logic_xxx);`。函数标识符就是配置、Web 和 API 使用的唯一 ID。
 4. 在 `logic.json` 声明参数、事件、上报字段、输出和 Action；不要手写 `name`。
@@ -119,18 +119,18 @@ REGISTER_LOGIC(logic_xxx);
 ## 必做验证
 
 ```bash
-cd vision_analysis
-python3 scripts/generate_logics_catalog.py --check
+python3 tools/build/generate_logics_catalog.py --check
 ```
 
 有可运行二进制时再核对：
 
 ```bash
-./vision_analysis --list-logics
-./vision_analysis --validate-config ./assets/config_6.json
+cd projects
+../build/engine/vision_analysis --list-logics
+../build/engine/vision_analysis --validate-config ./assets/config_global.json
 ```
 
-`config_6.json` 是仓库内现存的可复制示例；验收具体应用时，`--validate-config` 后应改为实际准备运行的配置。编译和打包
+`config_global.json` 是仓库内现存的可复制示例；验收具体应用时，`--validate-config` 后应改为实际准备运行的配置。编译和打包
 流程见 [`build-rk3588-vision-app`](../build-rk3588-vision-app/SKILL.md)。
 
 ## 完成标准

@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from routers import (apps, assets, auth, camera_settings, logic_control, config_io, logs, network_settings,
+from routers import (apps, assets, auth, camera_settings, logic_control, file_playback, config_io, logs, network_settings,
                      ota_config, process, records, services, snapshot, storage_settings, stream,
                      system_settings, terminal, delivery_config, video_capture)
 from services.auth_service import get_session
@@ -158,6 +158,7 @@ app.include_router(auth.router,      prefix="/api")
 app.include_router(apps.router,      prefix="/api")
 app.include_router(config_io.router, prefix="/api")
 app.include_router(logic_control.router, prefix="/api")
+app.include_router(file_playback.router, prefix="/api")
 app.include_router(assets.router,    prefix="/api")
 app.include_router(process.router,   prefix="/api")
 app.include_router(snapshot.router,  prefix="/api")

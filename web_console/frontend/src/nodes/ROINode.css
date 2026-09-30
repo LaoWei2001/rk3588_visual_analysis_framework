@@ -138,6 +138,7 @@
 .roi-canvas-wrap {
   overflow: auto;
   flex: 1;
+  min-height: 0;
 }
 
 .roi-sidebar {
@@ -190,6 +191,97 @@
   color: var(--text);
   font-size: 12px;
   padding: 3px 6px;
+}
+
+.inference-roi-dialog {
+  width: min(1240px, calc(100vw - 40px));
+}
+
+.inference-roi-help {
+  padding: 8px 14px;
+  color: #a5f3fc;
+  background: rgba(8, 145, 178, 0.12);
+  border-bottom: 1px solid rgba(34, 211, 238, 0.22);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.inference-roi-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+}
+
+.inference-roi-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text2);
+  font-size: 12px;
+}
+
+.inference-roi-toolbar select {
+  min-width: 120px;
+}
+
+.inference-roi-workspace {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 14px;
+  padding: 12px;
+  overflow: auto;
+}
+
+.inference-preview-panel {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: #080b12;
+}
+
+.inference-preview-title {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: #a5f3fc;
+  font-size: 12px;
+}
+
+.inference-preview-title > span:first-child { color: #a5f3fc; }
+.inference-preview-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text2);
+}
+.inference-preview-status button {
+  padding: 1px 6px;
+  border: 1px solid rgba(34, 211, 238, 0.4);
+  border-radius: 4px;
+  background: rgba(8, 145, 178, 0.16);
+  color: #67e8f9;
+  font-size: 10px;
+  cursor: pointer;
+}
+.inference-preview-status button:hover { background: rgba(8, 145, 178, 0.28); }
+.inference-preview-status button.active {
+  border-color: #22d3ee;
+  background: rgba(8, 145, 178, 0.38);
+  color: #cffafe;
+}
+.inference-preview-panel canvas { display: block; border: 1px solid #334155; }
+.inference-preview-note {
+  max-width: 360px;
+  margin-top: 8px;
+  color: var(--text2);
+  font-size: 11px;
+  line-height: 1.5;
 }
 .roi-zone-input.duplicate {
   border-color: #ef4444;

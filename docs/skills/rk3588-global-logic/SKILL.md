@@ -12,10 +12,10 @@ description: >-
 
 本 Skill 面向跨通道组合判断和独立周期任务。当前权威源码是：
 
-- `vision_analysis/src/logic/core/global_logic.h/.cpp`；
-- `vision_analysis/src/runtime/app_ctrl.h` 中的通道快照；
-- `vision_analysis/src/logic/global_modules/`；
-- `vision_analysis/src/config/config.h/.cpp` 中的 `GlobalLogicConfig`。
+- `engine/src/logic/core/global_logic.h/.cpp`；
+- `engine/src/runtime/app_ctrl.h` 中的通道快照；
+- `projects/global_modules/`；
+- `engine/src/config/config.h/.cpp` 中的 `GlobalLogicConfig`。
 
 每个启用的全局实例拥有一个 pthread 和一份独立 state。任一通道发布新业务快照时立即唤醒实例；
 `poll_interval_ms` 仅在没有新发布时提供周期性兜底，不是固定执行周期。
@@ -34,8 +34,8 @@ description: >-
 
 ## Logic-only 写入规则
 
-通过 `develop_feature` 运行时，只能写入 `vision_analysis/src/logic/modules/**` 和
-`vision_analysis/src/logic/global_modules/**`。全局模块及其 manifest/模板必须放在所属
+通过 `develop_feature` 运行时，只能写入 `projects/modules/**` 和
+`projects/global_modules/**`。全局模块及其 manifest/模板必须放在所属
 `global_modules/<global_logic_id>/`；需要新增上游输出时，只能修改或新增 `modules/<logic_id>/`。
 公共 `logic/core`、运行配置、测试、Web、服务、文档、脚本和生成物全部只读。现有接口不足时立即停止，
 不请求扩大权限。机械执行规则见
@@ -44,7 +44,7 @@ description: >-
 ## 开发工作流
 
 1. 明确每个上游通道要发布的 key、类型、缺失语义，并在上游 manifest 的 `outputs[]` 声明。
-2. 在 `vision_analysis/src/logic/global_modules/<global_logic_id>/` 创建 `logic.cpp` 和 `logic.json`。
+2. 在 `projects/global_modules/<global_logic_id>/` 创建 `logic.cpp` 和 `logic.json`。
 3. 实现 `static void global_xxx(GlobalContext *gctx)`，末尾写
    `REGISTER_GLOBAL_LOGIC(global_xxx);`。
 4. 普通业务从 `gctx->inputs()` 读取框架已经过滤的输入，不直接依赖通道私有 state。
@@ -159,15 +159,15 @@ handler 的结果写视觉程序日志。队列当前最多 64 条，溢出会�
 ## 验证
 
 ```bash
-cd vision_analysis
-python3 scripts/generate_logics_catalog.py --check
+python3 tools/build/generate_logics_catalog.py --check
 ```
 
-仓库当前没有提交预编译二进制。仅在已经用当前源码得到 `./vision_analysis` 后再运行：
+仓库当前没有提交预编译二进制。仅在已经用当前源码得到二进制后再运行：
 
 ```bash
-./vision_analysis --list-global-logics
-./vision_analysis --validate-config ./assets/config_global.json
+cd projects
+../build/engine/vision_analysis --list-global-logics
+../build/engine/vision_analysis --validate-config ./assets/config_global.json
 ```
 
 `config_global.json` 是仓库当前的全局逻辑示例；验收具体应用时应换成实际运行配置。运行时还应确认

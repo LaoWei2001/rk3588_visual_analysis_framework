@@ -1,0 +1,51 @@
+{
+  "label": "行车运动联合检测",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "motion_roi_name": { "type": "string", "title": "运动检测ROI名称", "description": "留空使用整幅画面。", "default": "detect_area", "x-hot-reload": "reset_state" },
+      "hook_class_id": { "type": "integer", "title": "吊钩类别编号", "description": "用于运动门控的吊钩类别编号，从0开始。", "default": 0, "minimum": 0, "maximum": 10000, "x-step": 1, "x-hot-reload": "reset_state" },
+      "hook_min_score": { "type": "number", "title": "吊钩最低置信度", "default": 0.3, "minimum": 0.0, "maximum": 1.0, "x-step": 0.05, "x-hot-reload": "preserve_state" },
+      "hook_motion_threshold_px": { "type": "number", "title": "吊钩移动位移阈值", "description": "观察窗口内吊钩框中心位移超过该值后，锁存为吊钩已移动。", "default": 3.0, "minimum": 0.0, "maximum": 500.0, "x-unit": "像素", "x-step": 1.0, "x-hot-reload": "reset_state" },
+      "hook_motion_window_sec": { "type": "number", "title": "吊钩位移观察窗口", "description": "在该时间窗口内统计检测框中心位移，用于识别缓慢移动。", "default": 0.2, "minimum": 0.05, "maximum": 5.0, "x-unit": "秒", "x-step": 0.05, "x-hot-reload": "reset_state" },
+      "hook_still_reset_sec": { "type": "number", "title": "吊钩静止复位时间", "description": "吊钩移动锁存后，只有检测框连续可见且持续静止达到该时间才重新启用静止门控；丢框不计入静止时间。", "default": 10.0, "minimum": 0.5, "maximum": 60.0, "x-unit": "秒", "x-step": 0.5, "x-hot-reload": "preserve_state" },
+      "diff_threshold": { "type": "integer", "title": "帧差灰度阈值", "default": 10, "minimum": 1, "maximum": 255, "x-hot-reload": "preserve_state" },
+      "change_ratio": { "type": "number", "title": "运动/静止变化比例", "default": 0.015, "minimum": 0.001, "maximum": 1.0, "x-step": 0.001, "x-hot-reload": "reset_state" },
+      "moving_confirm_sec": { "type": "number", "title": "运动确认时间", "default": 0.2, "minimum": 0.0, "maximum": 10.0, "x-unit": "秒", "x-step": 0.1, "x-hot-reload": "preserve_state" },
+      "still_confirm_sec": { "type": "number", "title": "静止确认时间", "description": "独立于运动确认时间；组合运动条件持续不成立达到该时长后，才判定行车静止。", "default": 2.0, "minimum": 0.0, "maximum": 60.0, "x-unit": "秒", "x-step": 0.1, "x-hot-reload": "preserve_state" }
+    }
+  },
+  "outputs": [
+    { "key": "motion_valid", "type": "boolean", "label": "运动状态是否有效" },
+    { "key": "crane_moving", "type": "boolean", "label": "行车是否运动" },
+    { "key": "motion_change_ratio", "type": "number", "label": "有效变化像素比例" },
+    { "key": "motion_hook_visible", "type": "boolean", "label": "运动通道吊钩是否可见" },
+    { "key": "motion_hook_moving", "type": "boolean", "label": "吊钩检测框当前是否移动" },
+    { "key": "motion_hook_motion_latched", "type": "boolean", "label": "吊钩移动是否已锁存放行" },
+    { "key": "motion_hook_displacement", "type": "number", "label": "吊钩观察窗口位移" },
+    { "key": "motion_hook_still_reset_elapsed", "type": "number", "label": "吊钩静止复位已计时秒数" }
+  ],
+  "report_fields": [],
+  "actions": [
+    {
+      "id": "switch_motion_setting",
+      "label": "切换运动参数",
+      "style": "primary",
+      "help": "在帧差灰度阈值、运动/静止变化像素比例和确认时间之间循环切换。"
+    },
+    {
+      "id": "motion_setting_decrease",
+      "label": "当前参数 -",
+      "style": "default",
+      "help": "减小画面中黄色显示的运动检测参数。"
+    },
+    {
+      "id": "motion_setting_increase",
+      "label": "当前参数 +",
+      "style": "default",
+      "help": "增大画面中黄色显示的运动检测参数。"
+    }
+  ]
+}

@@ -14,8 +14,8 @@ from typing import Mapping, Sequence
 
 
 ALLOWED_WRITE_ROOTS = (
-    PurePosixPath("vision_analysis/src/logic/modules"),
-    PurePosixPath("vision_analysis/src/logic/global_modules"),
+    PurePosixPath("projects/modules"),
+    PurePosixPath("projects/global_modules"),
 )
 
 # Keep generated dependencies, editor state, and large media out of the disposable

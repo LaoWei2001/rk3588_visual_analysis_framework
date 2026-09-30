@@ -865,7 +865,6 @@ export default function ReportContractEditor({
         <div className="report-contract-preview-head">
           <div>
             <div className="report-section-title">最终发送请求</div>
-            <div className="report-mapping-help">这是服务器最终收到的内容，左侧修改后立即刷新。</div>
           </div>
           <button type="button" disabled={!requestPreview.value} onClick={copyPreview}>
             {copyStatus === 'copied' ? '已复制'

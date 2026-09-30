@@ -10,8 +10,9 @@ from pathlib import Path
 
 
 REPO_MARKERS = (
-    "vision_analysis/src/logic",
-    "vision_analysis/scripts/generate_logics_catalog.py",
+    "engine/src/logic/core",
+    "projects/modules",
+    "tools/build/generate_logics_catalog.py",
     "docs/skills",
 )
 
@@ -89,7 +90,7 @@ def main() -> int:
     if not args.label.strip():
         raise SystemExit("error: label must not be empty")
 
-    parent = repo / "vision_analysis/src/logic" / (
+    parent = repo / "projects" / (
         "modules" if args.kind == "channel" else "global_modules"
     )
     if not parent.is_dir():

@@ -1,0 +1,93 @@
+{
+  "label": "训练集负样本采集",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "target_class_id": {
+        "type": "integer",
+        "title": "目标类别编号",
+        "description": "只要画面中没有该类别就采图；-1 表示画面中没有任何满足置信度的检测目标时采图。",
+        "default": 0,
+        "minimum": -1,
+        "maximum": 10000,
+        "x-step": 1,
+        "x-hot-reload": "reset_state"
+      },
+      "min_score": {
+        "type": "number",
+        "title": "目标最低置信度",
+        "default": 0.3,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "x-step": 0.05,
+        "x-hot-reload": "reset_state"
+      },
+      "capture_abnormal_count": {
+        "type": "boolean",
+        "title": "采集目标数量异常帧",
+        "description": "勾选后，当满足类别和置信度的目标数量不是恰好1个时采图，即0个或多于1个；适合画面中永远应只有一个吊钩的场景。未勾选时只采集0个目标的帧。",
+        "default": false,
+        "x-hot-reload": "reset_state"
+      },
+      "max_images": {
+        "type": "integer",
+        "title": "最多保存图片数",
+        "description": "本次 Logic 运行期间成功保存达到该数量后自动停止采集。",
+        "default": 100,
+        "minimum": 1,
+        "maximum": 100000,
+        "x-step": 1,
+        "x-hot-reload": "preserve_state"
+      },
+      "capture_interval_sec": {
+        "type": "number",
+        "title": "目标丢失采图间隔",
+        "description": "每次进入目标丢失状态时立即采一张，持续丢失期间按该间隔继续采集。",
+        "default": 2.0,
+        "minimum": 0.1,
+        "maximum": 86400.0,
+        "x-unit": "秒",
+        "x-step": 0.1,
+        "x-hot-reload": "preserve_state"
+      },
+      "output_dir": {
+        "type": "string",
+        "title": "图片保存目录",
+        "description": "@app_data 表示 Web 为当前程序分配的持久化数据目录；相对路径以应用运行目录为基准。目录不存在时自动创建。",
+        "default": "@app_data/training_negative_samples",
+        "x-hot-reload": "reset_state"
+      },
+      "jpeg_quality": {
+        "type": "integer",
+        "title": "JPEG图片质量",
+        "default": 95,
+        "minimum": 1,
+        "maximum": 100,
+        "x-step": 1,
+        "x-hot-reload": "preserve_state"
+      }
+    }
+  },
+  "outputs": [
+    { "key": "dataset_target_present", "type": "boolean", "label": "目标是否存在" },
+    { "key": "dataset_target_count", "type": "integer", "label": "目标数量" },
+    { "key": "dataset_capture_active", "type": "boolean", "label": "是否处于采集状态" },
+    { "key": "dataset_capture_complete", "type": "boolean", "label": "是否达到采集上限" },
+    { "key": "dataset_saved_count", "type": "integer", "label": "已成功保存图片数" },
+    { "key": "dataset_pending_count", "type": "integer", "label": "等待写盘图片数" },
+    { "key": "dataset_failed_count", "type": "integer", "label": "写盘失败次数" },
+    { "key": "dataset_source_width", "type": "integer", "label": "保存图片宽度" },
+    { "key": "dataset_source_height", "type": "integer", "label": "保存图片高度" }
+  ],
+  "report_fields": [],
+  "actions": [
+    {
+      "id": "capture_source_frame_now",
+      "label": "手动保存当前原始帧",
+      "style": "primary",
+      "help": "不受目标是否存在影响，立即把当前视频源分辨率画面加入写盘队列，并计入图片总数上限。"
+    }
+  ]
+}

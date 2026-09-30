@@ -1,4 +1,5 @@
 import { Handle, Position, NodeProps } from '@xyflow/react'
+import { useEditorStore } from '../store/editorStore'
 import './nodeStyles.css'
 
 export default function ModelNode({ data, selected }: NodeProps) {
@@ -6,8 +7,17 @@ export default function ModelNode({ data, selected }: NodeProps) {
   const enabled   = d.infer_enable !== false   // YOLO 推理开关（不再是整条通道的 enable）
   const modelId   = String(d.id ?? '').trim()
   const modelPath = String(d.model_path ?? '')
+  const labelPath = String(d.label_path ?? '')
   const modelType = String(d.model_type ?? 'yolov8_det')
   const basename  = modelPath ? modelPath.split('/').pop()! : '（未配置）'
+  const assets = useEditorStore(s => s.assets)
+  const assetsReady = useEditorStore(s => s.assetsStatus === 'ready'
+    && s.assetsForApp === s.appName)
+  const modelMissing = assetsReady && !!modelPath && !assets.models.includes(modelPath)
+  const labelMissing = assetsReady && !!labelPath && !assets.labels.includes(labelPath)
+  const missingText = modelMissing && labelMissing
+    ? '模型和标签文件不存在'
+    : modelMissing ? '模型文件不存在' : labelMissing ? '标签文件不存在' : ''
 
   return (
     <div className={`rf-node rf-node-compact${selected ? ' selected' : ''}`}>
@@ -29,7 +39,10 @@ export default function ModelNode({ data, selected }: NodeProps) {
           {enabled ? '推理开' : '推理关'}
         </span>
       </div>
-      <div className="rf-node-summary" title={modelPath}>{modelType} · {basename}</div>
+      <div className={`rf-node-summary${missingText ? ' asset-missing' : ''}`}
+        title={missingText ? `${missingText}：${modelMissing ? modelPath : labelPath}` : modelPath}>
+        {missingText ? `⚠ ${missingText}` : `${modelType} · ${basename}`}
+      </div>
 
       {/* right: output to logic */}
       <Handle type="source" position={Position.Right} id="logic-out" />

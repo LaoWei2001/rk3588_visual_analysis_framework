@@ -13,7 +13,7 @@
 # 安装成功后，--check 可在断网现场重复执行。
 #
 # 不在本脚本职责内：Rockchip BSP 的 RKNPU 内核驱动、RGA、MPP 及其 GStreamer 插件。
-# 用户态 librknnrt.so 已由 vision_analysis/vendor/rknn/ 固定并随应用包发布。
+# 用户态 librknnrt.so 已由 engine/vendor/rknn/ 固定并随应用包发布。
 # ============================================================================
 set -Eeuo pipefail
 
@@ -43,17 +43,17 @@ SYSTEM_ID="$(. /etc/os-release; printf '%s' "${ID:-unknown}")"
 SYSTEM_VERSION_ID="$(. /etc/os-release; printf '%s' "${VERSION_ID:-unknown}")"
 case "$SYSTEM_ID" in
     ubuntu)
-        DEPENDENCY_MANIFEST="$PROJ/offline_install_env_ubuntu/dependency_manifest.sh"
+        DEPENDENCY_MANIFEST="$PROJ/tools/offline_dev_install/ubuntu/dependency_manifest.sh"
         ;;
     *)
-        DEPENDENCY_MANIFEST="$PROJ/offline_install_env_debian/dependency_manifest.sh"
+        DEPENDENCY_MANIFEST="$PROJ/tools/offline_dev_install/debian/dependency_manifest.sh"
         ;;
 esac
 if [ ! -f "$DEPENDENCY_MANIFEST" ]; then
     echo "[错误] 缺少依赖清单: $DEPENDENCY_MANIFEST" >&2
     exit 1
 fi
-# shellcheck source=offline_install_env_debian/dependency_manifest.sh
+# shellcheck source=tools/offline_dev_install/debian/dependency_manifest.sh
 source "$DEPENDENCY_MANIFEST"
 NODE_VERSION="${NODE_VERSION:-$DEFAULT_NODE_VERSION}"
 SYSTEM_PYTHON="/usr/bin/python3"
@@ -425,7 +425,7 @@ check_platform_environment() {
     local kernel_release
     local kernel_numeric
     local glibc_version="unknown"
-    local compat_manifest="$PROJ/vision_analysis/vendor/rockchip/PLATFORM_COMPATIBILITY.env"
+    local compat_manifest="$PROJ/engine/vendor/rockchip/PLATFORM_COMPATIBILITY.env"
     local expected_os_id=""
     local expected_os_version=""
     local expected_kernel=""
@@ -489,8 +489,8 @@ check_platform_environment() {
 }
 
 check_rockchip_bsp() {
-    local compat_manifest="$PROJ/vision_analysis/vendor/rockchip/PLATFORM_COMPATIBILITY.env"
-    local rknn_root="$PROJ/vision_analysis/vendor/rknn/2.4.2a2"
+    local compat_manifest="$PROJ/engine/vendor/rockchip/PLATFORM_COMPATIBILITY.env"
+    local rknn_root="$PROJ/engine/vendor/rknn/2.4.2a2"
     local rknn_manifest="$rknn_root/RUNTIME_MANIFEST.txt"
     local expected_rknpu=""
     local expected_rga=""
@@ -603,7 +603,7 @@ gst_element_description() {
 }
 
 check_rockchip_gstreamer() {
-    local compat_manifest="$PROJ/vision_analysis/vendor/rockchip/PLATFORM_COMPATIBILITY.env"
+    local compat_manifest="$PROJ/engine/vendor/rockchip/PLATFORM_COMPATIBILITY.env"
     local expected_mpp=""
     local description=""
     local actual_mpp=""
@@ -715,7 +715,7 @@ PY
     if "$check_python" -m pip check; then
         check_pass "pip 依赖关系无冲突。"
     else
-        check_fail "pip 报告依赖缺失或版本冲突；断网机请重新运行 offline_install_env_debian/install_offline.sh。"
+        check_fail "pip 报告依赖缺失或版本冲突；断网机请重新运行 tools/offline_dev_install/debian/install_offline.sh。"
     fi
 
     local dpkg_audit_output=""
@@ -773,9 +773,9 @@ PY
 
     if [ ! -f /usr/share/fonts/truetype/wqy/wqy-zenhei.ttc ] \
         && [ ! -f /usr/share/fonts/truetype/wqy/wqy-microhei.ttc ] \
-        && [ ! -f "$PROJ/vision_analysis/assets/fonts/overlay.ttf" ] \
-        && [ ! -f "$PROJ/vision_analysis/assets/fonts/overlay.ttc" ] \
-        && [ ! -f "$PROJ/vision_analysis/assets/fonts/overlay.otf" ]; then
+        && [ ! -f "$PROJ/projects/assets/fonts/overlay.ttf" ] \
+        && [ ! -f "$PROJ/projects/assets/fonts/overlay.ttc" ] \
+        && [ ! -f "$PROJ/projects/assets/fonts/overlay.otf" ]; then
         check_fail "中文叠字字体（文泉驿或 assets/fonts）"
     else
         check_pass "中文叠字字体可用。"
@@ -944,25 +944,23 @@ check_application_binaries() {
     local binary
     local app_name
 
-    if [ -x "$PROJ/vision_analysis/vision_analysis" ]; then
-        found=$((found + 1))
-        check_one_binary "项目调试版 vision_analysis" \
-            "$PROJ/vision_analysis/vision_analysis" false
-    fi
-    if [ -x "$PROJ/vision_analysis/build/vision_analysis" ]; then
+    if [ -x "$PROJ/build/engine/vision_analysis" ]; then
         found=$((found + 1))
         check_one_binary "项目构建目录 vision_analysis" \
-            "$PROJ/vision_analysis/build/vision_analysis" false
+            "$PROJ/build/engine/vision_analysis" false
     fi
-    if [ -x "$PROJ/vision_analysis/test_skill/vision_analysis" ]; then
-        found=$((found + 1))
-        check_one_binary "项目应用包 test_skill" \
-            "$PROJ/vision_analysis/test_skill/vision_analysis" true
+    if [ -d "$PROJ/dist" ]; then
+        while IFS= read -r -d '' binary; do
+            found=$((found + 1))
+            app_name="$(basename "$(dirname "$binary")")"
+            check_one_binary "本地应用包 $app_name" "$binary" true
+        done < <(find "$PROJ/dist" -mindepth 2 -maxdepth 2 -type f \
+            -name vision_analysis -perm -u+x -print0 2>/dev/null | LC_ALL=C sort -z)
     fi
-    if [ -x "$PROJ/first_net_config/first_net_config" ]; then
+    if [ -x "$PROJ/tools/device/first_net_config/first_net_config" ]; then
         found=$((found + 1))
         check_one_binary "首次网络配置程序" \
-            "$PROJ/first_net_config/first_net_config" false
+            "$PROJ/tools/device/first_net_config/first_net_config" false
     fi
 
     if [ -d /opt/ai_apps ]; then
@@ -1052,6 +1050,6 @@ else
     echo "  到达断网现场后，可运行以下命令复检环境："
     echo "    bash install_deps.sh --check$([ "$WANT_BUILD" = false ] && echo ' --runtime-only' || true)"
     echo "  继续统一部署或升级 Web 控制台与 GPIO 服务："
-    echo "    sudo ./install.sh upgrade offline"
+    echo "    sudo ./install.sh offline"
 fi
 echo "  说明：Rockchip RKNPU内核驱动/RGA/MPP 由厂家系统提供；librknnrt.so 由应用包固定。"

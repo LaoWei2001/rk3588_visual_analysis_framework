@@ -17,6 +17,7 @@ import { MODEL_ID_MAX_LENGTH, validateModelId } from '../utils/modelId'
 import AssetPicker         from './AssetPicker'
 import NumberField         from './NumberField'
 import ReportForm          from './ReportForm'
+import InferenceROIEditor  from './InferenceROIEditor'
 import './NodeConfigPanel.css'
 
 // Stable empty-array constant — MUST NOT be an inline `[]` literal inside a Zustand selector,
@@ -45,7 +46,7 @@ interface Props {
 const NODE_TITLES: Record<string, [string, string]> = {
   stream: ['◈', '视频流节点'],
   model:  ['🧠', 'YOLO推理节点'],
-  roi:    ['◆', 'ROI区域节点'],
+  roi:    ['◆', '业务 ROI 节点'],
   logic:  ['⚡', '逻辑函数节点'],
   sop:    ['🧭', 'SOP流程节点'],
   report: ['📡', '上报配置节点'],
@@ -273,6 +274,8 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
   globalTrackerEnable: number
 }) {
   const assets  = useEditorStore(s => s.assets)
+  const assetsReady = useEditorStore(s => s.assetsStatus === 'ready'
+    && s.assetsForApp === s.appName)
   const { busy, progress, upload } = useAssetUpload()
   const d   = node.data as Record<string, unknown>
   const set = (k: string, v: unknown) => onUpdate(node.id, { [k]: v })
@@ -318,10 +321,6 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
           onChange={v => set('max_fps', v)}
         />
       </F>
-      <div className="ncp-hint">
-        限制本通道的推理与后处理频率；清空后使用全局最大 FPS。
-      </div>
-
       <F label="输入类型">
         <select value={srcType} onChange={e => setSrcType(e.target.value)}>
           {!srcType && <option value="" disabled>请选择视频源类型（src_type 必填）…</option>}
@@ -358,15 +357,15 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
             placeholder={DEFAULT_USB_DEVICE}
           />
         </F>
-        <F label="采集分辨率（与 ROI 抓帧一致，不随最大FPS变）">
+        <F label="采集分辨率">
           <select
             value={`${Number(d.usb_width ?? 0)}x${Number(d.usb_height ?? 0)}`}
             onChange={e => {
               const [w, h] = e.target.value.split('x').map(Number)
               onUpdate(node.id, { usb_width: w, usb_height: h })
             }}>
-            <option value="0x0">自动（随最大FPS，旧行为）</option>
-            <option value="1280x720">1280×720（16:9，推荐）</option>
+            <option value="0x0">自动（随最大 FPS）</option>
+            <option value="1280x720">1280×720（16:9）</option>
             <option value="640x480">640×480（4:3）</option>
             <option value="1280x960">1280×960（4:3）</option>
             <option value="1920x1080">1920×1080（16:9）</option>
@@ -380,6 +379,8 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
             value={String(d.url ?? '')}
             onChange={v => set('url', v)}
             options={assets.videos}
+            verified={assetsReady}
+            resourceLabel="视频文件"
             emptyHint="该程序 assets/ 下暂无视频文件，请点「导入」上传"
             accept=".mp4,.avi,.mkv"
             uploading={busy === 'url'}
@@ -393,6 +394,8 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
           循环播放
         </label>
       </>}
+
+      <InferenceROIEditor streamData={d} onChange={value => set('inference_roi', value)} />
 
       <div className="ncp-divider" />
       <div className="ncp-section-label">本视频流 Tracker（空 = 使用全局）</div>
@@ -435,7 +438,6 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
           <NumberField allowEmpty placeholder="全局"
             value={d.tracker_min_hits} onChange={v => set('tracker_min_hits', v)} />
         </F>
-        <div className="ncp-hint">SORT 使用高置信度检测框和卡尔曼运动预测进行关联。</div>
       </>}
 
       {effectiveTrackerEnabled && effectiveTrackerType === 'bytetrack' && <>
@@ -481,6 +483,8 @@ function ModelForm({ node, onUpdate, duplicateIdError }: {
   duplicateIdError?: string | null
 }) {
   const assets     = useEditorStore(s => s.assets)
+  const assetsReady = useEditorStore(s => s.assetsStatus === 'ready'
+    && s.assetsForApp === s.appName)
   const info       = useConsoleStore(s => s.info)
   const modelTypes = info?.known_model_types ?? ['yolov8_det', 'yolov5', 'yolov8_pose', 'yolo26_pose', 'yolov5_seg']
   const { busy, progress, upload } = useAssetUpload()
@@ -496,13 +500,10 @@ function ModelForm({ node, onUpdate, duplicateIdError }: {
     <div className="ncp-form">
       <label className="node-toggle ncp-top-toggle">
         <input type="checkbox" checked={d.infer_enable !== false} onChange={e => set('infer_enable', e.target.checked)} />
-        启用推理
+        启用 NPU 推理
       </label>
-      <div style={{ fontSize: 12, color: '#94a3b8', marginTop: -6, marginBottom: 6 }}>
-        关闭=该通道不进 NPU 推理（视频与逻辑照常运行，适合传统算法通道）
-      </div>
 
-      <F label="模型业务 ID（OTA ID）">
+      <F label="模型业务 ID（通道内唯一 / OTA ID）">
         <input
           value={modelId}
           maxLength={MODEL_ID_MAX_LENGTH}
@@ -515,16 +516,12 @@ function ModelForm({ node, onUpdate, duplicateIdError }: {
           placeholder="person_detector"
         />
       </F>
-      {modelIdError
-        ? <div className="ncp-field-error">⚠ {modelIdError}</div>
-        : <div className="ncp-hint">
-            同一通道内必须唯一；修改后会重载模型、重置跟踪轨迹，并需同步平台 OTA 的 model_id。
-          </div>}
+      {modelIdError && <div className="ncp-field-error">⚠ {modelIdError}</div>}
 
       <div className="node-row">
         <F label="NPU 核心">
           <select value={String(d.npu_core ?? -1)} onChange={e => set('npu_core', +e.target.value)}>
-            <option value="-1">自动（推荐）</option>
+            <option value="-1">自动</option>
             <option value="0">核心 0</option>
             <option value="1">核心 1</option>
             <option value="2">核心 2</option>
@@ -542,6 +539,8 @@ function ModelForm({ node, onUpdate, duplicateIdError }: {
           value={String(d.model_path ?? '')}
           onChange={v => set('model_path', v)}
           options={assets.models}
+          verified={assetsReady}
+          resourceLabel="模型文件"
           emptyHint="该程序 assets/ 下暂无 .rknn 模型，请点「导入」上传"
           accept=".rknn"
           uploading={busy === 'model_path'}
@@ -556,6 +555,8 @@ function ModelForm({ node, onUpdate, duplicateIdError }: {
           value={String(d.label_path ?? '')}
           onChange={v => set('label_path', v)}
           options={assets.labels}
+          verified={assetsReady}
+          resourceLabel="标签文件"
           emptyHint="该程序 assets/ 下暂无 .txt 标签文件，请点「导入」上传"
           accept=".txt"
           uploading={busy === 'label_path'}
@@ -835,7 +836,7 @@ function ROIInfo({ node }: { node: Node }) {
   return (
     <div className="ncp-form">
       <div className={`ncp-roi-status ${n > 0 ? 'active' : ''}`}>
-        {n > 0 ? `✔ 已配置 ${n} 个 ROI 区域` : '🔲 尚未绘制 ROI 区域'}
+        {n > 0 ? `✔ 已配置 ${n} 个业务 ROI` : '🔲 尚未绘制业务 ROI'}
       </div>
       {n > 0 && (
         <ul className="ncp-roi-zone-ul">

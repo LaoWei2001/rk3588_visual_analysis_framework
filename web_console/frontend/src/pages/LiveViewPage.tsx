@@ -2,14 +2,17 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import axios from 'axios'
 import {
   fetchApps,
+  fetchFilePlayback,
   fetchLogicControls,
   fetchConfig,
   fetchLogTail,
   loadConfigFile,
   sendChannelAction,
+  seekFilePlayback,
   sendGlobalLogicAction,
   streamUrl,
   type AppInfo,
+  type FilePlaybackSource,
   type LogicControlsResponse,
   type LogicActionDef,
 } from '../api/client'
@@ -156,6 +159,20 @@ function runtimeConfigPath(configName: string): string | null {
   return name.startsWith('assets/') ? name : `assets/${name}`
 }
 
+function formatPlaybackTime(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  const short = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  return hours > 0 ? `${String(hours).padStart(2, '0')}:${short}` : short
+}
+
+function sourceFileName(location: string): string {
+  const normalized = location.replace(/\\/g, '/')
+  return normalized.split('/').filter(Boolean).pop() ?? location
+}
+
 export default function LiveViewPage() {
   const [apps, setApps] = useState<AppInfo[]>([])
   const [appsLoading, setAppsLoading] = useState(true)
@@ -169,6 +186,9 @@ export default function LiveViewPage() {
   const [streamLogs, setStreamLogs] = useState<string[]>([])
   const [logConnected, setLogConnected] = useState(false)
   const [controls, setControls] = useState<LogicControlsResponse | null>(null)
+  const [fileSources, setFileSources] = useState<FilePlaybackSource[]>([])
+  const [seekDrafts, setSeekDrafts] = useState<Record<number, number>>({})
+  const [seekBusy, setSeekBusy] = useState<Record<number, boolean>>({})
   const [actionBusy, setActionBusy] = useState<Record<string, boolean>>({})
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
   const [sidePanelWidth, setSidePanelWidth] = useState(storedSidePanelWidth)
@@ -185,6 +205,8 @@ export default function LiveViewPage() {
   const logAutoScrollRef = useRef(true)
   const pendingLogsRef = useRef<string[]>([])
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const seekDraftsRef = useRef<Record<number, number>>({})
+  const seekBusyRef = useRef(new Set<number>())
   const sideResizeRef = useRef<{
     pointerId: number
     startX: number
@@ -412,6 +434,39 @@ export default function LiveViewPage() {
     }
   }
 
+  const setSeekDraft = (ownerChannelId: number, value: number) => {
+    seekDraftsRef.current = { ...seekDraftsRef.current, [ownerChannelId]: value }
+    setSeekDrafts(seekDraftsRef.current)
+  }
+
+  const clearSeekDraft = (ownerChannelId: number) => {
+    const next = { ...seekDraftsRef.current }
+    delete next[ownerChannelId]
+    seekDraftsRef.current = next
+    setSeekDrafts(next)
+  }
+
+  const commitSeek = async (source: FilePlaybackSource) => {
+    const owner = source.owner_channel_id
+    const requested = seekDraftsRef.current[owner]
+    if (!appName || requested === undefined || seekBusyRef.current.has(owner)) return
+    seekBusyRef.current.add(owner)
+    setSeekBusy(previous => ({ ...previous, [owner]: true }))
+    try {
+      const response = await seekFilePlayback(appName, owner, requested)
+      clearSeekDraft(owner)
+      setFileSources(previous => previous.map(item => item.owner_channel_id === owner
+        ? { ...item, position_ms: response.position_ms, ended: false, playing: true }
+        : item))
+    } catch (error) {
+      clearSeekDraft(owner)
+      showToast(`视频跳转失败：${errMsg(error)}`, 'err')
+    } finally {
+      seekBusyRef.current.delete(owner)
+      setSeekBusy(previous => ({ ...previous, [owner]: false }))
+    }
+  }
+
   // 页面始终跟随当前唯一处于 running 状态的视觉程序。
   useEffect(() => {
     let disposed = false
@@ -487,6 +542,36 @@ export default function LiveViewPage() {
     setActionBusy({})
     loadControls()
     const timer = setInterval(loadControls, 3000)
+    return () => {
+      disposed = true
+      clearInterval(timer)
+    }
+  }, [appName])
+
+  // 采集器单独提供本地文件时间轴；实时流和业务 Logic 不经过此接口。
+  useEffect(() => {
+    if (!appName) {
+      setFileSources([])
+      seekDraftsRef.current = {}
+      setSeekDrafts({})
+      return
+    }
+    let disposed = false
+    let requestPending = false
+    const loadPlayback = async () => {
+      if (requestPending) return
+      requestPending = true
+      try {
+        const response = await fetchFilePlayback(appName)
+        if (!disposed) setFileSources(Array.isArray(response.sources) ? response.sources : [])
+      } catch {
+        if (!disposed) setFileSources([])
+      } finally {
+        requestPending = false
+      }
+    }
+    loadPlayback()
+    const timer = setInterval(loadPlayback, 750)
     return () => {
       disposed = true
       clearInterval(timer)
@@ -774,7 +859,6 @@ export default function LiveViewPage() {
       <header className="live-view-page-header">
         <div>
           <h2>实时画面</h2>
-          <p>自动跟随当前运行的视觉程序，保留画面控制和终端输出。</p>
         </div>
         <div className="live-view-runtime">
           {runningApp && <span className="live-view-app-name">{runningApp.name}</span>}
@@ -798,7 +882,6 @@ export default function LiveViewPage() {
         <div className="live-view-empty">
           <div className="live-view-empty-icon">▶</div>
           <h3>当前没有正在运行的视觉程序</h3>
-          <p>程序启动后，这里会自动连接它的实时画面和终端输出。</p>
           {appsError && <p className="live-view-empty-error">{appsError}</p>}
         </div>
       ) : (
@@ -864,11 +947,47 @@ export default function LiveViewPage() {
                         ? '当前程序未开启 RTSP 推流'
                         : '无法确认 RTSP 推流配置'}
                   </strong>
-                  <span>
-                    {rtspState === 'disabled'
-                      ? '不会建立视频连接；右侧终端输出和自定义功能仍可正常使用。'
-                      : '读取到明确启用的 RTSP 配置后才会自动显示画面。'}
-                  </span>
+                </div>
+              )}
+              {fileSources.length > 0 && (
+                <div className="live-view-file-timelines">
+                  {fileSources.map(source => {
+                    const owner = source.owner_channel_id
+                    const value = seekDrafts[owner] ?? source.position_ms
+                    const duration = Math.max(0, source.duration_ms)
+                    const disabled = !source.available || !source.seekable || duration <= 0 || !!seekBusy[owner]
+                    return (
+                      <div className="live-view-file-timeline" key={owner}>
+                        <div className="live-view-file-meta">
+                          <span title={source.location}>{sourceFileName(source.location)}</span>
+                          <span>
+                            通道 {source.channel_ids.join('、')}
+                            {source.ended ? ' · 已播完' : ''}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={Math.max(1, duration)}
+                          step={100}
+                          value={Math.min(value, Math.max(1, duration))}
+                          disabled={disabled}
+                          aria-label={`${sourceFileName(source.location)} 播放进度`}
+                          onChange={event => setSeekDraft(owner, Number(event.target.value))}
+                          onPointerUp={() => { void commitSeek(source) }}
+                          onKeyUp={event => {
+                            if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+                              void commitSeek(source)
+                            }
+                          }}
+                          onBlur={() => { void commitSeek(source) }}
+                        />
+                        <span className="live-view-file-time">
+                          {formatPlaybackTime(value)} / {formatPlaybackTime(duration)}
+                        </span>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>

@@ -1,7 +1,6 @@
 # 旧辅助脚本边界
 
-本 Skill 的 `scripts/` 中三个 Python 脚本均创建于 2026-08-14，本轮遵守“不修改代码”约束，原文件
-保持不变。它们是辅助启发式工具，不是当前框架契约或验收真源。
+本 Skill 的 `scripts/` 中三个 Python 脚本是辅助启发式工具，不是当前框架契约或验收真源。
 
 | 脚本 | 当前可用范围 | 已知缺口 |
 |---|---|---|
@@ -12,8 +11,7 @@
 当前权威入口：
 
 ```bash
-cd vision_analysis
-python3 scripts/generate_logics_catalog.py --check
+python3 tools/build/generate_logics_catalog.py --check
 ```
 
 再按目标 Skill 的验收段落运行配置、Web、上传、构建和板端测试。不得因这些旧脚本返回成功就声明

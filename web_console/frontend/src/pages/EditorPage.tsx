@@ -40,6 +40,11 @@ import GlobalSettingsPanel, { GlobalSettingsData, DEFAULT_GLOBAL_SETTINGS } from
 import NodeConfigPanel from '../components/NodeConfigPanel'
 import ConfigPreviewPanel from '../components/ConfigPreviewPanel'
 import AppIntegrationModal from '../components/AppIntegrationModal'
+import {
+  inferenceRoiConfig,
+  inferenceRoiContainsPoint,
+  inferenceRoiRestrictsResults,
+} from '../components/InferenceROIEditor'
 import './EditorPage.css'
 
 const RIGHT_PANEL_STORAGE_KEY = 'rk3588.editor.rightPanelWidth'
@@ -94,7 +99,7 @@ const EDGE_COLORS: Record<string, string> = {
 const PALETTE_NODES = [
   { type: 'stream', label: '视频流',   icon: '◈', cls: 'stream' },
   { type: 'model',  label: 'YOLO推理', icon: '🧠', cls: 'model'  },
-  { type: 'roi',    label: 'ROI区域',  icon: '◆', cls: 'roi'    },
+  { type: 'roi',    label: '业务ROI',  icon: '◆', cls: 'roi'    },
   { type: 'logic',  label: '逻辑函数', icon: '⚡', cls: 'logic'  },
   { type: 'sop',    label: 'SOP流程',  icon: '🧭', cls: 'sop'    },
   { type: 'report', label: '上报配置', icon: '📤', cls: 'report' },
@@ -259,6 +264,9 @@ export default function EditorPage() {
   const navigate       = useNavigate()
   const setAppName     = useEditorStore(s => s.setAppName)
   const loadAssets     = useEditorStore(s => s.loadAssets)
+  const assets         = useEditorStore(s => s.assets)
+  const assetsForApp   = useEditorStore(s => s.assetsForApp)
+  const assetsStatus   = useEditorStore(s => s.assetsStatus)
   const loadDeliveryConnections = useEditorStore(s => s.loadDeliveryConnections)
   const setGlobalMaxFps = useEditorStore(s => s.setGlobalMaxFps)
   const dirty          = useEditorStore(s => s.dirty)       // 有未保存改动（也供侧边栏导航拦截）
@@ -1152,6 +1160,65 @@ export default function EditorPage() {
       return null
     }
 
+    // 本地资源必须来自当前程序实际扫描到的 assets/ 文件。配置中的失效旧路径
+    // 可以留在画布上供用户修复，但不能再次保存为看似有效的配置。
+    const modelNodes = nodes.filter(n => n.type === 'model')
+    const hasLocalAssetReference = streamNodes.some(node =>
+      String((node.data as Record<string, unknown>).src_type ?? '') === 'file')
+      || modelNodes.some(node => {
+        const data = node.data as Record<string, unknown>
+        return data.infer_enable !== false
+          || !!String(data.model_path ?? '') || !!String(data.label_path ?? '')
+      })
+    if (hasLocalAssetReference
+        && (assetsStatus !== 'ready' || assetsForApp !== appName)) {
+      showToast(assetsStatus === 'loading'
+        ? '正在核对模型、标签和视频文件，请稍后再保存'
+        : '无法确认当前程序的资源文件，请刷新画布后再保存', false)
+      return null
+    }
+
+    for (const streamNode of streamNodes) {
+      const data = streamNode.data as Record<string, unknown>
+      if (String(data.src_type ?? '') !== 'file') continue
+      const channelId = Number(data.channel_id ?? 0)
+      const path = String(data.url ?? '')
+      if (!path) {
+        showToast(`Ch.${channelId} 尚未选择视频文件，不能保存`, false)
+        return null
+      }
+      if (!assets.videos.includes(path)) {
+        showToast(`Ch.${channelId} 的视频文件不存在：${path}。请重新选择或导入后再保存`, false)
+        return null
+      }
+    }
+
+    const labelRequiredTypes = new Set(['yolov5', 'yolov5_seg', 'yolov8_det'])
+    for (const modelNode of modelNodes) {
+      const data = modelNode.data as Record<string, unknown>
+      const modelId = String(data.id ?? '').trim() || '未命名模型'
+      const enabled = data.infer_enable !== false
+      const modelPath = String(data.model_path ?? '')
+      const labelPath = String(data.label_path ?? '')
+      const modelType = String(data.model_type ?? 'yolov8_det').toLowerCase()
+      if (enabled && !modelPath) {
+        showToast(`模型 ${modelId} 尚未选择模型文件，不能保存`, false)
+        return null
+      }
+      if (modelPath && !assets.models.includes(modelPath)) {
+        showToast(`模型 ${modelId} 的模型文件不存在：${modelPath}。请重新选择或导入后再保存`, false)
+        return null
+      }
+      if (enabled && labelRequiredTypes.has(modelType) && !labelPath) {
+        showToast(`模型 ${modelId} 尚未选择标签文件，不能保存`, false)
+        return null
+      }
+      if (labelPath && !assets.labels.includes(labelPath)) {
+        showToast(`模型 ${modelId} 的标签文件不存在：${labelPath}。请重新选择或导入后再保存`, false)
+        return null
+      }
+    }
+
     // ── 检测所有视频流节点的重复通道号 ──
     const dupSet = new Set<number>()
     const dupNums: number[] = []
@@ -1163,6 +1230,16 @@ export default function EditorPage() {
     if (dupNums.length > 0) {
       showToast(`通道号重复：Ch.${[...new Set(dupNums)].join('、')} — 请在视频流节点中修改后再保存`, false)
       return null
+    }
+
+    for (const streamNode of streamNodes) {
+      const data = streamNode.data as Record<string, unknown>
+      const raw = data.inference_roi
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)
+          && !inferenceRoiConfig(raw)) {
+        showToast(`Ch.${Number(data.channel_id ?? 0)} 的推理 ROI 无效，请重新绘制区域`, false)
+        return null
+      }
     }
 
     // 画了区域的 ROI 节点必须直接连接一路视频流，才能明确写入哪个通道的 roi_zones。
@@ -1193,6 +1270,19 @@ export default function EditorPage() {
       if (streamTargets.length !== 1) {
         showToast('已配置区域的 ROI 节点必须连接且只能连接一个视频流节点', false)
         return null
+      }
+      const inferenceConfig = inferenceRoiConfig(
+        (streamTargets[0].data as Record<string, unknown>).inference_roi,
+      )
+      if (inferenceConfig && inferenceRoiRestrictsResults(inferenceConfig.mode)) {
+        const outside = zones.some(zone => zone.polygon.some(point => {
+          const x = Number(point[0]), y = Number(point[1])
+          return !inferenceRoiContainsPoint(inferenceConfig, x, y)
+        }))
+        if (outside) {
+          showToast('结果受限模式下，业务 ROI 必须完全位于推理 ROI 内；请打开业务 ROI 节点调整红色越界区域', false)
+          return null
+        }
       }
     }
 

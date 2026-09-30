@@ -34,6 +34,7 @@ export default function AppsPage() {
   const [autostartBusy, setAutostartBusy] = useState<Record<string, boolean>>({})
   const [toast, setToast]     = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
   const [crashInfo, setCrashInfo] = useState<{ name: string; lines: string[] } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const fileRef   = useRef<HTMLInputElement>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [uploading, setUploading] = useState<{ name: string; pct: number } | null>(null)
@@ -151,12 +152,14 @@ export default function AppsPage() {
     }
   }
 
-  const handleDelete = async (name: string) => {
-    if (!window.confirm(`确定删除程序 ${name}？\n此操作会永久删除该程序目录。`)) return
+  const handleDelete = async (name: string, deleteData: boolean) => {
+    setDeleteTarget(null)
     setBusy(b => ({ ...b, [name]: true }))
     try {
-      await deleteApp(name)
-      showToast(`程序 ${name} 已删除`)
+      await deleteApp(name, deleteData)
+      showToast(deleteData
+        ? `程序 ${name} 及其全部告警和运行数据已删除`
+        : `程序 ${name} 已删除，告警和运行数据已保留`)
       await load()
     } catch (e: unknown) {
       showToast(`删除失败：${errMsg(e)}`, 'err')
@@ -208,6 +211,32 @@ export default function AppsPage() {
       )}
       {uploading && (
         <div className="toast ok">正在上传 {uploading.name} — {uploading.pct}%</div>
+      )}
+
+      {/* 删除程序三选项弹窗 */}
+      {deleteTarget && (
+        <div className="delete-app-overlay" onClick={() => setDeleteTarget(null)}>
+          <div className="delete-app-dialog" role="dialog" aria-modal="true"
+            aria-labelledby="delete-app-title" onClick={event => event.stopPropagation()}>
+            <div className="delete-app-title" id="delete-app-title">删除程序 {deleteTarget}</div>
+            <div className="delete-app-description">请选择删除范围：</div>
+            <div className="delete-app-options">
+              <button className="delete-app-option package-only"
+                onClick={() => handleDelete(deleteTarget, false)}>
+                <strong>只删除程序</strong>
+                <span>删除程序包、模型和程序内配置，保留告警图片、录像和运行数据。</span>
+              </button>
+              <button className="delete-app-option delete-all"
+                onClick={() => handleDelete(deleteTarget, true)}>
+                <strong>全删</strong>
+                <span>同时永久删除该程序的全部告警图片、录像、记录和持久化数据。</span>
+              </button>
+            </div>
+            <div className="delete-app-footer">
+              <button className="delete-app-cancel" onClick={() => setDeleteTarget(null)}>取消</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Crash log dialog */}
@@ -367,7 +396,7 @@ export default function AppsPage() {
                     className="action-btn"
                     style={{ background: '#7f1d1d', color: '#fff' }}
                     disabled={!!busy[app.name]}
-                    onClick={() => handleDelete(app.name)}
+                    onClick={() => setDeleteTarget(app.name)}
                     title="停止并删除该程序包"
                   >删除</button>
                 </div>

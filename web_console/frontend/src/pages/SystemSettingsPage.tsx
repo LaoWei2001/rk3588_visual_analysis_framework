@@ -19,7 +19,6 @@ export default function SystemSettingsPage() {
     <div className="system-settings-page">
       <header className="system-settings-header">
         <h2>系统设置</h2>
-        <p>管理盒子的存储、网络和系统级运行参数。</p>
       </header>
 
       <div className="device-settings-layout">

@@ -19,8 +19,8 @@ Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` �
 只问 2–3 轮、最多 4 轮；向导先核对源码，再给出合并后的具体方案让用户简短确认，不会要求逐项填写
 硬件和内部合同字段。需求合同完整后，只在通道/全局 Logic 模块中实现并按平台能力验证。需要先确认或
 只生成计划时，分别使用 `--confirm-before-code`、`--plan-only`。自动实现采用硬写入边界：
-代理在一次性副本中无提示执行，启动器通过文件快照和哈希比较，仅回写 `vision_analysis/src/logic/modules/**` 和
-`vision_analysis/src/logic/global_modules/**`，发现其他改动便整批拒绝；选择和权限差异见
+代理在一次性副本中无提示执行，启动器通过文件快照和哈希比较，仅回写 `projects/modules/**` 和
+`projects/global_modules/**`，发现其他改动便整批拒绝；选择和权限差异见
 [`agent-adapters.md`](skills/rk3588-feature-wizard/references/agent-adapters.md)。
 
 本文档最初按仓库提交 `6bd2b94dbbdd8787753b90d1527a6882e3a70aa2`（2026-08-23）整理；
@@ -40,14 +40,14 @@ Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` �
 
 | 主题 | 真源 |
 |---|---|
-| 通道 API | `vision_analysis/src/logic/core/channel_logic.h`、`logic_action.h` |
-| 全局 API | `vision_analysis/src/logic/core/global_logic.h/.cpp` |
-| 逻辑清单 | `vision_analysis/src/logic/modules/*/logic.json`、`global_modules/*/logic.json` |
-| 配置与热重载 | `vision_analysis/src/config/`、`src/runtime/app_ctrl.cpp` |
-| 事件与媒体 | `vision_analysis/src/event/event_report.h/.cpp`、`src/recorder/` |
-| 网络投递 | `service/upload/` |
+| 通道 API | `engine/src/logic/core/channel_logic.h`、`logic_action.h` |
+| 全局 API | `engine/src/logic/core/global_logic.h/.cpp` |
+| 逻辑清单 | `projects/modules/*/logic.json`、`projects/global_modules/*/logic.json` |
+| 配置与热重载 | `engine/src/config/`、`src/runtime/app_ctrl.cpp` |
+| 事件与媒体 | `engine/src/event/event_report.h/.cpp`、`src/recorder/` |
+| 网络投递 | `services/framework/upload/` |
 | Web 行为 | `web_console/backend/`、`web_console/frontend/src/` |
-| 打包产物 | `vision_analysis/build.sh` 和两个生成器 |
+| 打包产物 | 根目录 `build.sh`、`tools/build/` 下的两个生成器 |
 
 ## 按任务进入
 
@@ -66,7 +66,7 @@ Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` �
 
 ### C++ 模块
 
-`vision_analysis/src/` 当前包含：
+`engine/src/` 当前包含：
 
 ```text
 capturer  common  config  control  display  event  gpio  inference
@@ -102,9 +102,8 @@ global_person_count_alarm_demo
 仓库当前没有提交预编译二进制。仅在完成当前源码的同版构建后核对：
 
 ```bash
-cd vision_analysis
-./vision_analysis --list-logics
-./vision_analysis --list-global-logics
+build/engine/vision_analysis --list-logics
+build/engine/vision_analysis --list-global-logics
 ```
 
 ### 当前上报模型

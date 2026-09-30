@@ -6,10 +6,10 @@
 
 | 文件 | 已确认的过期内容 | 当前入口 |
 |---|---|---|
-| `vision_analysis/src/control/README.md` | 使用已删除的 `ChannelAction`/`ChannelActionResult` 与 `channel_control.cpp`，并把当前公开的 Action POST 写成先登录 | [通道 Action](../../rk3588-channel-logic/references/actions.md) |
-| `vision_analysis/src/logic/README.md` | 把缺失的 `logic_path_sop` 及其 `flow` 当作当前模块 | [通道模块索引](../../rk3588-channel-logic/references/current-examples.md) |
-| `service/model_update/README.md` | 描述已移除的默认配置/`target_config: active` 推断和旧启动方式 | [服务与部署：OTA](../../rk3588-console-ops/references/services-and-deployment.md#ota-当前契约) |
-| `service/upload/README.md` | 声称 custom 同 ID 可覆盖包模板，并使用已不存在的旧契约 ID | [事件与上报开发](../../rk3588-console-ops/references/event-reporting.md#连接与版本化契约) |
+| `engine/src/control/README.md` | 使用已删除的 `ChannelAction`/`ChannelActionResult` 与 `channel_control.cpp`，并把当前公开的 Action POST 写成先登录 | [通道 Action](../../rk3588-channel-logic/references/actions.md) |
+| `projects/README.md` | 若示例模块集合滞后，以实际目录和生成器校验为准 | [通道模块索引](../../rk3588-channel-logic/references/current-examples.md) |
+| `services/framework/model_update/README.md` | 描述已移除的默认配置/`target_config: active` 推断和旧启动方式 | [服务与部署：OTA](../../rk3588-console-ops/references/services-and-deployment.md#ota-当前契约) |
+| `services/framework/upload/README.md` | 声称 custom 同 ID 可覆盖包模板，并使用已不存在的旧契约 ID | [事件与上报开发](../../rk3588-console-ops/references/event-reporting.md#连接与版本化契约) |
 
 这张表不是要求忽略所有模块内 README：例如当前 Dify、全局聚合、event 和 GPIO 说明仍可作为源码
 旁注，但运行时行为依然要回到实现、manifest 和生成器核对。发现新冲突时，应在修改对应旧文档或

@@ -234,6 +234,25 @@ export function graphToConfig(
     // 通道最大 FPS 属于视频流/通道本身；留空时不写入配置，由 C++ 继承全局 max_fps。
     if (streamData.max_fps != null) ch.max_fps = streamData.max_fps
 
+    // 推理 ROI 是通道级范围配置：同一路视频上的全部模型共享该矩形及处理模式。
+    const inferenceRoi = streamData.inference_roi
+    if (inferenceRoi && typeof inferenceRoi === 'object' && !Array.isArray(inferenceRoi)) {
+      const value = inferenceRoi as Record<string, unknown>
+      const rect = Array.isArray(value.rect) ? value.rect.map(Number) : []
+      if (['roi_only', 'full_plus_roi', 'full_frame_roi_filter'].includes(String(value.mode))
+          && rect.length === 4 && rect.every(Number.isFinite)) {
+        const shape = value.shape === 'polygon' ? 'polygon' : 'rect'
+        const resizeMode = ['stretch', 'expand', 'letterbox'].includes(String(value.resize_mode))
+          ? value.resize_mode : 'stretch'
+        const polygon = Array.isArray(value.polygon)
+          ? value.polygon.map(point => Array.isArray(point) ? point.map(Number) : []) : []
+        ch.inference_roi = {
+          mode: value.mode, shape, resize_mode: resizeMode, rect,
+          ...(shape === 'polygon' ? { polygon } : {}),
+        }
+      }
+    }
+
     // Tracker 是视频流/通道级配置。m 回退仅用于兼容编辑器升级前已在内存中的旧画布。
     const trackerValue = (key: string) => streamData[key] ?? m[key]
     if (trackerValue('tracker_enable') != null) ch.tracker_enable = trackerValue('tracker_enable')

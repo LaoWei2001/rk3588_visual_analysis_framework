@@ -1,6 +1,6 @@
 ---
 name: rk3588-feature-wizard
-description: Interactively discover, formalize, implement, and validate a channel or global Logic feature in this RK3588 visual-analysis repository through Codex CLI or Claude Code. Use when a user wants one guided entry point with short environment and requirement confirmations, automatic no-prompt permissions inside an isolated copy, and a mechanically enforced write-back allowlist limited to vision_analysis/src/logic/modules and global_modules.
+description: Interactively discover, formalize, implement, and validate a channel or global Logic feature in this RK3588 visual-analysis repository through Codex CLI or Claude Code. Use when a user wants one guided entry point with short environment and requirement confirmations, automatic no-prompt permissions inside an isolated copy, and a mechanically enforced write-back allowlist limited to projects/modules and global_modules.
 ---
 
 # RK3588 功能开发向导
@@ -24,10 +24,10 @@ description: Interactively discover, formalize, implement, and validate a channe
 完整读取 [`references/write-boundary.md`](references/write-boundary.md)。通过 `develop_feature` 运行时，
 唯一允许回写原仓库的路径是：
 
-- `vision_analysis/src/logic/modules/**`；
-- `vision_analysis/src/logic/global_modules/**`。
+- `projects/modules/**`；
+- `projects/global_modules/**`。
 
-仓库其他位置只读，包括 `vision_analysis/src/logic/core/**`、配置、测试、文档、Web、服务、脚本和生成物。
+仓库其他位置只读，包括 `engine/src/logic/core/**`、配置、测试、文档、Web、服务、脚本和生成物。
 不得请求用户扩大白名单，不得要求切换 Full Access、`danger-full-access` 或 `bypassPermissions`，不得创建
 指向白名单外的符号链接。其他 Skill 中要求同步框架、Web 或文档的步骤在本向导内一律让位于此边界。
 

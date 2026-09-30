@@ -310,9 +310,6 @@ export default function ReportForm({
           {allChannelIds.map(channelId =>
             <option key={channelId} value={channelId}>通道 {channelId}</option>)}
         </select>
-        <div className="report-mapping-help">
-          仅预录所选通道。
-        </div>
       </Field>}
       <Field label="接口模板">
         <select value={delivery.contract_id}
@@ -460,9 +457,6 @@ export default function ReportForm({
 
     <details className="report-advanced-section report-debug-section">
       <summary>高级诊断：查看画布保存配置</summary>
-      <div className="report-mapping-help">
-        供排查配置使用。由保存按钮使用的同一序列化结果生成，普通接口配置无需关注。
-      </div>
       <div className="report-event-actions">
         <span>{configPath ?? '当前节点尚未连接到通道逻辑或全局逻辑'}</span>
         <button type="button" className="report-event-button" disabled={!configJson}

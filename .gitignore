@@ -1,13 +1,21 @@
 *.mp4
 *.docx
 __pycache__
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+Testing/
+test-results/
+playwright-report/
 build
 dist
 *.tsbuildinfo
 .rknn
 node_modules
-/offline_install_env_debian/output/
-/offline_install_env_ubuntu/output/
+/tools/offline_dev_install/debian/output/
+/tools/offline_dev_install/ubuntu/output/
 .claude
 .vscode
 

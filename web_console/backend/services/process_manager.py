@@ -118,6 +118,7 @@ def _clear_stale_runtime_marker(app_name: str) -> None:
     app_dir = _app_path(app_name)
     (app_dir / "run.pid").unlink(missing_ok=True)
     (app_dir / "run.control.sock").unlink(missing_ok=True)
+    (app_dir / "run.playback.sock").unlink(missing_ok=True)
     (app_dir / "run.boot_id").unlink(missing_ok=True)
     (app_dir / "run.systemd_unit").unlink(missing_ok=True)
 
@@ -136,9 +137,17 @@ def _pid_belongs_to_app(app_name: str, pid: int) -> bool:
 
     try:
         expected_exe = (app_dir / BINARY_NAME).resolve(strict=True)
-        actual_exe = Path(f"/proc/{pid}/exe").resolve(strict=True)
+        proc_exe = Path(f"/proc/{pid}/exe")
+        actual_exe_link = os.readlink(proc_exe)
         actual_cwd = Path(f"/proc/{pid}/cwd").resolve(strict=True)
-        return actual_exe == expected_exe and actual_cwd == app_dir.resolve(strict=True)
+        expected_cwd = app_dir.resolve(strict=True)
+        if actual_exe_link.endswith(" (deleted)"):
+            # Linux 会在运行中原子替换可执行文件后给旧 inode 加 deleted 后缀。
+            # 路径、PID、boot-id 和 cwd 仍一致时，它仍是当前 App 的合法旧进程。
+            old_exe_path = Path(actual_exe_link[:-10])
+            return old_exe_path == expected_exe and actual_cwd == expected_cwd
+        actual_exe = proc_exe.resolve(strict=True)
+        return actual_exe == expected_exe and actual_cwd == expected_cwd
     except OSError:
         return False
 
@@ -223,6 +232,7 @@ def _clear_runtime_files_if_pid(app_name: str, pid: int) -> None:
     app_dir = _app_path(app_name)
     (app_dir / "run.pid").unlink(missing_ok=True)
     (app_dir / "run.control.sock").unlink(missing_ok=True)
+    (app_dir / "run.playback.sock").unlink(missing_ok=True)
     (app_dir / "run.boot_id").unlink(missing_ok=True)
     (app_dir / "run.systemd_unit").unlink(missing_ok=True)
 
@@ -489,6 +499,7 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
     binary      = app_dir / BINARY_NAME
     assets_dir  = app_dir / "assets"
     control_sock = app_dir / "run.control.sock"
+    playback_sock = app_dir / "run.playback.sock"
     config_name = _normalize_config_name(config_name)
     config      = assets_dir / config_name
 
@@ -521,7 +532,9 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
 
         env = os.environ.copy()
         control_sock.unlink(missing_ok=True)
+        playback_sock.unlink(missing_ok=True)
         env["RK_LOGIC_CONTROL_SOCKET"] = str(control_sock)
+        env["RK_FILE_PLAYBACK_CONTROL_SOCKET"] = str(playback_sock)
         env["ASSETS_DIR"] = str(assets_dir)
         env["EVENT_STORE_DIR"] = str(data_dir(app_name) / "event_store")
         env.update(storage_manager.vision_environment())

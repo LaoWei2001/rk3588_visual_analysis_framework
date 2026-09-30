@@ -258,7 +258,7 @@ def repository_root(start: Path) -> Path:
     for candidate in (resolved, *resolved.parents):
         if (
             (candidate / "develop_feature").is_file()
-            and (candidate / "vision_analysis" / "src").is_dir()
+            and (candidate / "engine" / "src").is_dir()
             and (candidate / "docs" / "skills").is_dir()
         ):
             return candidate
@@ -321,7 +321,7 @@ def build_prompt(
 在环境确认前不要询问业务功能或修改文件。
 
 这是一个 Logic-only 隔离开发会话。原仓库唯一允许写回的路径是：{allowed_roots_text()}。可以只读检查
-仓库其他位置，但禁止修改 `vision_analysis/src/logic/core/**`、配置、测试、文档、Web、服务、脚本、
+仓库其他位置，但禁止修改 `engine/src/logic/core/**`、配置、测试、文档、Web、服务、脚本、
 生成物或任何其他路径；也禁止创建符号链接。这个限制高于其他 Skill 中关于同步 Web、框架或文档的建议。
 如果需求无法完全通过现有公共 API、模块 `logic.json` 和模块内 `report_templates/` 实现，明确说明受限原因
 并停止，不得请求扩大权限或尝试越界。代理运行在一次性隔离副本中；不要查找、访问或修改其他仓库副本。
@@ -509,7 +509,7 @@ def dry_run_agent_label(requested: str) -> str:
 def verify_write_guard(repo: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="rk3588-guard-self-test-") as holder:
         source = Path(holder) / "source"
-        allowed = source / "vision_analysis/src/logic/modules/existing/logic.cpp"
+        allowed = source / "projects/modules/existing/logic.cpp"
         outside = source / "web_console/app.ts"
         excluded = source / "node_modules/cached/package.js"
         allowed.parent.mkdir(parents=True)
@@ -525,12 +525,12 @@ def verify_write_guard(repo: Path) -> None:
                 raise WriteBoundaryError("隔离副本错误复制了排除的依赖缓存。")
             generated = (
                 isolated.path
-                / "vision_analysis/src/logic/modules/generated/logic.cpp"
+                / "projects/modules/generated/logic.cpp"
             )
             generated.parent.mkdir(parents=True)
             generated.write_text("generated\n", encoding="utf-8")
             promoted = isolated.promote()
-            expected = "vision_analysis/src/logic/modules/generated/logic.cpp"
+            expected = "projects/modules/generated/logic.cpp"
             if promoted.changed_paths != (expected,):
                 raise WriteBoundaryError("允许路径回写自检结果不一致。")
         if not (source / expected).is_file():
@@ -549,7 +549,7 @@ def verify_write_guard(repo: Path) -> None:
             assert isolated.path is not None
             isolated_allowed = (
                 isolated.path
-                / "vision_analysis/src/logic/modules/existing/logic.cpp"
+                / "projects/modules/existing/logic.cpp"
             )
             isolated_outside = isolated.path / "web_console/app.ts"
             isolated_allowed.write_text("must-not-land\n", encoding="utf-8")
@@ -568,7 +568,7 @@ def verify_write_guard(repo: Path) -> None:
             assert isolated.path is not None
             isolated_allowed = (
                 isolated.path
-                / "vision_analysis/src/logic/modules/existing/logic.cpp"
+                / "projects/modules/existing/logic.cpp"
             )
             isolated_allowed.write_text("agent-change\n", encoding="utf-8")
             allowed.write_text("concurrent-change\n", encoding="utf-8")
@@ -603,10 +603,10 @@ def validate_isolated_catalog(workspace: Path, environment: dict[str, str]) -> N
             sys.executable,
             "-I",
             "-B",
-            "scripts/generate_logics_catalog.py",
+            "tools/build/generate_logics_catalog.py",
             "--check",
         ),
-        cwd=workspace / "vision_analysis",
+        cwd=workspace,
         env=environment,
         check=False,
         capture_output=True,

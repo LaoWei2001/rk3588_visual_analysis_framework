@@ -114,6 +114,8 @@ export function configToGraph(
     // 即使两个通道 URL 相同，也仍然分别创建各自的视频流节点。
     const streamId = uid('stream')
     const streamData: Record<string, unknown> = { ...stream, channel_id: origId }
+    if (ch.inference_roi && typeof ch.inference_roi === 'object' && !Array.isArray(ch.inference_roi))
+      streamData.inference_roi = ch.inference_roi
     if (ch.max_fps != null) streamData.max_fps = ch.max_fps
     TRACKER_KEYS.forEach(key => {
       if (ch[key] != null) streamData[key] = ch[key]

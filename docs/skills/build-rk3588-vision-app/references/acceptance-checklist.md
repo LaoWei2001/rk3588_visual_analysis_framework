@@ -12,8 +12,8 @@
 
 ## 所有改动
 
-- [ ] 通过 `develop_feature` 实施时，全部变更只位于 `vision_analysis/src/logic/modules/**` 或
-      `vision_analysis/src/logic/global_modules/**`；出现任何其他路径时整批拒绝回写。
+- [ ] 通过 `develop_feature` 实施时，全部变更只位于 `projects/modules/**` 或
+      `projects/global_modules/**`；出现任何其他路径时整批拒绝回写。
 - [ ] 白名单内没有符号链接、子模块或特殊文件。
 - [ ] `git status --short` 中没有意外文件；没有覆盖用户已有改动。
 - [ ] 新名称可在当前源码、配置或需求中找到依据。
@@ -24,7 +24,7 @@
 
 ## Logic 与清单
 
-- [ ] 通道模块位于 `src/logic/modules/<name>/`；全局模块位于 `global_modules/<name>/`。
+- [ ] 通道模块位于 `projects/modules/<name>/`；全局模块位于 `projects/global_modules/<name>/`。
 - [ ] 模块至少包含 C++ 源和 `logic.json`。
 - [ ] `REGISTER_LOGIC`/`REGISTER_GLOBAL_LOGIC` 的函数名就是外部 ID。
 - [ ] 源 `logic.json` 不写 `name`。
@@ -38,8 +38,7 @@
 权威静态检查：
 
 ```bash
-cd vision_analysis
-python3 scripts/generate_logics_catalog.py --check
+python3 tools/build/generate_logics_catalog.py --check
 ```
 
 ## 配置和热重载
@@ -51,7 +50,7 @@ python3 scripts/generate_logics_catalog.py --check
 - [ ] 模块参数只在对应实例的 `logic_parameters`。
 - [ ] 参数热重载策略与状态语义一致。
 - [ ] 没有把通道拓扑、显示尺寸/布局或 RTSP 输出设置误当成可热更新字段。
-- [ ] 有可执行文件时对实际配置运行 `./vision_analysis --validate-config ./assets/config_6.json`（示例文件名按应用替换）。
+- [ ] 有可执行文件时从仓库根运行 `(cd projects && ../build/engine/vision_analysis --validate-config ./assets/config_global.json)`（示例文件名按应用替换）。
 
 ## 事件与投递
 
@@ -65,12 +64,10 @@ python3 scripts/generate_logics_catalog.py --check
 模板聚合检查会写临时输出：
 
 ```bash
-cd vision_analysis
 tmp_dir="$(mktemp -d)"
-python3 scripts/generate_report_templates.py \
-  --logic-root src/logic \
-  --app-dir report_templates \
-  --adapter-catalog ../service/upload/adapters/catalog.json \
+python3 tools/build/generate_report_templates.py \
+  --logic-root projects \
+  --adapter-catalog services/framework/upload/adapters/catalog.json \
   --output "$tmp_dir/report_templates"
 rm -rf -- "$tmp_dir"
 ```

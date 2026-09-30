@@ -1,0 +1,53 @@
+{
+  "label": "吊钩动态圆心标定采集",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "hook_class_id": {
+        "type": "integer",
+        "title": "吊钩类别编号",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 10000,
+        "x-step": 1,
+        "x-hot-reload": "reset_state"
+      },
+      "min_score": {
+        "type": "number",
+        "title": "吊钩最低置信度",
+        "default": 0.3,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state"
+      },
+      "output_path": {
+        "type": "string",
+        "title": "标定数据保存路径",
+        "description": "相对路径以应用运行目录为基准；每次点击保存时向CSV追加一行。",
+        "default": "assets/hook_height_calibration_samples.csv",
+        "x-hot-reload": "preserve_state"
+      }
+    }
+  },
+  "outputs": [
+    { "key": "calibration_hook_visible", "type": "boolean", "label": "吊钩是否可见" },
+    { "key": "calibration_box_scale", "type": "number", "label": "吊钩检测框尺寸特征" },
+    { "key": "calibration_center_x", "type": "integer", "label": "吊钩框中心X" },
+    { "key": "calibration_center_y", "type": "integer", "label": "吊钩框中心Y" },
+    { "key": "calibration_box_width", "type": "integer", "label": "吊钩框宽度" },
+    { "key": "calibration_box_height", "type": "integer", "label": "吊钩框高度" },
+    { "key": "calibration_saved_count", "type": "integer", "label": "本次运行已保存样本数" }
+  ],
+  "report_fields": [],
+  "actions": [
+    {
+      "id": "save_current_calibration_sample",
+      "label": "保存正常铅垂圆心",
+      "style": "primary",
+      "help": "吊钩正常铅垂且检测框稳定时，保存当前中心点和box_scale到动态圆心标定CSV。"
+    }
+  ]
+}

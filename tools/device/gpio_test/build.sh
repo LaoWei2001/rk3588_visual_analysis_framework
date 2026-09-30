@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${project_dir}/../../.." && pwd)"
+
+cmake -S "${project_dir}" -B "${project_dir}/build" -DCMAKE_BUILD_TYPE=Release
+cmake --build "${project_dir}/build" --parallel
+
+echo "构建完成：${project_dir}/build/rk3588-gpioctl"
+echo "兼容入口：${project_dir}/build/gpio_test"
+echo "输出低电平：sudo ${project_dir}/build/rk3588-gpioctl output 0"
+echo "完整部署请从项目根目录执行："
+echo "  sudo ${repo_root}/install.sh offline"

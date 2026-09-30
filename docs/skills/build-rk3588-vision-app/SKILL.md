@@ -19,8 +19,8 @@ Read [`references/requirement-contract.md`](references/requirement-contract.md) 
 ## Logic-only wizard override
 
 When the startup prompt identifies a `develop_feature` isolated session, its allowlist overrides this Skill's broader
-end-to-end scope. Write only below `vision_analysis/src/logic/modules/` and
-`vision_analysis/src/logic/global_modules/`. Treat engine, config, tests, Web, services, documentation, scripts, and
+end-to-end scope. Write only below `projects/modules/` and
+`projects/global_modules/`. Treat engine, config, tests, Web, services, documentation, scripts, and
 generated files as read-only. Steps below that would change those locations become unsupported in that session; report
 the missing capability and stop instead of asking for wider access. Read the wizard's
 [`write-boundary.md`](../rk3588-feature-wizard/references/write-boundary.md) before editing.
@@ -32,7 +32,7 @@ the missing capability and stop instead of asking for wider access. Read the wiz
 3. Inspect the target module's C++ and `logic.json` together.
 4. Inspect the public header that owns the API being used.
 5. For Web behavior, inspect both the FastAPI route and the React caller.
-6. For reporting, inspect `vision_analysis/src/event/event_report.h/.cpp`, the module template, Adapter catalog,
+6. For reporting, inspect `engine/src/event/event_report.h/.cpp`, the module template, Adapter catalog,
    and delivery service.
 7. Compare any referenced example name against actual `REGISTER_*` macros or run the built binary's list command.
 
@@ -42,15 +42,15 @@ Current registered source modules do not include `logic_path_sop`, `logic_period
 
 | Need | Extension point |
 |---|---|
-| One channel, each business frame | `src/logic/modules/<logic>/` |
-| Cross-channel or periodic aggregation | `src/logic/global_modules/<logic>/` |
+| One channel, each business frame | `projects/modules/<logic>/` |
+| Cross-channel or periodic aggregation | `projects/global_modules/<logic>/` |
 | Logic-specific user parameter | Module `logic.json.parameters` plus `param_*()` |
 | Shared engine configuration | `src/config/` plus runtime/Web propagation |
 | Button for one Logic | Module `actions` plus `REGISTER_LOGIC_ACTION` or `REGISTER_GLOBAL_LOGIC_ACTION` |
 | Event creation | `report_event()` plus module `event_types`/`report_fields` |
 | Remote request shape | Logic-owned/app report template |
 | Address, token, timeout | Application `connections.yaml` through Web “应用集成” |
-| HTTP/Dify transport mechanics | `service/upload/adapters/` |
+| HTTP/Dify transport mechanics | `services/framework/upload/adapters/` |
 | Web-only workflow | FastAPI route + `api/client.ts` + React component |
 
 Do not hardcode endpoints or credentials in a Logic. Do not add a central config field for a parameter that belongs to one module. Do not add transport branches to the event outbox for ordinary business mappings.
@@ -73,13 +73,12 @@ Do not hardcode endpoints or credentials in a Logic. Do not add a central config
 Always run the manifest check after Logic changes:
 
 ```bash
-cd vision_analysis
-python3 scripts/generate_logics_catalog.py --check
+python3 tools/build/generate_logics_catalog.py --check
 ```
 
 Then use the task-specific commands in [`references/acceptance-checklist.md`](references/acceptance-checklist.md). Generated App `logics.json` and `report_templates/` must come from the same source revision as the binary; never patch generated package files as source.
 
-The Python files under this Skill's `scripts/` directory predate the 2026-08-22 source refactor. In particular, `validate_logic.py` incorrectly rejects currently supported global Actions; the other scripts do not cover the complete current contract. Read [`references/legacy-scripts.md`](references/legacy-scripts.md), and do not use any one of them as validation or scaffolding authority. They are unchanged because repository code was explicitly out of scope for this documentation audit.
+The Python files under this Skill's `scripts/` directory are heuristic helpers rather than the complete current contract. In particular, `validate_logic.py` still rejects currently supported global Actions. Read [`references/legacy-scripts.md`](references/legacy-scripts.md), and do not use any one helper as the sole validation or scaffolding authority.
 
 ## Handoff
 

@@ -205,6 +205,85 @@
 .action-btn.edit:hover { color: var(--accent); border-color: var(--accent); }
 .action-btn.log:hover  { color: var(--text); border-color: var(--text2); }
 
+/* ── 删除程序三选项弹窗 ─────────────────────────────────────────────────── */
+.delete-app-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.delete-app-dialog {
+  width: min(520px, 94vw);
+  overflow: hidden;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  border-radius: 12px;
+  background: #171923;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+}
+
+.delete-app-title {
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(239, 68, 68, 0.28);
+  background: rgba(239, 68, 68, 0.1);
+  color: #fecaca;
+  font-size: 15px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.delete-app-description {
+  padding: 14px 18px 8px;
+  color: var(--text2);
+  font-size: 13px;
+}
+
+.delete-app-options {
+  display: grid;
+  gap: 10px;
+  padding: 6px 18px 16px;
+}
+
+.delete-app-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface2);
+  color: var(--text);
+  text-align: left;
+}
+.delete-app-option strong { font-size: 14px; }
+.delete-app-option span { color: var(--text2); font-size: 12px; line-height: 1.5; }
+.delete-app-option.package-only:hover { border-color: var(--accent); }
+.delete-app-option.delete-all { border-color: rgba(239, 68, 68, 0.45); }
+.delete-app-option.delete-all strong { color: #fca5a5; }
+.delete-app-option.delete-all:hover { background: rgba(127, 29, 29, 0.42); border-color: #ef4444; }
+
+.delete-app-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.delete-app-cancel {
+  padding: 7px 18px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface2);
+  color: var(--text2);
+}
+.delete-app-cancel:hover { color: var(--text); border-color: var(--text2); }
+
 /* ── Crash log dialog ─────────────────────────────────────────────────────── */
 .crash-overlay {
   position: fixed;

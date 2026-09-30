@@ -16,6 +16,20 @@
 场景，都可以在这套框架上复用已有的采集、推理、显示、录像、上报和运维能力，把开发重点真正
 放回业务算法本身。
 
+## 项目愿景
+
+本项目受到 GNU 计划与自由软件运动的启发。我们相信，软件不应只是一个无法理解和修改的封闭工具，
+也应当成为可以学习、验证、改进和继续传播的公共知识。开源的价值不仅是公开代码，更是让工程经验
+能够被后来者继承，让不同开发者在清晰的规则和可复现的实现上继续创造。
+
+我们希望这套框架能够为 RK3588 及其他边缘计算平台上的多路视觉应用提供一种可靠的工程思路：
+底层能力集中建设，业务模块独立演进，配置和运行状态可视化，部署过程可以复现，现场问题能够定位。
+如果它能让一个算法更快落地、让一位新人更容易理解系统，或者让一个团队少重复搭建一次基础设施，
+这个项目就实现了它的意义。
+
+如果本项目对你的学习、研究或工程实践有所帮助，欢迎 Star、Fork、提交 Issue 或参与改进，让更多
+开发者能够发现、使用并共同完善它。
+
 ## 为什么选择本项目
 
 - **面向 RK3588 进行深度优化**：统一使用 RKNN NPU、RGA、MPP 和 GStreamer，兼顾多路并发、
@@ -49,8 +63,8 @@
 | 开发跨通道逻辑 | [全局 Logic 开发指南](docs/skills/rk3588-global-logic/SKILL.md) |
 | 修改引擎、线程或生命周期 | [源码模块索引](docs/skills/rk3588-src-modules/SKILL.md) |
 | 操作 Web、投递、OTA 或排障 | [控制台与运维指南](docs/skills/rk3588-console-ops/SKILL.md) |
-| 首次配置设备网络 | [first_net_config 使用说明](first_net_config/README.md) |
-| 制作断网安装包 | [Debian 离线包](offline_install_env_debian/README.md) / [Ubuntu 离线包](offline_install_env_ubuntu/README.md) |
+| 首次配置设备网络 | [first_net_config 使用说明](tools/device/first_net_config/README.md) |
+| 制作断网安装包 | [Debian 离线包](tools/offline_dev_install/debian/README.md) / [Ubuntu 离线包](tools/offline_dev_install/ubuntu/README.md) |
 | 查阅全部文档 | [文档总入口](docs/README.md) |
 
 仓库中的 `logic_course_01`～`logic_course_10` 是逐步学习 Logic API 的示例。第一次接触项目时，
@@ -85,6 +99,22 @@ Windows 可使用 `develop_feature.cmd`。向导只允许回写通道和全局 L
 
 > Web 画布编排的是视频源、模型、ROI、业务逻辑和上报等固定角色，不是任意 DAG 工作流引擎。
 
+## 技术栈
+
+| 层次 | 主要技术 | 用途 |
+|---|---|---|
+| 硬件与运行平台 | Rockchip RK3588、AArch64、Linux、RKNPU、RGA、MPP、GPIO | 边缘部署、NPU 推理、图像转换、硬件编解码和现场设备控制 |
+| 视觉分析引擎 | C/C++、CMake、POSIX Threads、OpenCV（含 FreeType）、cJSON、libgpiod | 多路分析管线、图像处理、业务 Logic、配置解析和 GPIO 控制 |
+| AI 推理与跟踪 | RKNN Runtime `2.4.2a2`、YOLO、SORT、ByteTrack | RK3588 NPU 模型推理、检测/姿态/分割后处理及跨帧目标跟踪 |
+| 视频与显示 | GStreamer、GStreamer RTSP Server、GTK3 | RTSP/File/USB 采集、解码、录像、拼接显示与 RTSP 输出 |
+| Web 前端 | React 18、TypeScript 5、Vite 6、XYFlow、Zustand、Axios、xterm.js | 可视化画布、参数配置、实时状态、日志和浏览器终端 |
+| Web 后端 | Python 3、FastAPI、Uvicorn、Pydantic、WebSocket | 应用管理、配置 API、实时日志、终端、设备与服务控制 |
+| 配置与模块契约 | JSON、JSON Schema、声明式 `logic.json` | 通道配置、Logic 参数、动作、输出、上报字段和热重载校验 |
+| 部署与运维 | Shell、systemd、离线 bundle、Debian/Ubuntu ARM64 | 一键安装、服务托管、离线交付、升级、检查与故障定位 |
+
+其中 RKNN Runtime 随仓库固定版本并在构建时校验，Web 前端和后端的精确依赖版本分别以
+`web_console/frontend/package.json` 和 `web_console/backend/requirements.txt` 为准。
+
 ## 核心能力
 
 ### 视频推理能力
@@ -102,7 +132,7 @@ Windows 可使用 `develop_feature.cmd`。向导只允许回写通道和全局 L
 
 ### 业务逻辑灵活拓展能力
 
-- 每种业务逻辑位于独立的 `src/logic/modules/logic_xxx/` 目录；
+- 每种业务逻辑位于独立的 `projects/modules/logic_xxx/` 目录；
 - 通过 `REGISTER_LOGIC(logic_xxx)` 自动注册，无需修改中央分发表；
 - `ChannelContext` 提供帧、推理结果、ROI、时间、状态、参数、绘制和跨通道快照；
 - `logic.json` 统一声明模块参数、Web 动作、上报字段及热重载策略；
@@ -201,17 +231,13 @@ GStreamer appsink
 
 ```text
 .
-├── vision_analysis/             # C++ 视觉分析引擎、示例业务和应用构建脚本
-│   ├── assets/                  # RKNN 模型、标签和示例配置
-│   ├── scripts/                 # logic 清单生成与一致性校验
+├── engine/             # C++ 视觉分析引擎
 │   ├── src/
 │   │   ├── capturer/            # GStreamer RTSP/File/USB 采集与重连
 │   │   ├── pipeline/            # 帧入口、结果分发与业务调用
 │   │   ├── inference/           # 推理任务、模型实例与热换
 │   │   ├── tracking/            # 每通道目标跟踪
 │   │   ├── logic/core/          # ChannelContext、注册表、参数和全局逻辑
-│   │   ├── logic/modules/       # 可扩展业务逻辑模块
-│   │   ├── logic/global_modules/ # 可扩展全局逻辑模块
 │   │   ├── display/             # HDMI 显示与统一叠加
 │   │   ├── rtsp/                # 拼接画面 RTSP 输出
 │   │   ├── event/               # 标准事件与媒体发件箱生产端
@@ -220,23 +246,36 @@ GStreamer appsink
 │   │   ├── config/              # 配置解析、校验和热重载字段
 │   │   ├── runtime/             # APP_CTRL、快照与运行状态
 │   │   └── yolo/                # RKNN 模型实现与后处理
-│   ├── CMakeLists.txt
-│   └── build.sh                 # 编译、打包和运行脚本生成
+│   ├── vendor/                  # 固定版本的 RKNN Runtime
+│   └── CMakeLists.txt           # 仅描述引擎编译目标
+├── projects/                    # 二次开发内容的唯一迁移单元
+│   ├── modules/                 # 可自由组合的通道 Logic
+│   ├── global_modules/          # 可自由组合的全局 Logic
+│   ├── assets/                  # 配置、RKNN、标签、视频和字体
+│   └── catalog.json             # 模型类型等共享能力
 ├── web_console/
 │   ├── frontend/                # React、TypeScript、XYFlow、Zustand
 │   ├── backend/                 # FastAPI 管理 API 与 WebSocket
-│   └── install.sh               # Web 控制台安装脚本
-├── service/
-│   ├── upload/                  # 可靠事件上传服务
-│   ├── model_update/            # 模型 OTA 服务
-│   └── gpio_state/              # GPIO 输出电平开机恢复服务
-├── first_net_config/            # 独立的首次网络配置终端工具（C + ANSI/termios）
-├── offline_install_env_debian/  # Debian 离线仓库制作与安装
-├── offline_install_env_ubuntu/  # Ubuntu 离线仓库制作入口与依赖清单
-├── gpio_test/                   # GPIO 独立测试工具
+│   └── deploy.sh                # 根安装器调用的 Web 控制台部署器
+├── services/framework/
+│   ├── upload/                  # 框架可靠事件上传服务
+│   ├── model_update/            # 框架模型 OTA 服务
+│   └── gpio_state/              # 框架 GPIO 开机恢复服务
+├── tools/
+│   ├── build/                   # Logic 清单和上报模板生成器
+│   ├── device/                  # 独立板端诊断与配置工具
+│   │   ├── first_net_config/    # 首次网络配置终端工具
+│   │   └── gpio_test/           # GPIO 独立测试工具
+│   └── offline_dev_install/     # 离线开发环境与安装包制作工具
+│       ├── debian/              # Debian 制包入口与依赖清单
+│       └── ubuntu/              # Ubuntu 制包入口与依赖清单
+├── build/engine/                # CMake 中间产物（不提交）
+├── dist/<app>/                  # 最终应用包（不提交）
 ├── docs/                        # 开发、运维和模块文档
 ├── develop_feature              # Codex/Claude 隔离式 Logic 需求澄清与自动开发入口
 ├── develop_feature.cmd          # 原生 Windows 的同一向导入口
+├── build.sh                     # 仓库唯一的应用构建入口
+├── install_app.sh               # 将 dist/<app>/ 安装到 Web 应用目录
 ├── install.sh                   # 平台统一安装、升级、状态与卸载入口
 ├── install_deps.sh              # 内部依赖准备或只读环境检查脚本
 └── LICENSE                      # GPL-3.0
@@ -259,7 +298,7 @@ GStreamer appsink
 
 YOLO26 人体姿态模型使用独立类型 `yolo26_pose`，适配 Ultralytics 导出的
 `[1,56,8400]` FP16 one-to-many 输出。项目已内置模型
-`vision_analysis/assets/yolo26n-pose-rk3588.rknn`，该类型不要求标签文件：
+`projects/assets/yolo26n-pose-rk3588.rknn`，该类型不要求标签文件：
 
 ```json
 {
@@ -275,7 +314,7 @@ YOLO26 人体姿态模型使用独立类型 `yolo26_pose`，适配 Ultralytics �
 }
 ```
 
-完整的单路配置见 `vision_analysis/assets/config_yolo26_pose.json`。`yolo26_pose`
+完整的单路配置见 `projects/assets/config_yolo26_pose.json`。`yolo26_pose`
 产出的 `AlgoResult` 与 `yolov8_pose` 一致，包含人员框、17 个 COCO 关键点及其置信度，
 并统一标记为 `PoseKeypointSchema::Coco17`，业务逻辑无需判断具体 YOLO 版本即可直接进入
 跟踪、画面骨架渲染和跌倒检测逻辑。`model_type` 仍保留具体版本，供日志和来源追踪使用。
@@ -314,21 +353,21 @@ ARM64 制作。不要把 Debian bundle 强制安装到 Ubuntu，也不要通过�
 sudo ./install.sh online
 ```
 
-后续更新源码后可统一升级，也可以随时查看安装状态：
+后续更新源码后直接重新部署，也可以随时查看安装状态：
 
 ```bash
-sudo ./install.sh upgrade online
+sudo ./install.sh online   # 依赖或前端依赖发生变化
+sudo ./install.sh offline  # 依赖齐全且前端已经构建
 ./install.sh status
 ```
 
 根目录 `install.sh` 是面向使用者的唯一源码安装入口；`install_deps.sh`、
-`web_console/install.sh` 和 `service/gpio_state/install.sh` 是内部组件脚本，仅用于制包、
-开发或单项故障修复。
+`web_console/deploy.sh` 和 `services/framework/gpio_state/install.sh` 是内部组件脚本。
 
 联网安装需要在盒子仍能访问 APT、PyPI/npm 镜像时执行，会安装完整第三方运行依赖、
 锁定安装前端依赖并预生成 `web_console/frontend/dist`。RKNPU 内核驱动、RGA、MPP 等
 Rockchip BSP 组件不由该脚本安装；用户态 `librknnrt.so` 和 `rknn_api.h` 已固定在
-`vision_analysis/vendor/rknn/`。APT 阶段只补装缺失包，不升级已经安装或被厂家设为
+`engine/vendor/rknn/`。APT 阶段只补装缺失包，不升级已经安装或被厂家设为
 `hold` 的 BSP 包；单个无关软件源更新失败时，会使用其他成功更新的索引继续安装。
 Python requirements 直接安装到系统 `/usr/bin/python3`，不会创建项目虚拟环境；已满足
 版本约束的模块会由 pip 跳过。这与默认完整离线包采用相同的解释器和依赖规则。
@@ -346,14 +385,14 @@ bash install_deps.sh --runtime-only
 
 ```bash
 # 制作机必须和目标机使用相同发行版及版本
-bash offline_install_env_debian/create_bundle.sh
+bash tools/offline_dev_install/debian/create_bundle.sh
 
 # 已装过完整包且只修改源码时，生成快速源码更新包（不编译、不联网）
-bash offline_install_env_debian/create_bundle.sh --source-only
+bash tools/offline_dev_install/debian/create_bundle.sh --source-only
 
 # Ubuntu ARM64 使用对应入口（首次先运行 prepare_host.sh）
-bash offline_install_env_ubuntu/prepare_host.sh
-bash offline_install_env_ubuntu/create_bundle.sh --refresh-debs
+bash tools/offline_dev_install/ubuntu/prepare_host.sh
+bash tools/offline_dev_install/ubuntu/create_bundle.sh --refresh-debs
 
 # 把 output/full-bundle 复制到断网 RK3588，然后在包目录内一键安装
 cd /userdata/full-bundle
@@ -364,14 +403,14 @@ sudo bash install_offline.sh
 系统 Python requirements、Web 控制台和 Rockchip 用户态组件组成一个本地 APT 仓库。临时编译的
 C++ 程序不会装入目标机的程序列表。目标机只需在所选 bundle 目录内运行
 `install_offline.sh`，安装完成后可直接访问 `http://<RK3588-IP>:8080`，无需再执行
-`web_console/install.sh` 或手工安装依赖。默认完整包也包含源码、板端 C/C++ 编译环境、
+根目录安装器或手工安装依赖。默认完整包也包含源码、板端 C/C++ 编译环境、
 ARM64 Node.js/npm 和前端 `node_modules`，源码入口为
 `/userdata/rk3588_visual_analysis_framework`；目标机可以直接编译主程序和重新构建前端。
 程序仍需由用户之后明确安装，或通过 Web 上传。
 默认完整离线包的一键安装流程也会自动安装 GPIO 服务并在首次安装时将继电器置低，无需再
-进入 `service/gpio_state/` 执行命令。
+进入 `services/framework/gpio_state/` 执行命令。
 
-日常源码迭代可复制 `offline_install_env_debian/output/source-update` 到已安装过完整包的设备，
+日常源码迭代可复制 `tools/offline_dev_install/debian/output/source-update` 到已安装过完整包的设备，
 并运行 `sudo bash install_source_update.sh`。依赖清单、前端锁文件或固定 RKNN 文件变化时，
 快速模式会拒绝制包并提示重新生成 `full-bundle`；全新设备也始终使用完整包。
 
@@ -380,11 +419,11 @@ requirements 约束的包会跳过，只补装缺失项或调整不兼容版本�
 依赖关系。仓库不会绑定项目源码哈希；发行版
 软件包按制作机对应的软件源解析，开发机上由 dpkg 管理、但软件源没有的厂家用户态包才会重新
 封装，项目固定的 RKNN Runtime 也会单独封装。完整包生成到
-`offline_install_env_debian/output/full-bundle`，精简包生成到
-`offline_install_env_debian/output/runtime-only-bundle`。升级时重新制包并再次运行安装脚本即可；新增依赖和
+`tools/offline_dev_install/debian/output/full-bundle`，精简包生成到
+`tools/offline_dev_install/debian/output/runtime-only-bundle`。升级时重新制包并再次运行安装脚本即可；新增依赖和
 手工补包方法见
-[Debian 说明](offline_install_env_debian/README.md) 或
-[Ubuntu 说明](offline_install_env_ubuntu/README.md)。
+[Debian 说明](tools/offline_dev_install/debian/README.md) 或
+[Ubuntu 说明](tools/offline_dev_install/ubuntu/README.md)。
 
 如需单独排查厂家 BSP、硬件驱动或应用动态库，可运行只读诊断（它不是离线安装步骤，
 诊断失败也不代表 deb 安装失败）：
@@ -405,7 +444,7 @@ Python/通用动态库、Rockchip GStreamer 硬件插件，以及项目和 `/opt
 
 检查不会启动摄像头、模型或推理进程，因此静态检查通过后仍应使用现场摄像头、实际
 `.rknn` 模型和 RTSP/录像输出做一次冒烟测试。项目已经验证的平台组合记录在
-`vision_analysis/vendor/rockchip/PLATFORM_COMPATIBILITY.env`；只有完成硬件冒烟测试后
+`engine/vendor/rockchip/PLATFORM_COMPATIBILITY.env`；只有完成硬件冒烟测试后
 才应更新该基线。
 
 已经用 `install_deps.sh` 准备好依赖和前端，或者前端产物已随完整源码复制到断网设备时，
@@ -434,7 +473,7 @@ Rockchip GStreamer 和 RKNN 等用户态组件，但不会尝试用用户态 `.s
 
 ### 2.1 固定的 RKNN Runtime
 
-编译和发布统一使用 `vision_analysis/vendor/rknn/2.4.2a2/` 中的 AArch64 Runtime，
+编译和发布统一使用 `engine/vendor/rknn/2.4.2a2/` 中的 AArch64 Runtime，
 不再根据构建设备的 `ldconfig` 顺序选择 `librknnrt.so`。CMake 和 `build.sh` 都会校验
 头文件及 Runtime 的 SHA-256；文件缺失、被替换、架构或版本不符时构建会直接失败。
 
@@ -448,9 +487,9 @@ SHA-256: bf50d51705ae433013927a13520ae781b534fdb1481c47bdddbc726f63ed4970
 ### 3. 板端调试构建
 
 ```bash
-cd vision_analysis
 ./build.sh --debug
-./vision_analysis ./assets/config_6.json
+cd projects
+../build/engine/vision_analysis ./assets/config_global.json
 ```
 
 `--debug` 只生成可执行文件，不创建完整应用包。请根据设备修改视频源、模型和标签路径。
@@ -460,8 +499,7 @@ cd vision_analysis
 ### 4. 构建发布包
 
 ```bash
-cd vision_analysis
-./build.sh dist
+./build.sh my_app
 ```
 
 脚本会自动判断构建方式：
@@ -469,7 +507,7 @@ cd vision_analysis
 - AArch64/ARM：在板端原生编译；
 - x86_64：使用配置好的 `rk3588_builder` Docker 交叉编译镜像。
 
-发布目录 `vision_analysis/dist/` 包含：
+发布目录 `dist/my_app/` 包含：
 
 - `vision_analysis` 可执行程序；
 - `libs/` 动态库，其中 `librknnrt.so` 来自项目锁定版本并带版本清单；
@@ -481,9 +519,9 @@ cd vision_analysis
 前台运行发布包：
 
 ```bash
-cd vision_analysis/dist
+cd dist/my_app
 OFFLINE=1 bash setup_python.sh  # 已执行根目录 install_deps.sh 的现场盒子
-bash run.sh ./assets/config_6.json
+bash run.sh ./assets/config_global.json
 ```
 
 `run.sh` 会把所选配置的 `global.enable_display` 改为 1。生产托管请把完整包安装到 Web 控制台；
@@ -508,8 +546,7 @@ http://<RK3588-IP>:8080
 控制台默认从 `/opt/ai_apps/` 扫描应用包。将刚构建的应用包安装到控制台：
 
 ```bash
-cd vision_analysis
-sudo ./install_app.sh dist
+sudo ./install_app.sh my_app
 ```
 
 离线环境包不会自动执行这一步，也不会预装名为 `vision_analysis` 的程序。Web 程序列表只显示
@@ -521,7 +558,7 @@ sudo ./install_app.sh dist
 以及检查网络冲突。它直接管理 NetworkManager，不依赖 Web 控制台：
 
 ```bash
-cd first_net_config
+cd tools/device/first_net_config
 sudo ./first_net_config
 ```
 
@@ -529,7 +566,7 @@ sudo ./first_net_config
 CMake 和 C 编译器。仓库随附 ARM64 成品（要求 glibc 2.29 或更高），可以在 RK3588 离线状态
 先完成网络配置，再运行联网依赖安装；修改源码后才需要执行 `./build.sh`。完整功能、SSH
 切换网络的回滚方式及高风险操作边界见
-[first_net_config/README.md](first_net_config/README.md)。
+[tools/device/first_net_config/README.md](tools/device/first_net_config/README.md)。
 
 ## 新成员开发路径
 
@@ -548,10 +585,21 @@ CMake 和 C 编译器。仓库随附 ARM64 成品（要求 glibc 2.29 或更高�
 ## 配置示例
 
 配置没有根级版本号契约；OTA 模型版本只写在 `channels[].models[].version`。模型只允许写在
-`channels[].models[]`，ROI 只允许写在
-`channels[].roi_zones[]`，录像设置只保存在 `report_policy`；`stream.src_type` 必须显式指定。
-Web 画布中 ROI 节点直接连接视频流节点，表示它归属于该视频通道；ROI 与模型推理和
-后处理算法解耦，即使通道没有配置模型，仍可保存、显示并通过 `ChannelContext` 读取。
+`channels[].models[]`；业务 ROI 只允许写在 `channels[].roi_zones[]`；通道级推理范围写在
+`channels[].inference_roi`；录像设置只保存在 `report_policy`；`stream.src_type` 必须显式指定。
+Web 画布中“业务 ROI”节点直接连接视频流节点，表示它归属于该视频通道。业务 ROI 即使在
+没有模型的传统算法通道中也可以保存、显示并通过 `ChannelContext` 读取。每个通道可配置一个矩形
+或一个多边形推理区域，并支持三种模式：`roi_only`（只推理局部）、`full_plus_roi`（整帧推理一次、
+局部再推理一次），以及 `full_frame_roi_filter`（保持整帧尺度推理一次，只输出区域内目标）。局部
+取景可选 `stretch`（直接拉伸）、`expand`（扩展周边画面匹配模型比例，触边后只对不足部分补黑）
+或 `letterbox`（保持比例并补黑边）。多边形使用 `stretch`/`letterbox` 时，多边形外的模型输入严格
+填黑；使用 `expand` 时则保留扩展后的真实周边上下文。Web 编辑器按与 C++ 相同的像素取整、偶数边界
+对齐、缩放和填黑规则预览模型输入；扩展动画结束后的无叠加画面就是最终模型视野。`roi_only` 和
+`full_frame_roi_filter` 要求业务 ROI 的全部顶点和边完全位于推理区域内。检测框、姿态关键点和分割
+掩码都会使用完整画面坐标；结果受限模式还会清除区域外掩码，
+`full_plus_roi` 的两批结果则会执行跨批次 NMS，因此业务逻辑不需要感知推理裁剪或结果过滤。
+已配置的推理 ROI 会作为青色边框叠加到实时显示、带叠加的录像和上报图片；该边框只在推理完成后的
+统一输出渲染阶段绘制，不会进入模型输入或污染业务逻辑读取的源帧。
 
 ```json
 {
@@ -589,6 +637,13 @@ Web 画布中 ROI 节点直接连接视频流节点，表示它归属于该视�
           "npu_core": 0
         }
       ],
+      "inference_roi": {
+        "mode": "full_plus_roi",
+        "shape": "polygon",
+        "resize_mode": "expand",
+        "rect": [0.25, 0.2, 0.5, 0.6],
+        "polygon": [[0.25, 0.2], [0.75, 0.25], [0.68, 0.8], [0.3, 0.72]]
+      },
       "logic": "logic_default",
       "logic_parameters": {},
       "roi_zones": [
@@ -611,7 +666,8 @@ Web 画布中 ROI 节点直接连接视频流节点，表示它归属于该视�
 只校验配置而不启动视频、NPU 和后台线程：
 
 ```bash
-./vision_analysis --validate-config ./assets/config_6.json
+cd projects
+../build/engine/vision_analysis --validate-config ./assets/config_global.json
 ```
 
 ## 开发新的通道逻辑
@@ -619,7 +675,7 @@ Web 画布中 ROI 节点直接连接视频流节点，表示它归属于该视�
 每个通道逻辑由一个 C++ 入口和一个模块清单组成：
 
 ```text
-vision_analysis/src/logic/modules/logic_people_count/
+projects/modules/logic_people_count/
 ├── logic.cpp
 └── logic.json
 ```
@@ -658,7 +714,7 @@ REGISTER_LOGIC(logic_people_count);
 
 新增模块后重新运行 CMake 或 `build.sh`。构建过程会：
 
-1. 递归收集 `src/logic/modules/` 中的 C++ 源文件；
+1. 递归收集 `projects/modules/` 中的 C++ 源文件；
 2. 从 `REGISTER_LOGIC()` 获取唯一 logic ID；
 3. 校验 `logic.json`、参数访问器和热重载策略；
 4. 将 Schema 嵌入二进制；
@@ -683,8 +739,10 @@ REGISTER_LOGIC(logic_people_count);
 | `logic_default` | 可删除的空白逻辑示例 |
 | `logic_dify` | Dify 周期截图与自定义变量 |
 | `logic_roi_person_count_demo` | 发布 ROI 内 `person` 人数，作为当前全局人数聚合示例的上游 |
-| `logic_crane_motion`、`logic_crane_hook` | 行车运动和吊钩状态检测 |
+| `logic_crane_motion`、`logic_crane_hook` | 行车运动检测，以及固定半径、随吊钩高度插值圆心的吊钩状态检测 |
+| `logic_crane_hook_calibration` | 播放视频时按需保存正常铅垂圆心和 `box_scale` 标定样本 |
 | `logic_crane_intrusion`、`logic_crane_helmet` | 行车投影区域入侵和静止安全帽检测 |
+| `logic_training_negative_capture` | 目标丢失期间按间隔采集视频源分辨率的训练集负样本 |
 | `logic_relay` | Action 控制继电器 |
 
 当前全局 Logic 包括 `global_person_count_alarm_demo` 和 `global_crane_safety_controller`。
@@ -770,14 +828,13 @@ channel logic / global logic
 校验所有 logic 注册、模块清单、参数 Schema 和 C++ 参数访问器：
 
 ```bash
-cd vision_analysis
-python3 scripts/generate_logics_catalog.py --check
+python3 tools/build/generate_logics_catalog.py --check
 ```
 
 编译后查看二进制实际注册的通道逻辑：
 
 ```bash
-./vision_analysis --list-logics
+build/engine/vision_analysis --list-logics
 ```
 
 构建 Web 前端：
@@ -799,9 +856,9 @@ python3 -m pytest -q tests
 
 ```bash
 bash -n install_deps.sh \
-  offline_install_env_debian/create_bundle.sh \
-  offline_install_env_debian/templates/install_offline.sh \
-  vision_analysis/build.sh
+  tools/offline_dev_install/debian/create_bundle.sh \
+  tools/offline_dev_install/debian/templates/install_offline.sh \
+  build.sh
 ```
 
 测试通过只说明软件层面的静态行为符合预期。涉及摄像头、NPU、RGA/MPP、GPIO、显示、RTSP 或
@@ -818,8 +875,8 @@ bash -n install_deps.sh \
 ## 文档
 
 - [文档总入口](docs/README.md)
-- [首次网络配置工具](first_net_config/README.md)
-- [离线环境与 Web 控制台安装](offline_install_env_debian/README.md)
+- [首次网络配置工具](tools/device/first_net_config/README.md)
+- [离线环境与 Web 控制台安装](tools/offline_dev_install/debian/README.md)
 - [Skill 与二次开发索引](docs/skills/README.md)
 - [交互式功能开发总入口](docs/skills/rk3588-feature-wizard/SKILL.md)
 - [通道逻辑开发指南](docs/skills/rk3588-channel-logic/SKILL.md)
@@ -831,20 +888,6 @@ bash -n install_deps.sh \
 
 维护 README 时避免记录未经复测的性能结论；发行版、驱动、RKNN Runtime、模型或配置契约变化后，
 必须同步更新兼容性说明和对应模块文档。
-
-## 项目愿景
-
-本项目受到 GNU 计划与自由软件运动的启发。我们相信，软件不应只是一个无法理解和修改的封闭工具，
-也应当成为可以学习、验证、改进和继续传播的公共知识。开源的价值不仅是公开代码，更是让工程经验
-能够被后来者继承，让不同开发者在清晰的规则和可复现的实现上继续创造。
-
-我们希望这套框架能够为 RK3588 及其他边缘计算平台上的多路视觉应用提供一种可靠的工程思路：
-底层能力集中建设，业务模块独立演进，配置和运行状态可视化，部署过程可以复现，现场问题能够定位。
-如果它能让一个算法更快落地、让一位新人更容易理解系统，或者让一个团队少重复搭建一次基础设施，
-这个项目就实现了它的意义。
-
-如果本项目对你的学习、研究或工程实践有所帮助，欢迎 Star、Fork、提交 Issue 或参与改进，让更多
-开发者能够发现、使用并共同完善它。
 
 ## License
 

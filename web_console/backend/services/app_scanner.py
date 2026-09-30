@@ -29,14 +29,17 @@ def scan_apps() -> List[Dict[str, Any]]:
         models, labels, videos, config_files = [], [], [], []
         if assets_dir.exists():
             for f in sorted(assets_dir.iterdir()):
+                if not f.is_file():
+                    continue
                 rel = f"assets/{f.name}"
-                if f.suffix == ".rknn":
+                suffix = f.suffix.lower()
+                if suffix == ".rknn":
                     models.append(rel)
-                elif f.suffix == ".txt":
+                elif suffix == ".txt":
                     labels.append(rel)
-                elif f.suffix in (".mp4", ".avi", ".mkv"):
+                elif suffix in (".mp4", ".avi", ".mkv"):
                     videos.append(rel)
-                elif f.suffix == ".json":
+                elif suffix == ".json":
                     config_files.append(rel)
 
         # 上次启动所用的配置文件名（供「指定配置启动」下拉默认选中），缺省 config.json

@@ -318,9 +318,6 @@ export default function RecordsPage() {
               <div className="record-data-flow">
                 <strong>算法产生的数据</strong><b>→</b><span>字段转换规则</span><b>→</b><span>最终发送请求</span>
               </div>
-              <div className="record-json-hint">
-                这里先展示算法本次产生的业务内容。服务器最终收到的内容请在画布上报节点中查看。
-              </div>
               <div className="record-business-summary">
                 <div><span>告警类型</span><strong>{String(detail.event.type ?? detailRecord.event_type ?? '—')}</strong></div>
                 <div><span>说明</span><strong>{String(detail.event.message ?? detailRecord.message ?? '—')}</strong></div>
@@ -355,7 +352,6 @@ export default function RecordsPage() {
 
               <details className="record-json-advanced">
                 <summary>高级诊断：查看完整原始数据</summary>
-                <p>包含媒体状态、发送任务和系统时间戳等排障信息，普通接口配置无需关注。</p>
                 <pre className="record-json-code">{JSON.stringify(detail, null, 2)}</pre>
               </details>
             </div>}

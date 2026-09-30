@@ -5,6 +5,8 @@ import { fetchAssets, fetchConnections } from '../api/client'
 interface EditorState {
   appName: string
   assets: AppAssets
+  assetsForApp: string
+  assetsStatus: 'idle' | 'loading' | 'ready' | 'error'
   deliveryConnections: Record<string, DeliveryConnection>
   globalMaxFps: number
   dirty: boolean
@@ -20,23 +22,29 @@ interface EditorState {
 
 const EMPTY_ASSETS: AppAssets = { models: [], labels: [], videos: [] }
 
-export const useEditorStore = create<EditorState>((set) => ({
+export const useEditorStore = create<EditorState>((set, get) => ({
   appName: '',
   assets: EMPTY_ASSETS,
+  assetsForApp: '',
+  assetsStatus: 'idle',
   deliveryConnections: {},
   globalMaxFps: 25,
   dirty: false,
   appIntegrationDirty: false,
-  setAppName: appName => set({ appName }),
+  setAppName: appName => set(state => state.appName === appName
+    ? { appName }
+    : { appName, assets: EMPTY_ASSETS, assetsForApp: '', assetsStatus: 'idle' }),
   setDeliveryConnections: deliveryConnections => set({ deliveryConnections }),
   setGlobalMaxFps: fps => set({ globalMaxFps: fps > 0 ? fps : 25 }),
   setDirty: dirty => set({ dirty }),
   setAppIntegrationDirty: appIntegrationDirty => set({ appIntegrationDirty }),
   loadAssets: async name => {
+    set({ assetsStatus: 'loading' })
     try {
-      set({ assets: await fetchAssets(name) })
+      const assets = await fetchAssets(name)
+      if (get().appName === name) set({ assets, assetsForApp: name, assetsStatus: 'ready' })
     } catch {
-      set({ assets: EMPTY_ASSETS })
+      if (get().appName === name) set({ assets: EMPTY_ASSETS, assetsForApp: name, assetsStatus: 'error' })
     }
   },
   loadDeliveryConnections: async name => {

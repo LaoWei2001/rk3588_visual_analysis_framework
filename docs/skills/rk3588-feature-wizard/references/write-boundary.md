@@ -8,22 +8,22 @@ Web、服务、配置、引擎核心、文档或其他文件的改动带回原�
 只允许以下两个根目录的普通文件发生新增、修改或按明确需求删除：
 
 ```text
-vision_analysis/src/logic/modules/**
-vision_analysis/src/logic/global_modules/**
+projects/modules/**
+projects/global_modules/**
 ```
 
 典型模块产物是 `logic.cpp`、`logic.json`，以及确有远端契约时放在同一模块目录下的
 `report_templates/*.json`。不得创建符号链接、子模块或特殊文件。
 
-`vision_analysis/src/logic/core/**` 不在白名单内。虽然它位于 `src/logic` 下，但属于公共框架代码，向导
+`engine/src/logic/core/**` 不在白名单内。虽然它位于 `src/logic` 下，但属于公共框架代码，向导
 只能读取，不能修改。
 
 ## 明确禁止写回
 
 除上述两个根目录外一律禁止，包括但不限于：
 
-- `vision_analysis/src/config/`、`runtime/`、`event/` 和其他引擎目录；
-- `web_console/`、`service/`、测试、示例配置和构建脚本；
+- `engine/src/config/`、`runtime/`、`event/` 和其他引擎目录；
+- `web_console/`、`services/framework/`、测试、示例配置和构建脚本；
 - `docs/`、根目录说明、Skill、代理设置和启动器自身；
 - 生成的 catalog、应用包、构建产物及仓库中的其他现有文件。
 

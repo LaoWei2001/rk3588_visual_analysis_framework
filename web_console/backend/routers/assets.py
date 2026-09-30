@@ -40,11 +40,12 @@ async def list_assets(name: str):
             if not f.is_file():
                 continue
             rel = f"assets/{f.name}"
-            if f.suffix == ".rknn":
+            suffix = f.suffix.lower()
+            if suffix == ".rknn":
                 models.append(rel)
-            elif f.suffix == ".txt":
+            elif suffix == ".txt":
                 labels.append(rel)
-            elif f.suffix in (".mp4", ".avi", ".mkv"):
+            elif suffix in (".mp4", ".avi", ".mkv"):
                 videos.append(rel)
 
     return {"models": models, "labels": labels, "videos": videos}

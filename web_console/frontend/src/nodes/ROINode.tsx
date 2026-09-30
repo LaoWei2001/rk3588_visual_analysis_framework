@@ -6,6 +6,15 @@ import { useEditorStore } from '../store/editorStore'
 import { captureSnapshot } from '../api/client'
 import { getSrcType } from '../utils/streamSource'
 import { normalizeRoiPolygon } from '../utils/roiPolygon'
+import {
+  inferenceRoiConfig,
+  inferenceRoiContainsPoint,
+  inferenceRoiContainsPolygon,
+  inferenceRoiRestrictsResults,
+  polygonArea,
+  polygonIsSimple,
+  type InferenceRoiValue,
+} from '../components/InferenceROIEditor'
 import './nodeStyles.css'
 import './ROINode.css'
 
@@ -58,12 +67,13 @@ export default function ROINode({ id, selected }: NodeProps) {
   const getStreamInfo = (): {
     streamData: Record<string, unknown> | null
     usbRes: { width: number; height: number } | null
+    inferenceRegion: InferenceRoiValue | null
   } => {
     const edges = rf.getEdges()
     const toStream = edges.find(e =>
       e.source === id && e.sourceHandle === 'roi-out' &&
       e.targetHandle === 'roi-in' && rf.getNode(e.target)?.type === 'stream')
-    if (!toStream) return { streamData: null, usbRes: null }
+    if (!toStream) return { streamData: null, usbRes: null, inferenceRegion: null }
     const streamData = (rf.getNode(toStream.target)?.data as Record<string, unknown>) ?? null
 
     let usbRes: { width: number; height: number } | null = null
@@ -89,14 +99,20 @@ export default function ROINode({ id, selected }: NodeProps) {
         usbRes = usbResolutionForFps(fps)
       }
     }
-    return { streamData, usbRes }
+    const inferenceConfig = inferenceRoiConfig(streamData?.inference_roi)
+    return {
+      streamData,
+      usbRes,
+      inferenceRegion: inferenceConfig && inferenceRoiRestrictsResults(inferenceConfig.mode)
+        ? inferenceConfig : null,
+    }
   }
 
   return (
     <>
       <div className={`rf-node${selected ? ' selected' : ''}`} style={{ minWidth: 210 }}>
         <div className="rf-node-header header-roi">
-          <span>⬡</span><span>ROI 区域</span>
+          <span>⬡</span><span>业务 ROI</span>
           {nZones > 0 && <span className="roi-count-badge">{nZones}</span>}
         </div>
 
@@ -115,7 +131,7 @@ export default function ROINode({ id, selected }: NodeProps) {
             </div>
           )}
           <button className="node-btn full primary" onClick={() => setShowModal(true)}>
-            {nZones > 0 ? '编辑 ROI 区域' : '绘制 ROI 区域'}
+            {nZones > 0 ? '编辑业务 ROI' : '绘制业务 ROI'}
           </button>
           {nZones > 0 && (
             <button className="node-btn full danger" onClick={() => clearZones(id)}>
@@ -148,6 +164,7 @@ interface ModalProps {
   appName: string
   streamData: Record<string, unknown> | null
   usbRes: { width: number; height: number } | null
+  inferenceRegion: InferenceRoiValue | null
   onClose: () => void
 }
 
@@ -167,7 +184,7 @@ type DragState =
   | { kind: 'zone'; zi: number; lastX: number; lastY: number }
   | null
 
-function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalProps) {
+function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, onClose }: ModalProps) {
   const storeZones = useROIStore(s => s.zones[nodeId] ?? EMPTY_ZONES)
   const setZones   = useROIStore(s => s.setZones)
   const clearZones = useROIStore(s => s.clearZones)
@@ -203,6 +220,13 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
     })
     return duplicates
   })()
+  const pointAllowed = (x: number, y: number) =>
+    !inferenceRegion || inferenceRoiContainsPoint(inferenceRegion, x, y)
+  const zoneAllowed = (points: [number, number][]) =>
+    points.length >= 3 && points.length <= 64 && polygonArea(points) > 1e-8 && polygonIsSimple(points)
+      && (!inferenceRegion || inferenceRoiContainsPolygon(inferenceRegion, points))
+  const invalidZoneIndexes = new Set(wzones.flatMap((zone, index) =>
+    !zoneAllowed(zone.pts) ? [index] : []))
 
   // 画布显示尺寸(给右侧区域列表留出空间, 保持宽高比)
   const dispW = Math.max(360, Math.min(CANVAS_MAX_W, window.innerWidth - 380))
@@ -260,10 +284,29 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
     }
     if (!bgImage) return
 
+    if (inferenceRegion) {
+      const regionPoints = inferenceRegion.shape === 'polygon' ? inferenceRegion.polygon : [
+        [inferenceRegion.rect.x, inferenceRegion.rect.y],
+        [inferenceRegion.rect.x + inferenceRegion.rect.width, inferenceRegion.rect.y],
+        [inferenceRegion.rect.x + inferenceRegion.rect.width, inferenceRegion.rect.y + inferenceRegion.rect.height],
+        [inferenceRegion.rect.x, inferenceRegion.rect.y + inferenceRegion.rect.height],
+      ]
+      ctx.save(); ctx.fillStyle = 'rgba(2, 6, 23, 0.62)'; ctx.fillRect(0, 0, dispW, dispH)
+      ctx.beginPath(); regionPoints.forEach(([x, y], index) => index === 0
+        ? ctx.moveTo(x * dispW, y * dispH) : ctx.lineTo(x * dispW, y * dispH)); ctx.closePath()
+      ctx.globalCompositeOperation = 'destination-out'; ctx.fill(); ctx.restore()
+      ctx.beginPath(); regionPoints.forEach(([x, y], index) => index === 0
+        ? ctx.moveTo(x * dispW, y * dispH) : ctx.lineTo(x * dispW, y * dispH)); ctx.closePath()
+      ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 3; ctx.stroke()
+      ctx.fillStyle = '#67e8f9'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left'
+      ctx.fillText('可绘制业务 ROI 的范围', inferenceRegion.rect.x * dispW + 6,
+        Math.max(14, inferenceRegion.rect.y * dispH - 6))
+    }
+
     // 已完成的各区域: 闭合多边形 + 半透明填充 + 顶点 + 标号/名字
     wzones.forEach((z, i) => {
       if (z.pts.length < 2) return
-      const col = ZONE_COLORS[i % ZONE_COLORS.length]
+      const col = invalidZoneIndexes.has(i) ? '#ef4444' : ZONE_COLORS[i % ZONE_COLORS.length]
       const px  = z.pts.map(([x, y]) => [x * dispW, y * dispH] as [number, number])
       ctx.beginPath()
       ctx.moveTo(px[0][0], px[0][1])
@@ -310,7 +353,7 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
         }
       }
     }
-  }, [wzones, draft, drawing, hover, sel, bgImage, dispW, dispH])
+  }, [wzones, draft, drawing, hover, sel, bgImage, dispW, dispH, inferenceRegion, invalidZoneIndexes])
 
   useEffect(() => { render() }, [render])
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -341,19 +384,25 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
   const commitDraft = (pts: [number, number][]) => {
     if (pts.length < 3) return
     const norm = pts.map(([x, y]) => [+(x / dispW).toFixed(5), +(y / dispH).toFixed(5)] as [number, number])
+    if (!zoneAllowed(norm)) return
     setWzones(prev => [...prev, { name: nextDefaultZoneName(prev), pts: norm }])
     setSel(wzones.length)   // 新区域的下标 = 添加前的长度
     setDraft([]); setDrawing(false); setHover(null)
   }
+  const clampToAllowed = (x: number, y: number): [number, number] => [
+    clamp01(x / dispW) * dispW,
+    clamp01(y / dispH) * dispH,
+  ]
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const [x, y] = getPos(e)
     if (drawing) {                                   // 绘制态: 左键加顶点 / 靠近首点闭合
+      if (!pointAllowed(x / dispW, y / dispH)) return
       if (draft.length >= 3) {
         const d = Math.hypot(x - draft[0][0], y - draft[0][1])
         if (d < SNAP_PX) { commitDraft(draft); return }
       }
-      setDraft(prev => [...prev, [x, y]])
+      if (draft.length < 64) setDraft(prev => [...prev, [x, y]])
       return
     }
     // 编辑态: 优先抓顶点(拖拽改形状/大小), 否则抓整块区域(整体移动)
@@ -366,14 +415,31 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const [x, y] = getPos(e)
-    if (drawing) { setHover([x, y]); return }
+    if (drawing) {
+      const [cx, cy] = clampToAllowed(x, y)
+      setHover([cx, cy]); return
+    }
 
     if (drag) {
       if (drag.kind === 'vertex') {                  // 拖单个顶点
         const dzi = drag.zi, dvi = drag.vi
-        const nx = clamp01(x / dispW), ny = clamp01(y / dispH)
-        setWzones(prev => prev.map((z, zi) => zi !== dzi ? z
-          : { ...z, pts: z.pts.map((p, vi) => vi === dvi ? [nx, ny] as [number, number] : p) }))
+        const [cx, cy] = clampToAllowed(x, y)
+        const nx = cx / dispW, ny = cy / dispH
+        setWzones(prev => prev.map((z, zi) => {
+          if (zi !== dzi) return z
+          const target = z.pts.map((p, vi) => vi === dvi ? [nx, ny] as [number, number] : p)
+          if (zoneAllowed(target)) return { ...z, pts: target }
+          // 指针越界时沿拖动轨迹二分到最后一个合法位置，避免顶点突然卡住。
+          const origin = z.pts[dvi]
+          let low = 0, high = 1, best = z.pts
+          for (let step = 0; step < 14; step++) {
+            const ratio = (low + high) / 2
+            const candidate = z.pts.map((p, vi) => vi === dvi
+              ? [origin[0] + (nx - origin[0]) * ratio, origin[1] + (ny - origin[1]) * ratio] as [number, number] : p)
+            if (zoneAllowed(candidate)) { low = ratio; best = candidate } else high = ratio
+          }
+          return { ...z, pts: best }
+        }))
       } else {                                        // 整块平移(限幅, 保持形状不出界)
         const dzi = drag.zi, lx = drag.lastX, ly = drag.lastY
         setWzones(prev => prev.map((z, zi) => {
@@ -382,7 +448,15 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
           let dx = (x - lx) / dispW, dy = (y - ly) / dispH
           dx = Math.max(-Math.min(...xs), Math.min(1 - Math.max(...xs), dx))
           dy = Math.max(-Math.min(...ys), Math.min(1 - Math.max(...ys), dy))
-          return { ...z, pts: z.pts.map(([px, py]) => [px + dx, py + dy] as [number, number]) }
+          const moved = z.pts.map(([px, py]) => [px + dx, py + dy] as [number, number])
+          if (zoneAllowed(moved)) return { ...z, pts: moved }
+          let low = 0, high = 1, best = z.pts
+          for (let step = 0; step < 14; step++) {
+            const ratio = (low + high) / 2
+            const candidate = z.pts.map(([px, py]) => [px + dx * ratio, py + dy * ratio] as [number, number])
+            if (zoneAllowed(candidate)) { low = ratio; best = candidate } else high = ratio
+          }
+          return { ...z, pts: best }
         }))
         setDrag({ kind: 'zone', zi: dzi, lastX: x, lastY: y })
       }
@@ -415,7 +489,7 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
   }
 
   const handleSave = () => {
-    if (duplicateNames.size > 0) return
+    if (duplicateNames.size > 0 || invalidZoneIndexes.size > 0) return
     const out: Zone[] = wzones
       .filter(z => z.pts.length >= 3)
       .map(z => ({
@@ -428,6 +502,8 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
   }
 
   const isUsb = streamData ? getSrcType(streamData) === 'usb' : false
+  const normalizedDraft = draft.map(([x, y]) => [x / dispW, y / dispH] as [number, number])
+  const draftCanClose = normalizedDraft.length >= 3 && zoneAllowed(normalizedDraft)
 
   // 画布光标: 绘制态十字; 编辑态按"悬停/拖拽顶点=抓手, 区域=移动"
   const canvasCursor = drawing ? 'crosshair'
@@ -442,7 +518,7 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
       <div className="roi-dialog">
         {/* Header */}
         <div className="roi-hdr">
-          <span>ROI 区域绘制（可画多个区域，各自命名）</span>
+          <span>业务 ROI 绘制（可画多个区域，各自命名）</span>
           <div className="roi-hdr-actions">
             <button className="roi-grab-btn" onClick={grabFrame} disabled={loading}>
               {loading ? '抓取中…' : '📷 抓取当前帧'}
@@ -460,9 +536,15 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
             </div>
           ) : (
             <div style={{ padding: '6px 12px', background: '#3a2a12', color: '#fbbf24', fontSize: 12, lineHeight: 1.5 }}>
-              ⚠ 当前为「自动」分辨率：采集视野随「全局最大FPS」变化（当前抓帧 {srcW}×{srcH}），改 FPS 后需重抓帧。建议到「视频流节点」把「采集分辨率」设为固定值。
+              ⚠ 自动分辨率会随最大 FPS 变化；修改 FPS 后请重新抓帧。
             </div>
           )
+        )}
+
+        {inferenceRegion && (
+          <div className="inference-roi-help">
+            业务 ROI 必须完全位于青色推理区域内。
+          </div>
         )}
 
         {/* Body: canvas + sidebar */}
@@ -514,12 +596,20 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
                 ROI 区域名称不能重复：{[...duplicateNames].join('、')}。请修改后再保存。
               </div>
             )}
+            {invalidZoneIndexes.size > 0 && (
+              <div className="roi-name-error">
+                红色区域无效、自相交或穿出了推理 ROI，请调整顶点或整个区域。
+              </div>
+            )}
 
             {drawing ? (
               <div className="roi-draw-hint">
                 绘制中：左键加顶点（{draft.length}）· 靠近首点或点「完成」闭合 · 右键撤销
+                {draft.length >= 3 && !draftCanClose && <div className="roi-name-error">
+                  当前边界自相交、面积无效或穿出了推理 ROI，请继续调整顶点。
+                </div>}
                 <div className="roi-draw-actions">
-                  <button className="roi-btn primary" disabled={draft.length < 3} onClick={() => commitDraft(draft)}>完成此区域</button>
+                  <button className="roi-btn primary" disabled={!draftCanClose} onClick={() => commitDraft(draft)}>完成此区域</button>
                   <button className="roi-btn" onClick={cancelDraft}>取消</button>
                 </div>
               </div>
@@ -536,15 +626,14 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, onClose }: ModalPro
 
         {/* Footer */}
         <div className="roi-footer">
-          <span className="roi-hint">
-            拖顶点改形状/大小 · 拖区域内部整体移动 · 右键顶点删点；坐标按比例存储，与分辨率解耦。
-          </span>
+          <span />
           <div className="roi-actions">
             <button
               className="roi-btn primary"
               onClick={handleSave}
-              disabled={duplicateNames.size > 0}
-              title={duplicateNames.size > 0 ? '请先修改重复的 ROI 区域名称' : undefined}
+              disabled={duplicateNames.size > 0 || invalidZoneIndexes.size > 0}
+              title={duplicateNames.size > 0 ? '请先修改重复的 ROI 区域名称'
+                : invalidZoneIndexes.size > 0 ? '业务 ROI 不能超出推理 ROI' : undefined}
             >
               保存
             </button>

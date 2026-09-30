@@ -24,8 +24,8 @@ class DeliveryConfigurationTest(unittest.TestCase):
         upload = app / "services" / "upload"
         adapters = upload / "adapters"
         adapters.mkdir(parents=True)
-        shutil.copy2(REPO_ROOT / "service/upload/contracts.py", upload / "contracts.py")
-        shutil.copy2(REPO_ROOT / "service/upload/adapters/catalog.json", adapters / "catalog.json")
+        shutil.copy2(REPO_ROOT / "services/framework/upload/contracts.py", upload / "contracts.py")
+        shutil.copy2(REPO_ROOT / "services/framework/upload/adapters/catalog.json", adapters / "catalog.json")
         (app / "report_templates").mkdir()
         (app / "logics.json").write_text(json.dumps({
             "channel_logics": [{

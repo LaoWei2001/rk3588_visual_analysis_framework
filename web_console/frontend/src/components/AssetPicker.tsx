@@ -10,6 +10,8 @@ interface AssetPickerProps {
   progress?: number
   onUpload?: (file: File) => void
   onDelete?: (path: string) => Promise<void>
+  verified?: boolean
+  resourceLabel?: string
 }
 
 export default function AssetPicker({
@@ -17,14 +19,15 @@ export default function AssetPicker({
   emptyHint = '（该目录暂无文件，请点「导入」上传）',
   accept, uploading, progress = 0, onUpload,
   onDelete,
+  verified = true,
+  resourceLabel = '文件',
 }: AssetPickerProps) {
   const fileRef = useRef<HTMLInputElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
 
-  const orphan  = value && !options.includes(value) ? [value] : []
-  const allOpts = [...options, ...orphan]
+  const missing = verified && !!value && !options.includes(value)
   const displayName = (p: string) => p.split('/').pop() ?? p
 
   // close dropdown on outside click
@@ -91,23 +94,24 @@ export default function AssetPicker({
   return (
     <div className="asset-picker-col">
       <div className="asset-picker" ref={dropdownRef}>
-        {allOpts.length === 0 ? (
+        {options.length === 0 ? (
           <span className="picker-empty">{emptyHint}</span>
         ) : (
           <div className="picker-dropdown">
             <button
               type="button"
-              className={`picker-trigger ${open ? 'open' : ''}`}
+              className={`picker-trigger ${open ? 'open' : ''} ${missing ? 'missing' : ''}`}
               onClick={() => setOpen(o => !o)}
+              aria-invalid={missing}
             >
-              <span className={value ? '' : 'placeholder'}>
-                {value ? displayName(value) : '— 选择文件 —'}
+              <span className={value && !missing ? '' : 'placeholder'}>
+                {value && !missing ? displayName(value) : '— 选择文件 —'}
               </span>
               <span className="picker-arrow">{open ? '▴' : '▾'}</span>
             </button>
             {open && (
               <div className="picker-menu">
-                {allOpts.map(p => (
+                {options.map(p => (
                   <div
                     key={p}
                     className={`picker-item ${p === value ? 'selected' : ''} ${deleting === p ? 'deleting' : ''}`}
@@ -138,6 +142,12 @@ export default function AssetPicker({
         )}
         {uploadBtn}
       </div>
+      {missing && (
+        <div className="picker-missing" role="alert">
+          <span title={value}>⚠ 当前{resourceLabel}不存在：{displayName(value)}</span>
+          <button type="button" onClick={() => onChange('')}>清除</button>
+        </div>
+      )}
       {uploading && (
         <div className="picker-progress" aria-hidden="true">
           <div className="picker-progress-bar" style={{ width: `${progress}%` }} />

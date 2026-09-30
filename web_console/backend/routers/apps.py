@@ -1,9 +1,9 @@
 """
 apps.py — 程序(App)列表 + 网页上传/删除程序包。
 
-上传/删除做的就是 install_app.sh 的网页版：把一个打包好的程序(build.sh 产出的 dist：
+上传/删除做的就是根目录 install_app.sh 的网页版：把一个打包好的程序（根 build.sh 产出的 dist）：
 二进制 + assets/ + libs/ + services/ ...)解压进 /opt/ai_apps/<name>/，或反向删除。
-命令行 install_app.sh 仍可用，两者写的是同一处，互不冲突。
+命令行 install_app.sh 与网页写入同一处，互不冲突。
 
 安全：
   - 程序名禁止 / .. 及 . / _ 开头(后者保留给 _console / 隐藏目录)。
@@ -163,12 +163,28 @@ async def upload_app(file: UploadFile = File(...), name: str = Form("")):
 
 
 @router.delete("/apps/{name}")
-async def delete_app(name: str):
+async def delete_app(name: str, delete_data: bool = False):
     app_name = _safe_name(name)
     dest = APPS_ROOT / app_name
     if not dest.is_dir():
         raise HTTPException(status_code=404, detail=f"程序不存在: {app_name}")
     pm.stop_app(app_name)                       # 删除前先停进程
-    await run_in_threadpool(lambda: shutil.rmtree(dest, ignore_errors=True))
+
+    def _delete() -> bool:
+        shutil.rmtree(dest)
+        if not delete_data:
+            return False
+        # 运行数据与程序包分开存放。全删严格限定到该程序名对应的目录；若目录被
+        # 异常替换成符号链接，只删除链接本身，绝不跟随到 APPS_ROOT 外部。
+        app_data = APPS_ROOT / ".data" / app_name
+        if app_data.is_symlink():
+            app_data.unlink()
+            return True
+        if app_data.exists():
+            shutil.rmtree(app_data)
+            return True
+        return False
+
+    data_deleted = await run_in_threadpool(_delete)
     runtime_state.remove_vision_app(app_name)
-    return {"ok": True}
+    return {"ok": True, "data_deleted": data_deleted}

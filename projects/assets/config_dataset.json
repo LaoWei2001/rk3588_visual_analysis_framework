@@ -1,0 +1,90 @@
+{
+  "global": {
+    "enable_display": 0,
+    "disp_width": 640,
+    "disp_height": 640,
+    "tile_rows": 1,
+    "tile_cols": 1,
+    "max_fps": 25,
+    "queue_size": 1,
+    "channel_threads": 3,
+    "tracker_enable": 1,
+    "tracker_type": "sort",
+    "tracker_iou_thresh": 0.3,
+    "tracker_max_miss": 30,
+    "tracker_min_hits": 3,
+    "bytetrack_low_thresh": 0.1,
+    "bytetrack_low_iou_thresh": 0.2,
+    "performance_display": 0,
+    "enable_pause_key": 0,
+    "enable_rtsp": 1,
+    "rtsp_codec": "h264"
+  },
+  "channels": [
+    {
+      "id": 0,
+      "enable": true,
+      "infer_enable": true,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/diaogou.mp4",
+        "loop": false
+      },
+      "models": [
+        {
+          "id": "model_0",
+          "enable": true,
+          "model_type": "yolov8_det",
+          "model_path": "assets/diaogou_s.rknn",
+          "label_path": "assets/labels_diaogou.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 0
+        }
+      ],
+      "logic": "logic_training_negative_capture",
+      "report_policy": {
+        "enabled": false,
+        "deliveries": [],
+        "parameters": []
+      },
+      "report_parameters": {},
+      "logic_parameters": {
+        "target_class_id": 0,
+        "min_score": 0.3,
+        "max_images": 200,
+        "capture_interval_sec": 0.5,
+        "output_dir": "@app_data/training_negative_samples",
+        "jpeg_quality": 95
+      },
+      "inference_roi": {
+        "mode": "full_frame_roi_filter",
+        "rect": [
+          0.221528,
+          0.011863,
+          0.7,
+          0.97037
+        ]
+      },
+      "roi_zones": []
+    }
+  ],
+  "_editor_layout": {
+    "0": {
+      "stream": {
+        "x": -756,
+        "y": 817
+      },
+      "model": {
+        "x": -441,
+        "y": 819
+      },
+      "logic": {
+        "x": -167,
+        "y": 817
+      }
+    }
+  }
+}

@@ -129,6 +129,7 @@
   align-items: center;
   gap: 5px;
 }
+.rf-node-summary.asset-missing { color: #f87171; }
 
 /* Channel-id label inside stream node summary */
 .node-ch-label {
@@ -287,7 +288,34 @@
 }
 .picker-trigger .placeholder { color: var(--text2); }
 .picker-trigger.open { border-color: var(--accent); }
+.picker-trigger.missing { border-color: #ef4444; }
 .picker-arrow { font-size: 10px; color: var(--text2); margin-left: 4px; flex-shrink: 0; }
+
+.picker-missing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #f87171;
+  font-size: 11px;
+}
+.picker-missing span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-missing button {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: #fca5a5;
+  cursor: pointer;
+  padding: 0;
+  font-size: 11px;
+}
+.picker-missing button:hover { color: #fff; text-decoration: underline; }
 
 .picker-menu {
   position: absolute;

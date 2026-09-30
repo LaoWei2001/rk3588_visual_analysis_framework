@@ -91,6 +91,7 @@
 
 - RTSP/file 使用 `url`；USB 使用 `device` 且必须以 `/dev/video` 开头；
 - 启用的 RTSP 通道经过完整验证时，`video_enc` 必须为 `h264` 或 `h265`；file/USB 不校验该字段；
+- file 的 `url` 必须指向已存在的普通文件；
 - `loop` 只用于 file；
 - `usb_width/usb_height` 为 0 时按 FPS 自动档，否则固定采集尺寸。
 

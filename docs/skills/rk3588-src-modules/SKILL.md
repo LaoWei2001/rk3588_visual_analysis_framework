@@ -12,17 +12,17 @@ description: >-
 # RK3588 引擎源码与配置
 
 本 Skill 是框架层二次开发入口。它替代过去按旧 `analyzer/core/player/uploader` 目录拆分的说明；这些
-目录在当前 `vision_analysis/src/` 中不存在，不得继续作为设计边界。
+目录在当前 `engine/src/` 中不存在，不得继续作为设计边界。
 
 ## 当前权威入口
 
-- 生命周期：`vision_analysis/src/main.cpp`；
+- 生命周期：`engine/src/main.cpp`；
 - 配置：`src/config/config.h/.cpp`、`config_init.cpp`、`config_validator.cpp`；
 - 运行状态与热更：`src/runtime/app_ctrl.h/.cpp`；
 - 帧管线：`src/pipeline/`；
 - 推理：`src/inference/` 和 `src/yolo/`；
-- 业务扩展：`src/logic/`；
-- 构建：`vision_analysis/CMakeLists.txt`、`build.sh`。
+- Logic 公共框架：`src/logic/core/`；业务扩展：仓库根 `projects/modules/` 和 `projects/global_modules/`；
+- 构建：`engine/CMakeLists.txt`、`build.sh`。
 
 ## 修改前的架构判断
 
@@ -81,19 +81,19 @@ channel publication（frame/results/outputs/draw/state 元信息）
 无需二进制的静态检查：
 
 ```bash
-cd vision_analysis
-python3 scripts/generate_logics_catalog.py --check
+python3 tools/build/generate_logics_catalog.py --check
 ```
 
-仓库当前没有提交预编译二进制；仅在已经用当前源码得到 `./vision_analysis` 后再做运行时能力探测：
+仓库当前没有提交预编译二进制；仅在已经用当前源码得到二进制后再做运行时能力探测：
 
 ```bash
-./vision_analysis --list-logics
-./vision_analysis --list-global-logics
-./vision_analysis --validate-config ./assets/config_6.json
+cd projects
+../build/engine/vision_analysis --list-logics
+../build/engine/vision_analysis --list-global-logics
+../build/engine/vision_analysis --validate-config ./assets/config_global.json
 ```
 
-`config_6.json` 只是仓库现存示例；验收具体应用时应换成实际运行配置。
+`config_global.json` 只是仓库现存示例；验收具体应用时应换成实际运行配置。
 
 编译验证：
 
