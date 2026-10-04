@@ -20,21 +20,19 @@ import StreamNode  from '../nodes/StreamNode'
 import ModelNode   from '../nodes/ModelNode'
 import ROINode     from '../nodes/ROINode'
 import LogicNode   from '../nodes/LogicNode'
-import SopNode     from '../nodes/SopNode'
 import ReportNode  from '../nodes/ReportNode'
 import GlobalLogicNode from '../nodes/GlobalLogicNode'
 
 import { useROIStore, type Zone } from '../store/roiStore'
 import { useConsoleStore } from '../store/consoleStore'
 import { useEditorStore }  from '../store/editorStore'
-import { useSopUiStore }   from '../store/sopUiStore'
 import { graphToConfig }   from '../utils/graphToConfig'
 import { configToGraph }   from '../utils/configToGraph'
 import { saveLastConfig }  from '../utils/lastConfig'
 import { validateModelId } from '../utils/modelId'
 import {
   fetchConfig, saveConfig, saveConfigFile, deleteConfigFile,
-  fetchConfigFiles, loadConfigFile,
+  fetchConfigFiles, loadConfigFile, fetchAppLogics,
 } from '../api/client'
 import GlobalSettingsPanel, { GlobalSettingsData, DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
 import NodeConfigPanel from '../components/NodeConfigPanel'
@@ -81,7 +79,6 @@ const nodeTypes = {
   model:  ModelNode,
   roi:    ROINode,
   logic:  LogicNode,
-  sop:    SopNode,
   report: ReportNode,
   globalLogic: GlobalLogicNode,
 }
@@ -101,7 +98,6 @@ const PALETTE_NODES = [
   { type: 'model',  label: 'YOLO推理', icon: '🧠', cls: 'model'  },
   { type: 'roi',    label: '业务ROI',  icon: '◆', cls: 'roi'    },
   { type: 'logic',  label: '逻辑函数', icon: '⚡', cls: 'logic'  },
-  { type: 'sop',    label: 'SOP流程',  icon: '🧭', cls: 'sop'    },
   { type: 'report', label: '上报配置', icon: '📤', cls: 'report' },
   { type: 'globalLogic', label: '全局逻辑', icon: '⬡', cls: 'global-logic' },
 ] as const
@@ -111,13 +107,13 @@ const DEFAULT_RTSP_URL = 'rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels
 
 // ── Default node data when dropped ──
 const NODE_DEFAULTS: Record<string, Record<string, unknown>> = {
-  stream: { src_type: 'rtsp', url: DEFAULT_RTSP_URL, video_enc: 'h264', channel_id: 0 },
+  stream: { src_type: 'rtsp', url: DEFAULT_RTSP_URL, video_enc: 'h264', channel_id: 0,
+            enable: true, infer_enable: true, swap_rb: false },
   model:  { id: 'model_0', enable: true, model_type: 'yolov8_det',
             model_path: '', label_path: '', obj_thresh: 0.3, nms_thresh: 0.45,
             detect_classes: [], npu_core: -1 },
   roi:    {},
   logic:  { logic: '' },
-  sop:    { target_label: '', reset_sec: 5, end_mode: 'leave', end_zone: '', end_dwell_sec: 0, report_normal: false, steps: [] },
   report: {
     report_policy: {
       enabled: true,
@@ -171,9 +167,7 @@ const channelInputForLogic = (
   if (stream?.type !== 'stream') return null
   return {
     channelId: Number((stream.data as Record<string, unknown>).channel_id ?? 0),
-    logic: logicNode.type === 'sop'
-      ? 'logic_path_sop'
-      : String((logicNode.data as Record<string, unknown>).logic ?? ''),
+    logic: String((logicNode.data as Record<string, unknown>).logic ?? ''),
   }
 }
 
@@ -216,7 +210,7 @@ const reportConfigPreviewForNode = (
     }
   }
 
-  if (source.type !== 'logic' && source.type !== 'sop') return null
+  if (source.type !== 'logic') return null
   const sourceInput = channelInputForLogic(source, nodes, edges)
   if (!sourceInput) return null
   const channels = Array.isArray(config.channels)
@@ -329,12 +323,15 @@ export default function EditorPage() {
   // 当前正在编辑/将保存到的配置文件（相对 app 目录）。导入/另存为后会切到对应文件，
   // 之后「保存」写到这里 —— 这样可以在副本上改而不动 config.json。
   const [currentFile,    setCurrentFile]   = useState('assets/config.json')
+  const [logicCatalog, setLogicCatalog] = useState<{
+    status: 'idle' | 'loading' | 'ready' | 'error'
+    channel: string[]
+    global: string[]
+  }>({ status: 'idle', channel: [], global: [] })
 
   const roiZones    = useROIStore(s => s.zones)
   const setAllROI   = useROIStore(s => s.setAll)
   const loadConsole = useConsoleStore(s => s.load)
-  // SOP 流程弹窗打开时, 暂停主画布的 Delete 删节点(避免误删整个 SOP 节点)
-  const sopFlowOpen = useSopUiStore(s => s.flowOpen)
 
   useEffect(() => {
     const fitPanelSizes = () => {
@@ -460,7 +457,7 @@ export default function EditorPage() {
     const inputs = edges
       .filter(edge => edge.target === selectedNode.id && edge.targetHandle === 'global-in')
       .map(edge => nodes.find(node => node.id === edge.source))
-      .filter((node): node is Node => node?.type === 'logic' || node?.type === 'sop')
+      .filter((node): node is Node => node?.type === 'logic')
       .map(logicNode => channelInputForLogic(logicNode, nodes, edges))
       .filter((input): input is { channelId: number; logic: string } => input != null)
     return inputs.sort((a, b) => a.channelId - b.channelId)
@@ -488,7 +485,7 @@ export default function EditorPage() {
     return [...new Set(edges
       .filter(edge => edge.target === source.id && edge.targetHandle === 'global-in')
       .map(edge => nodes.find(node => node.id === edge.source))
-      .filter((node): node is Node => node?.type === 'logic' || node?.type === 'sop')
+      .filter((node): node is Node => node?.type === 'logic')
       .map(logicNode => channelInputForLogic(logicNode, nodes, edges)?.channelId)
       .filter((channelId): channelId is number => channelId != null))]
       .sort((a, b) => a - b)
@@ -564,11 +561,28 @@ export default function EditorPage() {
 
   // Sync appName to editorStore, load assets
   useEffect(() => {
+    let cancelled = false
     if (appName) {
       setAppName(appName)
       loadAssets(appName)
       loadDeliveryConnections(appName)
+      setLogicCatalog({ status: 'loading', channel: [], global: [] })
+      fetchAppLogics(appName)
+        .then(result => {
+          if (cancelled) return
+          setLogicCatalog(result.error
+            ? { status: 'error', channel: [], global: [] }
+            : {
+                status: 'ready',
+                channel: result.channel_logics.map(item => item.name),
+                global: result.global_logics.map(item => item.name),
+              })
+        })
+        .catch(() => {
+          if (!cancelled) setLogicCatalog({ status: 'error', channel: [], global: [] })
+        })
     }
+    return () => { cancelled = true }
   }, [appName, setAppName, loadAssets, loadDeliveryConnections])
 
   // 全局最大FPS → editorStore：ROINode 抓 USB 帧时按它推算采集分辨率(与 C++ 一致)，避免 ROI 错位
@@ -687,7 +701,7 @@ export default function EditorPage() {
     if (params.sourceHandle === 'global-out' || params.targetHandle === 'global-in') {
       const sourceNode = nodesRef.current.find(node => node.id === params.source)
       const targetNode = nodesRef.current.find(node => node.id === params.target)
-      if (!['logic', 'sop'].includes(String(sourceNode?.type ?? '')) || targetNode?.type !== 'globalLogic') {
+      if (sourceNode?.type !== 'logic' || targetNode?.type !== 'globalLogic') {
         showToast('全局逻辑的输入只能来自单通道逻辑节点', false)
         return
       }
@@ -702,8 +716,7 @@ export default function EditorPage() {
     if (params.targetHandle === 'logic-in') {
       const source = nodesRef.current.find(node => node.id === params.source)
       const target = nodesRef.current.find(node => node.id === params.target)
-      if (!['stream', 'model'].includes(String(source?.type ?? '')) ||
-          !['logic', 'sop'].includes(String(target?.type ?? ''))) {
+      if (!['stream', 'model'].includes(String(source?.type ?? '')) || target?.type !== 'logic') {
         showToast('单通道逻辑只能接收视频流或该视频流的模型结果', false)
         return
       }
@@ -794,9 +807,7 @@ export default function EditorPage() {
         return
       }
       const source = nodesRef.current.find(node => node.id === params.source)
-      const logicName = source?.type === 'sop'
-        ? 'logic_path_sop'
-        : String((source?.data as Record<string, unknown> | undefined)?.logic ?? '')
+      const logicName = String((source?.data as Record<string, unknown> | undefined)?.logic ?? '')
       if (logicName) {
         setNodes(nodes => nodes.map(node => node.id === params.target
           ? { ...node, data: {
@@ -823,9 +834,6 @@ export default function EditorPage() {
   }, [])
 
   const onDrop = useCallback((event: React.DragEvent) => {
-    // SOP 配置弹窗位于主 ReactFlow 的 DOM 子树中。外层使用捕获阶段接收 drop，
-    // 因此必须先放行 SOP 专用拖拽，否则这里的 stopPropagation 会让子画布收不到事件。
-    if (event.dataTransfer.getData('application/reactflow-sop')) return
     event.preventDefault()
     event.stopPropagation()
     const nodeType = event.dataTransfer.getData('application/reactflow')
@@ -834,8 +842,7 @@ export default function EditorPage() {
       || ''
     dragNodeTypeRef.current = null
     if (!nodeType || !rfInstance) return
-    // 白名单防御: 只接受主画布 palette 注册过的类型, 否则忽略 —— 防止其他 ReactFlow 实例
-    // (如 SOP 子画布) 拖出的节点意外落到主画布上, 出现"未知 type 的白框"。
+    // 白名单防御：只接受主画布 palette 注册过的类型。
     if (!(nodeType in NODE_DEFAULTS)) return
     const position = rfInstance.screenToFlowPosition({ x: event.clientX, y: event.clientY })
     const id = uid(nodeType)
@@ -1025,8 +1032,6 @@ export default function EditorPage() {
     }
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return
-      // SOP 弹窗打开时不抢快捷键 — 让弹窗自己的 Ctrl+C/X/V/Z/Y 路由到子画布(主画布上选中的 SOP 节点不应被误复制)
-      if (useSopUiStore.getState().flowOpen) return
       // 在输入框/下拉里打字时不抢快捷键
       const t = e.target as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
@@ -1167,7 +1172,7 @@ export default function EditorPage() {
       String((node.data as Record<string, unknown>).src_type ?? '') === 'file')
       || modelNodes.some(node => {
         const data = node.data as Record<string, unknown>
-        return data.infer_enable !== false
+        return data.enable !== false
           || !!String(data.model_path ?? '') || !!String(data.label_path ?? '')
       })
     if (hasLocalAssetReference
@@ -1197,7 +1202,7 @@ export default function EditorPage() {
     for (const modelNode of modelNodes) {
       const data = modelNode.data as Record<string, unknown>
       const modelId = String(data.id ?? '').trim() || '未命名模型'
-      const enabled = data.infer_enable !== false
+      const enabled = data.enable !== false
       const modelPath = String(data.model_path ?? '')
       const labelPath = String(data.label_path ?? '')
       const modelType = String(data.model_type ?? 'yolov8_det').toLowerCase()
@@ -1332,6 +1337,33 @@ export default function EditorPage() {
       }
     }
 
+    const configuredChannelLogics = nodes
+      .filter(node => node.type === 'logic')
+      .map(node => String((node.data as Record<string, unknown>).logic ?? '').trim())
+      .filter(Boolean)
+    const configuredGlobalLogics = nodes
+      .filter(node => node.type === 'globalLogic')
+      .map(node => String((node.data as Record<string, unknown>).logic ?? '').trim())
+      .filter(Boolean)
+    if (configuredChannelLogics.length > 0 || configuredGlobalLogics.length > 0) {
+      if (logicCatalog.status !== 'ready') {
+        showToast(logicCatalog.status === 'loading'
+          ? '正在核对当前应用的 Logic 清单，请稍后再保存'
+          : '无法读取当前应用的 Logic 清单，不能保存', false)
+        return null
+      }
+      const invalidChannel = configuredChannelLogics.find(name => !logicCatalog.channel.includes(name))
+      if (invalidChannel) {
+        showToast(`通道 Logic 不存在：${invalidChannel}。请重新选择后再保存`, false)
+        return null
+      }
+      const invalidGlobal = configuredGlobalLogics.find(name => !logicCatalog.global.includes(name))
+      if (invalidGlobal) {
+        showToast(`全局 Logic 不存在：${invalidGlobal}。请重新选择后再保存`, false)
+        return null
+      }
+    }
+
     for (const reportNode of nodes.filter(node => node.type === 'report')) {
       const data = reportNode.data as Record<string, unknown>
       const policy = data.report_policy && typeof data.report_policy === 'object'
@@ -1450,7 +1482,6 @@ export default function EditorPage() {
     if (n.type === 'model')  return '#16a34a'
     if (n.type === 'roi')    return '#ea580c'
     if (n.type === 'logic')  return '#9333ea'
-    if (n.type === 'sop')    return '#06b6d4'
     if (n.type === 'globalLogic') return '#0891b2'
     return '#dc2626'
   }
@@ -1578,7 +1609,7 @@ export default function EditorPage() {
             onConnect={onConnect}
             onInit={setRfInstance}
             nodeTypes={nodeTypes}
-            deleteKeyCode={sopFlowOpen ? null : 'Delete'}
+            deleteKeyCode="Delete"
             proOptions={{ hideAttribution: true }}
             selectionOnDrag={true}
             selectionMode={SelectionMode.Partial}

@@ -4,7 +4,7 @@ import './nodeStyles.css'
 
 export default function ModelNode({ data, selected }: NodeProps) {
   const d = data as Record<string, unknown>
-  const enabled   = d.infer_enable !== false   // YOLO 推理开关（不再是整条通道的 enable）
+  const enabled   = d.enable !== false
   const modelId   = String(d.id ?? '').trim()
   const modelPath = String(d.model_path ?? '')
   const labelPath = String(d.label_path ?? '')

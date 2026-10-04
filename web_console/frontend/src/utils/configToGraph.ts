@@ -1,5 +1,4 @@
 import { Node, Edge, MarkerType } from '@xyflow/react'
-import { sopParametersToFlow } from './sopFlow'
 import type { GlobalLogicEntry } from './globalLogic'
 import type { GlobalSettingsData } from '../components/GlobalSettingsPanel'
 import { DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
@@ -11,15 +10,15 @@ import { normalizeRoiPolygon } from './roiPolygon'
 //       node role), NOT by node ID — see `layout`/`pos` below. This survives ID changes,
 //       drag/drop/paste, and channel add/remove.
 
-// 模型节点字段；通道里除这些(及 stream/logic/上报运行字段)之外的键视为逻辑参数。
-const MODEL_KEYS = new Set([
-  'id', 'enable', 'infer_enable', 'threads',
-  'playback_fps', 'roi_zones', 'models',
-])
 const TRACKER_KEYS = [
   'tracker_enable', 'tracker_type', 'tracker_iou_thresh', 'tracker_max_miss',
   'tracker_min_hits', 'bytetrack_low_thresh', 'bytetrack_low_iou_thresh',
 ] as const
+
+const configBool = (value: unknown, fallback: boolean): boolean => {
+  if (value == null) return fallback
+  return value === true || (typeof value === 'number' && value !== 0)
+}
 
 
 export function configToGraph(
@@ -66,7 +65,7 @@ export function configToGraph(
   const rawGL = (global.global_logics as Record<string, unknown>[]) ?? []
   const globalLogics: GlobalLogicEntry[] = rawGL.map(gl => ({
     instance_id:      String(gl.instance_id ?? ''),
-    enable:           (gl.enable          as boolean) ?? true,
+    enable:           configBool(gl.enable, true),
     logic:            (gl.logic           as string)  ?? 'global_default',
     channels:         (gl.channels        as number[]) ?? [],
     poll_interval_ms: (gl.poll_interval_ms as number) ?? 200,
@@ -113,10 +112,17 @@ export function configToGraph(
     // 通道号 (channel_id) 唯一。每个通道使用独立 StreamNode；同一 StreamNode 可连接多个模型。
     // 即使两个通道 URL 相同，也仍然分别创建各自的视频流节点。
     const streamId = uid('stream')
-    const streamData: Record<string, unknown> = { ...stream, channel_id: origId }
+    const streamData: Record<string, unknown> = {
+      ...stream,
+      channel_id: origId,
+      enable: configBool(ch.enable, true),
+      infer_enable: configBool(ch.infer_enable, true),
+      swap_rb: configBool(ch.swap_rb, false),
+    }
     if (ch.inference_roi && typeof ch.inference_roi === 'object' && !Array.isArray(ch.inference_roi))
       streamData.inference_roi = ch.inference_roi
     if (ch.max_fps != null) streamData.max_fps = ch.max_fps
+    if (ch.threads != null) streamData.threads = ch.threads
     TRACKER_KEYS.forEach(key => {
       if (ch[key] != null) streamData[key] = ch[key]
     })
@@ -126,17 +132,11 @@ export function configToGraph(
       data: streamData,
     })
 
-    // ── 通道字段分流：模型字段 → 模型节点；逻辑参数只来自 logic_parameters ──
+    // 逻辑参数只来自 logic_parameters，模型参数只来自 models[]。
     const {
       stream: _s, logic: _lg, logic_parameters: _logicParameters,
       report_policy: _reportPolicy, report_parameters: _reportParameters,
-      ...rest
     } = ch
-    const modelData:   Record<string, unknown> = {}
-    Object.entries(rest).forEach(([k, v]) => {
-      if (MODEL_KEYS.has(k)) modelData[k] = v
-    })
-    delete modelData.models
 
     // ── Model node (仅 YOLO 通道) ──
     // 节点创建顺序: stream→model→roi→logic→report。画布坐标按「通道序号 + 角色」从
@@ -151,9 +151,8 @@ export function configToGraph(
           id: modelId, type: 'model',
           position: pos(role, MODEL_X, y + modelIndex * 90),
           data: {
-            ...modelData,
             ...configuredModel,
-            infer_enable: configuredModel.enable !== false,
+            enable: configBool(configuredModel.enable, true),
             npu_core: npuCore,
           },
         })
@@ -184,27 +183,23 @@ export function configToGraph(
       edges.push(edge(roiId, 'roi-out', streamId, 'roi-in', '#f97316'))
     }
 
-    // ── Logic / SOP node（可选）── 配置未声明 logic 时不创建后处理节点。
+    // ── Logic node（可选）── 配置未声明 logic 时不创建后处理节点。
     const logic   = String(_lg ?? '').trim()
-    const isSop   = logic === 'logic_path_sop'
     let logicId: string | null = null
-    // SOP: flow 来自 logic_parameters；普通逻辑也只读取同一参数对象。
     const moduleParameters = _logicParameters && typeof _logicParameters === 'object' && !Array.isArray(_logicParameters)
       ? _logicParameters as Record<string, unknown> : {}
     if (logic) {
-      logicId = uid(isSop ? 'sop' : 'logic')
-      const logicData: Record<string, unknown> = isSop
-        ? { ...sopParametersToFlow(moduleParameters), logic_parameters: moduleParameters }
-        : { logic, logic_parameters: moduleParameters }
+      logicId = uid('logic')
+      const logicData: Record<string, unknown> = { logic, logic_parameters: moduleParameters }
       nodes.push({
-        id: logicId, type: isSop ? 'sop' : 'logic',
+        id: logicId, type: 'logic',
         position: pos('logic', hasModel ? LOGIC_X : MODEL_X, y),  // 传统通道 logic 占据 model 的列位置, 更紧凑
         data: logicData,
       })
       channelLogicNodes.set(origId, logicId)
       if (hasModel) {
         modelIds.forEach(modelId =>
-          edges.push(edge(modelId, 'logic-out', logicId!, 'logic-in', isSop ? '#06b6d4' : '#a855f7')))
+          edges.push(edge(modelId, 'logic-out', logicId!, 'logic-in', '#a855f7')))
       } else {
         // 传统/无推理通道: 视频流直连逻辑函数；ROI 已独立连接视频流。
         edges.push(edge(streamId, 'stream-out', logicId, 'logic-in', '#3b82f6'))

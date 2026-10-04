@@ -320,7 +320,7 @@ static bool run_model_task(int chnId, const InferenceTask &task, const std::shar
             const int model_fd = model->get_input_fd();
             /* 直接拉伸/补黑边的多边形是真正的多边形输入：外部填黑。
              * expand 的定义是扩展周边上下文，因此保留扩展框内的真实画面。 */
-            const bool mask_polygon = use_roi && task.roi_config.has_polygon() &&
+            const bool mask_polygon = use_roi && !task.roi_config.is_axis_aligned_rectangle() &&
                                       task.roi_config.resize_mode != "expand";
             if (task.src_buf && task.src_buf->handle != 0 && model_fd >= 0 &&
                 !mask_polygon &&
@@ -369,8 +369,8 @@ static bool run_model_task(int chnId, const InferenceTask &task, const std::shar
                                            full_results);
             model->annotate_results(full_results);
             if (task.roi_mode == InferenceRoiMode::FullFrameRoiFilter)
-                filter_results_to_inference_roi(full_results, task.roi_config, task.srcW, task.srcH,
-                                                g_inference.input_w, g_inference.input_h);
+                filter_results_to_inference_roi(full_results, task.roi_config, g_inference.input_w,
+                                                g_inference.input_h);
         }
         if (roi_ok)
         {
@@ -379,8 +379,7 @@ static bool run_model_task(int chnId, const InferenceTask &task, const std::shar
             model->annotate_results(roi_results);
             /* 补边区域也可能产生候选框；局部推理批次必须始终按用户区域门控。
              * full_plus_roi 的整帧批次仍完整保留，不改变增强模式语义。 */
-            filter_results_to_inference_roi(roi_results, task.roi_config, task.srcW, task.srcH, g_inference.input_w,
-                                            g_inference.input_h);
+            filter_results_to_inference_roi(roi_results, task.roi_config, g_inference.input_w, g_inference.input_h);
         }
 
         perf.preprocess_ms = full_perf.preprocess_ms + roi_perf.preprocess_ms;

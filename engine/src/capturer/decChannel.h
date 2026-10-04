@@ -16,7 +16,6 @@ struct SrcCfg_t
     bool loop = false;        // 文件播放是否循环
     int usb_width = 0;        // USB 显式采集宽度，0=自动
     int usb_height = 0;       // USB 显式采集高度，0=自动
-    int usb_fps = 0;          // USB 管线采集帧率，0=框架默认
 };
 
 struct FilePlaybackStatus
@@ -28,9 +27,12 @@ struct FilePlaybackStatus
     int64_t duration_ms = 0;
 };
 
+class DecChannel;
+
 /* GStreamer 管道元素 */
 typedef struct gst_Channel
 {
+    DecChannel *owner;
     std::vector<int> chnIds;
     GstElement *pipeline;
     GstElement *source;
@@ -51,8 +53,7 @@ typedef struct gst_Channel
     GstElement *capsFilter; // USB: capsfilter(video/x-raw,format=NV12)
     GstElement *vDec;
     GstElement *vSink;
-    uint64_t last_frame_time_us;
-    uint64_t last_sample_seen_us;
+    std::atomic<uint64_t> last_sample_seen_us;
     bool is_file;
 } GstChannel_t;
 
@@ -74,7 +75,8 @@ class DecChannel
     void reconnect();
     void resetReconnectCount()
     {
-        mReconnectCount = 0;
+        if (mReconnectCount.load(std::memory_order_relaxed) != 0)
+            mReconnectCount.store(0, std::memory_order_relaxed);
     }
     void addTargetChannel(int chnId)
     {
@@ -94,6 +96,7 @@ class DecChannel
     {
         return mCfg.location;
     }
+    bool canShareWith(const SrcCfg_t &cfg) const;
     std::vector<int> channelIds() const
     {
         return mGstChn.chnIds;
@@ -126,7 +129,7 @@ class DecChannel
     pthread_t mTid;
     int bObjIsInited;
     bool mThreadStarted{false}; // pipeline 可暂时离线，但监听/重连线程仍必须被 stop() join
-    int mReconnectCount;
+    std::atomic<int> mReconnectCount;
     int mRecoverOkCount;
     int mRecoverFailCount;
     bool mIsFileSrc;            // 是否为文件源

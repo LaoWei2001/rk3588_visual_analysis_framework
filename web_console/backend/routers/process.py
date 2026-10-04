@@ -10,7 +10,6 @@ router = APIRouter()
 
 
 class StartRequest(BaseModel):
-    mode: str = "deploy"            # "deploy" | "debug"
     config: Optional[str] = None    # 指定运行的配置文件名（assets/ 下，默认 config.json）
 
 
@@ -33,10 +32,8 @@ async def app_status(name: str, response: Response):
 
 @router.post("/apps/{name}/start")
 async def start_app(name: str, req: StartRequest):
-    if req.mode not in ("deploy", "debug"):
-        raise HTTPException(status_code=400, detail="mode must be 'deploy' or 'debug'")
     try:
-        pid = pm.start_app(name, req.mode, req.config)
+        pid = pm.start_app(name, req.config)
         service_sync = _sync_background_services()
         return {"ok": True, "pid": pid, "service_sync": service_sync}
     except pm.AppAlreadyRunningError as e:
@@ -71,11 +68,9 @@ async def set_app_autostart(name: str, req: AutostartRequest):
 
 @router.post("/apps/{name}/restart")
 async def restart_app(name: str, req: StartRequest):
-    if req.mode not in ("deploy", "debug"):
-        raise HTTPException(status_code=400, detail="mode must be 'deploy' or 'debug'")
     try:
         # start_app 会在同一把全局锁内完成同名停止和重新启动，避免重启间隙被另一 App 抢占。
-        pid = pm.start_app(name, req.mode, req.config)
+        pid = pm.start_app(name, req.config)
         service_sync = _sync_background_services()
         return {"ok": True, "pid": pid, "service_sync": service_sync}
     except pm.AppAlreadyRunningError as e:

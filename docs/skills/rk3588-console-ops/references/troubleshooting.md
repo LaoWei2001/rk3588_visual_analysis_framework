@@ -142,7 +142,7 @@ C++ 支持类型，不能把 Agent 的成功反馈单独作为模型已生效的
 - ROI 真源是 `channels[].roi_zones[]`，坐标归一化后由 C++ 转模型坐标；
 - USB 抓图与运行采集必须使用一致的固定分辨率，否则视野/坐标可能变化；
 - 查看 config monitor 是否整轮拒绝；
-- 部署/调试切换会主动改 `global.enable_display`，不要把该变化误判为编辑器丢配置。
+- HDMI 是否显示由所选配置的 `global.enable_display` 决定；Web 启动过程不会改写它。
 
 ## 终端或日志 WebSocket 断开
 

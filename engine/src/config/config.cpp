@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <initializer_list>
 #include <set>
 #include <sstream>
 #include <sys/stat.h>
@@ -40,9 +41,7 @@ std::string normalize_src_type(const StreamConfig &stream)
 
 std::string resolve_stream_location(const StreamConfig &stream, const std::string &src_type)
 {
-    if (src_type == "usb" && !stream.device.empty())
-        return stream.device;
-    return stream.url;
+    return src_type == "usb" ? stream.device : stream.url;
 }
 
 bool is_supported_src_type(const std::string &src_type)
@@ -74,6 +73,60 @@ float effective_model_obj_thresh(const ChannelConfig &ch_cfg, const ChannelModel
 
 namespace
 {
+bool validate_object_keys(cJSON *object, std::initializer_list<const char *> allowed, const std::string &path)
+{
+    if (!cJSON_IsObject(object))
+    {
+        fprintf(stderr, "[Config] '%s' must be an object\n", path.c_str());
+        return false;
+    }
+    cJSON *entry = nullptr;
+    cJSON_ArrayForEach(entry, object)
+    {
+        const char *key = entry->string;
+        const bool known = key && std::any_of(allowed.begin(), allowed.end(),
+                                              [key](const char *candidate) { return std::string(candidate) == key; });
+        if (!known)
+        {
+            fprintf(stderr, "[Config] unknown field '%s.%s'\n", path.c_str(), key ? key : "");
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validate_global_keys(cJSON *object)
+{
+    cJSON *entry = nullptr;
+    cJSON_ArrayForEach(entry, object)
+    {
+        const char *key = entry->string;
+        if (!key || (!g_cfg_reg.is_global_field(key) && std::string(key) != "global_logics"))
+        {
+            fprintf(stderr, "[Config] unknown field 'global.%s'\n", key ? key : "");
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validate_channel_keys(cJSON *object, size_t index)
+{
+    cJSON *entry = nullptr;
+    cJSON_ArrayForEach(entry, object)
+    {
+        const char *key = entry->string;
+        const bool structural = key && (std::string(key) == "stream" || std::string(key) == "models" ||
+                                        std::string(key) == "inference_roi" || std::string(key) == "roi_zones");
+        if (!key || (!structural && !g_cfg_reg.is_channel_field(key)))
+        {
+            fprintf(stderr, "[Config] unknown field 'channels[%zu].%s'\n", index, key ? key : "");
+            return false;
+        }
+    }
+    return true;
+}
+
 EventVideoRuntimeConfig event_video_from_report_policy(cJSON *policy)
 {
     EventVideoRuntimeConfig runtime;
@@ -149,9 +202,16 @@ bool load_config(const std::string &path, AppConfig &cfg)
     std::string json_text = buffer.str();
 
     cJSON *root = cJSON_Parse(json_text.c_str());
-    if (!root)
+    if (!cJSON_IsObject(root))
     {
         fprintf(stderr, "[Config] JSON parse failed: %s\n", path.c_str());
+        cJSON_Delete(root);
+        return false;
+    }
+
+    if (!validate_object_keys(root, {"global", "channels", "_editor_layout"}, "root"))
+    {
+        cJSON_Delete(root);
         return false;
     }
 
@@ -166,7 +226,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
     cfg.tile_rows = 2;
     cfg.channel_threads = 1;
     cfg.max_fps = 30;
-    cfg.local_default_fps = 25;
     cfg.queue_size = 1;
     cfg.tracker_enable = 1;
     cfg.tracker_type = "sort";
@@ -184,16 +243,10 @@ bool load_config(const std::string &path, AppConfig &cfg)
         return false;
     }
 
-    static const char *removed_global_model_fields[] = {"model_type", "model_path", "label_path",
-                                                        "obj_thresh", "nms_thresh", "detect_classes"};
-    for (const char *field : removed_global_model_fields)
+    if (!validate_global_keys(global))
     {
-        if (cJSON_GetObjectItemCaseSensitive(global, field))
-        {
-            fprintf(stderr, "[Config] global field '%s' is not allowed; configure it in channels[].models[]\n", field);
-            cJSON_Delete(root);
-            return false;
-        }
+        cJSON_Delete(root);
+        return false;
     }
 
     if (!g_cfg_reg.parse_global(global, &cfg))
@@ -202,7 +255,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
         cJSON_Delete(root);
         return false;
     }
-
     cfg.tracker_type = config_utils::to_lower_copy(cfg.tracker_type);
     if (cfg.tracker_type != "sort" && cfg.tracker_type != "bytetrack")
     {
@@ -224,8 +276,16 @@ bool load_config(const std::string &path, AppConfig &cfg)
         cJSON *gl_item = nullptr;
         cJSON_ArrayForEach(gl_item, gl_array)
         {
-            if (!cJSON_IsObject(gl_item))
-                continue;
+            const size_t global_index = cfg.global_logics.size();
+            if (!validate_object_keys(gl_item,
+                                      {"instance_id", "enable", "logic", "channels", "poll_interval_ms",
+                                       "logic_parameters", "report_policy", "report_parameters",
+                                       "media_source_channel_id"},
+                                      "global.global_logics[" + std::to_string(global_index) + "]"))
+            {
+                cJSON_Delete(root);
+                return false;
+            }
 
             GlobalLogicConfig gl_cfg;
             gl_cfg.enable = false;
@@ -385,18 +445,30 @@ bool load_config(const std::string &path, AppConfig &cfg)
     cJSON *item = nullptr;
     cJSON_ArrayForEach(item, channels)
     {
+        if (!validate_channel_keys(item, static_cast<size_t>(seq_idx)))
+        {
+            cJSON_Delete(root);
+            return false;
+        }
         ChannelConfig ch;
         ch.id = seq_idx;
         ch.enable = true;
         ch.stream.video_enc = "h264";
         ch.threads = -1;
-        ch.playback_fps = -1;
         ch.max_fps = -1;
         ch.tracker_enable = -1;
         ch.tracker_type.clear();
 
         // 解析stream对象
         cJSON *stream_obj = cJSON_GetObjectItemCaseSensitive(item, "stream");
+        if (stream_obj &&
+            !validate_object_keys(stream_obj,
+                                  {"src_type", "url", "device", "video_enc", "loop", "usb_width", "usb_height"},
+                                  "channels[" + std::to_string(seq_idx) + "].stream"))
+        {
+            cJSON_Delete(root);
+            return false;
+        }
         if (stream_obj && cJSON_IsObject(stream_obj))
         {
             cJSON *src_type = cJSON_GetObjectItemCaseSensitive(stream_obj, "src_type");
@@ -437,8 +509,12 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 cJSON *zone = nullptr;
                 cJSON_ArrayForEach(zone, rz)
                 {
-                    if (!cJSON_IsObject(zone))
-                        continue;
+                    if (!validate_object_keys(zone, {"name", "polygon"},
+                                              "channels[" + std::to_string(seq_idx) + "].roi_zones"))
+                    {
+                        cJSON_Delete(root);
+                        return false;
+                    }
                     RoiZoneConfig zc;
                     cJSON *nm = cJSON_GetObjectItemCaseSensitive(zone, "name");
                     if (cJSON_IsString(nm) && nm->valuestring)
@@ -467,7 +543,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
             }
         }
 
-        /* 推理 ROI 与业务 roi_zones 分离；只允许一个矩形或一个多边形。 */
+        /* 推理 ROI 与业务 roi_zones 分离；只允许一个多边形，矩形使用四个顶点表示。 */
         {
             cJSON *inference_roi = cJSON_GetObjectItemCaseSensitive(item, "inference_roi");
             if (inference_roi && !cJSON_IsObject(inference_roi))
@@ -478,128 +554,63 @@ bool load_config(const std::string &path, AppConfig &cfg)
             }
             if (cJSON_IsObject(inference_roi))
             {
+                if (!validate_object_keys(inference_roi, {"mode", "resize_mode", "polygon"},
+                                          "channels[" + std::to_string(seq_idx) + "].inference_roi"))
+                {
+                    cJSON_Delete(root);
+                    return false;
+                }
                 cJSON *mode = cJSON_GetObjectItemCaseSensitive(inference_roi, "mode");
-                cJSON *rect = cJSON_GetObjectItemCaseSensitive(inference_roi, "rect");
-                cJSON *shape = cJSON_GetObjectItemCaseSensitive(inference_roi, "shape");
                 cJSON *resize_mode = cJSON_GetObjectItemCaseSensitive(inference_roi, "resize_mode");
                 cJSON *polygon = cJSON_GetObjectItemCaseSensitive(inference_roi, "polygon");
-                const bool valid_rect_shape =
-                    cJSON_IsArray(rect) && cJSON_GetArraySize(rect) == 4 &&
-                    cJSON_IsNumber(cJSON_GetArrayItem(rect, 0)) && cJSON_IsNumber(cJSON_GetArrayItem(rect, 1)) &&
-                    cJSON_IsNumber(cJSON_GetArrayItem(rect, 2)) && cJSON_IsNumber(cJSON_GetArrayItem(rect, 3));
-                if (!cJSON_IsString(mode) || !mode->valuestring || !valid_rect_shape)
+                if (!cJSON_IsString(mode) || !mode->valuestring || !cJSON_IsArray(polygon))
                 {
-                    fprintf(stderr, "[Config] channel %d inference_roi requires mode and numeric rect[4]\n", ch.id);
+                    fprintf(stderr, "[Config] channel %d inference_roi requires mode and polygon[]\n", ch.id);
                     cJSON_Delete(root);
                     return false;
                 }
                 ch.inference_roi.mode = mode->valuestring;
-                ch.inference_roi.x = cJSON_GetArrayItem(rect, 0)->valuedouble;
-                ch.inference_roi.y = cJSON_GetArrayItem(rect, 1)->valuedouble;
-                ch.inference_roi.width = cJSON_GetArrayItem(rect, 2)->valuedouble;
-                ch.inference_roi.height = cJSON_GetArrayItem(rect, 3)->valuedouble;
-                if (cJSON_IsString(shape) && shape->valuestring)
-                    ch.inference_roi.shape = shape->valuestring;
                 if (cJSON_IsString(resize_mode) && resize_mode->valuestring)
                     ch.inference_roi.resize_mode = resize_mode->valuestring;
-                if (ch.inference_roi.shape == "polygon")
+                cJSON *point = nullptr;
+                cJSON_ArrayForEach(point, polygon)
                 {
-                    if (!cJSON_IsArray(polygon))
+                    if (!cJSON_IsArray(point) || cJSON_GetArraySize(point) != 2 ||
+                        !cJSON_IsNumber(cJSON_GetArrayItem(point, 0)) ||
+                        !cJSON_IsNumber(cJSON_GetArrayItem(point, 1)))
                     {
-                        fprintf(stderr, "[Config] channel %d polygon inference_roi requires polygon[]\n", ch.id);
+                        fprintf(stderr, "[Config] channel %d inference_roi polygon contains invalid point\n", ch.id);
                         cJSON_Delete(root);
                         return false;
                     }
-                    cJSON *point = nullptr;
-                    cJSON_ArrayForEach(point, polygon)
+                    ch.inference_roi.polygon.emplace_back(cJSON_GetArrayItem(point, 0)->valuedouble,
+                                                          cJSON_GetArrayItem(point, 1)->valuedouble);
+                }
+                while (ch.inference_roi.polygon.size() > 1 &&
+                       ch.inference_roi.polygon.front() == ch.inference_roi.polygon.back())
+                    ch.inference_roi.polygon.pop_back();
+                if (ch.inference_roi.polygon.size() >= 3)
+                {
+                    double min_x = ch.inference_roi.polygon.front().first;
+                    double max_x = min_x;
+                    double min_y = ch.inference_roi.polygon.front().second;
+                    double max_y = min_y;
+                    for (const auto &vertex : ch.inference_roi.polygon)
                     {
-                        if (!cJSON_IsArray(point) || cJSON_GetArraySize(point) != 2 ||
-                            !cJSON_IsNumber(cJSON_GetArrayItem(point, 0)) ||
-                            !cJSON_IsNumber(cJSON_GetArrayItem(point, 1)))
-                        {
-                            fprintf(stderr, "[Config] channel %d inference_roi polygon contains invalid point\n",
-                                    ch.id);
-                            cJSON_Delete(root);
-                            return false;
-                        }
-                        ch.inference_roi.polygon.emplace_back(cJSON_GetArrayItem(point, 0)->valuedouble,
-                                                              cJSON_GetArrayItem(point, 1)->valuedouble);
+                        min_x = std::min(min_x, vertex.first);
+                        max_x = std::max(max_x, vertex.first);
+                        min_y = std::min(min_y, vertex.second);
+                        max_y = std::max(max_y, vertex.second);
                     }
-                    while (ch.inference_roi.polygon.size() > 1 &&
-                           ch.inference_roi.polygon.front() == ch.inference_roi.polygon.back())
-                        ch.inference_roi.polygon.pop_back();
-                    if (ch.inference_roi.polygon.size() >= 3)
-                    {
-                        double min_x = ch.inference_roi.polygon.front().first;
-                        double max_x = min_x;
-                        double min_y = ch.inference_roi.polygon.front().second;
-                        double max_y = min_y;
-                        for (const auto &vertex : ch.inference_roi.polygon)
-                        {
-                            min_x = std::min(min_x, vertex.first);
-                            max_x = std::max(max_x, vertex.first);
-                            min_y = std::min(min_y, vertex.second);
-                            max_y = std::max(max_y, vertex.second);
-                        }
-                        ch.inference_roi.x = min_x;
-                        ch.inference_roi.y = min_y;
-                        ch.inference_roi.width = max_x - min_x;
-                        ch.inference_roi.height = max_y - min_y;
-                    }
+                    ch.inference_roi.x = min_x;
+                    ch.inference_roi.y = min_y;
+                    ch.inference_roi.width = max_x - min_x;
+                    ch.inference_roi.height = max_y - min_y;
                 }
             }
         }
 
         g_cfg_reg.parse_channel(item, &ch);
-
-        static const char *removed_model_fields[] = {"model_type", "model_path",     "label_path", "obj_thresh",
-                                                     "nms_thresh", "detect_classes", "npu_core",   "version"};
-        for (const char *field : removed_model_fields)
-        {
-            if (cJSON_GetObjectItemCaseSensitive(item, field))
-            {
-                fprintf(stderr, "[Config] channel %d field '%s' is not allowed; move it into models[]\n", ch.id, field);
-                cJSON_Delete(root);
-                return false;
-            }
-        }
-
-        static const char *removed_channel_fields[] = {"roi_polygon",         "event_video_enable",
-                                                       "event_video_pre_sec", "event_video_post_sec",
-                                                       "event_video_fps",     "event_video_overlay"};
-        for (const char *field : removed_channel_fields)
-        {
-            if (cJSON_GetObjectItemCaseSensitive(item, field))
-            {
-                fprintf(stderr,
-                        "[Config] channel %d field '%s' is not allowed; "
-                        "use roi_zones[] or report_policy\n",
-                        ch.id, field);
-                cJSON_Delete(root);
-                return false;
-            }
-        }
-
-        static const char *removed_sop_fields[] = {
-            "path_sequence",      "path_target_label",  "path_enter_sec",    "path_dwell_min_sec",
-            "path_dwell_max_sec", "path_enter_list",    "path_dwell_list",   "path_dwell_max_list",
-            "path_edges",         "path_entries",       "path_exits",        "path_edge_limits",
-            "path_reset_sec",     "path_end_mode",      "path_end_zone",     "path_end_dwell_sec",
-            "path_total_min_sec", "path_total_max_sec", "path_trigger_mode", "path_trigger_mandatory",
-            "path_report_normal", "path_step_x_list",   "path_step_y_list",  "path_end_x",
-            "path_end_y"};
-        for (const char *field : removed_sop_fields)
-        {
-            if (cJSON_GetObjectItemCaseSensitive(item, field))
-            {
-                fprintf(stderr,
-                        "[Config] channel %d field '%s' is not allowed; "
-                        "use logic_parameters.flow\n",
-                        ch.id, field);
-                cJSON_Delete(root);
-                return false;
-            }
-        }
 
         cJSON *logic_parameters_item = cJSON_GetObjectItemCaseSensitive(item, "logic_parameters");
         if (logic_parameters_item && !cJSON_IsObject(logic_parameters_item))
@@ -632,8 +643,14 @@ bool load_config(const std::string &path, AppConfig &cfg)
             cJSON *model_item = nullptr;
             cJSON_ArrayForEach(model_item, models)
             {
-                if (!cJSON_IsObject(model_item))
-                    continue;
+                if (!validate_object_keys(model_item,
+                                          {"id", "enable", "model_type", "model_path", "label_path", "version",
+                                           "obj_thresh", "nms_thresh", "detect_classes", "npu_core"},
+                                          "channels[" + std::to_string(seq_idx) + "].models"))
+                {
+                    cJSON_Delete(root);
+                    return false;
+                }
                 ChannelModelConfig model;
                 cJSON *v = cJSON_GetObjectItemCaseSensitive(model_item, "id");
                 if (cJSON_IsString(v) && v->valuestring)
@@ -711,8 +728,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
             ch.threads = cfg.channel_threads;
         if (ch.max_fps <= 0)
             ch.max_fps = (cfg.max_fps > 0) ? cfg.max_fps : 30;
-        // 注意不要级联 playback_fps！ playback_fps = -1 对于实时流（RTSP/USB）表示不节流！
-        // file 类型的播放器已在 decChannel.cpp 内部专门处理了 <=0 回落逻辑。
 
         /* 跟踪字段逐项继承：允许某一路只覆盖 tracker_type 或某一个阈值，
          * 不要求为了保留该覆盖而重复写 tracker_enable。 */

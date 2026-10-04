@@ -88,7 +88,7 @@
       "infer_enable": true,
       "stream": {
         "src_type": "file",
-        "url": "assets/diaogou.mp4",
+        "url": "assets/helmet_930.mp4",
         "loop": true
       },
       "models": [
@@ -96,8 +96,8 @@
           "id": "model_3",
           "enable": true,
           "model_type": "yolov8_det",
-          "model_path": "assets/diaogou.rknn",
-          "label_path": "assets/labels_hook.txt",
+          "model_path": "assets/diaogou_s.rknn",
+          "label_path": "assets/labels_diaogou.txt",
           "version": "",
           "obj_thresh": 0.3,
           "nms_thresh": 0.45,
@@ -141,12 +141,12 @@
               0.97744
             ],
             [
-              0.45038,
-              0.42391
+              0.45378785566850144,
+              0.32289561262034405
             ],
             [
-              0.75152,
-              0.41785
+              0.7469696738503196,
+              0.33097642070115213
             ],
             [
               0.74811,
@@ -170,7 +170,7 @@
       "infer_enable": true,
       "stream": {
         "src_type": "file",
-        "url": "assets/diaogou.mp4",
+        "url": "assets/helmet_930.mp4",
         "loop": true
       },
       "models": [
@@ -178,8 +178,8 @@
           "id": "model_0",
           "enable": true,
           "model_type": "yolov8_det",
-          "model_path": "assets/diaogou.rknn",
-          "label_path": "assets/labels_hook.txt",
+          "model_path": "assets/diaogou_s.rknn",
+          "label_path": "assets/labels_diaogou.txt",
           "version": "",
           "obj_thresh": 0.3,
           "nms_thresh": 0.45,
@@ -212,7 +212,7 @@
       "infer_enable": true,
       "stream": {
         "src_type": "file",
-        "url": "assets/diaogou.mp4",
+        "url": "assets/helmet_930.mp4",
         "loop": true
       },
       "models": [
@@ -220,7 +220,7 @@
           "id": "model_1",
           "enable": true,
           "model_type": "yolov8_det",
-          "model_path": "assets/helmet_928.rknn",
+          "model_path": "assets/diaogou_s.rknn",
           "label_path": "assets/labels_helmet.txt",
           "version": "",
           "obj_thresh": 0.3,
@@ -250,32 +250,32 @@
           "name": "loading_zone",
           "polygon": [
             [
-              0.46856,
-              0.35724
+              0.5049242193048654,
+              0
             ],
             [
-              0.38561,
-              0.50471
+              0.44583331021395595,
+              0.08047137019610164
             ],
             [
-              0.4072,
-              0.69865
+              0.45719694657759236,
+              0.25218854191327333
             ],
             [
-              0.50833,
-              0.82189
+              0.5367424011230468,
+              0.2986531883779198
             ],
             [
-              0.6572,
-              0.74714
+              0.6185605829412287,
+              0.25016833989307136
             ],
             [
-              0.66174,
-              0.57946
+              0.6390151283957741,
+              0.1471380368627683
             ],
             [
-              0.60492,
-              0.4037
+              0.6071969465775924,
+              0
             ]
           ]
         }
@@ -287,7 +287,7 @@
       "infer_enable": true,
       "stream": {
         "src_type": "file",
-        "url": "assets/diaogou.mp4",
+        "url": "assets/helmet_930.mp4",
         "loop": true
       },
       "models": [
@@ -295,7 +295,7 @@
           "id": "model_2",
           "enable": true,
           "model_type": "yolov8_det",
-          "model_path": "assets/helmet_928.rknn",
+          "model_path": "assets/diaogou_s.rknn",
           "label_path": "assets/labels_helmet.txt",
           "version": "",
           "obj_thresh": 0.3,

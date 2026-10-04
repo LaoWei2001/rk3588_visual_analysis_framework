@@ -17,10 +17,9 @@ def test_vision_boot_target_requires_autostart_and_running_intent(tmp_path, monk
     runtime_state.set_vision_autostart("demo", True)
     assert runtime_state.get_vision_boot_target() is None
 
-    runtime_state.mark_vision_started("demo", "deploy", "production.json")
+    runtime_state.mark_vision_started("demo", "production.json")
     assert runtime_state.get_vision_boot_target() == {
         "app": "demo",
-        "mode": "deploy",
         "config": "production.json",
     }
 

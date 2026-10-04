@@ -56,12 +56,12 @@
   `performance_display`、`debug_display`、`enable_pause_key`；
 - RTSP 输出：`enable_rtsp`、`rtsp_port`、`rtsp_path`、`rtsp_bitrate`、`rtsp_codec`、
   `rtsp_encoder`；
-- 管线：`channel_threads`、`max_fps`、`local_default_fps`、`queue_size`；
+- 管线：`channel_threads`、`max_fps`、`queue_size`；
 - tracker 默认：`tracker_enable`、`tracker_iou_thresh`、`tracker_max_miss`、
   `tracker_min_hits`；
 - 全局业务：`global_logics[]`。
 
-`disp_width/height`、tile rows/cols、max_fps、local_default_fps 必须为正数；开启显示时网格容量不能小于
+`disp_width/height`、tile rows/cols、max_fps 必须为正数；开启显示时网格容量不能小于
 有效通道数。Web 配置生成器固定 `rtsp_codec: "h264"` 以满足浏览器零转码预览。
 
 ## `channels[]`
@@ -76,7 +76,7 @@
 - 输入：`stream`；
 - 推理：`models[]`；
 - 业务：可选 `logic`、`logic_parameters`、`roi_zones[]`；
-- 调度：`threads`、`playback_fps`、`max_fps`；
+- 调度：`threads`、`max_fps`。本地文件按原始 PTS 实时播放，推理和业务逻辑也统一由 `max_fps` 节流；
 - tracker override：四个 `tracker_*` 字段；
 - 事件：`report_policy`、`report_parameters`。
 
@@ -93,7 +93,7 @@
 - 启用的 RTSP 通道经过完整验证时，`video_enc` 必须为 `h264` 或 `h265`；file/USB 不校验该字段；
 - file 的 `url` 必须指向已存在的普通文件；
 - `loop` 只用于 file；
-- `usb_width/usb_height` 为 0 时按 FPS 自动档，否则固定采集尺寸。
+- `usb_width/usb_height` 省略时使用 1280×720 @ 15 FPS；显式分辨率对应固定采集档位，且不随处理 `max_fps` 改变。
 
 file path 可相对 App 工作目录或使用绝对路径。当前初始验证器的 `is_valid_url()` 实际接受
 `rtsp://`、`rtsps://`、`http://`、`https://` 或绝对路径，虽然失败提示只写 RTSP/RTSPS；这是一处校验
@@ -136,13 +136,11 @@ delivery 见[事件与上报开发](../../rk3588-console-ops/references/event-re
 channels 和媒体来源 ID 必须存在。启用视频 delivery 的全局实例必须显式给有效
 `media_source_channel_id`。
 
-## 明确拒绝的旧格式
+## 严格字段校验
 
-- `global.model_type/model_path/label_path/obj_thresh/nms_thresh/detect_classes`；
-- 通道顶层 `model_type/model_path/label_path/obj_thresh/nms_thresh/detect_classes/npu_core/version`；
-- `roi_polygon`；
-- `event_video_enable/pre_sec/post_sec/fps/overlay`；
-- 旧的扁平 SOP `path_*` 字段；若将来对应模块恢复，应走模块 `logic_parameters.flow`。
+根对象、`global`、`global_logics[]`、通道、视频源、模型和 ROI 都使用当前字段白名单；任何未知字段
+都会让整份配置加载失败，不再为历史字段维护单独的兼容分支。根对象只额外允许 Web 编辑器使用的
+`_editor_layout` 元数据。模块自己的动态参数继续由对应 `logic.json` Schema 校验。
 
 ## 热重载事务
 

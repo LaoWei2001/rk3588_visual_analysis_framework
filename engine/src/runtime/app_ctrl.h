@@ -347,7 +347,6 @@ extern "C"
     int app_ctrl_get_tile_cols(void);
     int app_ctrl_get_tile_rows(void);
     int app_ctrl_get_max_fps(void);
-    int app_ctrl_get_local_default_fps(void);
     int app_ctrl_get_performance_display(void);
     int app_ctrl_get_debug_display(void);
 

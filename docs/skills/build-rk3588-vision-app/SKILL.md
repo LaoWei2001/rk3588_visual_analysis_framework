@@ -36,7 +36,7 @@ the missing capability and stop instead of asking for wider access. Read the wiz
    and delivery service.
 7. Compare any referenced example name against actual `REGISTER_*` macros or run the built binary's list command.
 
-Current registered source modules do not include `logic_path_sop`, `logic_periodic_snapshot_demo`, `logic_upload_teach`, or `global_two_channel_demo`. The Web still exposes an SOP node that generates `logic_path_sop`; treat that as an implementation gap, not a supported feature.
+Current registered source modules do not include `logic_path_sop`, `logic_periodic_snapshot_demo`, `logic_upload_teach`, or `global_two_channel_demo`. Web exposes only catalog-backed Logic choices.
 
 ## Choose the smallest correct extension point
 

@@ -1,6 +1,5 @@
 import { Node, Edge } from '@xyflow/react'
 import { getSrcType } from './streamSource'
-import { sopFlowToParameters, type SopFlow } from './sopFlow'
 import type { GlobalLogicEntry } from './globalLogic'
 import type { GlobalSettingsData } from '../components/GlobalSettingsPanel'
 import type { Zone } from '../store/roiStore'
@@ -22,7 +21,7 @@ function buildStream(d: Record<string, unknown>): Record<string, unknown> {
   const t = getSrcType(d)
   if (t === 'usb') {
     const s: Record<string, unknown> = { src_type: 'usb', device: d.device ?? '/dev/video81' }
-    // 方案B: 显式 USB 采集分辨率(0=自动随 fps)。写进 config 供 C++ 与 ROI 抓帧用同一值
+    // 显式分辨率写入配置；省略时 C++ 与 ROI 抓帧都使用 1280×720。
     const uw = Number(d.usb_width ?? 0), uh = Number(d.usb_height ?? 0)
     if (uw > 0 && uh > 0) { s.usb_width = uw; s.usb_height = uh }
     return s
@@ -68,12 +67,10 @@ export function graphToConfig(
       .filter((n): n is Node => n?.type === 'model')
       .sort((a, b) => a.position.y - b.position.y)
     const isModel = modelNodes.length > 0
-    const modelDataList = modelNodes.map(n => n.data as Record<string, unknown>)
-    const m = modelDataList[0] ?? {}
     const stream = buildStream(streamData)
 
     const directLogicEdge = edges.find(e => e.source === streamNode.id && e.sourceHandle === 'stream-out' &&
-      ['logic', 'sop'].includes(String(nodes.find(n => n.id === e.target)?.type ?? '')))
+      nodes.find(n => n.id === e.target)?.type === 'logic')
     const modelLogicEdge = modelNodes
       .map(modelNode => edges.find(e => e.source === modelNode.id && e.sourceHandle === 'logic-out'))
       .find((edge): edge is Edge => edge != null)
@@ -87,7 +84,7 @@ export function graphToConfig(
         // 唯一性由画布保存校验负责；这里必须保持用户填写的稳定 ID，
         // 不能静默追加 _2 破坏 Logic/OTA 契约。
         id:             requestedId || `model_${modelIndex}`,
-        enable:         data.infer_enable !== false,
+        enable:         data.enable !== false,
         model_type:     data.model_type ?? 'yolov8_det',
         model_path:     data.model_path ?? '',
         label_path:     data.label_path ?? '',
@@ -115,10 +112,9 @@ export function graphToConfig(
       }))
       .filter(z => z.polygon.length >= 3)
 
-    // ── Logic/SOP ── 后处理是可选步骤；多个模型连接时应汇入同一个逻辑节点。
-    const isSop = logicNode?.type === 'sop'
+    // ── Logic ── 后处理是可选步骤；多个模型连接时应汇入同一个逻辑节点。
     const l = logicNode ? (logicNode.data as Record<string, unknown>) : {}
-    const logic = isSop ? 'logic_path_sop' : String(l.logic ?? '').trim()
+    const logic = String(l.logic ?? '').trim()
     const hasLogic = logic.length > 0
     if (hasLogic && logicNode) channelIdByLogicNode.set(logicNode.id, chId)
 
@@ -135,8 +131,9 @@ export function graphToConfig(
     const ch: Record<string, unknown> = isModel
       ? {
           id:             chId,
-          enable:         true,                       // 通道存在即启用；YOLO 节点的开关现在控制 infer_enable
-          infer_enable:   modelConfigs.some(model => model.enable !== false),
+          enable:         streamData.enable !== false,
+          infer_enable:   streamData.infer_enable !== false,
+          swap_rb:        streamData.swap_rb === true,
           stream,
           models:         modelConfigs,
         }
@@ -144,8 +141,9 @@ export function graphToConfig(
           // 传统/无推理通道: models 为空；C++ 跳过 NPU 推理，
           // 仍解码/显示；连接了 logic 时才以空 results 逐帧执行后处理。
           id:           chId,
-          enable:       true,
+          enable:       streamData.enable !== false,
           infer_enable: false,
+          swap_rb:      streamData.swap_rb === true,
           stream,
           models:       [],
         }
@@ -224,37 +222,32 @@ export function graphToConfig(
       ? Object.assign({}, ...reportData.map(data =>
           data.report_parameters && typeof data.report_parameters === 'object' ? data.report_parameters : {}))
       : {}
-    let moduleParameters = l.logic_parameters && typeof l.logic_parameters === 'object' && !Array.isArray(l.logic_parameters)
+    const moduleParameters = l.logic_parameters && typeof l.logic_parameters === 'object' && !Array.isArray(l.logic_parameters)
       ? l.logic_parameters as Record<string, unknown> : {}
-    if (hasLogic && isSop) {
-      moduleParameters = sopFlowToParameters(l as unknown as SopFlow)
-    }
     if (hasLogic) ch.logic_parameters = moduleParameters
 
     // 通道最大 FPS 属于视频流/通道本身；留空时不写入配置，由 C++ 继承全局 max_fps。
     if (streamData.max_fps != null) ch.max_fps = streamData.max_fps
 
-    // 推理 ROI 是通道级范围配置：同一路视频上的全部模型共享该矩形及处理模式。
+    // 推理 ROI 是通道级范围配置：矩形也统一保存为四顶点多边形。
     const inferenceRoi = streamData.inference_roi
     if (inferenceRoi && typeof inferenceRoi === 'object' && !Array.isArray(inferenceRoi)) {
       const value = inferenceRoi as Record<string, unknown>
-      const rect = Array.isArray(value.rect) ? value.rect.map(Number) : []
+      const polygon = Array.isArray(value.polygon)
+        ? value.polygon.map(point => Array.isArray(point) ? point.map(Number) : []) : []
       if (['roi_only', 'full_plus_roi', 'full_frame_roi_filter'].includes(String(value.mode))
-          && rect.length === 4 && rect.every(Number.isFinite)) {
-        const shape = value.shape === 'polygon' ? 'polygon' : 'rect'
+          && polygon.length >= 3
+          && polygon.every(point => point.length === 2 && point.every(Number.isFinite))) {
         const resizeMode = ['stretch', 'expand', 'letterbox'].includes(String(value.resize_mode))
           ? value.resize_mode : 'stretch'
-        const polygon = Array.isArray(value.polygon)
-          ? value.polygon.map(point => Array.isArray(point) ? point.map(Number) : []) : []
         ch.inference_roi = {
-          mode: value.mode, shape, resize_mode: resizeMode, rect,
-          ...(shape === 'polygon' ? { polygon } : {}),
+          mode: value.mode, resize_mode: resizeMode, polygon,
         }
       }
     }
 
-    // Tracker 是视频流/通道级配置。m 回退仅用于兼容编辑器升级前已在内存中的旧画布。
-    const trackerValue = (key: string) => streamData[key] ?? m[key]
+    // Tracker 是视频流/通道级配置。
+    const trackerValue = (key: string) => streamData[key]
     if (trackerValue('tracker_enable') != null) ch.tracker_enable = trackerValue('tracker_enable')
     if (trackerValue('tracker_type') != null && trackerValue('tracker_type') !== '')
       ch.tracker_type = trackerValue('tracker_type')
@@ -266,7 +259,7 @@ export function graphToConfig(
       ch.bytetrack_low_thresh = trackerValue('bytetrack_low_thresh')
     if (trackerValue('bytetrack_low_iou_thresh') != null)
       ch.bytetrack_low_iou_thresh = trackerValue('bytetrack_low_iou_thresh')
-    if (m.threads          != null) ch.threads          = m.threads
+    if (streamData.threads != null) ch.threads = streamData.threads
 
     // ROI 唯一持久化入口；空数组明确表示本通道没有 ROI。
     ch.roi_zones = zones
@@ -415,6 +408,7 @@ export function graphToConfig(
     bytetrack_low_thresh: g.bytetrack_low_thresh ?? 0.1,
     bytetrack_low_iou_thresh: g.bytetrack_low_iou_thresh ?? 0.2,
     performance_display: g.performance_display ?? 0,
+    debug_display:       g.debug_display       ?? 0,
     enable_pause_key:   g.enable_pause_key   ?? 0,
     enable_rtsp:        g.enable_rtsp        ?? 1,
     rtsp_codec:         'h264',

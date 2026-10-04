@@ -34,7 +34,6 @@ BINARY_NAME = os.environ.get("BINARY_NAME", "vision_analysis")
 class ManagedProcess:
     app_name:   str
     pid:        int
-    mode:       str
     started_at: float
     proc:       Optional[subprocess.Popen]  # None when recovered or managed by systemd
     config:     str = "config.json"  # 本次启动所用的配置文件名（assets/ 下）
@@ -188,13 +187,8 @@ def _recover_process(app_name: str, announce: bool = False) -> Optional[ManagedP
         _clear_stale_runtime_marker(app_name)
         return None
 
-    mode_file = app_dir / "run.mode"
     cfg_file = app_dir / "run.config"
     started_file = app_dir / "run.started_at"
-    try:
-        mode = mode_file.read_text().strip() if mode_file.exists() else "deploy"
-    except OSError:
-        mode = "deploy"
     try:
         config = cfg_file.read_text().strip() if cfg_file.exists() else "config.json"
     except OSError:
@@ -209,7 +203,6 @@ def _recover_process(app_name: str, announce: bool = False) -> Optional[ManagedP
     managed = ManagedProcess(
         app_name=app_name,
         pid=pid,
-        mode=mode or "deploy",
         started_at=started_at,
         proc=None,
         config=config or "config.json",
@@ -249,7 +242,6 @@ def get_running_app_context() -> Optional[dict]:
         "app": running.app_name,
         "app_dir": _app_path(running.app_name),
         "pid": running.pid,
-        "mode": status.get("mode") or "deploy",
         "config": status.get("config") or "config.json",
     }
 
@@ -269,36 +261,21 @@ def _normalize_config_name(config_name: Optional[str]) -> str:
     return name
 
 
-def _patch_display(config_path: Path, enable: bool) -> None:
-    """原子修改 config.json 中 global.enable_display 字段。
-
-    deploy 模式启动时调用（enable=False），确保推理程序不尝试输出 HDMI，
-    即使用户在编辑器里误勾选了「HDMI 显示」也不会影响无显示器环境。
-    """
+def _config_enables_display(config_path: Path) -> bool:
+    """读取配置中的 HDMI 显示开关，但不修改用户配置。"""
     try:
         cfg = json.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return  # 读取失败不阻断启动
-
-    target = 1 if enable else 0
-
+        return False
     global_config = cfg.get("global")
     if not isinstance(global_config, dict):
-        return
-    changed = global_config.get("enable_display") != target
-    if changed:
-        global_config["enable_display"] = target
-
-    if not changed:
-        return
-
-    # 原子写：先写 .tmp 再 replace，防止写到一半崩溃损坏配置
-    tmp = config_path.with_suffix(".tmp")
-    try:
-        tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=4), encoding="utf-8")
-        os.replace(tmp, config_path)
-    except OSError:
-        tmp.unlink(missing_ok=True)  # 清理残留临时文件，不阻断启动
+        return False
+    value = global_config.get("enable_display", 0)
+    return value is True or (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value != 0
+    )
 
 
 # ── 启动时恢复上次未退出的进程 ───────────────────────────────────────────────
@@ -494,7 +471,7 @@ def _start_systemd_app(binary: Path, config: Path, app_dir: Path, env: dict, uni
     )
 
 
-def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> int:
+def start_app(app_name: str, config_name: Optional[str] = None) -> int:
     app_dir     = _app_path(app_name)
     binary      = app_dir / BINARY_NAME
     assets_dir  = app_dir / "assets"
@@ -522,9 +499,6 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
         # 同一个 App 再次启动仍保持原来的“重启”语义，不会与其他 App 并存。
         _stop_app_unlocked(app_name)
 
-        # 根据启动模式自动同步 enable_display：部署=0，调试=1
-        _patch_display(config, enable=(mode == "debug"))
-
         # 清空内存日志缓冲，准备新一轮输出
         from services.log_buffer import get_log_buffer
         buf = get_log_buffer(app_name)
@@ -543,9 +517,8 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
         env["LD_LIBRARY_PATH"] = (
             f"{bundled_libs}:{existing_ld_path}" if existing_ld_path else bundled_libs
         )
-        # Debug 模式要在板端 HDMI 上显示：补齐 X 显示环境（DISPLAY + XAUTHORITY + 放行本地 root）。
-        # 否则 systemd 服务(无图形会话)拉起的程序连不上 X，表现为“先得在命令行手动跑一次才显示”。
-        if mode == "debug":
+        # 配置启用 HDMI 时补齐 X 显示环境；只读取配置，绝不在启动时改写它。
+        if _config_enables_display(config):
             _setup_display_env(env)
 
         unit_name = _app_unit_name(app_name)
@@ -590,20 +563,19 @@ def start_app(app_name: str, mode: str, config_name: Optional[str] = None) -> in
 
         started_at = time.time()
         _processes[app_name] = ManagedProcess(
-            app_name=app_name, pid=pid, mode=mode,
+            app_name=app_name, pid=pid,
             started_at=started_at, proc=None, config=config_name,
             unit_name=unit_name, launcher=launcher,
         )
 
         try:
             # PID文件是运行状态的提交标记，最后写入；其他worker看到PID时，其余元数据已经完整。
-            (app_dir / "run.mode").write_text(mode)
             (app_dir / "run.config").write_text(config_name)
             (app_dir / "run.started_at").write_text(str(started_at))
             (app_dir / "run.boot_id").write_text(_current_boot_id())
             (app_dir / "run.systemd_unit").write_text(unit_name)
             (app_dir / "run.pid").write_text(str(pid))
-            runtime_state.mark_vision_started(app_name, mode, config_name)
+            runtime_state.mark_vision_started(app_name, config_name)
         except Exception:
             _processes.pop(app_name, None)
             _stop_systemd_unit(unit_name)
@@ -712,7 +684,7 @@ def stop_app(app_name: str) -> bool:
 # ── 状态查询 ─────────────────────────────────────────────────────────────────
 
 def get_status(app_name: str) -> dict:
-    stopped = {"status": "stopped", "mode": None, "pid": None,
+    stopped = {"status": "stopped", "pid": None,
                "uptime_seconds": None, "config": None}
 
     mp = _processes.get(app_name)
@@ -737,7 +709,6 @@ def get_status(app_name: str) -> dict:
 
     return {
         "status":         "running",
-        "mode":           mp.mode,
         "pid":            mp.pid,
         "uptime_seconds": int(time.time() - mp.started_at),
         "config":         mp.config,

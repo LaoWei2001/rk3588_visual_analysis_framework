@@ -71,10 +71,10 @@ async def lifespan(app: FastAPI):
                 )
                 return
             if current is None:
-                process_manager.start_app(target["app"], target["mode"], target["config"])
+                process_manager.start_app(target["app"], target["config"])
                 print(
                     f"[Autostart] 已恢复视觉程序 {target['app']} "
-                    f"({target['mode']}, {target['config']})"
+                    f"({target['config']})"
                 )
             result = services.sync_services_for_running_app()
             for message in result["errors"]:

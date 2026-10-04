@@ -45,6 +45,7 @@ export interface GlobalSettingsData {
   bytetrack_low_thresh: number
   bytetrack_low_iou_thresh: number
   performance_display: number
+  debug_display: number
   enable_pause_key: number
   enable_rtsp: number
   [key: string]: unknown
@@ -59,7 +60,7 @@ export const DEFAULT_GLOBAL_SETTINGS: GlobalSettingsData = {
   tracker_enable: 1, tracker_type: 'sort', tracker_iou_thresh: 0.3,
   tracker_max_miss: 30, tracker_min_hits: 3,
   bytetrack_low_thresh: 0.1, bytetrack_low_iou_thresh: 0.2,
-  performance_display: 0, enable_pause_key: 0,
+  performance_display: 0, debug_display: 0, enable_pause_key: 0,
   enable_rtsp: 1, rtsp_codec: 'h264',
 }
 
@@ -88,7 +89,7 @@ export default function GlobalSettingsPanel({ settings: s, onChange }: Props) {
             <NumField label="显示高度"     value={s.disp_height}     def={640} onChange={v => set('disp_height', v)} />
             <NumField label="显示窗口行数" value={s.tile_rows}       def={1}   onChange={v => set('tile_rows', v)} />
             <NumField label="显示窗口列数" value={s.tile_cols}       def={1}   onChange={v => set('tile_cols', v)} />
-            <NumField label="最大 FPS"     value={s.max_fps}         def={25}  onChange={v => set('max_fps', v)} />
+            <NumField label="全局处理 FPS" value={s.max_fps}         def={25}  onChange={v => set('max_fps', v)} />
             <NumField label="队列深度"     value={s.queue_size}      def={1}    onChange={v => set('queue_size', v)} />
             <NumField label="通道线程"     value={s.channel_threads} def={3}    onChange={v => set('channel_threads', v)} />
           </div>
@@ -118,6 +119,10 @@ export default function GlobalSettingsPanel({ settings: s, onChange }: Props) {
             <label className="gs-toggle">
               <input type="checkbox" checked={!!s.performance_display} onChange={e => set('performance_display', e.target.checked ? 1 : 0)} />
               性能显示
+            </label>
+            <label className="gs-toggle">
+              <input type="checkbox" checked={!!s.debug_display} onChange={e => set('debug_display', e.target.checked ? 1 : 0)} />
+              调试日志
             </label>
             <label className="gs-toggle">
               <input type="checkbox" checked={!!s.enable_display} onChange={e => set('enable_display', e.target.checked ? 1 : 0)} />

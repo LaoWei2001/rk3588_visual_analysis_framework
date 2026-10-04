@@ -93,6 +93,26 @@ bool ConfigRegistry::parse_channel(cJSON *obj, void *base)
     return true;
 }
 
+bool ConfigRegistry::is_global_field(const char *key) const
+{
+    if (!key)
+        return false;
+    for (const auto &field : global_fields)
+        if (std::string(field.key) == key)
+            return true;
+    return false;
+}
+
+bool ConfigRegistry::is_channel_field(const char *key) const
+{
+    if (!key)
+        return false;
+    for (const auto &field : channel_fields)
+        if (std::string(field.key) == key)
+            return true;
+    return false;
+}
+
 bool ConfigRegistry::sync_fields(void *dst, const void *src, bool is_global) const
 {
     if (!dst || !src)

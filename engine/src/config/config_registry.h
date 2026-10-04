@@ -38,6 +38,8 @@ class ConfigRegistry
     void add_channel(const char *key, ConfigType type, size_t offset);
     bool parse_global(cJSON *obj, void *base);
     bool parse_channel(cJSON *obj, void *base);
+    bool is_global_field(const char *key) const;
+    bool is_channel_field(const char *key) const;
     bool sync_fields(void *dst, const void *src, bool is_global) const;
     void add_reload_callback(std::function<void()> cb)
     {

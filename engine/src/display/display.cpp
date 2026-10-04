@@ -291,20 +291,9 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
     {
         const InferenceRoiConfig &roi = *p.inference_roi;
         std::vector<cv::Point> points;
-        if (roi.has_polygon())
-        {
-            points.reserve(roi.polygon.size());
-            for (const auto &point : roi.polygon)
-                points.emplace_back(cvRound(point.first * screen_roi.cols), cvRound(point.second * screen_roi.rows));
-        }
-        else
-        {
-            const int left = cvRound(roi.x * screen_roi.cols);
-            const int top = cvRound(roi.y * screen_roi.rows);
-            const int right = cvRound((roi.x + roi.width) * screen_roi.cols);
-            const int bottom = cvRound((roi.y + roi.height) * screen_roi.rows);
-            points = {{left, top}, {right, top}, {right, bottom}, {left, bottom}};
-        }
+        points.reserve(roi.polygon.size());
+        for (const auto &point : roi.polygon)
+            points.emplace_back(cvRound(point.first * screen_roi.cols), cvRound(point.second * screen_roi.rows));
         if (points.size() >= 3)
         {
             const double scale = (static_cast<double>(screen_roi.cols) + screen_roi.rows) / (640.0 + 640.0);

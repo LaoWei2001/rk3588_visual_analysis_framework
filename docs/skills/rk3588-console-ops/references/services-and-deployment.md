@@ -55,7 +55,7 @@ sudo ./install.sh online
 Web“上传程序”与根目录 `install_app.sh` 写入同一 App 根，但 Web 接受归档并做路径安全检查。Web 上传时
 会停止全部托管视觉 App，避免替换正在执行的文件。
 
-## 运行模式
+## 程序启动
 
 Web 通过 `systemd-run --pipe` 启动二进制，工作目录是 App 根，参数是所选 `assets/<config>.json`。
 它设置：
@@ -66,8 +66,9 @@ Web 通过 `systemd-run --pipe` 启动二进制，工作目录是 App 根，参�
 - `LD_LIBRARY_PATH=<App>/libs...`；
 - 存储管理器生成的运行环境。
 
-部署模式把 `global.enable_display` 原子写为 0；调试模式写为 1，并补 `DISPLAY=:0` 与可能的
-Xauthority。`run.pid/run.mode/run.config/run.started_at/run.systemd_unit` 是运行标记，不是源码配置。
+启动过程不会改写所选配置。配置中的 `global.enable_display` 启用时，后端会补 `DISPLAY=:0` 与可能的
+Xauthority；关闭时按无界面方式运行。`run.pid/run.config/run.started_at/run.systemd_unit` 是运行标记，
+不是源码配置。
 
 ## 两个后台服务
 

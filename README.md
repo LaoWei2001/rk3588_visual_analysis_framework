@@ -169,41 +169,125 @@ Windows 可使用 `develop_feature.cmd`。向导只允许回写通道和全局 L
 
 ## 系统架构
 
+构建、部署与控制面：
+
+```mermaid
+flowchart TB
+    subgraph Build[仓库与构建期]
+        direction LR
+        EngineSrc[engine/src<br/>通用引擎]
+        ProjectSrc[projects/modules + global_modules<br/>assets + catalog.json]
+        AppServices[services/framework<br/>upload + model_update]
+        Builder[build.sh + CMake<br/>tools/build 生成清单]
+        Package[dist/&lt;app&gt;<br/>可部署应用包]
+        WebSource[web_console<br/>React + FastAPI]
+        GpioSource[services/framework/gpio_state]
+        PlatformInstall[install.sh<br/>web_console/deploy.sh]
+        EngineSrc --> Builder
+        ProjectSrc --> Builder
+        AppServices --> Builder
+        Builder --> Package
+        WebSource --> PlatformInstall
+        GpioSource --> PlatformInstall
+    end
+
+    subgraph Console[Web 管理面 · rk3588-console.service]
+        direction LR
+        Browser[浏览器中的 React / XYFlow]
+        Backend[FastAPI<br/>routers + services]
+        Browser <-->|HTTP / WebSocket| Backend
+    end
+
+    subgraph Device[板端运行目录与 systemd]
+        direction LR
+        AppDir["/opt/ai_apps/&lt;app&gt;<br/>二进制 + assets + services"]
+        AppUnit[rk3588-app-*.service<br/>systemd-run --pipe]
+        Vision[vision_analysis]
+        DataDir["/opt/ai_apps/.data/&lt;app&gt;<br/>event_store + 连接 + 契约"]
+        UploadUnit[unified_upload.service]
+        OtaUnit[ota_agent.service]
+        GpioControl[rk3588-gpio-control.service]
+        GpioRestore[rk3588-gpio-restore.service]
+
+        AppDir --> AppUnit --> Vision
+        Vision -->|事件持久化| DataDir
+        DataDir --> UploadUnit
+        OtaUnit -->|配置/模型更新| AppDir
+    end
+
+    subgraph External[外部系统]
+        direction LR
+        Delivery[HTTP / Dify / 自定义投递端]
+        OtaServer[模型与配置 OTA 服务端]
+    end
+
+    Package -->|上传安装或 install_app.sh| AppDir
+    PlatformInstall --> Backend
+    PlatformInstall --> GpioControl
+    PlatformInstall --> GpioRestore
+    Backend -->|应用、配置与资产管理| AppDir
+    Backend -->|启动/停止、日志| AppUnit
+    Backend <-->|run.control.sock<br/>run.playback.sock| Vision
+    Backend -->|绑定当前应用并管理| UploadUnit
+    Backend -->|绑定当前应用并管理| OtaUnit
+    Backend -->|电平保持状态与开关| GpioRestore
+    GpioRestore --> GpioControl
+    Vision -->|GPIO 控制 socket| GpioControl
+    Vision -->|拼接画面 RTSP| Backend
+    Backend -->|浏览器直播| Browser
+    UploadUnit --> Delivery
+    OtaServer --> OtaUnit
+```
+
+`web_console/` 由根安装器独立部署到 `/opt/ai_apps/_console`；业务应用包由 `build.sh` 生成，
+安装到 `/opt/ai_apps/<app>`。应用代码与持久数据分离，删除或替换应用包不会把
+`/opt/ai_apps/.data/<app>` 中的事件、连接和上报契约混入程序目录。
+
+视觉引擎内部数据面：
+
 ```mermaid
 flowchart LR
-    Web[React 可视化管理平台]
-    API[FastAPI 后端]
-    Config[JSON 配置与应用包]
+    Sources[RTSP / 视频文件 / USB]
+    Capture[capturer<br/>GStreamer 解码、重连、同源复用]
+    Inlet[pipeline/frame_inlet<br/>唯一帧入口]
 
-    Capture[RTSP / File / USB]
-    Inlet[帧入口与 FPS 节流]
-    Infer[RKNN / RGA 推理引擎]
-    Track[结果分发与跟踪]
-    Logic[ChannelContext + logic_xxx]
+    Sources --> Capture --> Inlet
 
-    Display[HDMI / RTSP 输出]
-    EventMedia[标准事件与媒体]
-    Outbox[本地事件发件箱]
-    Upload[事件投递服务]
-    Remote[HTTP / Dify / 自定义 adapter]
-    OTA[模型 OTA 服务]
+    subgraph Analysis[分析链路 · 每通道 max_fps]
+        direction LR
+        Schedule[交错节拍<br/>最新帧优先]
+        Infer[inference + yolo<br/>推理 ROI / RGA / RKNN]
+        Dispatch[pipeline/result_dispatch<br/>严格同帧结果分发]
+        Traditional[传统 CV worker<br/>无模型通道]
+        ChannelPipeline[pipeline/channel_pipeline + tracking<br/>SORT / ByteTrack / 动作]
+        Logic[logic/core + projects/modules<br/>ChannelContext / 业务 ROI]
 
-    Web --> API
-    API --> Config
-    Config --> Logic
-    API -->|进程与通道控制| Logic
+        Schedule -->|有模型| Infer --> Dispatch --> ChannelPipeline
+        Schedule -->|无模型| Traditional --> ChannelPipeline
+        ChannelPipeline --> Logic
+    end
 
-    Capture --> Inlet
-    Inlet --> Infer
-    Infer --> Track
-    Track --> Logic
-    Inlet --> Display
-    Logic --> Display
-    Logic --> EventMedia
-    EventMedia --> Outbox
-    Outbox --> Upload
-    Upload --> Remote
-    OTA -->|更新模型和配置| Infer
+    subgraph Preview[实时预览链路 · 独立于分析节拍]
+        direction LR
+        DisplayQueue[最新帧显示队列]
+        Render[display<br/>拼接与统一叠加]
+        VideoOut[HDMI / 内置 RTSP]
+        DisplayQueue --> Render --> VideoOut
+    end
+
+    subgraph Events[事件媒体链路 · 独立录像 FPS]
+        direction LR
+        Recorder[recorder<br/>源帧环形缓冲与 MP4]
+        Event[event<br/>标准事件与证据图片]
+        Store[event_store]
+        Recorder --> Event --> Store
+    end
+
+    Inlet --> Schedule
+    Inlet --> DisplayQueue
+    Inlet --> Recorder
+    Logic -->|绘制命令与最近结果| Render
+    Logic -->|事件请求| Event
 ```
 
 ### 单帧运行链路
@@ -212,16 +296,15 @@ flowchart LR
 GStreamer appsink
   → pipeline_submit_frame()
   ├─ 按录像自身 FPS → 事件视频源帧缓存
-  └─ 每通道业务 max_fps 节流
-       ├─ 无推理通道：按需惰性取帧 → 同步执行传统 CV logic
-       ├─ 最新源帧 → HDMI/有客户端的 RTSP 预览队列
-       └─ 推理通道：任务队列 → RKNN worker → 同帧结果分发
-       → tracker
-       → 构造 ChannelContext
-       → 执行动作处理器
-       → 执行当前 logic_xxx
-       → 原子写回 frame / results / state / draw commands
-       → 显示叠加、事件图片和跨通道快照
+  ├─ 按预览安全上限 → HDMI/有客户端的 RTSP 最新帧队列
+  └─ 每通道 max_fps 交错节拍
+       ├─ 无模型通道：惰性保留源帧 → 单槽传统 CV worker
+       └─ 推理通道：最新帧任务队列 → RGA/RKNN worker → 同帧结果分发
+            → tracker
+            → 构造 ChannelContext
+            → 执行动作处理器与当前 logic_xxx
+            → 原子写回 frame / results / state / draw commands
+            → 显示叠加、事件图片和跨通道快照
 ```
 
 业务发布与事件图片通过版本检查保持帧/结果一致；事件视频走独立源帧环形缓冲；实时预览优先显示
@@ -588,8 +671,9 @@ CMake 和 C 编译器。仓库随附 ARM64 成品（要求 glibc 2.29 或更高�
 `channels[].models[]`；业务 ROI 只允许写在 `channels[].roi_zones[]`；通道级推理范围写在
 `channels[].inference_roi`；录像设置只保存在 `report_policy`；`stream.src_type` 必须显式指定。
 Web 画布中“业务 ROI”节点直接连接视频流节点，表示它归属于该视频通道。业务 ROI 即使在
-没有模型的传统算法通道中也可以保存、显示并通过 `ChannelContext` 读取。每个通道可配置一个矩形
-或一个多边形推理区域，并支持三种模式：`roi_only`（只推理局部）、`full_plus_roi`（整帧推理一次、
+没有模型的传统算法通道中也可以保存、显示并通过 `ChannelContext` 读取。每个通道可配置一个推理
+多边形；矩形由四个顶点表示，矩形和任意多边形使用同一份配置结构。推理范围支持三种模式：
+`roi_only`（只推理局部）、`full_plus_roi`（整帧推理一次、
 局部再推理一次），以及 `full_frame_roi_filter`（保持整帧尺度推理一次，只输出区域内目标）。局部
 取景可选 `stretch`（直接拉伸）、`expand`（扩展周边画面匹配模型比例，触边后只对不足部分补黑）
 或 `letterbox`（保持比例并补黑边）。多边形使用 `stretch`/`letterbox` 时，多边形外的模型输入严格
@@ -639,9 +723,7 @@ Web 画布中“业务 ROI”节点直接连接视频流节点，表示它归属
       ],
       "inference_roi": {
         "mode": "full_plus_roi",
-        "shape": "polygon",
         "resize_mode": "expand",
-        "rect": [0.25, 0.2, 0.5, 0.6],
         "polygon": [[0.25, 0.2], [0.75, 0.25], [0.68, 0.8], [0.3, 0.72]]
       },
       "logic": "logic_default",
@@ -751,7 +833,7 @@ REGISTER_LOGIC(logic_people_count);
 运行，不是固定回调周期。二次开发代码应使用 `gctx->timestamp_ms`/`gctx->dt_ms` 计时，不能用
 调用次数或 tick 序号推算时间。快速连续发布可能合并为一次最新状态回调。
 
-当前未注册 `logic_path_sop`。Web 仍有 SOP 节点并会生成这个缺失的 Logic ID，不能作为可运行配置。
+当前未注册 `logic_path_sop`，Web 也不会再生成这个无效 Logic ID。
 
 通道可以不配置 `logic`。此时仍会执行视频、模型、跟踪和通用绘制管线，但不会调用业务后处理模块。
 
@@ -870,7 +952,7 @@ bash -n install_deps.sh \
 - Web 图编辑器编排固定的视觉分析角色，暂不支持用户自定义 DAG；
 - 模型类型由 C++ 模型工厂注册，新增类型需要重新编译；
 - 全局 logic 与通道 logic 一样是编译期自注册模块；
-- Web 的 SOP 节点与当前缺失的 `logic_path_sop` 是已知实现缺口。
+- Web 只允许从当前 App 的 Logic 清单选择已注册模块。
 
 ## 文档
 

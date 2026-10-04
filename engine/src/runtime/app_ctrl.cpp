@@ -537,10 +537,6 @@ extern "C" void *config_monitor_thread_func(void *arg)
                 }
                 if (!changed && (os.loop != ns.loop || os.usb_width != ns.usb_width || os.usb_height != ns.usb_height))
                     changed = true;
-                if (!changed && old_type == "usb" &&
-                    (old_cfg.channels[i].playback_fps != new_cfg.channels[i].playback_fps ||
-                     old_cfg.channels[i].max_fps != new_cfg.channels[i].max_fps))
-                    changed = true;
                 if (!changed)
                     continue;
 
@@ -551,8 +547,6 @@ extern "C" void *config_monitor_thread_func(void *arg)
                 src.loop = ns.loop;
                 src.usb_width = ns.usb_width;
                 src.usb_height = ns.usb_height;
-                src.usb_fps = new_cfg.channels[i].playback_fps > 0 ? new_cfg.channels[i].playback_fps
-                                                                   : new_cfg.channels[i].max_fps;
                 SrcCfg_t old_src;
                 old_src.srcType = old_type;
                 old_src.location = old_loc;
@@ -560,8 +554,6 @@ extern "C" void *config_monitor_thread_func(void *arg)
                 old_src.loop = os.loop;
                 old_src.usb_width = os.usb_width;
                 old_src.usb_height = os.usb_height;
-                old_src.usb_fps = old_cfg.channels[i].playback_fps > 0 ? old_cfg.channels[i].playback_fps
-                                                                       : old_cfg.channels[i].max_fps;
                 stream_switches.push_back(
                     {i, new_cfg.channels[i].id, old_loc, new_loc, old_type, new_type, old_src, src});
             }
@@ -647,8 +639,6 @@ extern "C" void *config_monitor_thread_func(void *arg)
                     old_src.loop = ps.loop;
                     old_src.usb_width = ps.usb_width;
                     old_src.usb_height = ps.usb_height;
-                    old_src.usb_fps =
-                        primary_config->playback_fps > 0 ? primary_config->playback_fps : primary_config->max_fps;
 
                     DecChannel *rebuild = new DecChannel(primary, old_src);
                     for (size_t k = 1; k < remaining.size(); ++k)
@@ -909,12 +899,6 @@ int app_ctrl_get_max_fps(void)
 {
     auto snapshot = app_ctrl_get_runtime_snapshot();
     return snapshot && snapshot->config.max_fps > 0 ? snapshot->config.max_fps : 30;
-}
-
-int app_ctrl_get_local_default_fps(void)
-{
-    auto snapshot = app_ctrl_get_runtime_snapshot();
-    return snapshot ? snapshot->config.local_default_fps : 25;
 }
 
 int app_ctrl_get_performance_display(void)

@@ -116,14 +116,13 @@ build/engine/vision_analysis --list-global-logics
 
 ## 必须知道的当前边界
 
-1. Web 编辑器仍显示“SOP流程”节点，并会生成 `logic_path_sop`；当前 C++ 模块目录中没有该逻辑。因此它不是可运行能力，不能用于新配置，也不能在文档或提示词中当作现成示例。
-2. `logic_periodic_snapshot_demo`、`logic_upload_teach`、`logic_path_sop`、`logic_global_input_demo`、`global_channel_aggregate_demo`、`global_default` 和 `global_two_channel_demo` 均不在当前源码中。周期事件可参考 `logic_course_08`/`logic_dify`；当前跨通道人数闭环由 `logic_roi_person_count_demo` 与 `global_person_count_alarm_demo` 组成。
-3. 全局实例的 `channels` 非空时按连接列表取输入；为空时，当前调度实现会取应用全部通道。普通业务应使用 `gctx->inputs()`，它会过滤未发布、离线或过期输入。
-4. 全局实例由通道新发布立即唤醒，`poll_interval_ms` 只是无更新兜底周期。回调不是固定频率，计时必须使用 `timestamp_ms`/`dt_ms`，快速连续发布可能只读取一次最新状态。
-5. 全局聚合事件没有主通道。`evidence_channel_ids` 描述事件涉及通道，Web policy 决定图片通道；`source_channel_id` 只用于确有单路来源的元数据，事件视频固定使用明确配置的 `media_source_channel_id`。
-6. 待上报记录页是本地发件箱视图，不是成功历史。全部 delivery 成功后，投递服务会删除事件目录。
-7. `config.h` 对 `swap_rb` 的行内注释仍写“不影响上报”，但当前录像实现会在 `video_overlay` 为 `custom`/`all` 时把它应用到事件视频；事件图片仍不受影响。以 recorder 实际分支为准。
-8. OTA Agent 当前不单独校验下载 `url` 的格式，也只检查 `type` 非空而不检查它是否属于 C++ 支持的模型类型。下载/写配置成功后仍必须以 MD5、配置监控和模型热加载日志确认最终结果。
+1. `logic_periodic_snapshot_demo`、`logic_upload_teach`、`logic_path_sop`、`logic_global_input_demo`、`global_channel_aggregate_demo`、`global_default` 和 `global_two_channel_demo` 均不在当前源码中。周期事件可参考 `logic_course_08`/`logic_dify`；当前跨通道人数闭环由 `logic_roi_person_count_demo` 与 `global_person_count_alarm_demo` 组成。
+2. 全局实例的 `channels` 非空时按连接列表取输入；为空时，当前调度实现会取应用全部通道。普通业务应使用 `gctx->inputs()`，它会过滤未发布、离线或过期输入。
+3. 全局实例由通道新发布立即唤醒，`poll_interval_ms` 只是无更新兜底周期。回调不是固定频率，计时必须使用 `timestamp_ms`/`dt_ms`，快速连续发布可能只读取一次最新状态。
+4. 全局聚合事件没有主通道。`evidence_channel_ids` 描述事件涉及通道，Web policy 决定图片通道；`source_channel_id` 只用于确有单路来源的元数据，事件视频固定使用明确配置的 `media_source_channel_id`。
+5. 待上报记录页是本地发件箱视图，不是成功历史。全部 delivery 成功后，投递服务会删除事件目录。
+6. `config.h` 对 `swap_rb` 的行内注释仍写“不影响上报”，但当前录像实现会在 `video_overlay` 为 `custom`/`all` 时把它应用到事件视频；事件图片仍不受影响。以 recorder 实际分支为准。
+7. OTA Agent 当前不单独校验下载 `url` 的格式，也只检查 `type` 非空而不检查它是否属于 C++ 支持的模型类型。下载/写配置成功后仍必须以 MD5、配置监控和模型热加载日志确认最终结果。
 
 项目其他位置仍保留少量重构前 README，本轮因“以 `docs/` 为交付入口、且不改辅助代码”的边界未
 整篇重写；不要把它们覆盖本目录契约。逐项冲突见[项目内旧 README 边界](skills/build-rk3588-vision-app/references/known-document-drift.md)。

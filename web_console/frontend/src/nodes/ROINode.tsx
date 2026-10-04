@@ -25,17 +25,6 @@ const SNAP_PX = 10
 // 每个区域一种颜色, 区域多于色板时循环复用 (与 C++ render/逻辑里的配色意图一致)
 const ZONE_COLORS = ['#fbbf24', '#34d399', '#60a5fa', '#f472b6', '#fb923c', '#a78bfa']
 
-/**
- * 根据 max_fps 推算 GStreamer USB 管道实际采集分辨率。
- * 必须与 createUsbDecChannel() 中的档位逻辑完全一致，否则 ROI 坐标系会错位。
- */
-function usbResolutionForFps(fps: number): { width: number; height: number } {
-  if (fps >= 25) return { width: 640,  height: 480  }
-  if (fps >= 15) return { width: 1280, height: 720  }
-  if (fps >= 10) return { width: 1280, height: 960  }
-  return             { width: 1920, height: 1080 }
-}
-
 // 加载新旧配置时统一去掉末尾重复的闭合点，编辑期只保留实际顶点。
 function stripClose(poly: number[][]): [number, number][] {
   return normalizeRoiPolygon(poly).map(p => [p[0], p[1]] as [number, number])
@@ -57,7 +46,6 @@ export default function ROINode({ id, selected }: NodeProps) {
   const zones        = useROIStore(s => s.zones[id] ?? EMPTY_ZONES)
   const clearZones   = useROIStore(s => s.clearZones)
   const appName      = useEditorStore(s => s.appName)
-  const globalMaxFps = useEditorStore(s => s.globalMaxFps)
   const rf           = useReactFlow()
 
   const [showModal, setShowModal] = useState(false)
@@ -83,20 +71,7 @@ export default function ROINode({ id, selected }: NodeProps) {
       if (ew > 0 && eh > 0) {
         usbRes = { width: ew, height: eh }
       } else {
-        // playback_fps 仍来自模型节点兼容数据；通道最大 FPS 则存放在视频流节点。
-        const streamOutput = edges.find(e =>
-          e.source === toStream.target && e.sourceHandle === 'stream-out' &&
-          rf.getNode(e.target)?.type === 'model')
-        const anchorData = streamOutput
-          ? rf.getNode(streamOutput.target)?.data as Record<string, unknown> | undefined
-          : undefined
-        const playbackFps = Number(anchorData?.playback_fps ?? 0)
-        const maxFps      = Number(streamData?.max_fps      ?? 0)
-        const fps = playbackFps > 0 ? playbackFps
-                  : maxFps      > 0 ? maxFps
-                  : globalMaxFps > 0 ? globalMaxFps
-                  : 15
-        usbRes = usbResolutionForFps(fps)
+        usbRes = { width: 1280, height: 720 }
       }
     }
     const inferenceConfig = inferenceRoiConfig(streamData?.inference_roi)
@@ -285,12 +260,7 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
     if (!bgImage) return
 
     if (inferenceRegion) {
-      const regionPoints = inferenceRegion.shape === 'polygon' ? inferenceRegion.polygon : [
-        [inferenceRegion.rect.x, inferenceRegion.rect.y],
-        [inferenceRegion.rect.x + inferenceRegion.rect.width, inferenceRegion.rect.y],
-        [inferenceRegion.rect.x + inferenceRegion.rect.width, inferenceRegion.rect.y + inferenceRegion.rect.height],
-        [inferenceRegion.rect.x, inferenceRegion.rect.y + inferenceRegion.rect.height],
-      ]
+      const regionPoints = inferenceRegion.polygon
       ctx.save(); ctx.fillStyle = 'rgba(2, 6, 23, 0.62)'; ctx.fillRect(0, 0, dispW, dispH)
       ctx.beginPath(); regionPoints.forEach(([x, y], index) => index === 0
         ? ctx.moveTo(x * dispW, y * dispH) : ctx.lineTo(x * dispW, y * dispH)); ctx.closePath()
@@ -532,11 +502,11 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
         {isUsb && (
           Number(streamData!.usb_width) > 0 ? (
             <div style={{ padding: '6px 12px', background: '#12321a', color: '#34d399', fontSize: 12, lineHeight: 1.5 }}>
-              ✓ USB 采集分辨率已固定为 {Number(streamData!.usb_width)}×{Number(streamData!.usb_height)}（显式配置，不随最大FPS变）。在此分辨率下画 ROI 即可。
+              USB 采集分辨率为 {Number(streamData!.usb_width)}×{Number(streamData!.usb_height)}，不随处理 FPS 改变。
             </div>
           ) : (
             <div style={{ padding: '6px 12px', background: '#3a2a12', color: '#fbbf24', fontSize: 12, lineHeight: 1.5 }}>
-              ⚠ 自动分辨率会随最大 FPS 变化；修改 FPS 后请重新抓帧。
+              USB 自动档固定使用 1280×720 @ 15 FPS。
             </div>
           )
         )}

@@ -28,7 +28,6 @@ void init_config_fields(AppConfig &cfg)
     REG_G("rtsp_encoder", STRING, rtsp_encoder);
     REG_G("channel_threads", INT, channel_threads);
     REG_G("max_fps", INT, max_fps);
-    REG_G("local_default_fps", INT, local_default_fps);
     REG_G("queue_size", INT, queue_size);
     REG_G("tracker_enable", INT, tracker_enable);
     REG_G("tracker_type", STRING, tracker_type);
@@ -46,7 +45,6 @@ void init_config_fields(AppConfig &cfg)
     REG_C("logic", STRING, logic);
     REG_C("logic_parameters", JSON, logic_parameters_json);
     REG_C("threads", INT, threads);
-    REG_C("playback_fps", INT, playback_fps);
     REG_C("max_fps", INT, max_fps);
     REG_C("tracker_enable", INT, tracker_enable);
     REG_C("tracker_type", STRING, tracker_type);

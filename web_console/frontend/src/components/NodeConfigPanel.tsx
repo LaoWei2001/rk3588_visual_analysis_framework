@@ -48,7 +48,6 @@ const NODE_TITLES: Record<string, [string, string]> = {
   model:  ['🧠', 'YOLO推理节点'],
   roi:    ['◆', '业务 ROI 节点'],
   logic:  ['⚡', '逻辑函数节点'],
-  sop:    ['🧭', 'SOP流程节点'],
   report: ['📡', '上报配置节点'],
   globalLogic: ['⬡', '全局逻辑节点'],
 }
@@ -58,7 +57,6 @@ const HEADER_CLASS: Record<string, string> = {
   model:  'header-model',
   roi:    'header-roi',
   logic:  'header-logic',
-  sop:    'header-sop',
   report: 'header-report',
   globalLogic: 'header-global-logic',
 }
@@ -94,7 +92,6 @@ export default function NodeConfigPanel({
         {node.type === 'model'  && <ModelForm   node={node} onUpdate={onUpdate}
           duplicateIdError={modelIdError} />}
         {node.type === 'logic'  && <LogicForm   node={node} onUpdate={onUpdate} />}
-        {node.type === 'sop'    && <SopInfo     node={node} onUpdate={onUpdate} />}
         {node.type === 'globalLogic' &&
           <GlobalLogicForm node={node} onUpdate={onUpdate} inputs={globalInputs} />}
         {node.type === 'report' && <ReportForm node={node} onUpdate={onUpdate}
@@ -306,11 +303,25 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
 
   return (
     <div className="ncp-form">
+      <div className="node-row">
+        <label className="node-toggle">
+          <input type="checkbox" checked={d.enable !== false} onChange={e => set('enable', e.target.checked)} />
+          启用通道
+        </label>
+        <label className="node-toggle">
+          <input type="checkbox" checked={d.infer_enable !== false} onChange={e => set('infer_enable', e.target.checked)} />
+          允许模型推理
+        </label>
+        <label className="node-toggle">
+          <input type="checkbox" checked={d.swap_rb === true} onChange={e => set('swap_rb', e.target.checked)} />
+          显示红蓝互换
+        </label>
+      </div>
       <F label="通道编号 (channel_id)">
         <NumberField min="0" def={0} value={d.channel_id} onChange={v => set('channel_id', v ?? 0)} />
       </F>
 
-      <F label="通道最大 FPS（空 = 继承全局）">
+      <F label="推理/业务最大 FPS（空 = 继承全局）">
         <NumberField
           allowEmpty
           integerOnly
@@ -364,11 +375,11 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
               const [w, h] = e.target.value.split('x').map(Number)
               onUpdate(node.id, { usb_width: w, usb_height: h })
             }}>
-            <option value="0x0">自动（随最大 FPS）</option>
-            <option value="1280x720">1280×720（16:9）</option>
-            <option value="640x480">640×480（4:3）</option>
-            <option value="1280x960">1280×960（4:3）</option>
-            <option value="1920x1080">1920×1080（16:9）</option>
+            <option value="0x0">自动（1280×720 @ 15 FPS）</option>
+            <option value="1280x720">1280×720 @ 15 FPS</option>
+            <option value="640x480">640×480 @ 30 FPS</option>
+            <option value="1280x960">1280×960 @ 10 FPS</option>
+            <option value="1920x1080">1920×1080 @ 5 FPS</option>
           </select>
         </F>
       </>}
@@ -499,7 +510,7 @@ function ModelForm({ node, onUpdate, duplicateIdError }: {
   return (
     <div className="ncp-form">
       <label className="node-toggle ncp-top-toggle">
-        <input type="checkbox" checked={d.infer_enable !== false} onChange={e => set('infer_enable', e.target.checked)} />
+        <input type="checkbox" checked={d.enable !== false} onChange={e => set('enable', e.target.checked)} />
         启用 NPU 推理
       </label>
 
@@ -844,53 +855,6 @@ function ROIInfo({ node }: { node: Node }) {
             <li key={i}>{i + 1}. {z.name?.trim() || `区域${i + 1}`}（{z.polygon.length} 顶点）</li>
           ))}
         </ul>
-      )}
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SOP 流程信息 — 具体步骤在画布的 SOP 节点上点「配置流程」编辑(区域来自上游 ROI 节点)
-// ─────────────────────────────────────────────────────────────────────────────
-function SopInfo({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate'] }) {
-  const appName = useEditorStore(s => s.appName)
-  const [moduleParams, setModuleParams] = useState<LogicParam[]>([])
-  useEffect(() => {
-    if (!appName) return
-    fetchAppLogics(appName)
-      .then(result => {
-        const def = result.channel_logics.find(item => item.name === 'logic_path_sop')
-        setModuleParams(def?.params ?? [])
-      })
-      .catch(() => setModuleParams([]))
-  }, [appName])
-
-  const d     = node.data as { target_label?: string; steps?: { zoneName?: string }[] }
-  const steps = d.steps ?? []
-
-  return (
-    <div className="ncp-form">
-      <div className="node-field">
-        <label>目标类别</label>
-        <div className={`ncp-roi-status ${d.target_label?.trim() ? 'active' : ''}`}>
-          {d.target_label?.trim() || '（未设置）'}
-        </div>
-      </div>
-      <div className="node-field">
-        <label>步骤（{steps.length}）</label>
-        {steps.length > 0 ? (
-          <ul className="ncp-roi-zone-ul">
-            {steps.map((s, i) => <li key={i}>{i + 1}. {s.zoneName?.trim() || '未选区域'}</li>)}
-          </ul>
-        ) : (
-          <div className="ncp-roi-status">还没有步骤</div>
-        )}
-      </div>
-      {moduleParams.length > 0 && (
-        <>
-          <div className="ncp-section-title" style={{ marginTop: 14 }}>模块扩展参数</div>
-          <LogicParameterFields node={node} params={moduleParams} onUpdate={onUpdate} />
-        </>
       )}
     </div>
   )

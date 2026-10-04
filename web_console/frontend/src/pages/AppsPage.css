@@ -127,28 +127,9 @@
 .card-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
 }
-
-.mode-toggle {
-  display: flex;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.mode-btn {
-  padding: 5px 12px;
-  font-size: 12px;
-  background: none;
-  color: var(--text2);
-  border: none;
-  transition: all 0.15s;
-}
-.mode-btn.active { background: #1e3a6b; color: var(--accent); }
-.mode-btn:disabled { opacity: 0.5; cursor: default; }
 
 .config-row {
   display: flex;

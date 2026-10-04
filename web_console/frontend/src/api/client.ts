@@ -54,7 +54,6 @@ export interface AppInfo {
   autostart: boolean            // 用户是否勾选“开机自启”
   desired_running: boolean      // 用户最后一次操作是否要求保持运行
   status: 'running' | 'stopped' | 'unknown'
-  mode: string | null
   pid: number | null
   uptime_seconds: number | null
   config?: string | null        // 运行中时实际加载的配置文件名
@@ -78,8 +77,8 @@ export const fetchApps = () => api.get<AppInfo[]>('/apps', {
 }).then(r => r.data)
 
 // config: 指定运行的配置文件名（assets/ 下，默认 config.json）。不传则用 config.json。
-export const startApp = (name: string, mode: 'deploy' | 'debug', config?: string) =>
-  api.post(`/apps/${name}/start`, { mode, config }).then(r => r.data)
+export const startApp = (name: string, config?: string) =>
+  api.post(`/apps/${name}/start`, { config }).then(r => r.data)
 
 export const stopApp = (name: string) =>
   api.post(`/apps/${name}/stop`).then(r => r.data)

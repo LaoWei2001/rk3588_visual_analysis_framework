@@ -1,8 +1,29 @@
+import json
 import os
 import shutil
 import subprocess
 
 from services import process_manager as pm
+
+
+def test_display_setting_is_read_without_modifying_config(tmp_path):
+    config = tmp_path / "config.json"
+    content = {"global": {"enable_display": 1}, "channels": []}
+    config.write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
+    before = config.read_bytes()
+
+    assert pm._config_enables_display(config) is True
+    assert config.read_bytes() == before
+
+
+def test_display_setting_defaults_to_disabled(tmp_path):
+    missing_global = tmp_path / "missing-global.json"
+    missing_global.write_text("{}", encoding="utf-8")
+    disabled = tmp_path / "disabled.json"
+    disabled.write_text('{"global":{"enable_display":0}}', encoding="utf-8")
+
+    assert pm._config_enables_display(missing_global) is False
+    assert pm._config_enables_display(disabled) is False
 
 
 def test_running_process_survives_atomic_executable_upgrade(tmp_path, monkeypatch):
@@ -24,4 +45,3 @@ def test_running_process_survives_atomic_executable_upgrade(tmp_path, monkeypatc
     finally:
         process.terminate()
         process.wait(timeout=2)
-

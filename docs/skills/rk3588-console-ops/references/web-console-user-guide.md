@@ -18,7 +18,7 @@
 
 | 路径 | 页面 | 当前用途 |
 |---|---|---|
-| `/` | 程序管理 | 安装包、配置选择、部署/调试、启停、自启、编辑、日志、事件 |
+| `/` | 程序管理 | 安装包、配置选择、启停、自启、编辑、日志、事件 |
 | `/live-view` | 实时画面 | 当前唯一运行 App 的拼接视频、实时日志和 logic Actions |
 | `/editor/:appName` | 配置编辑器 | 图形化生成 `assets/*.json` |
 | `/logs/:appName` | 程序日志 | 当前控制台会话内存日志 |
@@ -39,9 +39,9 @@
 
 - “上传程序”接受 zip、tar.gz、tgz、tar；安装前会停止所有 Web 托管视觉程序。
 - 系统只允许运行一个视觉 App；启动第二个会返回冲突，必须先停止当前 App。
-- 启动前选择 `assets/` 下的 JSON 配置，以及“部署”或“调试”。
-- 部署模式强制当前配置 `global.enable_display=0`；调试模式强制为 1 并尝试连接板端 `:0` 显示。
-- “开机自启”记录用户意图，由 Web 控制台启动时恢复视觉 App 和对应后台服务。
+- 启动前选择 `assets/` 下的 JSON 配置，然后点击“启动”。
+- HDMI 是否显示由配置中的 `global.enable_display` 决定；Web 启动过程不会改写配置。
+- “开机自启”记录程序和启动配置，由 Web 控制台启动时恢复视觉 App 和对应后台服务。
 - 删除 App 会停进程并删除 `/opt/ai_apps/<App>`；当前后端不会同时删除
   `/opt/ai_apps/.data/<App>`，持久事件/连接仍需按运维策略另行处理。
 
@@ -62,7 +62,6 @@ Web 上传替换同名包时，`.data/<App>` 位于包外而保留；包内手�
 | 逻辑函数 | 可选的 `channels[].logic` 与 `logic_parameters` |
 | 上报配置 | 通道或全局实例的 `report_policy/report_parameters` 中一条 delivery |
 | 全局逻辑 | `global.global_logics[]`，输入通道来自画布连线 |
-| SOP 流程 | 当前会生成 `logic_path_sop`，但 C++ 模块缺失，暂不可运行 |
 
 没有 YOLO 节点时仍是正常视频通道：`infer_enable=false`、`models=[]`；直接连接 logic 可做传统 CV
 或无推理业务，logic 收到空 results。没有 logic 时仍显示/推理/系统绘制，只是不运行自定义业务。

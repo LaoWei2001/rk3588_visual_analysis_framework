@@ -13,13 +13,8 @@ APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 
 router = APIRouter()
 
-# USB cameras: GStreamer (createUsbDecChannel) requests NV12 at these resolutions:
-#   desired_fps >= 25 → 640×480 @ 30fps
-#   desired_fps >= 15 → 1280×720 @ 15fps  ← default (max_fps=15 in most configs)
-#   desired_fps >= 10 → 1280×960 @ 10fps
-#   desired_fps <  10 → 1920×1080 @ 5fps
-# The snapshot must use the SAME resolution so ROI coordinates match the C++ pipeline.
-# We default to 1280×720 (the most common case) and let the caller override via usb_width/usb_height.
+# USB 自动档与 C++ 采集管道都固定为 1280×720；显式分辨率由调用方传入。
+# 抓帧与实际管道使用同一尺寸，保证 ROI 坐标一致。
 USB_DEFAULT_WIDTH  = 1280
 USB_DEFAULT_HEIGHT = 720
 

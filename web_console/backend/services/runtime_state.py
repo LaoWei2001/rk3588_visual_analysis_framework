@@ -52,14 +52,12 @@ def _normalize(raw: Any) -> Dict[str, Any]:
             for name, value in apps.items():
                 if not isinstance(name, str) or not name or not isinstance(value, dict):
                     continue
-                mode = value.get("mode") if value.get("mode") in ("deploy", "debug") else "deploy"
                 config = value.get("config")
                 if not isinstance(config, str) or not config:
                     config = "config.json"
                 state["vision"]["apps"][name] = {
                     "autostart": bool(value.get("autostart", False)),
                     "desired_running": bool(value.get("desired_running", False)),
-                    "mode": mode,
                     "config": config,
                 }
 
@@ -118,7 +116,6 @@ def get_vision_settings(app_name: str) -> Dict[str, Any]:
     return {
         "autostart": bool(value.get("autostart", False)),
         "desired_running": bool(value.get("desired_running", False)),
-        "mode": value.get("mode", "deploy"),
         "config": value.get("config", "config.json"),
     }
 
@@ -129,7 +126,6 @@ def set_vision_autostart(app_name: str, enabled: bool) -> Dict[str, Any]:
         current = apps.setdefault(app_name, {
             "autostart": False,
             "desired_running": False,
-            "mode": "deploy",
             "config": "config.json",
         })
         current["autostart"] = bool(enabled)
@@ -138,7 +134,7 @@ def set_vision_autostart(app_name: str, enabled: bool) -> Dict[str, Any]:
     return dict(state["vision"]["apps"][app_name])
 
 
-def mark_vision_started(app_name: str, mode: str, config: str) -> None:
+def mark_vision_started(app_name: str, config: str) -> None:
     def change(state: Dict[str, Any]) -> None:
         apps = state["vision"]["apps"]
         # 视觉程序全局单实例，因此最多只能有一个“最后要求运行”的 App。
@@ -147,12 +143,10 @@ def mark_vision_started(app_name: str, mode: str, config: str) -> None:
         current = apps.setdefault(app_name, {
             "autostart": False,
             "desired_running": False,
-            "mode": "deploy",
             "config": "config.json",
         })
         current.update({
             "desired_running": True,
-            "mode": mode if mode in ("deploy", "debug") else "deploy",
             "config": config or "config.json",
         })
         state["vision"]["last_app"] = app_name
@@ -193,7 +187,6 @@ def get_vision_boot_target() -> Optional[Dict[str, str]]:
     value = apps[app_name]
     return {
         "app": app_name,
-        "mode": value.get("mode", "deploy"),
         "config": value.get("config", "config.json"),
     }
 
@@ -227,4 +220,3 @@ def mark_service_stopped(key: str) -> None:
     if key not in _SERVICE_KEYS:
         raise KeyError(key)
     _update(lambda state: state["services"][key].update({"desired_running": False}))
-

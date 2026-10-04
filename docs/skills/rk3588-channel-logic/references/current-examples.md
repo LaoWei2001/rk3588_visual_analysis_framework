@@ -23,9 +23,8 @@
 | `logic_crane_intrusion`、`logic_crane_helmet` | 发布入侵与安全帽状态 | 行车全局控制器输入，涉及业务 ROI/状态机 |
 | `logic_relay` | Action 切换继电器 | 有真实 GPIO 副作用 |
 
-当前没有注册 `logic_path_sop`、`logic_periodic_snapshot_demo` 或 `logic_upload_teach`。Web 编辑器中
-仍保留 SOP 节点并会生成 `logic_path_sop`，但仓库当前没有对应 C++ 模块；在模块补回且 catalog
-校验通过之前，SOP 画布不能当作可运行配置。文档不得把历史模块写成现成功能。
+当前没有注册 `logic_path_sop`、`logic_periodic_snapshot_demo` 或 `logic_upload_teach`，Web 也不会为这些
+历史模块生成配置。文档不得把历史模块写成现成功能。
 
 查询当前清单：
 

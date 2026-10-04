@@ -566,9 +566,7 @@ static std::string build_launch_string(void)
     const char *parse_elem = h265 ? "h265parse" : "h264parse";
     const char *pay_elem = h265 ? "rtph265pay" : "rtph264pay";
 
-    /* 选择硬编/软编:
-     *   "hw"   强制硬件 mpph26xenc (插件缺失时 pipeline 会报错, 便于暴露问题)
-     *   其他    探测到 mpph26xenc 用硬编, 否则回退软编 (默认) */
+    /* "hw" 强制硬件编码；"auto" 优先硬件，不可用时回退软件编码。 */
     bool hw_available = false;
     GstElementFactory *hw_factory = gst_element_factory_find(enc_hw);
     if (hw_factory)
@@ -581,7 +579,7 @@ static std::string build_launch_string(void)
     if (g_st.encoder == "hw")
         use_hw = true;
     else
-        use_hw = hw_available; /* auto (含旧 "sw" 值不再强制软编) */
+        use_hw = hw_available;
     if (use_hw)
     {
         g_st.dma_pool = DmaFramePool::create(g_st.width, g_st.height, g_st.enc_w, g_st.enc_h);

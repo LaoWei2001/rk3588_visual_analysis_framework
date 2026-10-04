@@ -191,78 +191,15 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
     if (!sample)
         return GST_FLOW_OK;
 
-    data->last_sample_seen_us = static_cast<uint64_t>(
+    data->last_sample_seen_us.store(static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count());
+            .count()), std::memory_order_relaxed);
 
-    /* 收到帧说明连接成功，重置重连计数器。
-     * 使用 user_data 中缓存的 GstChannel_t 指针获取 DecChannel，
-     * 避免每帧调用 gst_element_get_parent() 导致的引用泄漏。 */
-    DecChannel *pThis = nullptr;
-    if (data->pipeline)
-    {
-        pThis = (DecChannel *)g_object_get_data(G_OBJECT(data->pipeline), "dec_channel_ptr");
-    }
+    /* owner 随 GstChannel 生命周期稳定，避免逐帧查询 GObject qdata。 */
+    DecChannel *pThis = data->owner;
     if (pThis)
     {
         pThis->resetReconnectCount();
-    }
-
-    /* 帧率限制逻辑: drop 模式（跳帧不延迟）
-     * 始终立即拉取帧以保持 GStreamer 管道畅通，
-     * 若未到处理时间则直接丢弃，确保每次处理的都是最新帧。 */
-    bool should_process = false;
-    for (int cid : data->chnIds)
-    {
-        if (app_ctrl_has_channel(cid))
-        {
-            int target_fps;
-            int local_default_fps;
-            {
-                auto runtime = app_ctrl_get_runtime_snapshot();
-                const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, cid);
-                target_fps = channel ? channel->playback_fps : 0;
-                local_default_fps = runtime ? runtime->config.local_default_fps : 25;
-            }
-            if (target_fps <= 0 && data->is_file)
-            {
-                target_fps = local_default_fps;
-            }
-
-            if (target_fps > 0)
-            {
-                uint64_t period_us = 1000000ULL / target_fps;
-                auto now = std::chrono::steady_clock::now();
-                uint64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
-
-                if (data->last_frame_time_us == 0)
-                {
-                    should_process = true;
-                    data->last_frame_time_us = now_us;
-                }
-                else
-                {
-                    uint64_t target_time = data->last_frame_time_us + period_us;
-                    if (now_us >= target_time)
-                    {
-                        should_process = true;
-                        data->last_frame_time_us = now_us;
-                        break;
-                    }
-                }
-            }
-            else
-            {
-                should_process = true;
-                break;
-            }
-        }
-    }
-
-    if (!should_process)
-    {
-        gst_sample_unref(sample);
-        return GST_FLOW_OK;
     }
 
     FrameDesc_t stFrameDesc;
@@ -385,7 +322,7 @@ static void *busListen(void *para)
                         /* 暂停期间持续刷新 last_sample_seen_us，防止 watchdog
                          * 误判"无新帧"并触发重连——pipeline 是我们主动暂停的，
                          * 不是卡死，不应该重连。 */
-                        pThis->mGstChn.last_sample_seen_us = now_us;
+                        pThis->mGstChn.last_sample_seen_us.store(now_us, std::memory_order_relaxed);
                         continue;
                     }
                     else
@@ -394,7 +331,7 @@ static void *busListen(void *para)
                         {
                             gst_element_set_state(pPipeLine, GST_STATE_PLAYING);
                             /* 恢复后重置时间戳，给 watchdog 一个干净的起点 */
-                            pThis->mGstChn.last_sample_seen_us = now_us;
+                            pThis->mGstChn.last_sample_seen_us.store(now_us, std::memory_order_relaxed);
                         }
                     }
                 }
@@ -406,7 +343,7 @@ static void *busListen(void *para)
                  * - RTSP/USB：TCP 连接未断但摄像头停止推流，超时 15 秒 */
                 if (pThis)
                 {
-                    uint64_t last_us = pThis->mGstChn.last_sample_seen_us;
+                    uint64_t last_us = pThis->mGstChn.last_sample_seen_us.load(std::memory_order_relaxed);
 
                     // 文件流 3 秒无帧、实时流 15 秒无帧，均视为静默断流
                     uint64_t stall_threshold_us = pThis->mGstChn.is_file ? 3000000ULL : 15000000ULL;
@@ -605,6 +542,7 @@ DecChannel::DecChannel(int chnId, const SrcCfg_t &cfg)
     : bObjIsInited(false), mReconnectCount(0), mRecoverOkCount(0), mRecoverFailCount(0),
       mIsFileSrc(cfg.srcType == "file"), mIsUsbSrc(cfg.srcType == "usb"), mLoop(cfg.loop), mCfg(cfg)
 {
+    mGstChn.owner = this;
     mGstChn.pipeline = nullptr;
     mGstChn.source = nullptr;
     mGstChn.h26xRTPDepay = nullptr;
@@ -616,10 +554,9 @@ DecChannel::DecChannel(int chnId, const SrcCfg_t &cfg)
 
     mGstChn.chnIds.push_back(chnId);
     mGstChn.is_file = mIsFileSrc;
-    mGstChn.last_frame_time_us = 0;
-    mGstChn.last_sample_seen_us = static_cast<uint64_t>(
+    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count());
+            .count()), std::memory_order_relaxed);
 }
 
 DecChannel::~DecChannel()
@@ -632,6 +569,25 @@ bool DecChannel::hasChannel(int chnId) const
     for (int id : mGstChn.chnIds)
         if (id == chnId)
             return true;
+    return false;
+}
+
+bool DecChannel::canShareWith(const SrcCfg_t &cfg) const
+{
+    if (mCfg.srcType != cfg.srcType || mCfg.location != cfg.location)
+        return false;
+    if (cfg.srcType == "rtsp")
+        return mCfg.videoEncType == cfg.videoEncType;
+    if (cfg.srcType == "file")
+        return mCfg.loop == cfg.loop;
+    if (cfg.srcType == "usb")
+    {
+        const int own_width = mCfg.usb_width > 0 ? mCfg.usb_width : 1280;
+        const int own_height = mCfg.usb_height > 0 ? mCfg.usb_height : 720;
+        const int other_width = cfg.usb_width > 0 ? cfg.usb_width : 1280;
+        const int other_height = cfg.usb_height > 0 ? cfg.usb_height : 720;
+        return own_width == other_width && own_height == other_height;
+    }
     return false;
 }
 
@@ -802,9 +758,9 @@ int DecChannel::createVideoDecChannel(bool start_thread)
     g_signal_connect(mGstChn.source, "pad-added", G_CALLBACK(rtsp_pad_added), &mGstChn);
 
     g_object_set_data(G_OBJECT(mGstChn.pipeline), "dec_channel_ptr", this);
-    mGstChn.last_sample_seen_us = static_cast<uint64_t>(
+    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count());
+            .count()), std::memory_order_relaxed);
 
     GstStateChangeReturn ret = gst_element_set_state(mGstChn.pipeline, GST_STATE_PLAYING);
     if (ret == GST_STATE_CHANGE_FAILURE)
@@ -851,11 +807,11 @@ int DecChannel::createFileDecChannel(bool start_thread)
 
     g_object_set(mGstChn.source, "location", mCfg.location.c_str(), NULL);
 
-    /* 本地文件：sync=TRUE 按PTS播放，但使用async=FALSE避免阻塞。
-     * max-buffers增加到8提供足够缓冲，drop=TRUE丢弃过旧帧。 */
+    /* 本地文件按原始 PTS 实时播放。appsink 只保留两帧，防止下游短时繁忙时
+     * 积累一段过期画面；推理/业务节拍统一由 pipeline_submit_frame 的 max_fps 控制。 */
     g_object_set(mGstChn.vSink, "sync", TRUE, "async", FALSE, NULL);
     g_object_set(mGstChn.vSink, "emit-signals", TRUE, NULL);
-    g_object_set(mGstChn.vSink, "max-buffers", 8, "drop", TRUE, NULL);
+    g_object_set(mGstChn.vSink, "max-buffers", 2, "drop", TRUE, NULL);
     g_signal_connect(mGstChn.vSink, "new-sample", G_CALLBACK(new_sample), &mGstChn);
 
     /*
@@ -876,9 +832,9 @@ int DecChannel::createFileDecChannel(bool start_thread)
     }
 
     g_object_set_data(G_OBJECT(mGstChn.pipeline), "dec_channel_ptr", this);
-    mGstChn.last_sample_seen_us = static_cast<uint64_t>(
+    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count());
+            .count()), std::memory_order_relaxed);
 
     /* decodebin 需要先 PAUSED 完成 typefinding，再切 PLAYING */
     GstStateChangeReturn ret = gst_element_set_state(mGstChn.pipeline, GST_STATE_PAUSED);
@@ -957,40 +913,14 @@ int DecChannel::createUsbDecChannel(bool start_thread)
 
     g_object_set(mGstChn.source, "device", mCfg.location.c_str(), NULL);
 
-    int desired_fps = mCfg.usb_fps > 0 ? mCfg.usb_fps : 15;
     int explicit_w = mCfg.usb_width, explicit_h = mCfg.usb_height;
-    if (app_ctrl_has_channel(channelId()))
-    {
-        int channel_fps = 0;
-        auto runtime = app_ctrl_get_runtime_snapshot();
-        const ChannelConfig *ch = app_ctrl_runtime_channel_config(runtime, channelId());
-        if (ch)
-        {
-            if (ch->playback_fps > 0)
-                channel_fps = ch->playback_fps;
-            else if (ch->max_fps > 0)
-                channel_fps = ch->max_fps;
-        }
-        if (mCfg.usb_fps <= 0 && channel_fps > 0)
-            desired_fps = channel_fps;
-        else if (mCfg.usb_fps <= 0 && app_ctrl_get_max_fps() > 0)
-            desired_fps = app_ctrl_get_max_fps();
-    }
-    if (desired_fps < 1)
-        desired_fps = 1;
-    if (desired_fps > 30)
-        desired_fps = 30;
-
-    /* 某些USB摄像头（当前这只）NV12并不支持25fps离散档位，
-     * 直接请求 25 会触发 not-negotiated。映射到常见离散帧率并提供后备档位。 */
+    /* USB 采集档位只由采集分辨率决定，不再与推理/业务 max_fps 耦合。
+     * 这样修改处理帧率不会重建摄像头管道，也不会暗中改变 ROI 坐标系。 */
     int capture_fps = 15;
     int preferred_width = 1280;
     int preferred_height = 720;
     if (explicit_w > 0 && explicit_h > 0)
     {
-        /* 方案B: 显式 USB 采集分辨率(来自 config: stream.usb_width/height) ——
-         * 与 ROI 抓帧用的分辨率一致、不随 max_fps 变，从而"画的区域 == 逻辑/显示拿到的区域"。
-         * 帧率仍按分辨率选相机支持的离散档；推理处理帧率由 max_fps 在推理层节流，互不影响。*/
         preferred_width = explicit_w;
         preferred_height = explicit_h;
         if (explicit_w <= 640)
@@ -1001,30 +931,6 @@ int DecChannel::createUsbDecChannel(bool start_thread)
             capture_fps = 10; /* 1280x960 */
         else
             capture_fps = 5; /* 1920x1080 */
-    }
-    else if (desired_fps >= 25)
-    {
-        capture_fps = 30;
-        preferred_width = 640;
-        preferred_height = 480;
-    }
-    else if (desired_fps >= 15)
-    {
-        capture_fps = 15;
-        preferred_width = 1280;
-        preferred_height = 720;
-    }
-    else if (desired_fps >= 10)
-    {
-        capture_fps = 10;
-        preferred_width = 1280;
-        preferred_height = 960;
-    }
-    else
-    {
-        capture_fps = 5;
-        preferred_width = 1920;
-        preferred_height = 1080;
     }
 
     GstCaps *preferred_caps = gst_caps_new_empty();
@@ -1059,12 +965,12 @@ int DecChannel::createUsbDecChannel(bool start_thread)
     }
 
     g_object_set_data(G_OBJECT(mGstChn.pipeline), "dec_channel_ptr", this);
-    mGstChn.last_sample_seen_us = static_cast<uint64_t>(
+    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count());
+            .count()), std::memory_order_relaxed);
 
-    g_print("[DecChannel ch%d] USB preferred caps: NV12 %dx%d @ %dfps (target infer=%dfps)\n", channelId(),
-            preferred_width, preferred_height, capture_fps, desired_fps);
+    g_print("[DecChannel ch%d] USB preferred caps: NV12 %dx%d @ %dfps\n", channelId(), preferred_width,
+            preferred_height, capture_fps);
 
     GstStateChangeReturn ret = gst_element_set_state(mGstChn.pipeline, GST_STATE_PLAYING);
     if (ret == GST_STATE_CHANGE_FAILURE)
@@ -1222,10 +1128,9 @@ bool DecChannel::seekFilePlayback(int64_t position_ms, int64_t &actual_position_
         if (!pause_ctrl::is_paused())
             gst_element_set_state(pipeline, GST_STATE_PLAYING);
     }
-    mGstChn.last_frame_time_us = 0;
-    mGstChn.last_sample_seen_us = static_cast<uint64_t>(
+    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count());
+            .count()), std::memory_order_relaxed);
     for (int channel_id : channels)
         pipeline_channel_online(channel_id);
 
@@ -1306,19 +1211,20 @@ void DecChannel::reconnect()
      *   4-8 次:   5 秒
      *   9-15 次:  15 秒
      *   16+ 次:   30 秒 (网络长断时降低风暴) */
+    const int reconnect_count = mReconnectCount.load(std::memory_order_relaxed);
     int delay_sec;
-    if (mReconnectCount < 3)
+    if (reconnect_count < 3)
         delay_sec = 1;
-    else if (mReconnectCount < 8)
+    else if (reconnect_count < 8)
         delay_sec = 5;
-    else if (mReconnectCount < 15)
+    else if (reconnect_count < 15)
         delay_sec = 15;
     else
         delay_sec = 30;
 
     const char *live_src_name = mIsUsbSrc ? "USB" : "RTSP";
     g_print("[Ch%d] %s reconnecting in %d seconds (attempt #%d, backoff)...\n", channelId(), live_src_name, delay_sec,
-            mReconnectCount + 1);
+            reconnect_count + 1);
 
     for (int i = 0; i < delay_sec * 10; ++i)
     {
@@ -1327,7 +1233,7 @@ void DecChannel::reconnect()
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    mReconnectCount++;
+    mReconnectCount.fetch_add(1, std::memory_order_relaxed);
     bObjIsInited = false;
 
     /* 等待旧管道清理完成 */

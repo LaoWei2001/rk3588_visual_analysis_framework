@@ -39,8 +39,7 @@ bool point_in_polygon(double x, double y, const std::vector<std::pair<double, do
 bool inference_region_contains(double x, double y, const InferenceRoiConfig &roi)
 {
     if (!roi.has_polygon())
-        return x >= roi.x - 1e-9 && x <= roi.x + roi.width + 1e-9 && y >= roi.y - 1e-9 &&
-               y <= roi.y + roi.height + 1e-9;
+        return false;
     return point_in_polygon(x, y, roi.polygon);
 }
 
@@ -72,8 +71,6 @@ bool segments_intersect(const std::pair<double, double> &a, const std::pair<doub
 
 bool valid_inference_polygon(const InferenceRoiConfig &roi)
 {
-    if (roi.shape != "polygon")
-        return roi.shape == "rect";
     if (roi.polygon.size() < 3 || roi.polygon.size() > 64)
         return false;
     double twice_area = 0.0;
@@ -106,7 +103,6 @@ bool valid_inference_polygon(const InferenceRoiConfig &roi)
 bool valid_business_polygon(const std::vector<std::pair<double, double>> &polygon)
 {
     InferenceRoiConfig probe;
-    probe.shape = "polygon";
     probe.polygon = polygon;
     return valid_inference_polygon(probe);
 }
@@ -121,9 +117,6 @@ bool segment_inside_inference_polygon(const std::pair<double, double> &a, const 
 {
     if (!inference_region_contains(a.first, a.second, roi) || !inference_region_contains(b.first, b.second, roi))
         return false;
-    if (!roi.has_polygon())
-        return true;
-
     const double rx = b.first - a.first, ry = b.second - a.second;
     std::vector<double> parameters{0.0, 1.0};
     for (size_t edge = 0; edge < roi.polygon.size(); ++edge)
@@ -240,12 +233,11 @@ bool ConfigValidator::validate_global(const AppConfig &cfg, std::vector<Validati
         errors.push_back({"global.max_fps", "必须 > 0"});
         valid = false;
     }
-    if (cfg.local_default_fps <= 0)
+    if (cfg.rtsp_encoder != "auto" && cfg.rtsp_encoder != "hw")
     {
-        errors.push_back({"global.local_default_fps", "必须 > 0"});
+        errors.push_back({"global.rtsp_encoder", "必须是auto或hw"});
         valid = false;
     }
-
     return valid;
 }
 
@@ -295,14 +287,6 @@ bool ConfigValidator::validate_channels(const AppConfig &cfg, std::vector<Valida
         if (ch.inference_roi.has_roi())
         {
             const auto &r = ch.inference_roi;
-            const bool valid_rect = r.x >= 0.0 && r.y >= 0.0 && r.width > 0.0 && r.height > 0.0 &&
-                                    r.x + r.width <= 1.0 + 1e-9 && r.y + r.height <= 1.0 + 1e-9;
-            if (!valid_rect)
-            {
-                errors.push_back(
-                    {prefix + ".inference_roi.rect", "必须是位于完整画面内的 [x,y,width,height] 归一化矩形"});
-                valid = false;
-            }
             if (r.resize_mode != "stretch" && r.resize_mode != "expand" && r.resize_mode != "letterbox")
             {
                 errors.push_back({prefix + ".inference_roi.resize_mode", "必须是 stretch、expand 或 letterbox"});
@@ -478,14 +462,6 @@ bool ConfigValidator::validate_channels_critical(const AppConfig &cfg, std::vect
         if (ch.inference_roi.has_roi())
         {
             const auto &r = ch.inference_roi;
-            const bool valid_rect = r.x >= 0.0 && r.y >= 0.0 && r.width > 0.0 && r.height > 0.0 &&
-                                    r.x + r.width <= 1.0 + 1e-9 && r.y + r.height <= 1.0 + 1e-9;
-            if (!valid_rect)
-            {
-                errors.push_back(
-                    {prefix + ".inference_roi.rect", "必须是位于完整画面内的 [x,y,width,height] 归一化矩形"});
-                valid = false;
-            }
             if (r.resize_mode != "stretch" && r.resize_mode != "expand" && r.resize_mode != "letterbox")
             {
                 errors.push_back({prefix + ".inference_roi.resize_mode", "必须是 stretch、expand 或 letterbox"});
@@ -497,15 +473,16 @@ bool ConfigValidator::validate_channels_critical(const AppConfig &cfg, std::vect
                     {prefix + ".inference_roi.polygon", "必须是单个有效且不自相交的归一化多边形（3~64 个顶点）"});
                 valid = false;
             }
-            for (size_t zone_index = 0;
-                 valid_rect && ch.inference_roi.restricts_results_to_roi() && zone_index < ch.roi_zones.size();
-                 ++zone_index)
+            else if (ch.inference_roi.restricts_results_to_roi())
             {
-                if (!inference_region_contains_polygon(ch.roi_zones[zone_index].polygon, r))
+                for (size_t zone_index = 0; zone_index < ch.roi_zones.size(); ++zone_index)
                 {
-                    errors.push_back({prefix + ".roi_zones[" + std::to_string(zone_index) + "].polygon",
-                                      "结果受限模式下业务 ROI 的顶点和边必须完全位于推理 ROI 内"});
-                    valid = false;
+                    if (!inference_region_contains_polygon(ch.roi_zones[zone_index].polygon, r))
+                    {
+                        errors.push_back({prefix + ".roi_zones[" + std::to_string(zone_index) + "].polygon",
+                                          "结果受限模式下业务 ROI 的顶点和边必须完全位于推理 ROI 内"});
+                        valid = false;
+                    }
                 }
             }
         }

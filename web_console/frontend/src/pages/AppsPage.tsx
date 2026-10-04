@@ -28,7 +28,6 @@ const cfgName = (p: string): string => p.split('/').pop() ?? p
 export default function AppsPage() {
   const [apps, setApps]       = useState<AppInfo[]>([])
   const [loading, setLoading] = useState(true)
-  const [modes, setModes]     = useState<Record<string, 'deploy' | 'debug'>>({})
   const [cfgSel, setCfgSel]   = useState<Record<string, string>>({})   // 每个程序选中的启动配置文件名
   const [busy, setBusy]       = useState<Record<string, boolean>>({})
   const [autostartBusy, setAutostartBusy] = useState<Record<string, boolean>>({})
@@ -75,9 +74,6 @@ export default function AppsPage() {
       )
 
       setApps(data)
-      const m: Record<string, 'deploy' | 'debug'> = {}
-      data.forEach(a => { m[a.name] = (a.mode as 'deploy' | 'debug') ?? 'deploy' })
-      setModes(prev => ({ ...m, ...prev }))
     } finally {
       setLoading(false)
     }
@@ -104,7 +100,7 @@ export default function AppsPage() {
   const handleStart = async (name: string, config?: string) => {
     setBusy(b => ({ ...b, [name]: true }))
     try {
-      const result = await startApp(name, modes[name] ?? 'deploy', config)
+      const result = await startApp(name, config)
       const warnings = result?.service_sync?.errors as string[] | undefined
       if (warnings?.length) {
         showToast(`${name} 已启动，但后台服务同步失败：${warnings.join('；')}`, 'err')
@@ -305,7 +301,6 @@ export default function AppsPage() {
                   <>
                     <span>PID: {app.pid}</span>
                     <span>运行时间：{fmtUptime(app.uptime_seconds)}</span>
-                    <span>模式：{app.mode === 'debug' ? '调试' : '部署'}</span>
                     {app.config && <span>配置：{app.config}</span>}
                   </>
                 )}
@@ -334,19 +329,6 @@ export default function AppsPage() {
               )}
 
               <div className="card-actions">
-                <div className="mode-toggle">
-                  <button
-                    className={`mode-btn${(modes[app.name] ?? 'deploy') === 'deploy' ? ' active' : ''}`}
-                    onClick={() => setModes(m => ({ ...m, [app.name]: 'deploy' }))}
-                    disabled={app.status === 'running'}
-                  >部署</button>
-                  <button
-                    className={`mode-btn${(modes[app.name] ?? 'deploy') === 'debug' ? ' active' : ''}`}
-                    onClick={() => setModes(m => ({ ...m, [app.name]: 'debug' }))}
-                    disabled={app.status === 'running'}
-                  >调试</button>
-                </div>
-
                 <div className="action-btns">
                   <label className="autostart-toggle" title="勾选后，仅当关机前最后状态为运行时才会在下次开机恢复">
                     <input

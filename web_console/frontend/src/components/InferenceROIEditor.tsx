@@ -24,23 +24,18 @@ export function inferenceRoiConfig(value: unknown): InferenceRoiValue | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const config = value as Record<string, unknown>
   if (!['roi_only', 'full_plus_roi', 'full_frame_roi_filter'].includes(String(config.mode))
-      || !Array.isArray(config.rect) || config.rect.length !== 4) return null
-  const rawRect = config.rect.map(Number)
-  if (!rawRect.every(Number.isFinite)) return null
-  const [x, y, width, height] = rawRect
-  if (x < 0 || y < 0 || width <= 0 || height <= 0
-      || x + width > 1 + 1e-9 || y + height > 1 + 1e-9) return null
-  const shape: InferenceRoiShape = config.shape === 'polygon' ? 'polygon' : 'rect'
+      || !Array.isArray(config.polygon)) return null
   const resizeMode: InferenceResizeMode = ['stretch', 'expand', 'letterbox'].includes(String(config.resize_mode))
     ? config.resize_mode as InferenceResizeMode : 'stretch'
-  const polygon: NormalizedPoint[] = shape === 'polygon' && Array.isArray(config.polygon)
-    ? config.polygon.filter((point): point is number[] => Array.isArray(point) && point.length === 2)
-      .map(point => [Number(point[0]), Number(point[1])] as NormalizedPoint)
-      .filter(point => point.every(Number.isFinite) && point[0] >= 0 && point[0] <= 1 && point[1] >= 0 && point[1] <= 1)
-    : []
-  if (shape === 'polygon' && (polygon.length < 3 || polygon.length > 64
-      || polygonArea(polygon) <= 1e-8 || !polygonIsSimple(polygon))) return null
-  return { mode: config.mode as InferenceRoiMode, shape, resizeMode, rect: { x, y, width, height }, polygon }
+  const polygon: NormalizedPoint[] = config.polygon
+    .filter((point): point is number[] => Array.isArray(point) && point.length === 2)
+    .map(point => [Number(point[0]), Number(point[1])] as NormalizedPoint)
+    .filter(point => point.every(Number.isFinite) && point[0] >= 0 && point[0] <= 1 && point[1] >= 0 && point[1] <= 1)
+  if (polygon.length !== config.polygon.length || polygon.length < 3 || polygon.length > 64
+      || polygonArea(polygon) <= 1e-8 || !polygonIsSimple(polygon)) return null
+  const rect = regionBounds(polygon)
+  const shape: InferenceRoiShape = isAxisAlignedRectangle(polygon, rect) ? 'rect' : 'polygon'
+  return { mode: config.mode as InferenceRoiMode, shape, resizeMode, rect, polygon }
 }
 
 export const inferenceRoiRect = (value: unknown): NormalizedRect | null => inferenceRoiConfig(value)?.rect ?? null
@@ -48,11 +43,6 @@ export const inferenceRoiRestrictsResults = (mode: InferenceRoiMode): boolean =>
   mode === 'roi_only' || mode === 'full_frame_roi_filter'
 
 export function inferenceRoiContainsPoint(config: InferenceRoiValue, x: number, y: number): boolean {
-  if (config.shape !== 'polygon') {
-    const r = config.rect
-    return x >= r.x - 1e-9 && x <= r.x + r.width + 1e-9
-      && y >= r.y - 1e-9 && y <= r.y + r.height + 1e-9
-  }
   return normalizedPointInPolygon(x, y, config.polygon)
 }
 
@@ -71,7 +61,6 @@ export function normalizedPointInPolygon(x: number, y: number, polygon: Normaliz
 /** 判断整条业务 ROI 边界都位于推理多边形内；仅检查顶点会漏掉凹口穿越。 */
 export function inferenceRoiContainsPolygon(config: InferenceRoiValue, polygon: NormalizedPoint[]): boolean {
   if (polygon.some(([x, y]) => !inferenceRoiContainsPoint(config, x, y))) return false
-  if (config.shape !== 'polygon') return true
   const cross = (ax: number, ay: number, bx: number, by: number) => ax * by - ay * bx
   for (let index = 0; index < polygon.length; index++) {
     const a = polygon[index], b = polygon[(index + 1) % polygon.length]
@@ -107,11 +96,28 @@ export function inferenceRoiContainsPolygon(config: InferenceRoiValue, polygon: 
   return true
 }
 
-function regionBounds(shape: InferenceRoiShape, rect: NormalizedRect, polygon: NormalizedPoint[]): NormalizedRect {
-  if (shape === 'rect' || polygon.length < 3) return rect
+function regionBounds(polygon: NormalizedPoint[]): NormalizedRect {
   const xs = polygon.map(point => point[0]), ys = polygon.map(point => point[1])
   const x = Math.min(...xs), y = Math.min(...ys)
   return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y }
+}
+
+function rectanglePolygon(rect: NormalizedRect): NormalizedPoint[] {
+  return [[rect.x, rect.y], [rect.x + rect.width, rect.y],
+    [rect.x + rect.width, rect.y + rect.height], [rect.x, rect.y + rect.height]]
+}
+
+function isAxisAlignedRectangle(polygon: NormalizedPoint[], bounds = regionBounds(polygon)): boolean {
+  if (polygon.length !== 4 || bounds.width <= 0 || bounds.height <= 0) return false
+  const right = bounds.x + bounds.width, bottom = bounds.y + bounds.height
+  const corners = new Set<string>()
+  for (const [x, y] of polygon) {
+    const sideX = Math.abs(x - bounds.x) <= 1e-9 ? 0 : Math.abs(x - right) <= 1e-9 ? 1 : -1
+    const sideY = Math.abs(y - bounds.y) <= 1e-9 ? 0 : Math.abs(y - bottom) <= 1e-9 ? 1 : -1
+    if (sideX < 0 || sideY < 0) return false
+    corners.add(`${sideX}:${sideY}`)
+  }
+  return corners.size === 4
 }
 
 export function polygonArea(polygon: NormalizedPoint[]): number {
@@ -146,19 +152,12 @@ export function polygonIsSimple(polygon: NormalizedPoint[]): boolean {
   return true
 }
 
-function usbResolutionForFps(fps: number): { width: number; height: number } {
-  if (fps >= 25) return { width: 640, height: 480 }
-  if (fps >= 15) return { width: 1280, height: 720 }
-  if (fps >= 10) return { width: 1280, height: 960 }
-  return { width: 1920, height: 1080 }
-}
-
 function serialized(config: InferenceRoiValue): Record<string, unknown> {
-  const rect = [config.rect.x, config.rect.y, config.rect.width, config.rect.height].map(value => +value.toFixed(6))
+  const polygon = config.shape === 'rect' ? rectanglePolygon(config.rect) : config.polygon
   return {
-    mode: config.mode, shape: config.shape, resize_mode: config.resizeMode, rect,
-    ...(config.shape === 'polygon'
-      ? { polygon: config.polygon.map(point => point.map(value => +value.toFixed(6))) } : {}),
+    mode: config.mode,
+    resize_mode: config.resizeMode,
+    polygon: polygon.map(point => point.map(value => +value.toFixed(6))),
   }
 }
 
@@ -308,7 +307,6 @@ function InferenceROIDrawModal({ appName, streamData, initial, mode, onCancel, o
   onCancel: () => void
   onSave: (value: InferenceRoiValue) => void
 }) {
-  const globalMaxFps = useEditorStore(state => state.globalMaxFps)
   const canvasRef = useRef<HTMLCanvasElement>(null), previewRef = useRef<HTMLCanvasElement>(null)
   const [srcW, setSrcW] = useState(1920), [srcH, setSrcH] = useState(1080)
   const [bgImage, setBgImage] = useState<HTMLImageElement | null>(null)
@@ -329,7 +327,7 @@ function InferenceROIDrawModal({ appName, streamData, initial, mode, onCancel, o
   const runtimePolygon = useMemo<NormalizedPoint[]>(() => polygon.map(([x, y]) =>
     [+x.toFixed(6), +y.toFixed(6)]), [polygon])
   const selection = useMemo(() => shape === 'polygon'
-    ? regionBounds(shape, rect, runtimePolygon)
+    ? regionBounds(runtimePolygon)
     : { x: +rect.x.toFixed(6), y: +rect.y.toFixed(6),
       width: +rect.width.toFixed(6), height: +rect.height.toFixed(6) }, [shape, rect, runtimePolygon])
   const transform = useMemo(() => mode === 'full_frame_roi_filter'
@@ -401,8 +399,9 @@ function InferenceROIDrawModal({ appName, streamData, initial, mode, onCancel, o
     try {
       const srcType = getSrcType(streamData)
       const explicitW = Number(streamData.usb_width ?? 0), explicitH = Number(streamData.usb_height ?? 0)
-      const maxFps = Number(streamData.max_fps ?? 0) || globalMaxFps || 15
-      const usbRes = explicitW > 0 && explicitH > 0 ? { width: explicitW, height: explicitH } : usbResolutionForFps(maxFps)
+      const usbRes = explicitW > 0 && explicitH > 0
+        ? { width: explicitW, height: explicitH }
+        : { width: 1280, height: 720 }
       const result = await captureSnapshot(appName, {
         src_type: srcType, url: String(streamData.url ?? ''), device: String(streamData.device ?? '/dev/video81'),
         ...(srcType === 'usb' ? { usb_width: usbRes.width, usb_height: usbRes.height } : {}),
@@ -532,8 +531,8 @@ function InferenceROIDrawModal({ appName, streamData, initial, mode, onCancel, o
     setRect({ x: clamp(left, 0, 1), y: clamp(top, 0, 1), width: clamp(nextRight, 0, 1) - clamp(left, 0, 1), height: clamp(nextBottom, 0, 1) - clamp(top, 0, 1) })
   }
   const switchShape = (next: InferenceRoiShape) => {
-    if (next === 'polygon' && polygon.length < 3) setPolygon([[rect.x, rect.y], [rect.x + rect.width, rect.y], [rect.x + rect.width, rect.y + rect.height], [rect.x, rect.y + rect.height]])
-    if (next === 'rect' && polygon.length >= 3) setRect(regionBounds('polygon', rect, polygon))
+    if (next === 'polygon' && polygon.length < 3) setPolygon(rectanglePolygon(rect))
+    if (next === 'rect' && polygon.length >= 3) setRect(regionBounds(polygon))
     setShape(next); setDrawingPolygon(false)
   }
   const validRect = rect.width > 1e-8 && rect.height > 1e-8
@@ -594,8 +593,8 @@ function InferenceROIDrawModal({ appName, streamData, initial, mode, onCancel, o
                 : '选区保持比例完整显示，剩余空间填黑。'}</div></div></div>
     <div className="roi-footer"><span /><div className="roi-actions">
       <button className="roi-btn" onClick={onCancel}>取消</button><button className="roi-btn primary" disabled={!valid} onClick={() => {
-        const bounds = regionBounds(shape, rect, polygon)
-        onSave({ mode, shape, resizeMode, rect: bounds, polygon: shape === 'polygon' ? polygon : [] })
+        const savedPolygon = shape === 'rect' ? rectanglePolygon(rect) : polygon
+        onSave({ mode, shape, resizeMode, rect: regionBounds(savedPolygon), polygon: savedPolygon })
       }}>保存单区域设置</button></div></div>
   </div></div>
 }

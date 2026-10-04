@@ -67,8 +67,7 @@ Bearer header 时也接受 `?token=`，供原生 `<img>/<video>` 资源使用；
 round-trip 测试。不能只在一个 Node 组件中加 UI。
 
 Logic 列表/参数/outputs/事件/Action 来自 App `logics.json`。前端不得硬编码新增 logic ID；源码模块
-通过生成器进入 catalog 后才会出现。当前唯一例外是 SOP 节点硬编码 `logic_path_sop`，且恰好是已知
-缺口，新增功能不要复制这种模式。
+通过生成器进入 catalog 后才会出现。
 
 上报节点只保存 delivery 对连接和契约 revision 的引用，转换时主动删除 adapter/mapping/request/
 success 的冗余副本；完整发送定义来自版本化契约。这一边界不能破坏，否则 Web 预览、C++ outbox 和

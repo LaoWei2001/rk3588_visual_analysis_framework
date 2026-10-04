@@ -14,14 +14,29 @@ AlgoResult detection(int x, int y, int width, int height) {
   return result;
 }
 
+InferenceRoiConfig rectangle_roi(const cv::Rect &rect, int source_width,
+                                 int source_height) {
+  InferenceRoiConfig config;
+  config.mode = "roi_only";
+  config.x = static_cast<double>(rect.x) / source_width;
+  config.y = static_cast<double>(rect.y) / source_height;
+  config.width = static_cast<double>(rect.width) / source_width;
+  config.height = static_cast<double>(rect.height) / source_height;
+  const double right = config.x + config.width;
+  const double bottom = config.y + config.height;
+  config.polygon = {{config.x, config.y}, {right, config.y},
+                    {right, bottom}, {config.x, bottom}};
+  return config;
+}
+
 void test_keeps_only_centers_inside_roi() {
   std::vector<AlgoResult> results = {
       detection(10, 10, 10, 10), // outside
       detection(25, 25, 10, 10), // center (30, 30), inside
-      detection(65, 65, 10, 10), // center (70, 70), right/bottom edge: outside
+      detection(66, 66, 10, 10), // center (71, 71), outside
   };
 
-  filter_results_to_inference_roi(results, cv::Rect(20, 20, 50, 50), 100, 100,
+  filter_results_to_inference_roi(results, rectangle_roi(cv::Rect(20, 20, 50, 50), 100, 100),
                                   100, 100);
 
   assert(results.size() == 1);
@@ -35,7 +50,7 @@ void test_scales_source_roi_to_canonical_coordinates() {
       detection(9, 9, 2, 2),
   };
 
-  filter_results_to_inference_roi(results, cv::Rect(80, 40, 40, 20), 200, 100,
+  filter_results_to_inference_roi(results, rectangle_roi(cv::Rect(80, 40, 40, 20), 200, 100),
                                   100, 100);
 
   assert(results.size() == 1);
@@ -49,7 +64,7 @@ void test_clips_and_reattaches_segmentation_mask() {
   };
   results.front().boxMask = cv::Mat(100, 100, CV_8UC1, cv::Scalar(7));
 
-  filter_results_to_inference_roi(results, cv::Rect(25, 25, 50, 50), 100, 100,
+  filter_results_to_inference_roi(results, rectangle_roi(cv::Rect(25, 25, 50, 50), 100, 100),
                                   100, 100);
 
   assert(results.size() == 1);
@@ -70,10 +85,25 @@ void test_config_recognizes_full_frame_filter_mode() {
   assert(!config.full_plus_roi());
 }
 
+void test_rectangle_uses_the_polygon_schema_and_fast_path() {
+  InferenceRoiConfig config;
+  config.mode = "roi_only";
+  config.x = 0.2;
+  config.y = 0.1;
+  config.width = 0.6;
+  config.height = 0.7;
+  config.polygon = {{0.2, 0.1}, {0.8, 0.1}, {0.8, 0.8}, {0.2, 0.8}};
+
+  assert(config.has_polygon());
+  assert(config.is_axis_aligned_rectangle());
+
+  config.polygon[1].second = 0.2;
+  assert(!config.is_axis_aligned_rectangle());
+}
+
 void test_polygon_filters_centers_and_clips_mask() {
   InferenceRoiConfig config;
   config.mode = "roi_only";
-  config.shape = "polygon";
   config.polygon = {{0.1, 0.1}, {0.9, 0.1}, {0.5, 0.9}};
   std::vector<AlgoResult> results = {
       detection(45, 35, 10, 10), // triangle center
@@ -81,7 +111,7 @@ void test_polygon_filters_centers_and_clips_mask() {
   };
   results.front().boxMask = cv::Mat(100, 100, CV_8UC1, cv::Scalar(9));
 
-  filter_results_to_inference_roi(results, config, 1920, 1080, 100, 100);
+  filter_results_to_inference_roi(results, config, 100, 100);
 
   assert(results.size() == 1);
   assert(results.front().boxMask.at<unsigned char>(40, 50) == 9);
@@ -143,7 +173,7 @@ void test_resize_transforms() {
 void test_empty_padding_detection_is_not_retained() {
   std::vector<AlgoResult> results = {detection(0, 0, 0, 0),
                                      detection(40, 40, 10, 10)};
-  filter_results_to_inference_roi(results, cv::Rect(0, 0, 100, 100), 100, 100,
+  filter_results_to_inference_roi(results, rectangle_roi(cv::Rect(0, 0, 100, 100), 100, 100),
                                   100, 100);
   assert(results.size() == 1);
   assert(results.front().box == cv::Rect(40, 40, 10, 10));
@@ -191,6 +221,7 @@ int main() {
   test_scales_source_roi_to_canonical_coordinates();
   test_clips_and_reattaches_segmentation_mask();
   test_config_recognizes_full_frame_filter_mode();
+  test_rectangle_uses_the_polygon_schema_and_fast_path();
   test_polygon_filters_centers_and_clips_mask();
   test_resize_transforms();
   test_empty_padding_detection_is_not_retained();

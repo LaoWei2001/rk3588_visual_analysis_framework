@@ -11,6 +11,7 @@
  */
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -30,7 +31,7 @@ struct StreamConfig
     std::string device;    /* USB设备节点, 例如 "/dev/video0" */
     std::string video_enc; /* "h264" 或 "h265" */
     bool loop = false;     /* 文件播放循环（仅 src_type=file 有效） */
-    int usb_width = 0; /* USB 显式采集分辨率(0=随 fps 自动档)。与 ROI 抓帧一致、不随 fps 变 → 三者坐标统一 */
+    int usb_width = 0; /* USB 显式采集分辨率；0 表示默认 1280x720 */
     int usb_height = 0;
 };
 
@@ -44,11 +45,10 @@ struct RoiZoneConfig
 /*======================== 推理 ROI 配置 ========================*/
 struct InferenceRoiConfig
 {
-    /* 空字符串表示整帧推理。rect 始终保存区域包围盒，以兼容旧配置；
-     * polygon 非空时由单个多边形定义精确结果边界。stretch/letterbox
-     * 还会把多边形外输入填黑；expand 则按设计保留扩展后的周边上下文。 */
+    /* 空字符串表示整帧推理。配置只保存 polygon；矩形同样表示为四顶点多边形。
+     * x/y/width/height 是加载时计算的运行时包围框，不对应 JSON 字段。
+     * stretch/letterbox 会把非矩形多边形外输入填黑；expand 保留扩展后的周边上下文。 */
     std::string mode;
-    std::string shape = "rect";          /* rect / polygon */
     std::string resize_mode = "stretch"; /* stretch / expand / letterbox */
     double x = 0.0;
     double y = 0.0;
@@ -78,13 +78,35 @@ struct InferenceRoiConfig
     }
     bool has_polygon() const
     {
-        return shape == "polygon" && polygon.size() >= 3;
+        return polygon.size() >= 3;
+    }
+    bool is_axis_aligned_rectangle() const
+    {
+        if (polygon.size() != 4 || width <= 0.0 || height <= 0.0)
+            return false;
+        const double right = x + width;
+        const double bottom = y + height;
+        bool corners[4] = {false, false, false, false};
+        for (const auto &point : polygon)
+        {
+            const bool left_x = std::abs(point.first - x) <= 1e-9;
+            const bool right_x = std::abs(point.first - right) <= 1e-9;
+            const bool top_y = std::abs(point.second - y) <= 1e-9;
+            const bool bottom_y = std::abs(point.second - bottom) <= 1e-9;
+            if ((!left_x && !right_x) || (!top_y && !bottom_y))
+                return false;
+            const size_t index = (bottom_y ? 2U : 0U) + (right_x ? 1U : 0U);
+            if (corners[index])
+                return false;
+            corners[index] = true;
+        }
+        return corners[0] && corners[1] && corners[2] && corners[3];
     }
 };
 
 inline bool operator==(const InferenceRoiConfig &a, const InferenceRoiConfig &b)
 {
-    return a.mode == b.mode && a.shape == b.shape && a.resize_mode == b.resize_mode && a.x == b.x && a.y == b.y &&
+    return a.mode == b.mode && a.resize_mode == b.resize_mode && a.x == b.x && a.y == b.y &&
            a.width == b.width && a.height == b.height && a.polygon == b.polygon;
 }
 inline bool operator!=(const InferenceRoiConfig &a, const InferenceRoiConfig &b)
@@ -144,8 +166,7 @@ struct ChannelConfig
      * 配置文件键为 logic_parameters；新增普通逻辑参数不再扩展 ChannelConfig。 */
     std::string logic_parameters_json = "{}";
     int threads = -1;      /* 单通道并发线程数, <0表示使用全局设置 */
-    int playback_fps = -1; /* 播放/处理帧率上限，<0表示不限制(本地文件默认25) */
-    int max_fps = -1;      /* 推理帧率上限，<0表示继承全局设置 */
+    int max_fps = -1;      /* 推理/业务处理帧率上限，<0表示继承全局设置 */
 
     /* 跟踪器 (全局默认, 可被通道覆盖) */
     int tracker_enable = -1;               /* -1=未指定(继承全局), 0=关闭, 1=开启 */
@@ -216,8 +237,7 @@ struct AppConfig
 
     /* 推理引擎 */
     int channel_threads = 1;    /* 每个通道并发数默认值 */
-    int max_fps = 30;           /* 每通道推理帧率上限默认值 (从15提高到30) */
-    int local_default_fps = 25; /* 本地文件默认播放采样率 */
+    int max_fps = 30;           /* 每通道推理/业务处理帧率上限默认值 */
     int queue_size = 1;         /* 每核任务队列深度 */
     /* 跟踪器 (全局默认，可被通道覆盖) */
     int tracker_enable = 1; /* 0=关闭, 1=开启 */

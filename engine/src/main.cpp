@@ -207,7 +207,7 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    const char *cfgPath = (argc > 1) ? argv[1] : "./assets/config_sop.json";
+    const char *cfgPath = (argc > 1) ? argv[1] : "./assets/config.json";
     int exit_code = 0;
     bool ctrl_initialized = false;
     bool pipeline_initialized = false;
@@ -292,8 +292,6 @@ int main(int argc, char **argv)
         srcCfg.loop = chCfg.stream.loop;
         srcCfg.usb_width = chCfg.stream.usb_width;
         srcCfg.usb_height = chCfg.stream.usb_height;
-        srcCfg.usb_fps =
-            chCfg.playback_fps > 0 ? chCfg.playback_fps : (chCfg.max_fps > 0 ? chCfg.max_fps : app_ctrl_get_max_fps());
         if (srcCfg.location.empty())
         {
             fprintf(stderr, "[Main] channel %d has empty stream location (src_type=%s)\n", channel_id,
@@ -304,13 +302,10 @@ int main(int argc, char **argv)
         bool shared = false;
         for (int other_index = 0; other_index < config_index; ++other_index)
         {
-            const auto &otherCfg = startup_runtime->config.channels[other_index];
-            const int other_id = otherCfg.id;
+            const int other_id = startup_runtime->config.channels[other_index].id;
             if (!g_pCtrl->capturers[other_id])
                 continue;
-            const auto otherSrcType = config_utils::normalize_src_type(otherCfg.stream);
-            const auto otherLocation = config_utils::resolve_stream_location(otherCfg.stream, otherSrcType);
-            if (srcCfg.srcType == otherSrcType && srcCfg.location == otherLocation)
+            if (g_pCtrl->capturers[other_id]->canShareWith(srcCfg))
             {
                 printf("[Main] channel %d shares stream with channel %d\n", channel_id, other_id);
                 g_pCtrl->capturers[other_id]->addTargetChannel(channel_id);

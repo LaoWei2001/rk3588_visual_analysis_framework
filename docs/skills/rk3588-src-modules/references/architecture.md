@@ -3,9 +3,7 @@
 ## 启动与退出
 
 `main.cpp` 支持三个只读命令：`--list-logics`、`--list-global-logics`、
-`--validate-config FILE`。正常启动参数是配置路径；未传参数时当前源码默认
-`./assets/config_sop.json`，但当前仓库没有 `logic_path_sop` C++ 模块，因此生产/验收必须显式传入
-已校验的实际配置，不能依赖默认文件名代表功能完整。
+`--validate-config FILE`。正常启动参数是配置路径；未传参数时默认读取 `./assets/config.json`。
 
 正常启动大致顺序：配置和 `APP_CTRL` → GStreamer → 显示缓冲 → pipeline/inference → logic control
 Unix socket → capturer → display/dispatch workers → RTSP → config/fd monitors → 主循环。全局 logic 在
