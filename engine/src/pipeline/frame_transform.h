@@ -63,7 +63,7 @@ struct RgaImportedBuffer
 
 /**
  * 同一业务帧的惰性图像容器。
- * - source handle 只保留 DMA-BUF 引用，不主动转换像素；
+ * - source handle 保留 DMA-BUF，source_owner 保留解码缓冲区，阻止池重用像素；
  * - model_frame()/source_frame() 各自在第一次调用时生成一份 BGR 并缓存；
  * - borrowed_data 仅服务同步解码回调，回调结束前必须 clear_borrowed_source()；
  * - DMA-BUF 不可用时可用 retain_borrowed_source() 只保留原始字节，延后到 worker 转换。
@@ -73,7 +73,7 @@ class LazyVideoFrame
   public:
     LazyVideoFrame(int channel_id, std::shared_ptr<RgaImportedBuffer> source, int source_width, int source_height,
                    int source_stride_w, int source_stride_h, int source_format, int model_width, int model_height,
-                   const void *borrowed_data = nullptr);
+                   const void *borrowed_data = nullptr, std::shared_ptr<void> source_owner = {});
 
     const cv::Mat *model_frame();
     const cv::Mat *source_frame();
@@ -88,6 +88,7 @@ class LazyVideoFrame
     bool materialize_borrowed(int dst_width, int dst_height, cv::Mat &out);
 
     int channel_id_ = -1;
+    std::shared_ptr<void> source_owner_; /* 后于 source_ 析构，先释放 RGA 句柄再归还解码池。 */
     std::shared_ptr<RgaImportedBuffer> source_;
     int source_width_ = 0;
     int source_height_ = 0;

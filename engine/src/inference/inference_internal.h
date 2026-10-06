@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 
+#include "common/performance_metrics.h"
 #include "config/config.h"
 #include "inference_engine.h"
 #include "pipeline/frame_transform.h" /* RgaImportedBuffer / LazyVideoFrame */
@@ -73,127 +74,22 @@ struct InferenceTaskQueue
     pthread_cond_t cv;
 };
 
-/*======================== 性能计数器（每通道，支持多个 worker 汇总）========================*/
-
-struct InferencePerfCounters
-{
-    std::mutex mtx;
-    uint64_t wait_us{0}, lock_us{0}, pre_us{0}, npu_us{0};
-    uint64_t post_us{0}, filter_nms_us{0}, total_us{0}, samples{0};
-    uint64_t last_log_ms{0};
-
-    void accumulate(uint64_t wait, uint64_t lock, uint64_t pre, uint64_t npu, uint64_t post, uint64_t filter_nms,
-                    uint64_t total)
-    {
-        std::lock_guard<std::mutex> guard(mtx);
-        wait_us += wait;
-        lock_us += lock;
-        pre_us += pre;
-        npu_us += npu;
-        post_us += post;
-        filter_nms_us += filter_nms;
-        total_us += total;
-        samples++;
-    }
-
-    struct Snapshot
-    {
-        uint64_t samples, wait, lock, pre, npu, post, filter_nms, total;
-    };
-
-    void init(uint64_t now_ms)
-    {
-        std::lock_guard<std::mutex> guard(mtx);
-        wait_us = lock_us = pre_us = npu_us = post_us = filter_nms_us = total_us = samples = 0;
-        last_log_ms = now_ms;
-    }
-
-    bool reset_if_due(uint64_t now_ms, uint64_t window_ms, Snapshot &out)
-    {
-        std::lock_guard<std::mutex> guard(mtx);
-        if (last_log_ms == 0)
-        {
-            last_log_ms = now_ms;
-            return false;
-        }
-        if (now_ms - last_log_ms < window_ms || samples == 0)
-            return false;
-        last_log_ms = now_ms;
-        out = Snapshot{samples, wait_us, lock_us, pre_us, npu_us, post_us, filter_nms_us, total_us};
-        wait_us = lock_us = pre_us = npu_us = post_us = filter_nms_us = total_us = samples = 0;
-        return true;
-    }
-};
-
 /*======================== FPS 跟踪器（每通道）========================*/
 
 struct FpsTracker
 {
-    mutable std::mutex mtx;
-    std::chrono::steady_clock::time_point last_ts;
-    std::chrono::steady_clock::time_point last_tick_ts;
-    int counter{0};
-    float fps{0.0f};
-    int64_t frame_seq{0};
-    bool has_tick{false};
+    FrameRateCounter rate;
+    std::atomic<int64_t> frame_seq{0};
 
-    static constexpr int STALE_TIMEOUT_MS = 2000;
-
-    void init(std::chrono::steady_clock::time_point now)
+    void init()
     {
-        std::lock_guard<std::mutex> lock(mtx);
-        last_ts = now;
-        last_tick_ts = now;
-        counter = 0;
-        fps = 0.0f;
-        frame_seq = 0;
-        has_tick = false;
+        rate.reset();
+        frame_seq.store(0);
     }
-
-    /* Only call after a model inference has actually completed successfully. */
-    void tick()
-    {
-        std::lock_guard<std::mutex> lock(mtx);
-        const auto now_ts = std::chrono::steady_clock::now();
-        counter++;
-        last_tick_ts = now_ts;
-        has_tick = true;
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now_ts - last_ts).count();
-        if (elapsed >= 1000)
-        {
-            fps = (1000.0f * counter) / (float)elapsed;
-            counter = 0;
-            last_ts = now_ts;
-        }
-    }
-
-    float value() const
-    {
-        std::lock_guard<std::mutex> lock(mtx);
-        if (!has_tick)
-            return 0.0f;
-        const auto idle_ms =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - last_tick_ts)
-                .count();
-        return idle_ms >= STALE_TIMEOUT_MS ? 0.0f : fps;
-    }
-
-    void reset_rate()
-    {
-        std::lock_guard<std::mutex> lock(mtx);
-        const auto now = std::chrono::steady_clock::now();
-        last_ts = now;
-        last_tick_ts = now;
-        counter = 0;
-        fps = 0.0f;
-        has_tick = false;
-    }
-
-    int64_t next_frame_seq()
-    {
-        std::lock_guard<std::mutex> lock(mtx);
-        return ++frame_seq;
-    }
+    void tick() { rate.tick(); }
+    float value() const { return rate.value(); }
+    void reset_rate() { rate.reset(); }
+    int64_t next_frame_seq() { return ++frame_seq; }
 };
 
 /*======================== 推理引擎主状态（模块级单例）========================*/

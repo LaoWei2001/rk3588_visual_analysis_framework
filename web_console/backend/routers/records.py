@@ -5,11 +5,16 @@ import os
 import re
 import shutil
 import time
+import secrets
+import threading
+import zipfile
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 CAP_BYTES = int(os.environ.get("EVENT_STORE_MAX_BYTES", 1024 * 1024 * 1024))
@@ -19,6 +24,129 @@ RETRY_REQUEST_FILE = "delivery_retry.request.json"
 from services.data_dir import data_dir
 
 router = APIRouter()
+_exports = {}
+_export_lock = threading.Lock()
+
+
+class RecordSelection(BaseModel):
+    ids: Optional[list[str]] = Field(default=None, max_length=5000)
+
+
+def _selected_paths(name: str, ids: Optional[list[str]]) -> list[Path]:
+    if ids is not None:
+        if not ids or any(not _SAFE_ID.fullmatch(value) or value in (".", "..") for value in ids):
+            raise HTTPException(400, "请选择有效的告警记录")
+        store = _store_dir(name).resolve()
+        paths = [store / value for value in dict.fromkeys(ids)]
+        if any(path.is_symlink() or path.resolve().parent != store or
+               (path.is_dir() and not (path / "event.json").is_file()) for path in paths):
+            raise HTTPException(400, "选择包含无效的告警记录")
+        return paths
+    store = _store_dir(name)
+    return sorted((path for path in store.iterdir() if not path.is_symlink() and path.is_dir() and (path / "event.json").is_file()),
+                  key=lambda path: path.name) if store.exists() else []
+
+
+@router.post("/apps/{name}/records/delete-selected")
+async def delete_selected_records(name: str, selection: RecordSelection):
+    if selection.ids is None:
+        raise HTTPException(400, "请选择要清空的记录")
+    deleted, failed = [], []
+    for path in _selected_paths(name, selection.ids):
+        if not path.is_dir():
+            continue
+        try:
+            shutil.rmtree(path)
+            deleted.append(path.name)
+        except OSError:
+            failed.append(path.name)
+    return {"ok": not failed, "deleted_ids": deleted, "failed_ids": failed}
+
+
+@router.post("/apps/{name}/records/export-images")
+async def prepare_image_export(name: str, selection: RecordSelection):
+    paths = _selected_paths(name, selection.ids)
+    images = [{"id": path.name, "filename": f"{path.name}_raw.jpg"}
+              for path in paths if (path / "raw.jpg").is_file()]
+    if not images:
+        raise HTTPException(404, "所选范围内没有已生成的原始图片")
+    filename = f"alarm_raw_images_{time.strftime('%Y%m%d_%H%M%S')}.zip"
+    download_id = secrets.token_urlsafe(24)
+    with _export_lock:
+        now = time.monotonic()
+        for key in list(_exports):
+            if _exports[key][0] < now:
+                del _exports[key]
+        if len(_exports) >= 50:
+            del _exports[next(iter(_exports))]
+        _exports[download_id] = (now + 1800, name, images, filename)
+    return {"download_id": download_id, "filename": filename, "images": images,
+            "image_count": len(images), "skipped_count": len(paths) - len(images)}
+
+
+class _ZipOutput:
+    """不可 seek 的 ZIP 输出；每次只保留正在传输的一小块，不写板端临时文件。"""
+    def __init__(self):
+        self.chunks = deque()
+        self.position = 0
+
+    def write(self, chunk):
+        if chunk:
+            self.chunks.append(bytes(chunk))
+            self.position += len(chunk)
+        return len(chunk)
+
+    def tell(self):
+        return self.position
+
+    def flush(self):
+        pass
+
+
+def _stream_raw_images(name: str, images: list[dict]):
+    output = _ZipOutput()
+    missing = []
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
+        for image in images:
+            path = _store_dir(name) / image["id"] / "raw.jpg"
+            try:
+                source = path.open("rb")
+            except OSError:
+                missing.append(image["id"])
+                continue
+            with source, archive.open(image["filename"], "w", force_zip64=True) as destination:
+                while True:
+                    chunk = source.read(65536)
+                    if not chunk:
+                        break
+                    destination.write(chunk)
+                    while output.chunks:
+                        yield output.chunks.popleft()
+            while output.chunks:
+                yield output.chunks.popleft()
+        if missing:
+            archive.writestr("missing-images.txt", "图片在导出期间已被删除：\n" + "\n".join(missing))
+    while output.chunks:
+        yield output.chunks.popleft()
+
+
+@router.get("/apps/{name}/records/export-images/{download_id}")
+async def download_image_export(name: str, download_id: str):
+    with _export_lock:
+        job = _exports.get(download_id)
+    if not job or job[0] < time.monotonic() or job[1] != name:
+        raise HTTPException(404, "导出已过期，请重新导出")
+    return StreamingResponse(_stream_raw_images(name, job[2]), media_type="application/zip",
+                             headers={"Content-Disposition": f'attachment; filename="{job[3]}"',
+                                      "Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+@router.get("/apps/{name}/records/{event_id}/raw-image")
+async def record_original_image(name: str, event_id: str):
+    image = _event_dir(name, event_id) / "raw.jpg"
+    if not image.is_file():
+        raise HTTPException(404, "原始图片不存在或仍在生成")
+    return FileResponse(image, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 def _store_dir(name: str) -> Path:
@@ -64,10 +192,10 @@ def _read_event_dir(event_dir: Path) -> dict:
 
 
 def _event_dir(name: str, event_id: str) -> Path:
-    if not _SAFE_ID.fullmatch(event_id):
+    if not _SAFE_ID.fullmatch(event_id) or event_id in (".", ".."):
         raise HTTPException(400, "非法的事件 ID")
     path = _store_dir(name) / event_id
-    if not path.is_dir():
+    if path.is_symlink() or not path.is_dir():
         raise HTTPException(404, "事件不存在或已成功投递")
     return path
 

@@ -17,8 +17,8 @@
  *
  * 与推理结果的关系（有意设计）：
  *   显示的是最新解码帧，叠加的框来自共享的 last_results（可能旧几帧），
- *   由 display_commit_frame 内部用卡尔曼速度外推补偿管线延迟。
- *   这是实时预览的合理取舍；logic/上报路径用严格同帧匹配的数据。
+ *   display_commit_frame 按检测结果的实际坐标绘制框。
+ *   logic/上报路径用严格同帧匹配的数据。
  *
  * 帧池设计要点（见 DisplayFramePool 注释）：
  *   持 DisplayQueue::mtx 的临界区只做整数级槽交换（≈10 ns），
@@ -28,46 +28,68 @@
 
 #include "display_pipeline.h"
 #include "pipeline/pipeline_internal.h"
+#include "rtsp/rtsp_streamer.h"
+#include <cerrno>
+#include <ctime>
 #include <pthread.h>
 
 extern "C" void *display_worker_thread(void *arg)
 {
     const int chnId = (int)(intptr_t)arg;
     DisplayQueue &dq = g_display_queues[chnId];
+    bool had_performance_display = false;
 
     while (g_pCtrl && g_pCtrl->isRunning)
     {
-        /* ---- 等待新帧（条件变量阻塞，零 CPU 占用）---- */
+        /* 新帧到达立即处理；停帧时每 250ms 更新性能文字。 */
         DisplayTask task;
         bool reset_fps = false;
+        bool has_frame = false;
         {
+            timespec deadline;
+            clock_gettime(CLOCK_REALTIME, &deadline);
+            deadline.tv_nsec += 250000000;
+            if (deadline.tv_nsec >= 1000000000)
+            {
+                ++deadline.tv_sec;
+                deadline.tv_nsec -= 1000000000;
+            }
             pthread_mutex_lock(&dq.mtx);
             while (!dq.has_task && g_pCtrl && g_pCtrl->isRunning)
-                pthread_cond_wait(&dq.cv, &dq.mtx);
+            {
+                if (pthread_cond_timedwait(&dq.cv, &dq.mtx, &deadline) == ETIMEDOUT)
+                    break;
+            }
             if (!g_pCtrl || !g_pCtrl->isRunning)
             {
                 pthread_mutex_unlock(&dq.mtx);
                 break;
             }
-            task = dq.task;                /* 仅拷贝元数据（6 个整数，约 24 B）*/
-            reset_fps = dq.reset_fps_pending;
-            dq.reset_fps_pending = false;
-            dq.pool.swap_front_if_dirty(); /* mid↔front 整数交换，将最新帧切为 front */
-            dq.has_task = 0;
+            has_frame = dq.has_task;
+            if (has_frame)
+            {
+                task = dq.task;
+                reset_fps = dq.reset_fps_pending;
+                dq.reset_fps_pending = false;
+                dq.pool.swap_front_if_dirty();
+                dq.has_task = 0;
+            }
             pthread_mutex_unlock(&dq.mtx);
         }
 
-        if (reset_fps)
+        const bool show_perf = app_ctrl_get_performance_display();
+        if (!has_frame)
         {
-            /* fps_counter/last_fps_ts_ms 由本线程独占；共享显示值在通道锁下清零。
-             * 第一帧随后立即进入新的统计窗口，不包含程序启动或 RTSP 断连时间。 */
-            ChannelState &state = g_pCtrl->channels_state[chnId];
-            state.fps_counter = 0;
-            state.last_fps_ts_ms = steady_now_ms();
-            pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-            state.disp_fps = 0.0f;
-            pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
+            const bool consumer_active = app_ctrl_get_enable_disp() ||
+                (app_ctrl_get_enable_rtsp() && rtsp_streamer_has_active_client());
+            if (consumer_active && (show_perf || had_performance_display))
+                display_refresh_channel_overlays(chnId);
+            had_performance_display = show_perf;
+            continue;
         }
+        had_performance_display = show_perf;
+        if (reset_fps)
+            g_pCtrl->channels_state[chnId].preview_rate.reset();
 
         /* ---- RGA 缩放 + render_overlays + 写 framebuffer ----
          * front_buf() 无需持锁：
@@ -75,7 +97,7 @@ extern "C" void *display_worker_thread(void *arg)
          *   front 槽由本线程独占直到下次 swap_front_if_dirty。
          *
          * overlay 在 display_commit_frame 内读取共享 last_results，
-         * 按 result_age_ms 做卡尔曼速度外推绘制框（实时平滑预览）。*/
+         * 按检测结果的实际坐标绘制框。*/
         display_commit_frame(task.chnId, dq.pool.front_buf(), task.srcFmt, task.srcWidth, task.srcHeight,
                               task.srcHStride, task.srcVStride);
     }

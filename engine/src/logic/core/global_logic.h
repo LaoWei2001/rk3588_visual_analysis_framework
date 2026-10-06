@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -184,6 +185,8 @@ struct GlobalContext
     const std::vector<int> *connected_channel_ids = nullptr;              /* Web 画布连入通道 */
     const std::vector<ChannelUpdate> *updated_channels = nullptr;
     const std::vector<ChannelInput> *ready_inputs = nullptr; /* 框架已完成选择和有效性过滤的业务输入 */
+    /* 框架维护的本 tick 自有叠加层更新；业务输入快照始终只读。 */
+    mutable std::map<int, std::vector<DrawCommand>> image_draw_commands;
 
     bool has_param(const char *key) const;
     float param_float(const char *key) const;
@@ -306,12 +309,22 @@ struct GlobalContext
         return latest;
     }
 
-    /** 深拷贝本 tick 对应的媒体快照；通道已更新到下一版时返回 false，绝不混用版本。 */
+    /** 深拷贝本 tick 保留的媒体版本；后续发布不会替换它，也不会导致抓图失败。 */
     bool get_channel_frame_snapshot(int configured_id, ChannelFrameSnapshot *out) const
     {
         const ChannelLogicSnapshot *expected = channel(configured_id);
-        return out && expected && app_ctrl_get_channel_frame_snapshot(configured_id, out) != 0 &&
-               out->logic.publication_seq == expected->publication_seq;
+        if (!out || !expected)
+            return false;
+        ChannelLogicSnapshot evidence = *expected;
+        const auto overlay = image_draw_commands.find(configured_id);
+        if (config && overlay != image_draw_commands.end())
+        {
+            if (overlay->second.empty())
+                evidence.global_draw_commands_by_owner.erase(config->instance_id);
+            else
+                evidence.global_draw_commands_by_owner[config->instance_id] = overlay->second;
+        }
+        return app_ctrl_materialize_channel_frame_snapshot(evidence, out) != 0 && out->logic.has_frame;
     }
 
     template <typename Func> void for_each_channel(Func &&fn) const

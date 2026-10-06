@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "label": "JNU 行车安全拼接图片告警",
-  "description": "以 application/json 上传行车安全告警字段、四通道标注拼接图和原始拼接图 Base64。",
+  "label": "JNU 行车安全图片告警",
+  "description": "以 application/json 上传行车安全告警字段、标注图和原始图 Base64；图片来源由上报节点选择，可使用告警通道单路图片或多通道拼接图片。",
   "owner_logic": "global_crane_safety_controller",
   "event_types": [
     "crane_hook_outside",

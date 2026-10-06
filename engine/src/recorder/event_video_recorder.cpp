@@ -44,7 +44,6 @@ struct RawFrame
     int input_w = 0, input_h = 0;
     float disp_fps = 0.0f;
     int64_t result_frame_id = 0;
-    uint64_t result_ts_ms = 0;
     bool swap_rb = false;
     InferenceRoiConfig inference_roi;
     std::vector<RoiZone> rois;
@@ -189,9 +188,6 @@ static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
         params.disp_fps = raw.disp_fps;
         params.infer_fps = inference_get_infer_fps(raw.channel_id);
         params.result_frame_id = raw.result_frame_id;
-        params.result_age_ms = raw.result_ts_ms && raw.timestamp_ms >= raw.result_ts_ms
-                                   ? static_cast<int64_t>(std::min<uint64_t>(raw.timestamp_ms - raw.result_ts_ms, 200))
-                                   : 0;
         /* 视频自动复用实时画面的绘制层，并保留 VIDEO 专用绘制能力。 */
         params.target_mask = static_cast<uint8_t>(DrawCommand::DISPLAY | DrawCommand::VIDEO);
         params.show_fps = 0;
@@ -217,9 +213,6 @@ static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
     params.disp_fps = raw.disp_fps;
     params.infer_fps = inference_get_infer_fps(raw.channel_id);
     params.result_frame_id = raw.result_frame_id;
-    params.result_age_ms = raw.result_ts_ms && raw.timestamp_ms >= raw.result_ts_ms
-                               ? static_cast<int64_t>(std::min<uint64_t>(raw.timestamp_ms - raw.result_ts_ms, 200))
-                               : 0;
     params.show_fps = 0;
     params.target_mask = DrawCommand::VIDEO;
     params.show_system_overlays = raw.overlay_mode == EVENT_VIDEO_OVERLAY_ALL;
@@ -695,7 +688,6 @@ void event_video_recorder_push_source_frame(int channel_id, const void *data, in
     raw.input_w = raw.input_h = 0;
     raw.disp_fps = 0.0f;
     raw.result_frame_id = 0;
-    raw.result_ts_ms = 0;
     raw.swap_rb = false;
     raw.inference_roi = InferenceRoiConfig{};
 
@@ -715,9 +707,8 @@ void event_video_recorder_push_source_frame(int channel_id, const void *data, in
         raw.results = state.last_results;
         raw.commands = state.draw_cmds;
         state.append_global_draw_commands(&raw.commands);
-        raw.disp_fps = state.disp_fps;
+        raw.disp_fps = state.preview_rate.value();
         raw.result_frame_id = state.published_frame_seq;
-        raw.result_ts_ms = state.published_steady_ms;
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[channel_id]);
 
         raw.input_w = g_pCtrl->inputW;

@@ -53,7 +53,7 @@
 当前注册字段：
 
 - 显示：`enable_display`、`disp_width`、`disp_height`、`tile_cols`、`tile_rows`、
-  `performance_display`、`debug_display`、`enable_pause_key`；
+  `performance_display`、`enable_pause_key`；
 - RTSP 输出：`enable_rtsp`、`rtsp_port`、`rtsp_path`、`rtsp_bitrate`、`rtsp_codec`、
   `rtsp_encoder`；
 - 管线：`channel_threads`、`max_fps`、`queue_size`；
@@ -63,6 +63,31 @@
 
 `disp_width/height`、tile rows/cols、max_fps 必须为正数；开启显示时网格容量不能小于
 有效通道数。Web 配置生成器固定 `rtsp_codec: "h264"` 以满足浏览器零转码预览。
+
+`performance_display` 统一控制性能统计显示和调试日志输出，支持 `0/1` 或
+`false/true`。Web「全局配置 → 性能显示」可切换，保存到运行中的配置文件后支持
+热更新，无需重启引擎。预览、上报图片和录像叠加均按检测结果的实际坐标绘制框。
+
+性能指标口径：
+
+- 画面 `render / infer FPS`：最近 1 秒完成的预览合成/成功推理任务数，不做平滑。
+  `render` 不代表浏览器、RTSP 客户端或 HDMI 实际播放帧率；停帧后每 250ms 刷新叠加，
+  旧样本在 1 秒后归零，文字刷新不计入合成帧数。暂停时显示 0。
+  性能文字只缓存底部 64 像素背景，关闭时释放缓存；停帧刷新只更新此区域，
+  数值未变化时跳过绘制和缓冲写入。板端绘制耗时与测试范围见
+  [性能显示测试报告](../../../performance-display-benchmark.md)。
+- `[Feed] window` 是实际统计秒数，`recv_fps/enq_fps` 使用该窗口；
+  `throttle_skip` 是限频跳过，`pending_discard` 是已入队旧帧被淘汰，
+  `enqueue_fail` 是入队失败。失败百分比仅针对入队尝试，三类不能混为总丢帧率。
+- `[Perf] window` 内的 `completed/published/failed` 分别为成功完成任务、写入最新结果缓存的任务、
+  整体失败任务数。多模型任务至少一个子模型成功即为成功；`published` 不等于业务消费次数。
+  `infer_fps/publish_fps` 使用同一实际窗口，与画面的 1 秒窗口可有差异。
+  `avg_success_ms` 下各项仅为成功任务的平均值；`rknn` 计量 RKNN 输入设置/运行的本机墙钟耗时，
+  输出获取计入 `post`；`pre` 包含 CPU 回退的取帧、转换、缩放。并行时 `lock/pre/rknn/post`
+  为子模型耗时之和，`worker` 是同帧实际墙钟耗时，`queue+worker` 再包含排队等待。
+  二者不包含后续业务执行、画面合成、网络传输和客户端播放。
+- `[FrameSync] lag_frames` 仅是序号差，`age_ms` 是输入进入本机管线到业务处理结束的耗时，
+  `dispatch_ms` 包含业务串行锁等待和业务处理时间；不能据此推算摄像头到客户端的总延迟。
 
 ## `channels[]`
 

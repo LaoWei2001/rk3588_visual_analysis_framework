@@ -169,13 +169,15 @@ void GlobalContext::set_channel_draw_commands(int channel_id,
                                               const std::vector<DrawCommand> &commands) const
 {
     if (config)
+    {
+        image_draw_commands[channel_id] = commands;
         app_ctrl_set_global_draw_commands(channel_id, config->instance_id, commands);
+    }
 }
 
 void GlobalContext::clear_channel_draw_commands(int channel_id) const
 {
-    if (config)
-        app_ctrl_clear_global_draw_commands(channel_id, config->instance_id);
+    set_channel_draw_commands(channel_id, {});
 }
 
 /*======================== 辅助: 时间戳 ========================*/
@@ -284,6 +286,7 @@ void *global_logic_thread_func(void *arg)
 
         t->channel_snapshots.clear();
         t->updated_channels.clear();
+        t->gctx.image_draw_commands.clear();
 
         for (int i = 0; i < ch_count; ++i)
         {
@@ -360,6 +363,11 @@ void *global_logic_thread_func(void *arg)
 
         if (t->func)
             t->func(&t->gctx);
+
+        /* 本 tick 已完成：释放证据帧引用，等待期间不占用旧解码缓冲区。 */
+        t->ready_inputs.clear();
+        t->channel_snapshots.clear();
+        t->gctx.image_draw_commands.clear();
 
         if (t->stop_requested.load())
             break;

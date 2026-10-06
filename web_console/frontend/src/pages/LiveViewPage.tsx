@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import {
   fetchApps,
@@ -17,6 +17,7 @@ import {
   type LogicActionDef,
 } from '../api/client'
 import { useAuthStore } from '../store/authStore'
+import { videoTimelineLayout, type VideoLayout } from './videoTimelineLayout'
 import './LiveViewPage.css'
 
 type RtspState = 'idle' | 'checking' | 'enabled' | 'disabled' | 'error'
@@ -31,6 +32,7 @@ const LIVE_SIDE_WIDTH_STORAGE_KEY = 'rk3588.liveView.sidePanelWidth'
 const LIVE_SIDE_WIDTH_DEFAULT = 380
 const LIVE_SIDE_WIDTH_MIN = 310
 const LIVE_SIDE_WIDTH_MAX = 900
+const FILE_TIMELINE_HIDE_MS = 3000
 
 function storedSidePanelWidth(): number {
   try {
@@ -189,6 +191,9 @@ export default function LiveViewPage() {
   const [fileSources, setFileSources] = useState<FilePlaybackSource[]>([])
   const [seekDrafts, setSeekDrafts] = useState<Record<number, number>>({})
   const [seekBusy, setSeekBusy] = useState<Record<number, boolean>>({})
+  const [activeTimelineChannel, setActiveTimelineChannel] = useState<number | null>(null)
+  const [videoLayout, setVideoLayout] = useState<VideoLayout | null>(null)
+  const [pictureBounds, setPictureBounds] = useState({ left: 0, top: 0, width: 0, height: 0 })
   const [actionBusy, setActionBusy] = useState<Record<string, boolean>>({})
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
   const [sidePanelWidth, setSidePanelWidth] = useState(storedSidePanelWidth)
@@ -207,6 +212,8 @@ export default function LiveViewPage() {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const seekDraftsRef = useRef<Record<number, number>>({})
   const seekBusyRef = useRef(new Set<number>())
+  const fileTimelineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const fileTimelinePointerRef = useRef<{ pointerId: number; channelId: number } | null>(null)
   const sideResizeRef = useRef<{
     pointerId: number
     startX: number
@@ -290,6 +297,160 @@ export default function LiveViewPage() {
   const appName = runningApp?.name ?? ''
   const runningConfig = runningApp?.config ?? ''
   const rtspEnabled = rtspState === 'enabled'
+  const fileTimelineEnabled = !!appName && rtspEnabled && !streamLoading && !streamErr
+
+  const timelineTiles = useMemo(() => fileTimelineEnabled ? videoLayout?.tiles.flatMap(tile => {
+    const source = fileSources.find(item => item.channel_ids.includes(tile.channelId))
+    return source ? [{ ...tile, source }] : []
+  }) ?? [] : [], [fileTimelineEnabled, videoLayout, fileSources])
+  const timelineKey = timelineTiles.map(tile => `${tile.channelId}:${tile.source.owner_channel_id}`).join(',')
+
+  const clearFileTimelineTimer = useCallback(() => {
+    if (fileTimelineTimerRef.current !== null) clearTimeout(fileTimelineTimerRef.current)
+    fileTimelineTimerRef.current = null
+  }, [])
+
+  const hideFileTimelines = useCallback(() => {
+    if (fileTimelinePointerRef.current !== null) return
+    clearFileTimelineTimer()
+    setActiveTimelineChannel(null)
+  }, [clearFileTimelineTimer])
+
+  const showFileTimeline = useCallback((channelId: number) => {
+    const drag = fileTimelinePointerRef.current
+    if (drag && drag.channelId !== channelId) return
+    setActiveTimelineChannel(channelId)
+    clearFileTimelineTimer()
+    if (drag) return
+    fileTimelineTimerRef.current = setTimeout(() => {
+      fileTimelineTimerRef.current = null
+      setActiveTimelineChannel(null)
+    }, FILE_TIMELINE_HIDE_MS)
+  }, [clearFileTimelineTimer])
+
+  useEffect(() => {
+    clearFileTimelineTimer()
+    fileTimelinePointerRef.current = null
+    setActiveTimelineChannel(null)
+    const finishInteraction = (event: PointerEvent) => {
+      const drag = fileTimelinePointerRef.current
+      if (!drag || drag.pointerId !== event.pointerId) return
+      fileTimelinePointerRef.current = null
+      showFileTimeline(drag.channelId)
+    }
+    const hideTimelines = () => {
+      fileTimelinePointerRef.current = null
+      hideFileTimelines()
+    }
+    window.addEventListener('pointerup', finishInteraction)
+    window.addEventListener('pointercancel', finishInteraction)
+    window.addEventListener('blur', hideTimelines)
+    return () => {
+      clearFileTimelineTimer()
+      window.removeEventListener('pointerup', finishInteraction)
+      window.removeEventListener('pointercancel', finishInteraction)
+      window.removeEventListener('blur', hideTimelines)
+    }
+  }, [appName, runningConfig, timelineKey, clearFileTimelineTimer, hideFileTimelines, showFileTimeline])
+
+  const measurePicture = useCallback(() => {
+    const frame = videoFrameRef.current
+    const video = videoRef.current
+    if (!frame || !video || !videoLayout) return null
+    const frameBox = frame.getBoundingClientRect()
+    const box = video.getBoundingClientRect()
+    const width = video.videoWidth || videoLayout.width
+    const height = video.videoHeight || videoLayout.height
+    const scale = Math.min(box.width / width, box.height / height)
+    return {
+      left: box.left - frameBox.left + (box.width - width * scale) / 2,
+      top: box.top - frameBox.top + (box.height - height * scale) / 2,
+      width: width * scale,
+      height: height * scale,
+    }
+  }, [videoLayout])
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const next = measurePicture()
+      if (next) setPictureBounds(previous =>
+        Object.keys(next).every(key => Math.abs(previous[key as keyof typeof next] - next[key as keyof typeof next]) < 0.1)
+          ? previous : next)
+    }
+    const frame = videoFrameRef.current
+    const video = videoRef.current
+    const observer = new ResizeObserver(measure)
+    if (frame) observer.observe(frame)
+    if (video) observer.observe(video)
+    video?.addEventListener('loadedmetadata', measure)
+    video?.addEventListener('resize', measure)
+    window.addEventListener('resize', measure)
+    document.addEventListener('fullscreenchange', measure)
+    measure()
+    return () => {
+      observer.disconnect()
+      video?.removeEventListener('loadedmetadata', measure)
+      video?.removeEventListener('resize', measure)
+      window.removeEventListener('resize', measure)
+      document.removeEventListener('fullscreenchange', measure)
+    }
+  }, [appName, streamNonce, rtspEnabled, streamErr, videoFullscreen, measurePicture])
+
+  useEffect(() => {
+    if (timelineTiles.length === 0) return
+    let lastPosition: { x: number; y: number } | null = null
+    const detectMovement = (event: MouseEvent) => {
+      const frame = videoFrameRef.current
+      if (!frame) return
+      if (lastPosition?.x === event.clientX && lastPosition.y === event.clientY) return
+      lastPosition = { x: event.clientX, y: event.clientY }
+      if (fileTimelinePointerRef.current) return
+      const frameBox = frame.getBoundingClientRect()
+      if (event.clientX < frameBox.left || event.clientX >= frameBox.right ||
+          event.clientY < frameBox.top || event.clientY >= frameBox.bottom) {
+        hideFileTimelines()
+        return
+      }
+      const picture = measurePicture()
+      if (!picture || picture.width <= 0 || picture.height <= 0) return
+      const x = (event.clientX - frameBox.left - picture.left) / picture.width
+      const y = (event.clientY - frameBox.top - picture.top) / picture.height
+      const tile = timelineTiles.find(item => x >= item.left && x < item.left + item.width &&
+        y >= item.top && y < item.top + item.height)
+      if (tile) showFileTimeline(tile.channelId)
+      else hideFileTimelines()
+    }
+    const resetPosition = () => {
+      lastPosition = null
+      hideFileTimelines()
+    }
+    document.addEventListener('pointermove', detectMovement, true)
+    document.addEventListener('mousemove', detectMovement, true)
+    document.addEventListener('fullscreenchange', resetPosition)
+    return () => {
+      document.removeEventListener('pointermove', detectMovement, true)
+      document.removeEventListener('mousemove', detectMovement, true)
+      document.removeEventListener('fullscreenchange', resetPosition)
+    }
+  }, [timelineKey, measurePicture, hideFileTimelines, showFileTimeline])
+
+  const focusTimeline = (event: React.FocusEvent<HTMLDivElement>) => {
+    // 鼠标点击画面也会聚焦外框；只有键盘聚焦才默认选择第一路。
+    if (event.target === event.currentTarget && event.currentTarget.matches(':focus-visible') && timelineTiles[0]) {
+      showFileTimeline(timelineTiles[0].channelId)
+    }
+  }
+
+  const selectTimelineByKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget || !videoLayout || timelineTiles.length === 0) return
+    const offsets: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -videoLayout.columns, ArrowDown: videoLayout.columns }
+    const offset = offsets[event.key]
+    if (offset === undefined) return
+    event.preventDefault()
+    const index = timelineTiles.findIndex(tile => tile.channelId === activeTimelineChannel)
+    const next = Math.min(timelineTiles.length - 1, Math.max(0, index + offset))
+    showFileTimeline(timelineTiles[next].channelId)
+  }
 
   const actionTargets = controls ? [
     ...controls.globals.map(instance => ({
@@ -449,7 +610,7 @@ export default function LiveViewPage() {
   const commitSeek = async (source: FilePlaybackSource) => {
     const owner = source.owner_channel_id
     const requested = seekDraftsRef.current[owner]
-    if (!appName || requested === undefined || seekBusyRef.current.has(owner)) return
+    if (!fileTimelineEnabled || requested === undefined || seekBusyRef.current.has(owner)) return
     seekBusyRef.current.add(owner)
     setSeekBusy(previous => ({ ...previous, [owner]: true }))
     try {
@@ -499,10 +660,12 @@ export default function LiveViewPage() {
   useEffect(() => {
     if (!appName) {
       setRtspState('idle')
+      setVideoLayout(null)
       return
     }
     let disposed = false
     setRtspState('checking')
+    setVideoLayout(null)
     const checkRtsp = async () => {
       try {
         const path = runtimeConfigPath(runningConfig)
@@ -512,6 +675,7 @@ export default function LiveViewPage() {
           setRtspState('error')
           return
         }
+        setVideoLayout(videoTimelineLayout(config as Record<string, unknown>))
         const globalConfig = ((config as Record<string, unknown>).global ?? config) as Record<string, unknown>
         setRtspState(Number(globalConfig.enable_rtsp ?? 0) !== 0 ? 'enabled' : 'disabled')
       } catch {
@@ -548,9 +712,9 @@ export default function LiveViewPage() {
     }
   }, [appName])
 
-  // 采集器单独提供本地文件时间轴；实时流和业务 Logic 不经过此接口。
+  // 画面真正进入 playing 后再读取文件时间轴；加载、重连和出错时暂停进度条功能。
   useEffect(() => {
-    if (!appName) {
+    if (!fileTimelineEnabled) {
       setFileSources([])
       seekDraftsRef.current = {}
       setSeekDrafts({})
@@ -576,7 +740,7 @@ export default function LiveViewPage() {
       disposed = true
       clearInterval(timer)
     }
-  }, [appName])
+  }, [appName, fileTimelineEnabled])
 
   // 复用原实时画面弹窗的日志尾部读取和 WebSocket 输出，并在断线后自动重连。
   useEffect(() => {
@@ -890,8 +1054,14 @@ export default function LiveViewPage() {
           ref={workspaceRef}
           style={{ '--live-view-side-width': `${sidePanelWidth}px` } as React.CSSProperties}
         >
-          <section className="live-view-visual-panel">
-            <div className="live-view-video-frame" ref={videoFrameRef}>
+          <section className={`live-view-visual-panel${videoFullscreen ? ' fullscreen-active' : ''}`}>
+            <div
+              className="live-view-video-frame"
+              ref={videoFrameRef}
+              tabIndex={timelineTiles.length > 0 ? 0 : undefined}
+              onFocus={focusTimeline}
+              onKeyDown={selectTimelineByKeyboard}
+            >
               <button
                 className="live-view-fullscreen-btn"
                 onClick={toggleVideoFullscreen}
@@ -900,69 +1070,103 @@ export default function LiveViewPage() {
                 <span aria-hidden="true">{videoFullscreen ? '⊠' : '⛶'}</span>
                 {videoFullscreen ? '退出全屏' : '全屏'}
               </button>
-              {rtspEnabled ? (
-                !streamErr ? (
-                  <>
-                    <video
-                      ref={videoRef}
-                      key={`${appName}-${streamNonce}`}
-                      className="live-view-video"
-                      style={streamLoading ? { visibility: 'hidden' } : undefined}
-                      muted
-                      autoPlay
-                      playsInline
-                      onPlaying={handleStreamLoad}
-                    />
-                    {streamLoading && (
-                      <div className="live-view-loading">
-                        <div className="live-view-spinner" />
-                        <span>正在准备实时画面……</span>
-                        <div
-                          className="live-view-progress"
-                          role="progressbar"
-                          aria-label="实时画面连接进度"
-                          aria-valuetext="正在连接视频流"
-                        >
-                          <div className="live-view-progress-fill" />
+              <div className="live-view-video-stage">
+                {rtspEnabled ? (
+                  !streamErr ? (
+                    <>
+                      <video
+                        ref={videoRef}
+                        key={`${appName}-${streamNonce}`}
+                        className="live-view-video"
+                        style={streamLoading ? { visibility: 'hidden' } : undefined}
+                        muted
+                        autoPlay
+                        playsInline
+                        onPlaying={handleStreamLoad}
+                      />
+                      {streamLoading && (
+                        <div className="live-view-loading">
+                          <div className="live-view-spinner" />
+                          <span>正在准备实时画面……</span>
+                          <div
+                            className="live-view-progress"
+                            role="progressbar"
+                            aria-label="实时画面连接进度"
+                            aria-valuetext="正在连接视频流"
+                          >
+                            <div className="live-view-progress-fill" />
+                          </div>
+                          <span className="live-view-progress-text">
+                            正在连接视频流，通常约 3 秒
+                          </span>
                         </div>
-                        <span className="live-view-progress-text">
-                          正在连接视频流，通常约 3 秒
-                        </span>
-                      </div>
-                    )}
-                  </>
+                      )}
+                    </>
+                  ) : (
+                    <div className="live-view-video-state error">
+                      <strong>实时视频暂不可用</strong>
+                      <span>{streamErrorDetail || '请检查程序推流状态和视频源连接。'}</span>
+                      <button onClick={retryStream}>重新连接</button>
+                    </div>
+                  )
                 ) : (
-                  <div className="live-view-video-state error">
-                    <strong>实时视频暂不可用</strong>
-                    <span>{streamErrorDetail || '请检查程序推流状态和视频源连接。'}</span>
-                    <button onClick={retryStream}>重新连接</button>
+                  <div className="live-view-video-state">
+                    <strong>
+                      {rtspState === 'checking'
+                        ? '正在检查运行配置'
+                        : rtspState === 'disabled'
+                          ? '当前程序未开启 RTSP 推流'
+                          : '无法确认 RTSP 推流配置'}
+                    </strong>
                   </div>
-                )
-              ) : (
-                <div className="live-view-video-state">
-                  <strong>
-                    {rtspState === 'checking'
-                      ? '正在检查运行配置'
-                      : rtspState === 'disabled'
-                        ? '当前程序未开启 RTSP 推流'
-                        : '无法确认 RTSP 推流配置'}
-                  </strong>
-                </div>
-              )}
-              {fileSources.length > 0 && (
-                <div className="live-view-file-timelines">
-                  {fileSources.map(source => {
+                )}
+              </div>
+              {timelineTiles.length > 0 && videoLayout && (
+                <div
+                  className="live-view-file-timelines"
+                  style={{
+                    '--picture-left': `${pictureBounds.left}px`,
+                    '--picture-top': `${pictureBounds.top}px`,
+                    '--picture-width': pictureBounds.width > 0 ? `${pictureBounds.width}px` : '100%',
+                    '--picture-height': `${pictureBounds.height}px`,
+                  } as React.CSSProperties}
+                >
+                  {timelineTiles.map(tile => {
+                    const { source, channelId } = tile
                     const owner = source.owner_channel_id
                     const value = seekDrafts[owner] ?? source.position_ms
                     const duration = Math.max(0, source.duration_ms)
                     const disabled = !source.available || !source.seekable || duration <= 0 || !!seekBusy[owner]
+                    const sharedChannels = source.channel_ids.filter(id => id !== channelId)
                     return (
-                      <div className="live-view-file-timeline" key={owner}>
+                      <div
+                        className={`live-view-file-timeline${activeTimelineChannel === channelId ? '' : ' is-hidden'}`}
+                        key={channelId}
+                        data-timeline-channel={channelId}
+                        aria-hidden={activeTimelineChannel !== channelId}
+                        style={{
+                          '--tile-left': `${tile.left * 100}%`,
+                          '--tile-width': `${tile.width * 100}%`,
+                          '--tile-bottom': `${(1 - tile.top - tile.height) * 100}%`,
+                        } as React.CSSProperties}
+                        onPointerDownCapture={event => {
+                          if (!event.isPrimary) return
+                          fileTimelinePointerRef.current = { pointerId: event.pointerId, channelId }
+                          showFileTimeline(channelId)
+                        }}
+                        onFocusCapture={() => showFileTimeline(channelId)}
+                        onKeyDownCapture={() => showFileTimeline(channelId)}
+                      >
                         <div className="live-view-file-meta">
-                          <span title={source.location}>{sourceFileName(source.location)}</span>
-                          <span>
-                            通道 {source.channel_ids.join('、')}
+                          <span title={sharedChannels.length > 0
+                            ? `通道 ${channelId} · 与通道 ${sharedChannels.join('、')} 共用进度 · ${source.location}`
+                            : source.location}>
+                            通道 {channelId} · {sourceFileName(source.location)}
+                            {sharedChannels.length > 0 ? ' · 共用进度' : ''}
                             {source.ended ? ' · 已播完' : ''}
+                          </span>
+                          <span className="live-view-file-time">
+                            {formatPlaybackTime(value)} / {formatPlaybackTime(duration)}
                           </span>
                         </div>
                         <input
@@ -972,7 +1176,7 @@ export default function LiveViewPage() {
                           step={100}
                           value={Math.min(value, Math.max(1, duration))}
                           disabled={disabled}
-                          aria-label={`${sourceFileName(source.location)} 播放进度`}
+                          aria-label={`通道 ${channelId} ${sourceFileName(source.location)} 播放进度`}
                           onChange={event => setSeekDraft(owner, Number(event.target.value))}
                           onPointerUp={() => { void commitSeek(source) }}
                           onKeyUp={event => {
@@ -982,9 +1186,6 @@ export default function LiveViewPage() {
                           }}
                           onBlur={() => { void commitSeek(source) }}
                         />
-                        <span className="live-view-file-time">
-                          {formatPlaybackTime(value)} / {formatPlaybackTime(duration)}
-                        </span>
                       </div>
                     )
                   })}

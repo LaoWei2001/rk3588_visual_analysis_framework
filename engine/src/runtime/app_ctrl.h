@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "common/performance_metrics.h"
 #include "config/config.h"
 #include "display/display.h"
 #include "logic/core/channel_logic.h"
@@ -84,16 +85,24 @@ struct AppRuntimeSnapshot
     uint64_t generation = 0;
 };
 
+/* 每次发布创建一次；轻量快照持有引用，取证时无需重新读取通道最新状态。 */
+struct ChannelPublicationMedia
+{
+    std::shared_ptr<LazyVideoFrame> frame;
+    std::vector<AlgoResult> results;
+    std::vector<DrawCommand> commands;
+    std::shared_ptr<const AppRuntimeSnapshot> runtime;
+};
+
 /*================================================================
  * 通道运行时状态
  *================================================================*/
 struct ChannelState
 {
-    /* fps_counter/last_fps_ts_ms 由 display_worker 独占；disp_fps 跨线程读写走 chn_mtx */
+    /* 图像由 display_worker 独占；计数器内部同步，查询会自动淘汰过期样本。 */
     cv::Mat tile_staging;
-    float disp_fps = 0.0f;
-    int fps_counter = 0;
-    uint64_t last_fps_ts_ms = 0;
+    PerformanceOverlayCache performance_overlay; /* FPS 底部背景，仅在显示性能文字时缓存 */
+    FrameRateCounter preview_rate;
 
     /* 由 chn_mtx[chnId] 保护 */
     ChannelOnlineState online_state = CH_ONLINE; /*!< 当前在线状态 */
@@ -121,6 +130,7 @@ struct ChannelState
     /* 每个业务帧只生成一份不可变变量表；所有全局 Logic 共享读取，不再逐实例复制。 */
     std::shared_ptr<const LogicOutputSet> logic_outputs = empty_logic_output_snapshot();
     std::shared_ptr<LazyVideoFrame> last_lazy_frame;
+    std::shared_ptr<const ChannelPublicationMedia> published_media;
     cv::Mat logic_display_frame; /* Logic 输出的任意尺寸 BGR 显示底图；空=不覆盖，显示走实时采集帧 */
     uint64_t logic_display_ts_ms = 0; /* 上面那帧的产生时刻(steady ms)，显示端据此判新鲜度，过期回退实时帧 */
     int64_t logic_frame_id = 0;
@@ -157,6 +167,8 @@ struct ChannelState
         published_src_width = source_width > 0 ? source_width : src_w_now;
         published_src_height = source_height > 0 ? source_height : src_h_now;
         published_logic_frame_id = logic_frame_id;
+        if (!last_lazy_frame)
+            published_media.reset();
         publication_signal_notify();
     }
 };
@@ -191,6 +203,9 @@ struct ChannelLogicSnapshot
     uint64_t online_state_changed_steady_ms = 0;
     std::string logic_name;
     std::shared_ptr<const LogicOutputSet> outputs;
+    std::shared_ptr<const ChannelPublicationMedia> media;
+    /* 在采样时冻结其它全局实例的叠加层；当前实例可在本 tick 更新自己的层。 */
+    std::map<std::string, std::vector<DrawCommand>> global_draw_commands_by_owner;
 
     /**
      * 全局 Logic 的便捷读取入口。读取失败统一返回 false：包括通道离线、尚未发布、
@@ -240,6 +255,9 @@ struct ChannelFrameSnapshot
     std::vector<RoiZone> rois;
     std::vector<DrawCommand> draw_cmds;
 };
+
+/* 只从固定 publication 物化图片；不会查询当前通道或借用后续帧。 */
+int app_ctrl_materialize_channel_frame_snapshot(const ChannelLogicSnapshot &snapshot, ChannelFrameSnapshot *out);
 
 /*================================================================
  * 全局控制块 — 仿 H9 HIKFLOW_DEMO_CTRL 分区段设计
@@ -348,7 +366,6 @@ extern "C"
     int app_ctrl_get_tile_rows(void);
     int app_ctrl_get_max_fps(void);
     int app_ctrl_get_performance_display(void);
-    int app_ctrl_get_debug_display(void);
 
 #ifdef __cplusplus
 }

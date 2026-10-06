@@ -110,6 +110,12 @@ Web 画布负责生成这些字段并绑定当前契约 revision。不要在 C++
 `source.missing_image_channel_ids`；至少一路成功就继续生成，全部失败时事件仍持久化并把图片标为
 failed。`source.requested_image_channel_ids` 和 `source.image_channel_ids` 分别记录请求与实际通道。
 
+抓拍使用全局 tick 保留的 publication，与该批业务输入同版本；后续通道发布不会替换图片证据。
+标注图片使用对应帧的实际检测坐标。异步解码帧通过 `GstBuffer` 引用防止缓冲区提前重用，
+图片线程使用已经复制的 CPU 图像。`source.image_frames[]` 记录每路图片的通道、publication、
+帧号和采集墙钟时间；`event.snap_time` 为图片帧时间，多路时使用成功窗格中的最新时间。
+多路快照不保证同一采集时刻。单路来源事件的触发时间使用来源业务帧时间，聚合事件使用 tick 时间。
+
 全局聚合事件没有主通道。`request.source_channel_id` 只在确有单路业务来源时写入
 `source.channel_id`，不参与图片或视频选择，也没有自动回退。事件视频始终使用全局配置的
 `media_source_channel_id`；启用视频时该字段必须是存在的通道 ID，以便预先建立该路录像缓冲。

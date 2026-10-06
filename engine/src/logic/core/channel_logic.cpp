@@ -104,8 +104,7 @@ int ChannelContext::channel_has_logic(int configuredId, const char *logicName) c
  *   - 改任何函数体只需重编本文件, 不再波及 30+ 个 logic_*.cpp (原先内联时全得重编)。
  * 这些都是每帧级调用, 内部 string 比较 / pointPolygonTest 远重于一次函数调用,
  * 因此不再跨编译单元内联也无可测量的性能影响。
- * 注意: 静态成员 point_box_in_poly 与带默认参数的 render_params 在此定义时,
- *       均不重复 static / 默认实参 (默认实参只写在头文件声明处)。 */
+ * 注意: 静态成员 point_box_in_poly 在此定义时不重复 static。 */
 
 int ChannelContext::has_target(const char *label) const
 {
@@ -359,7 +358,7 @@ FrameTime ChannelContext::datetime() const
     return t;
 }
 
-RenderParams ChannelContext::render_params(int64_t result_age_ms) const
+RenderParams ChannelContext::render_params() const
 {
     RenderParams p;
     const cv::Mat *frame = model_frame();
@@ -368,7 +367,6 @@ RenderParams ChannelContext::render_params(int64_t result_age_ms) const
     p.inputH = frame ? frame->rows : 0;
     p.disp_fps = disp_fps;
     p.infer_fps = infer_fps;
-    p.result_age_ms = result_age_ms;
     p.result_frame_id = frame_id;
     p.inference_roi = config && config->inference_roi.has_roi() ? &config->inference_roi : nullptr;
     p.roi_zones = rois;

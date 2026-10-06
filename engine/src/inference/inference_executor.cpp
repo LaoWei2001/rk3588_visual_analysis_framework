@@ -317,6 +317,7 @@ static bool run_model_task(int chnId, const InferenceTask &task, const std::shar
                                                    cv::Rect(0, 0, model->input_width(), model->input_height())};
         auto run_pass = [&](bool use_roi, std::vector<AlgoResult> &pass_results, YoloPerfStat &pass_perf) {
             bool ok = false;
+            float input_prepare_ms = 0.0f;
             const int model_fd = model->get_input_fd();
             /* 直接拉伸/补黑边的多边形是真正的多边形输入：外部填黑。
              * expand 的定义是扩展周边上下文，因此保留扩展框内的真实画面。 */
@@ -337,19 +338,24 @@ static bool run_model_task(int chnId, const InferenceTask &task, const std::shar
                                                         model->input_height(), model->input_width(),
                                                         model->input_height(), RK_FORMAT_RGB_888, cached_handle);
                 const auto pre_end = std::chrono::steady_clock::now();
-                pass_perf.preprocess_ms = std::chrono::duration<float, std::milli>(pre_end - pre_begin).count();
+                input_prepare_ms += std::chrono::duration<float, std::milli>(pre_end - pre_begin).count();
                 if (rga_ok)
                     ok = model->infer_zero_copy(pass_results, &pass_perf);
             }
             if (!ok)
             {
                 /* 只有零拷贝失败才生成 CPU BGR；两种路径都严格使用当前模型的输入尺寸。 */
+                const auto cpu_pre_begin = std::chrono::steady_clock::now();
                 cv::Mat cpu_frame =
                     ensure_cpu_frame(task, model->input_width(), model->input_height(), use_roi, roi_transform,
                                      mask_polygon);
+                input_prepare_ms += std::chrono::duration<float, std::milli>(
+                    std::chrono::steady_clock::now() - cpu_pre_begin).count();
+                pass_perf = YoloPerfStat{};
                 if (!cpu_frame.empty())
                     ok = model->infer(cpu_frame, pass_results, &pass_perf);
             }
+            pass_perf.preprocess_ms += input_prepare_ms;
             return ok;
         };
 
@@ -754,32 +760,48 @@ void *inference_worker_thread(void *arg)
             g_fps[task.chnId].tick();
 
             float filter_nms_ms = std::chrono::duration<float, std::milli>(filter_end - filter_begin).count();
-            float total_ms = std::chrono::duration<float, std::milli>(filter_end - work_begin).count();
+            float total_ms = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - work_begin).count();
             g_perf[task.chnId].accumulate(
                 (uint64_t)(std::max(0.0f, queue_wait_ms) * 1000.0f), (uint64_t)(std::max(0.0f, lock_wait_ms) * 1000.0f),
                 (uint64_t)(std::max(0.0f, perf.preprocess_ms) * 1000.0f),
                 (uint64_t)(std::max(0.0f, perf.infer_ms) * 1000.0f),
                 (uint64_t)(std::max(0.0f, perf.postprocess_ms) * 1000.0f),
-                (uint64_t)(std::max(0.0f, filter_nms_ms) * 1000.0f), (uint64_t)(std::max(0.0f, total_ms) * 1000.0f));
+                (uint64_t)(std::max(0.0f, filter_nms_ms) * 1000.0f),
+                (uint64_t)(std::max(0.0f, total_ms) * 1000.0f), wrote_new != 0);
+        }
+        else
+            g_perf[task.chnId].record_failure();
 
-            /* 周期性 Perf 日志 */
-            uint64_t now_ms = inference_steady_now_ms();
-            InferencePerfCounters::Snapshot snap{};
-            if (g_perf[task.chnId].reset_if_due(now_ms, PERF_LOG_WINDOW_MS, snap))
+        /* 同一实际窗口中的任务吞吐和成功任务平均耗时。失败也会触发周期日志。 */
+        const uint64_t now_ms = inference_steady_now_ms();
+        InferencePerfCounters::Snapshot snap{};
+        if (g_perf[task.chnId].reset_if_due(now_ms, PERF_LOG_WINDOW_MS, snap) &&
+            app_ctrl_get_performance_display())
+        {
+            const double seconds = static_cast<double>(snap.elapsed_ms) / 1000.0;
+            if (snap.samples == 0)
             {
-                if (app_ctrl_get_performance_display())
-                {
-                    float div = (float)snap.samples * 1000.0f;
-                    /* parallel 模式下 pre/npu/post 是各模型工作量之和；total 是同帧并行后的真实墙钟耗时。 */
-                    log_printf_threadsafe("[Perf][ch%02d][5s] fps=%.1f mode=%s models=%zu | "
-                                          "wait_q=%.2f lock=%.2f pre=%.2f npu=%.2f post=%.2f nms=%.2f | total=%.2fms\n",
-                                          task.chnId, g_fps[task.chnId].value(),
-                                          parallel_executor ? "parallel" : "single", model_group_size,
-                                          (float)snap.wait / div, (float)snap.lock / div, (float)snap.pre / div,
-                                          (float)snap.npu / div, (float)snap.post / div, (float)snap.filter_nms / div,
-                                          (float)snap.total / div);
-                }
+                log_printf_threadsafe(
+                    "[Perf][ch%02d] window=%.3fs completed=0 published=0 failed=%llu "
+                    "infer_fps=0.00 publish_fps=0.00 avg_success_ms=unavailable\n",
+                    task.chnId, seconds, (unsigned long long)snap.failures);
+                continue;
             }
+            const double div = static_cast<double>(snap.samples) * 1000.0;
+            /* parallel 模式下各阶段为模型工作量之和，worker 是同帧实际墙钟耗时。 */
+            log_printf_threadsafe(
+                "[Perf][ch%02d] window=%.3fs completed=%llu published=%llu failed=%llu "
+                "infer_fps=%.2f publish_fps=%.2f mode=%s models=%zu | avg_success_ms "
+                "wait_q=%.2f lock=%.2f pre=%.2f rknn=%.2f post=%.2f filter=%.2f "
+                "worker=%.2f queue+worker=%.2f\n",
+                task.chnId, seconds, (unsigned long long)snap.samples,
+                (unsigned long long)snap.published, (unsigned long long)snap.failures,
+                snap.samples / seconds, snap.published / seconds,
+                parallel_executor ? "parallel" : "single", model_group_size,
+                snap.wait / div, snap.lock / div, snap.pre / div, snap.npu / div,
+                snap.post / div, snap.filter_nms / div, snap.total / div,
+                (static_cast<double>(snap.wait) + snap.total) / div);
         }
     }
     return nullptr;

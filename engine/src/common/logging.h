@@ -14,14 +14,14 @@ static inline void log_printf_threadsafe(const char *fmt, ...)
     va_end(args);
 }
 
-/* 调试打印宏: 受 JSON global.debug_display 控制
+/* 调试打印宏: 受 JSON global.performance_display 控制
  * 用法: DBG_PRINT("ch%d val=%d\n", chnId, val);
  * 注意: 使用本宏的 .cpp 文件需已包含 app_ctrl.h (大多数文件已包含) */
 #ifdef __cplusplus
 #define DBG_PRINT(fmt, ...)                                                                                            \
     do                                                                                                                 \
     {                                                                                                                  \
-        if (app_ctrl_get_debug_display())                                                                              \
+        if (app_ctrl_get_performance_display())                                                                       \
             log_printf_threadsafe(fmt, ##__VA_ARGS__);                                                                 \
     } while (0)
 #else

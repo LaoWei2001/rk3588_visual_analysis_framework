@@ -308,13 +308,10 @@ struct Tracker::Impl
     void update(std::vector<AlgoResult> &dets)
     {
         /* Tracker 的输出字段必须由本帧重新产生，防止调用方复用
-         * AlgoResult 容器时把上一帧的 ID/速度带入新一轮关联。 */
+         * AlgoResult 容器时把上一帧的 ID 带入新一轮关联。 */
         for (auto &det : dets)
         {
             det.track_id = -1;
-            det.vx = 0.0f;
-            det.vy = 0.0f;
-            det.track_hits = 0;
         }
 
         predict();
@@ -440,15 +437,6 @@ struct Tracker::Impl
             {
                 dets[j].track_id = tr.id;
             }
-
-            /* 把 Kalman 矫正框写回 det，使显示层拿到平滑后的位置（R=0.1 时
-             * 矫正框 ≈ 90% 原始检测，几乎无平滑误差但消除抖动）。
-             * 同时写入速度和命中数，供显示层做前向外推补偿管线延迟。*/
-            /* dets[j].box 保持原始 YOLO 检测框不变，确保业务逻辑取到的坐标
-             * 与修改前完全一致。仅写入速度和命中数供显示层前向外推使用。*/
-            dets[j].vx = est.at<float>(4); // vcx: 像素/推理帧
-            dets[j].vy = est.at<float>(5); // vcy: 像素/推理帧
-            dets[j].track_hits = tr.hits;
         }
 
         /* ---- 未匹配的检测 → 创建新轨迹 ---- */

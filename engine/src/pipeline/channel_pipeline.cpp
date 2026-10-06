@@ -296,10 +296,24 @@ static const cv::Mat *get_source_frame_bgr(void *opaque)
  * @param infer_enabled   本通道是否开启推理（透传给 ctx）
  * @param raw_frame       当前同步解码源帧；异步推理路径中不含有效 source_data
  */
+static std::shared_ptr<const ChannelPublicationMedia> make_publication_media(
+    const ChannelRawFrame *raw_frame, const std::vector<AlgoResult> &results,
+    const std::vector<DrawCommand> &commands, const std::shared_ptr<const AppRuntimeSnapshot> &runtime)
+{
+    if (!raw_frame || !raw_frame->lazy_frame)
+        return {};
+    auto media = std::make_shared<ChannelPublicationMedia>();
+    media->frame = raw_frame->lazy_frame;
+    media->results = results;
+    media->commands = commands;
+    media->runtime = runtime;
+    return media;
+}
+
 static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_results, int64_t frame_id,
                                  uint64_t timestamp_ms, uint64_t unix_ms, float dt_ms, int infer_enabled,
                                  const ChannelRawFrame *raw_frame,
-                                 const std::shared_ptr<const AppRuntimeSnapshot> &runtime)
+                                 const std::shared_ptr<const AppRuntimeSnapshot> &runtime, bool inference_valid = false)
 {
     const ChannelConfig *channel_config = app_ctrl_runtime_channel_config(runtime, chnId);
     const std::vector<RoiZone> *runtime_rois = app_ctrl_runtime_channel_rois(runtime, chnId);
@@ -314,9 +328,11 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
     {
         if (raw_frame && raw_frame->lazy_frame)
             raw_frame->lazy_frame->clear_borrowed_source();
+        auto media = make_publication_media(raw_frame, current_results, {}, runtime);
         ChannelState &ch_state = g_pCtrl->channels_state[chnId];
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         ch_state.last_lazy_frame = raw_frame ? raw_frame->lazy_frame : nullptr;
+        ch_state.published_media = std::move(media);
         ch_state.logic_state.reset();
         ch_state.logic_outputs = empty_logic_output_snapshot();
         ch_state.last_results = current_results;
@@ -334,9 +350,11 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
     {
         if (raw_frame && raw_frame->lazy_frame)
             raw_frame->lazy_frame->clear_borrowed_source();
+        auto media = make_publication_media(raw_frame, current_results, {}, runtime);
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         ChannelState &state = g_pCtrl->channels_state[chnId];
         state.last_lazy_frame = raw_frame ? raw_frame->lazy_frame : nullptr;
+        state.published_media = std::move(media);
         state.logic_state.reset();
         state.logic_outputs = empty_logic_output_snapshot();
         state.last_results = current_results;
@@ -358,7 +376,7 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
     pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
     ctx.src_width = raw_frame && raw_frame->width > 0 ? raw_frame->width : ch_state.src_w_now;
     ctx.src_height = raw_frame && raw_frame->height > 0 ? raw_frame->height : ch_state.src_h_now;
-    ctx.disp_fps = ch_state.disp_fps;
+    ctx.disp_fps = ch_state.preview_rate.value();
     logic_state = ch_state.logic_state;
     pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
     ctx.frame_id = frame_id;
@@ -375,6 +393,7 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
     ctx.rois = runtime_rois;
     ctx.state = &logic_state;
     ctx.infer_enabled = infer_enabled;
+    ctx.inference_valid = inference_valid;
     ctx.infer_fps = inference_get_infer_fps(chnId);
 
     /* model/source 两种尺寸共享同一个帧提供者，各自首次调用时才转换，且每帧最多一次。 */
@@ -431,10 +450,12 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
     else
         published_outputs = std::make_shared<const LogicOutputSet>(std::move(logic_outputs));
 
+    auto media = make_publication_media(raw_frame, current_results, draw_cmds, runtime);
     /* 原子写回共享状态：媒体快照在同一把锁内读出，三者必定同帧。*/
     {
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         ch_state.last_lazy_frame = raw_frame ? raw_frame->lazy_frame : nullptr;
+        ch_state.published_media = std::move(media);
         ch_state.logic_state = std::move(logic_state);
         ch_state.logic_outputs = std::move(published_outputs);
         ch_state.last_results = current_results;
@@ -550,6 +571,6 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
     std::vector<AlgoResult> out = std::move(results);
     for (auto &result : out)
         result.chn_id = chnId;
-    invoke_channel_logic(chnId, out, frame_seq, frame_ts, frame_unix_ms, dt_ms, infer_enabled, &raw_frame, runtime);
+    invoke_channel_logic(chnId, out, frame_seq, frame_ts, frame_unix_ms, dt_ms, infer_enabled, &raw_frame, runtime, true);
     return out;
 }

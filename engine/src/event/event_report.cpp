@@ -1,4 +1,5 @@
 #include "event_report.h"
+#include "event_retention.h"
 
 #include "config/config.h"
 #include "display/display.h"
@@ -18,6 +19,7 @@
 #include <dirent.h>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <opencv2/imgcodecs.hpp>
 #include <pthread.h>
 #include <queue>
@@ -46,6 +48,9 @@ struct ImageJob
     struct Pane
     {
         int channel_id = -1;
+        uint64_t publication_seq = 0;
+        int64_t frame_id = 0;
+        uint64_t frame_unix_ms = 0;
         cv::Mat frame;
         RenderParams render_params;
         InferenceRoiConfig inference_roi;
@@ -235,22 +240,7 @@ static cJSON *read_json_file(const std::string &path)
     return cJSON_Parse(text.c_str());
 }
 
-static bool delivery_root_has_uploading(const cJSON *root)
-{
-    const cJSON *deliveries = cJSON_IsObject(root) ? cJSON_GetObjectItemCaseSensitive(root, "deliveries") : nullptr;
-    if (!cJSON_IsArray(deliveries))
-        return false;
-    const cJSON *delivery = nullptr;
-    cJSON_ArrayForEach(delivery, deliveries)
-    {
-        const cJSON *status = cJSON_GetObjectItemCaseSensitive(delivery, "status");
-        if (cJSON_IsString(status) && status->valuestring && strcmp(status->valuestring, "uploading") == 0)
-            return true;
-    }
-    return false;
-}
-
-/* 容量回收只能删除静态待处理事件。状态文件无法读取/解析时采用保守策略，
+/* 容量回收只能删除投递完成且媒体不再生成的事件。状态文件无法读取/解析时采用保守策略，
  * 防止半写入文件或损坏文件被误判成可删除。新 schema 按文件划分所有者：
  * C++ 只改 event/media_state，Python 只改 delivery_state。 */
 static bool event_has_active_work(const std::string &event_dir)
@@ -280,15 +270,17 @@ static bool event_has_active_work(const std::string &event_dir)
             break;
         }
     }
-    const bool uploading = delivery_root_has_uploading(delivery);
+    const bool undelivered = event_deliveries_need_retention(delivery);
     cJSON_Delete(event);
     cJSON_Delete(media);
     cJSON_Delete(delivery);
-    return generating || uploading;
+    return generating || undelivered;
 }
 
 static void enforce_outbox_cap()
 {
+    static std::mutex cap_mutex;
+    const std::lock_guard<std::mutex> lock(cap_mutex);
     const std::string root = store_dir();
     const char *cap_env = getenv("EVENT_STORE_MAX_BYTES");
     const char *free_env = getenv("EVENT_STORE_MIN_FREE_BYTES");
@@ -331,10 +323,22 @@ static void enforce_outbox_cap()
     {
         if (total <= cap_bytes && free_bytes >= min_free_bytes)
             break;
-        fprintf(stderr, "[event_outbox] cap exceeded; evict oldest pending event: %s\n", event.path.c_str());
+        fprintf(stderr, "[event_outbox] storage limit reached; reclaim completed event: %s\n", event.path.c_str());
         remove_tree(event.path);
         total -= event.bytes;
         free_bytes += event.bytes;
+    }
+    if (total > cap_bytes || free_bytes < min_free_bytes)
+    {
+        static uint64_t last_warning_ms = 0;
+        const uint64_t now_ms = steady_now_ms();
+        if (last_warning_ms == 0 || now_ms - last_warning_ms >= 30000)
+        {
+            fprintf(stderr, "[event_outbox] storage pressure: retained undelivered events; "
+                            "used=%lld cap=%lld free=%lld min_free=%lld\n",
+                    total, cap_bytes, free_bytes, min_free_bytes);
+            last_warning_ms = now_ms;
+        }
     }
 }
 
@@ -872,6 +876,7 @@ static void *persistence_worker(void *)
             remove_tree(job.event_dir);
             continue;
         }
+        fprintf(stdout, "[event_outbox] persisted event: %s\n", job.event_id.c_str());
 
         if (job.has_image_job)
         {
@@ -1031,6 +1036,7 @@ struct EventIdentity
     std::string scope;
     int source_channel_id = -1;
     int video_source_channel_id = -1;
+    uint64_t snapshot_unix_ms = 0;
 };
 
 static EventReportResult report_event_impl(ChannelContext *ctx, const EventRequest &input,
@@ -1053,20 +1059,11 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
         cJSON_Delete(policy);
         return result(EventReportStatus::DISABLED, "", "report policy is disabled");
     }
-    cJSON *configured_deliveries = cJSON_GetObjectItemCaseSensitive(policy, "deliveries");
-    if (!cJSON_IsArray(configured_deliveries) || cJSON_GetArraySize(configured_deliveries) == 0)
-    {
-        cJSON_Delete(policy);
-        return result(EventReportStatus::NO_DELIVERY, "", "report policy has no deliveries");
-    }
-
-    const DeliveryRequirements requirements = delivery_requirements(policy, input.event_type);
-    if (requirements.count == 0)
-    {
-        cJSON_Delete(policy);
-        return result(EventReportStatus::NO_DELIVERY, "", "no enabled delivery matches this event type");
-    }
-    const uint32_t media_flags = requirements.media_flags;
+    DeliveryRequirements requirements = delivery_requirements(policy, input.event_type);
+    requirements.annotated_image = true;
+    requirements.raw_image = true;
+    // Local evidence is independent of whether an external delivery is configured.
+    const uint32_t media_flags = requirements.media_flags | EVENT_MEDIA_IMAGE;
     const int resolved_video_source_channel_id = identity.video_source_channel_id;
     if ((media_flags & EVENT_MEDIA_VIDEO) && !app_ctrl_has_channel(resolved_video_source_channel_id))
     {
@@ -1142,7 +1139,9 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
     cJSON_AddNumberToObject(event, "trigger_unix_ms", (double)ctx->unix_ms);
     cJSON_AddNumberToObject(event, "last_trigger_unix_ms", (double)ctx->unix_ms);
     cJSON_AddNumberToObject(event, "trigger_count", 1);
-    const std::string snap_time = ctx->time_str();
+    ChannelContext snapshot_clock{};
+    snapshot_clock.unix_ms = identity.snapshot_unix_ms != 0 ? identity.snapshot_unix_ms : ctx->unix_ms;
+    const std::string snap_time = snapshot_clock.time_str();
     cJSON_AddStringToObject(event, "snap_time", snap_time.c_str());
     cJSON_AddStringToObject(event, "end_time", snap_time.c_str());
     cJSON_AddItemToObject(event, "merged_triggers", cJSON_CreateArray());
@@ -1165,6 +1164,17 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
         cJSON_AddItemToObject(source, "image_channel_ids", channel_ids_to_json(actual_channel_ids));
         cJSON_AddItemToObject(source, "missing_image_channel_ids",
                              channel_ids_to_json(composite_image->missing_channel_ids));
+        cJSON *image_frames = cJSON_CreateArray();
+        for (const ImageJob::Pane &pane : composite_image->panes)
+        {
+            cJSON *frame = cJSON_CreateObject();
+            cJSON_AddNumberToObject(frame, "channel_id", pane.channel_id);
+            cJSON_AddNumberToObject(frame, "publication_seq", static_cast<double>(pane.publication_seq));
+            cJSON_AddNumberToObject(frame, "frame_id", static_cast<double>(pane.frame_id));
+            cJSON_AddNumberToObject(frame, "frame_unix_ms", static_cast<double>(pane.frame_unix_ms));
+            cJSON_AddItemToArray(image_frames, frame);
+        }
+        cJSON_AddItemToObject(source, "image_frames", image_frames);
     }
     cJSON_AddItemToObject(source, "parameters", parse_object_or_empty(cfg.report_parameters_json));
     cJSON_AddItemToObject(root, "source", source);
@@ -1356,36 +1366,24 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
         return invalid("global event runtime config is not available");
 
     cJSON *policy = parse_object_or_empty(gctx->config->report_policy_json);
-    const DeliveryRequirements requirements = delivery_requirements(policy, request.event_type);
     ImageSelectionPolicy image_selection;
     std::string image_selection_error;
     const bool image_selection_valid = parse_image_selection(policy, &image_selection, &image_selection_error);
     cJSON_Delete(policy);
     if (!image_selection_valid)
         return invalid(image_selection_error);
-    const bool need_image = (requirements.media_flags & EVENT_MEDIA_IMAGE) != 0;
+    const bool need_image = true;
 
     CompositeImage composite;
 
-    /*
-     * GlobalContext carries the lightweight snapshots sampled at the beginning of
-     * this global-logic tick.  A channel may publish another frame while the logic
-     * is deciding whether to report (and normally will do so at video frame rate),
-     * so requiring publication_seq equality makes image reporting fail spuriously.
-     *
-     * The frame snapshot API already copies one internally consistent publication
-     * under the channel lock.  Accept that publication when it is the sampled one
-     * or a newer one from the same runtime configuration; still reject offline,
-     * frame-less, stale-generation, or older snapshots.
-     */
+    /* 从本 tick 已保留的 publication 取证，避免告警字段属于旧版本而图片来自新版本。
+     * 采样只共享引用，真正上报才物化和复制图片；无需阻止通道继续发布。 */
     auto capture_report_frame = [&](int channel_id, ChannelFrameSnapshot *out) -> bool {
-        const ChannelLogicSnapshot *expected = gctx->channel(channel_id);
-        if (!expected || !app_ctrl_get_channel_frame_snapshot(channel_id, out))
+        if (!gctx->get_channel_frame_snapshot(channel_id, out))
             return false;
         return out->logic.has_publication && out->logic.has_frame &&
                out->logic.online_state == CH_ONLINE &&
-               out->logic.config_generation == runtime->generation &&
-               out->logic.publication_seq >= expected->publication_seq;
+               out->logic.config_generation == runtime->generation;
     };
 
     if (need_image)
@@ -1430,6 +1428,9 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
 
             ImageJob::Pane pane;
             pane.channel_id = channel_id;
+            pane.publication_seq = snapshot.logic.publication_seq;
+            pane.frame_id = snapshot.logic.frame_seq;
+            pane.frame_unix_ms = snapshot.logic.frame_unix_ms;
             pane.frame = snapshot.frame;
             pane.results = snapshot.results;
             pane.rois = snapshot.rois;
@@ -1443,7 +1444,6 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
             pane.render_params.disp_fps = snapshot.logic.disp_fps;
             pane.render_params.infer_fps = snapshot.logic.infer_fps;
             pane.render_params.result_frame_id = snapshot.logic.frame_seq;
-            pane.render_params.result_age_ms = std::max<int64_t>(0, snapshot.logic.publication_age_ms);
             pane.render_params.show_fps = 0;
             pane.render_params.target_mask = static_cast<uint8_t>(DrawCommand::DISPLAY | DrawCommand::IMAGE);
             pane.render_params.show_system_overlays = true;
@@ -1468,12 +1468,22 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
     ctx.chnId = -1;
     ctx.timestamp_ms = gctx->timestamp_ms;
     ctx.unix_ms = gctx->unix_ms;
+    if (const ChannelLogicSnapshot *source = gctx->channel(request.source_channel_id))
+    {
+        if (source->frame_unix_ms != 0)
+        {
+            ctx.timestamp_ms = source->frame_steady_ms;
+            ctx.unix_ms = source->frame_unix_ms;
+        }
+    }
     ctx.config = &report_config;
 
     EventIdentity identity;
     identity.scope = "global_" + gctx->config->instance_id;
     identity.source_channel_id = request.source_channel_id;
     identity.video_source_channel_id = gctx->config->media_source_channel_id;
+    for (const ImageJob::Pane &pane : composite.panes)
+        identity.snapshot_unix_ms = std::max(identity.snapshot_unix_ms, pane.frame_unix_ms);
     return report_event_impl(&ctx, request, need_image ? &composite : nullptr, identity);
 }
 

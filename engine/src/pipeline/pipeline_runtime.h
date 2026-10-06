@@ -29,6 +29,7 @@ extern "C"
         int verStride;
         int dataSize;
         int fd;
+        void *source_buffer; /* 借用的 GstBuffer；异步消费者入队前必须增加引用。 */
     } FrameInputDesc;
 
     /** @brief 结果分发线程 — 等 NPU 完成 → process_channel_results → channel_logic */

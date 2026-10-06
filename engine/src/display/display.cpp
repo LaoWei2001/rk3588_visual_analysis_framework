@@ -283,7 +283,7 @@ static void draw_pose_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult>
     }
 }
 
-void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
+void render_overlays(cv::Mat &screen_roi, const RenderParams &p, PerformanceOverlayCache *performance_cache)
 {
     /* 推理 ROI 是纯输出叠加层：此函数只接收已经完成模型推理的显示画面，
      * 因而边界和文字不会进入模型，也不会污染业务逻辑读取的 source/model frame。 */
@@ -341,42 +341,13 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
     // Detections
     if (p.show_system_overlays && p.results && !p.results->empty())
     {
-        /* 速度外推参数：补偿从 NPU 推理完成到当前帧显示之间的管线延迟。
-         *
-         * 原理：result_age_ms = 当前帧距上次 NPU 推理结果的毫秒数（即管线延迟）。
-         * infer_fps = 推理帧率，用于把 Kalman 速度（像素/推理帧）换算成 像素/秒。
-         * frames_elapsed = result_age_ms × infer_fps / 1000 ≈ 经过了几个推理帧间隔。
-         *
-         * 安全限制：
-         *  - 只对 confirmed 轨迹 (track_id >= 0, track_hits >= 3) 外推，速度可信
-         *  - frames_elapsed 上限 2.0f，避免网络抖动时 result_age 突然很大导致框飞走
-         *  - 外推后对框做边界裁剪
-         */
-        float frames_elapsed = 0.0f;
-        if (p.result_age_ms > 0 && p.infer_fps > 0.5f)
-        {
-            frames_elapsed = static_cast<float>(p.result_age_ms) / 1000.0f * p.infer_fps;
-            frames_elapsed = std::min(frames_elapsed, 2.0f);
-        }
-
         for (const auto &res : *p.results)
         {
-            float fx = res.box.x * scale_x;
-            float fy = res.box.y * scale_y;
-            float fw = res.box.width * scale_x;
-            float fh = res.box.height * scale_y;
-
-            if (frames_elapsed > 0.0f && res.track_id >= 0 && res.track_hits >= 3)
-            {
-                fx += res.vx * scale_x * frames_elapsed;
-                fy += res.vy * scale_y * frames_elapsed;
-            }
-
             cv::Rect box;
-            box.x = static_cast<int>(fx);
-            box.y = static_cast<int>(fy);
-            box.width = static_cast<int>(fw);
-            box.height = static_cast<int>(fh);
+            box.x = static_cast<int>(res.box.x * scale_x);
+            box.y = static_cast<int>(res.box.y * scale_y);
+            box.width = static_cast<int>(res.box.width * scale_x);
+            box.height = static_cast<int>(res.box.height * scale_y);
 
             box.x = std::max(0, box.x);
             box.y = std::max(0, box.y);
@@ -561,15 +532,30 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
         }
     }
 
-    // FPS overlay
+    render_performance_overlay(screen_roi, p, performance_cache);
+}
+
+cv::Rect performance_overlay_bounds(const cv::Mat &view)
+{
+    // 固定 64px 高的底部条带覆盖 17px 字体、基线和边距，数值位数变化也无需扩容。
+    const int height = std::min(64, view.rows);
+    return cv::Rect(0, view.rows - height, view.cols, height);
+}
+
+void render_performance_overlay(cv::Mat &screen_roi, const RenderParams &p, PerformanceOverlayCache *cache)
+{
     if (app_ctrl_get_performance_display() && p.show_fps)
     {
         char fps_text[80];
-        if (p.disp_fps > 0.0f)
-            snprintf(fps_text, sizeof(fps_text), "Ch%d preview %.1f / infer %.1f FPS", p.chnId, p.disp_fps,
-                     p.infer_fps);
-        else
-            snprintf(fps_text, sizeof(fps_text), "Ch%d preview -- / infer %.1f FPS", p.chnId, p.infer_fps);
+        snprintf(fps_text, sizeof(fps_text), "Ch%d render %.1f / infer %.1f FPS",
+                 p.chnId, p.disp_fps, p.infer_fps);
+        if (cache)
+        {
+            screen_roi(performance_overlay_bounds(screen_roi)).copyTo(cache->background);
+            cache->render_fps = p.disp_fps;
+            cache->infer_fps = p.infer_fps;
+            cache->visible = true;
+        }
         constexpr double font_scale = 0.58;
         constexpr int margin = 10;
         const int font_height = std::max(12, static_cast<int>(std::lround(font_scale * 30.0)));
@@ -585,9 +571,15 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p)
         }
         put_text_auto(screen_roi, fps_text, text_org, font_scale, cv::Scalar(255, 0, 0), 1);
     }
+    else if (cache)
+    {
+        cache->background.release();
+        cache->visible = false;
+    }
 }
 
-void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms)
+void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms,
+                         PerformanceOverlayCache *performance_cache)
 {
     if (bgr.empty() || !app_ctrl_has_channel(chn_id))
         return;
@@ -602,7 +594,6 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms)
     cv::Mat logic_frame;
     float disp_fps = 0.0f;
     int64_t result_frame_id = 0;
-    uint64_t result_ts_ms = 0;
     uint64_t logic_ts_ms = 0;
 
     pthread_mutex_lock(&g_pCtrl->chn_mtx[chn_id]);
@@ -611,9 +602,8 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms)
     commands = state.draw_cmds;
     state.append_global_draw_commands(&commands);
     logic_frame = state.logic_display_frame;
-    disp_fps = state.disp_fps;
+    disp_fps = state.preview_rate.value();
     result_frame_id = state.published_frame_seq;
-    result_ts_ms = state.published_steady_ms;
     logic_ts_ms = state.logic_display_ts_ms;
     pthread_mutex_unlock(&g_pCtrl->chn_mtx[chn_id]);
 
@@ -632,12 +622,9 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms)
     params.inputH = g_pCtrl->inputH;
     if (params.inputW <= 0 || params.inputH <= 0)
         return;
-    params.disp_fps = disp_fps;
-    params.infer_fps = inference_get_infer_fps(chn_id);
+    params.disp_fps = pause_ctrl::is_paused() ? 0.0f : disp_fps;
+    params.infer_fps = pause_ctrl::is_paused() ? 0.0f : inference_get_infer_fps(chn_id);
     params.result_frame_id = result_frame_id;
-    params.result_age_ms = result_ts_ms != 0 && current_ms >= result_ts_ms
-                               ? static_cast<int64_t>(std::min<uint64_t>(current_ms - result_ts_ms, 200))
-                               : 0;
     params.target_mask = DrawCommand::DISPLAY;
     params.show_system_overlays = true;
     params.show_custom_overlays = true;
@@ -645,7 +632,7 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms)
     params.roi_zones = rois;
     params.results = &results;
     params.draw_cmds = &commands;
-    render_overlays(bgr, params);
+    render_overlays(bgr, params, performance_cache);
 }
 
 char **dispBufferMap(Display_t *dispDesc)

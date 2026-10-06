@@ -223,8 +223,7 @@ struct AppConfig
     int disp_height = 1080;
     int tile_cols = 2;
     int tile_rows = 2;
-    bool performance_display = true; /* 性能统计显示开关 */
-    bool debug_display = false;      /* 调试信息打印开关 (JSON: debug_display: 1) */
+    bool performance_display = true; /* 性能统计显示与调试信息打印开关 */
     bool enable_pause_key = false;   /* 暂停键开关: true=按空格可暂停 (需同时开启 enable_display) */
 
     /* RTSP 推流 (无显示器时通过 VLC / 配置平台查看与显示屏一致的拼接画面) */

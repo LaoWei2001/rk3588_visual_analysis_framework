@@ -231,8 +231,10 @@ bool rga_convert_resize_handle_to_bgr(int chnId, const RgaImportedBuffer &src, i
 
 LazyVideoFrame::LazyVideoFrame(int channel_id, std::shared_ptr<RgaImportedBuffer> source, int source_width,
                                int source_height, int source_stride_w, int source_stride_h, int source_format,
-                               int model_width, int model_height, const void *borrowed_data)
-    : channel_id_(channel_id), source_(std::move(source)), source_width_(source_width), source_height_(source_height),
+                               int model_width, int model_height, const void *borrowed_data,
+                               std::shared_ptr<void> source_owner)
+    : channel_id_(channel_id), source_owner_(std::move(source_owner)), source_(std::move(source)),
+      source_width_(source_width), source_height_(source_height),
       source_stride_w_(source_stride_w), source_stride_h_(source_stride_h), source_format_(source_format),
       model_width_(model_width), model_height_(model_height), borrowed_data_(borrowed_data)
 {

@@ -851,3 +851,22 @@ export const deleteRecord = (name: string, id: string) =>
 
 export const deleteAllRecords = (name: string) =>
   api.delete(`/apps/${name}/records`).then(r => r.data)
+
+export const deleteSelectedRecords = (name: string, ids: string[]) =>
+  api.post<{ ok: boolean; deleted_ids: string[]; failed_ids: string[] }>(
+    `/apps/${encodeURIComponent(name)}/records/delete-selected`, { ids },
+  ).then(r => r.data)
+
+export const prepareRawImageExport = (name: string, ids?: string[]) =>
+  api.post<{ download_id: string; filename: string; image_count: number; skipped_count: number;
+    images: Array<{ id: string; filename: string }> }>(
+    `/apps/${encodeURIComponent(name)}/records/export-images`, { ids: ids ?? null },
+  ).then(r => r.data)
+
+export const rawImageDownloadUrl = (name: string, id: string) =>
+  `/api/apps/${encodeURIComponent(name)}/records/${encodeURIComponent(id)}/raw-image`
+  + `?token=${encodeURIComponent(useAuthStore.getState().token ?? '')}`
+
+export const rawImageExportUrl = (name: string, downloadId: string) =>
+  `/api/apps/${encodeURIComponent(name)}/records/export-images/${encodeURIComponent(downloadId)}`
+  + `?token=${encodeURIComponent(useAuthStore.getState().token ?? '')}`

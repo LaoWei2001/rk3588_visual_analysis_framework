@@ -223,6 +223,7 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
             imgDesc.verStride = stFrameDesc.verStride;
             imgDesc.dataSize = map.size;
             imgDesc.fd = stFrameDesc.fd; /* DMA-BUF 零拷贝句柄 */
+            imgDesc.source_buffer = buffer;
             snprintf(imgDesc.fmt, sizeof(imgDesc.fmt), "%s", stFrameDesc.strFmt);
             pipeline_submit_frame((char *)map.data, imgDesc);
         }
@@ -579,7 +580,8 @@ bool DecChannel::canShareWith(const SrcCfg_t &cfg) const
     if (cfg.srcType == "rtsp")
         return mCfg.videoEncType == cfg.videoEncType;
     if (cfg.srcType == "file")
-        return mCfg.loop == cfg.loop;
+        // 文件的播放时钟和 seek 属于各自通道，不能因路径相同而共用管线。
+        return false;
     if (cfg.srcType == "usb")
     {
         const int own_width = mCfg.usb_width > 0 ? mCfg.usb_width : 1280;
@@ -809,7 +811,9 @@ int DecChannel::createFileDecChannel(bool start_thread)
 
     /* 本地文件按原始 PTS 实时播放。appsink 只保留两帧，防止下游短时繁忙时
      * 积累一段过期画面；推理/业务节拍统一由 pipeline_submit_frame 的 max_fps 控制。 */
-    g_object_set(mGstChn.vSink, "sync", TRUE, "async", FALSE, NULL);
+    /* 文件跳转需要等待新位置的 preroll，让 pipeline 重置播放时钟。
+     * async=false 会跳过这一步，重复 seek 后把正常帧当成迟到帧快速播放。 */
+    g_object_set(mGstChn.vSink, "sync", TRUE, "async", TRUE, NULL);
     g_object_set(mGstChn.vSink, "emit-signals", TRUE, NULL);
     g_object_set(mGstChn.vSink, "max-buffers", 2, "drop", TRUE, NULL);
     g_signal_connect(mGstChn.vSink, "new-sample", G_CALLBACK(new_sample), &mGstChn);
@@ -1121,7 +1125,7 @@ bool DecChannel::seekFilePlayback(int64_t position_ms, int64_t &actual_position_
 
     const gboolean ok = gst_element_seek_simple(
         pipeline, GST_FORMAT_TIME,
-        static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT), requested);
+        static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE), requested);
     if (ok)
     {
         setFileEos(false);
@@ -1136,8 +1140,16 @@ bool DecChannel::seekFilePlayback(int64_t position_ms, int64_t &actual_position_
 
     if (ok)
     {
+        /* seek 是异步的；新段完成 preroll 后才查询位置，避免把瞬时的 0
+         * 当成跳转结果返回给 Web。等待只发生在用户跳转时，不进入逐帧路径。 */
+        const GstStateChangeReturn state = gst_element_get_state(pipeline, nullptr, nullptr, 2 * GST_SECOND);
         gint64 actual = requested;
-        gst_element_query_position(pipeline, GST_FORMAT_TIME, &actual);
+        if (state != GST_STATE_CHANGE_FAILURE && state != GST_STATE_CHANGE_ASYNC)
+        {
+            gint64 queried = 0;
+            if (gst_element_query_position(pipeline, GST_FORMAT_TIME, &queried) && queried >= 0)
+                actual = queried;
+        }
         actual_position_ms = std::max<int64_t>(0, actual / GST_MSECOND);
     }
     gst_object_unref(pipeline);

@@ -16,6 +16,7 @@ import { getSrcType, SRC_TYPES } from '../utils/streamSource'
 import { MODEL_ID_MAX_LENGTH, validateModelId } from '../utils/modelId'
 import AssetPicker         from './AssetPicker'
 import NumberField         from './NumberField'
+import DatasetRuleBuilder from './DatasetRuleBuilder'
 import ReportForm          from './ReportForm'
 import InferenceROIEditor  from './InferenceROIEditor'
 import './NodeConfigPanel.css'
@@ -79,7 +80,7 @@ export default function NodeConfigPanel({
   const headerCls = HEADER_CLASS[node.type ?? ''] ?? ''
 
   return (
-    <div className={`ncp ${node.type === 'report' ? 'ncp-report' : ''}`}>
+    <div className={`ncp ${node.type === 'report' ? 'ncp-report' : node.type === 'logic' && node.data.logic === 'logic_dataset_collector' ? 'ncp-dataset' : ''}`}>
       <div className={`ncp-header ${headerCls}`}>
         <span>{icon}</span>
         <span>{title}</span>
@@ -693,6 +694,7 @@ function LogicParameterFields({ node, params, onUpdate }: {
   params: LogicParam[]
   onUpdate: Props['onUpdate']
 }) {
+  const appName = useEditorStore(state => state.appName)
   const data = node.data as Record<string, unknown>
   const moduleParameters = data.logic_parameters && typeof data.logic_parameters === 'object' &&
     !Array.isArray(data.logic_parameters)
@@ -703,6 +705,34 @@ function LogicParameterFields({ node, params, onUpdate }: {
     onUpdate(node.id, {
       logic_parameters: { ...moduleParameters, [param.key]: value },
     })
+  }
+
+  if (data.logic === 'logic_dataset_collector') {
+    const primaryKeys = new Set(['enabled', 'rules', 'save_dir', 'interval_sec', 'max_samples'])
+    const render = (key: string, label?: string, help?: string) => {
+      const param = params.find(item => item.key === key)
+      if (!param) return null
+      return <ParamField key={key} compact param={{ ...param, label: label ?? param.label, help: help ?? param.help }} value={valueOf(param)} onChange={value => setParam(param, value)} />
+    }
+    const ruleParam = params.find(param => param.key === 'rules')
+    return <div className="dataset-collector-settings">
+      {render('enabled', '启用抓图')}
+      <div className="dataset-step"><span>1</span>什么时候抓图</div>
+      {ruleParam && <DatasetRuleBuilder value={valueOf(ruleParam) ?? ruleParam.default} onChange={value => setParam(ruleParam, value)} />}
+      <div className="dataset-step"><span>2</span>图片怎么保存</div>
+      {render('save_dir', 'RK3588 上的保存文件夹', `留空使用 /userdata/rk3588_dataset_samples/${appName || '程序名'}，各通道分开保存。`)}
+      <div className="dataset-saving-grid">
+        {render('interval_sec', '抓图间隔', '避免连续保存相似图片。')}
+        {render('max_samples', '最多保存几张', '本次运行达到上限就停止抓图。')}
+      </div>
+      <details className="dataset-details dataset-extra-settings">
+        <summary>高级设置</summary>
+        <div className="dataset-details-body">
+          <p className="dataset-match-hint">通常保持默认即可。修改采集参数会重新计数，已保存的图片保留。</p>
+          {params.filter(param => !primaryKeys.has(param.key)).map(param => <ParamField key={param.key} compact param={param} value={valueOf(param)} onChange={value => setParam(param, value)} />)}
+        </div>
+      </details>
+    </div>
   }
 
   return <>
@@ -718,13 +748,14 @@ function LogicParameterFields({ node, params, onUpdate }: {
 }
 
 // 按参数类型动态渲染一个表单控件（int/float/string/bool/enum/text）
-function ParamField({ param, value, onChange }: {
+function ParamField({ param, value, onChange, compact = false }: {
+  compact?: boolean
   param: LogicParam
   value: unknown
   onChange: (v: unknown) => void
 }) {
   const label = `${param.label ?? param.key}${param.unit ? `（${param.unit}）` : ''}`
-  const reloadHint = param.hot_reload === 'restart_required'
+  const reloadHint = compact ? '' : param.hot_reload === 'restart_required'
     ? '修改后需要重启程序。'
     : param.hot_reload === 'reset_state'
       ? '修改后会清空当前通道的逻辑状态。' : ''
@@ -746,7 +777,7 @@ function ParamField({ param, value, onChange }: {
       <F label={label}>
         <select value={value !== undefined ? String(value) : String(param.default ?? '')}
           onChange={e => onChange(e.target.value)}>
-          {(param.options ?? []).map(o => <option key={o} value={o}>{o}</option>)}
+          {(param.options ?? []).map(o => <option key={o} value={o}>{compact ? ({ center: '目标中心', foot: '脚点', periodic: '满足条件时按间隔抓图', on_enter: '每次刚满足时抓一次' } as Record<string, string>)[o] ?? o : o}</option>)}
         </select>
         {hint}
       </F>

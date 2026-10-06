@@ -27,6 +27,7 @@
 #include "inference_internal.h"
 #include "pipeline/frame_transform.h"
 #include "runtime/app_ctrl.h"
+#include "runtime/pause_ctrl.h"
 #include "yolo/composite_model.h"
 #include "yolo/yolo.h"
 
@@ -307,11 +308,10 @@ int inference_init(const AppConfig &cfg)
                 q_count++;
             }
         }
-        auto now = std::chrono::steady_clock::now();
         uint64_t now_ms = inference_steady_now_ms();
         for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
         {
-            g_fps[i].init(now);
+            g_fps[i].init();
             g_perf[i].init(now_ms);
         }
 
@@ -409,7 +409,8 @@ void inference_deinit()
 /*======================== 帧入队（pipeline_submit_frame 调用）========================*/
 
 int inference_process_source(int chnId, void *source_data, int fd, int srcW, int srcH, int srcFmt, int srcStrH,
-                             int srcStrV, int64_t frame_seq, uint64_t frame_steady_ms, uint64_t frame_unix_ms)
+                             int srcStrV, int64_t frame_seq, uint64_t frame_steady_ms, uint64_t frame_unix_ms,
+                             std::shared_ptr<void> source_owner)
 {
     if (!g_inference.running)
         return -1;
@@ -444,11 +445,11 @@ int inference_process_source(int chnId, void *source_data, int fd, int srcW, int
                 /* FD 只在解码回调期间有效，必须在本函数返回前导入稳定 handle。
                  * 队列中的旧 pending 帧会在入队临界区被这张更新的帧替换。 */
                 std::shared_ptr<RgaImportedBuffer> imported;
-                if (fd >= 0)
+                if (fd >= 0 && source_owner)
                     imported = rga_import_src_fd(fd, srcW, srcH, srcStrH, srcStrV, srcFmt);
                 std::shared_ptr<LazyVideoFrame> lazy_frame = std::make_shared<LazyVideoFrame>(
                     chnId, imported, srcW, srcH, srcStrH, srcStrV, srcFmt, g_inference.input_w, g_inference.input_h,
-                    imported ? nullptr : source_data);
+                    imported ? nullptr : source_data, imported ? source_owner : std::shared_ptr<void>{});
                 if (!imported)
                 {
                     /* 异步 worker 不能借用解码回调指针。无 DMA-BUF 时只保留原始字节，
@@ -492,12 +493,12 @@ int inference_process_source(int chnId, void *source_data, int fd, int srcW, int
                     superseded.push(std::move(tq.q.front()));
                     tq.q.pop();
                 }
-                const bool replaced_pending = !superseded.empty();
+                const size_t discarded_pending = superseded.size();
                 tq.q.push(std::move(task));
                 pthread_cond_signal(&tq.cv);
                 pthread_mutex_unlock(&tq.mtx);
                 pthread_rwlock_unlock(&g_inference.dispatch_mtx);
-                return replaced_pending ? 2 : 1;
+                return 1 + static_cast<int>(discarded_pending);
             }
             q_idx++;
         }
@@ -519,7 +520,7 @@ int inference_get_input_h()
 
 float inference_get_infer_fps(int chnId)
 {
-    if (chnId < 0 || chnId >= MAX_CHANNEL_NUM)
+    if (chnId < 0 || chnId >= MAX_CHANNEL_NUM || pause_ctrl::is_paused())
         return 0.0f;
     return g_fps[chnId].value();
 }
@@ -707,6 +708,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
             pthread_mutex_unlock(&g_inference.channel_results[chnId].mtx);
         }
         g_fps[chnId].reset_rate();
+        g_perf[chnId].init(inference_steady_now_ms());
         g_inference.chn_reload_stop[chnId] = 0;
         bool all_started = true;
         for (int w = worker_start; w < worker_start + worker_count; ++w)

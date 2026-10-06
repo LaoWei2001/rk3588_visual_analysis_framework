@@ -7,9 +7,10 @@
 class LazyVideoFrame;
 
 int inference_init(const AppConfig &cfg);
+/* >0 表示成功入队；返回值减 1 为本次入队淘汰的旧 pending 帧数。 */
 int inference_process_source(int chnId, void *source_data, int fd, int srcW, int srcH, int srcFmt, int srcStrH,
                              int srcStrV, int64_t frame_seq = 0, uint64_t frame_steady_ms = 0,
-                             uint64_t frame_unix_ms = 0);
+                             uint64_t frame_unix_ms = 0, std::shared_ptr<void> source_owner = {});
 void inference_deinit();
 /** 停止并唤醒推理/结果等待线程，但不 join、也不销毁同步对象。 */
 void inference_request_stop();

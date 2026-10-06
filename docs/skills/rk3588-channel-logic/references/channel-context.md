@@ -47,7 +47,7 @@
 |---|---|
 | `box` | 模型输入坐标系检测框 |
 | `label`, `class_id`, `score` | 标签、类别 ID、置信度 |
-| `track_id`, `track_hits`, `vx`, `vy` | 跟踪 ID、命中次数和速度 |
+| `track_id` | 跟踪 ID |
 | `chn_id`, `frame_id`, `timestamp_ms` | 结果来源与时间 |
 | `model_id`, `model_type`, `model_index` | 模型身份和通道内序号 |
 | `box_color` | 框颜色 |

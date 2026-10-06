@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  deleteAllRecords, deleteRecord, fetchRecordJson, fetchRecords,
+  apiErrorMessage, deleteAllRecords, deleteRecord, deleteSelectedRecords, fetchRecordJson, fetchRecords,
+  prepareRawImageExport, rawImageDownloadUrl, rawImageExportUrl,
   recordImageUrl, recordVideoUrl, retryRecord,
   type EventRecord, type RecordJsonResponse,
 } from '../api/client'
 import './RecordsPage.css'
+import { chooseLocalDirectory, downloadToComputer, isSaveCancelled, localDownloadHint, writeResponseToFile } from '../utils/localFiles'
 
 function fmtBytes(value: number): string {
   if (value < 1024) return `${value} B`
@@ -53,6 +55,9 @@ export default function RecordsPage() {
   const [detailError, setDetailError] = useState('')
   const [mediaRecord, setMediaRecord] = useState<EventRecord | null>(null)
   const [showRawImage, setShowRawImage] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [exporting, setExporting] = useState(false)
+  const [notice, setNotice] = useState('')
 
   const startUnixMs = startTime ? new Date(startTime).getTime() : undefined
   const endUnixMs = endTime ? new Date(endTime).getTime() : undefined
@@ -63,6 +68,7 @@ export default function RecordsPage() {
     try {
       const result = await fetchRecords(appName, 500, { startUnixMs, endUnixMs })
       setRecords(result.records)
+      setSelectedIds(previous => new Set([...previous].filter(id => result.records.some(record => record.id === id))))
       setStats({ count: result.count, total: result.total_bytes, cap: result.cap_bytes })
       setFilteredCount(result.filtered_count ?? result.count)
       setError('')
@@ -79,6 +85,8 @@ export default function RecordsPage() {
     return () => clearInterval(timer)
   }, [load])
 
+  useEffect(() => { setSelectedIds(new Set()); setNotice('') }, [appName, filter, startTime, endTime])
+
   useEffect(() => {
     const closeModal = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
@@ -93,6 +101,66 @@ export default function RecordsPage() {
     || (filter === 'data' && record.required_media.length === 0)
     || (filter === 'image' && record.required_media.some(item => item.endsWith('_image')))
     || (filter === 'video' && record.required_media.includes('video')))
+
+  const toggleSelection = (id: string) => setSelectedIds(previous => {
+    const next = new Set(previous)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
+
+  const clearRecords = async () => {
+    const ids = [...selectedIds]
+    if (!appName || !confirm(ids.length
+      ? `确定清空所选 ${ids.length} 条告警记录及其图片、视频？此操作不可撤销。`
+      : `确定清空全部 ${stats.count} 条告警记录及其图片、视频？此操作不可撤销。`)) return
+    setClearing(true)
+    setNotice('')
+    try {
+      if (ids.length) {
+        const result = await deleteSelectedRecords(appName, ids)
+        setSelectedIds(new Set(result.failed_ids))
+        setNotice(result.failed_ids.length ? `已清空 ${result.deleted_ids.length} 条，${result.failed_ids.length} 条清空失败，可重试。` : `已清空 ${result.deleted_ids.length} 条所选记录。`)
+      } else {
+        await deleteAllRecords(appName)
+        setSelectedIds(new Set())
+        setNotice('已清空全部记录。')
+      }
+      await load()
+    } catch { setNotice('清空失败，请重试。') }
+    finally { setClearing(false) }
+  }
+
+  const exportImages = async () => {
+    if (!appName) return
+    const ids = selectedIds.size ? [...selectedIds] : undefined
+    setExporting(true)
+    setNotice('')
+    try {
+      // 本地目录选择必须直接来自用户点击，不能等网络请求后才调用。
+      const directory = await chooseLocalDirectory()
+      const result = await prepareRawImageExport(appName, ids)
+      const skipped = result.skipped_count ? `，跳过 ${result.skipped_count} 条没有原图的记录` : ''
+      if (directory) {
+        let completed = 0
+        let failed = 0
+        for (const image of result.images) {
+          setNotice(`正在导出原图 ${completed + failed + 1} / ${result.image_count}…`)
+          try {
+            const file = await directory.getFileHandle(image.filename, { create: true })
+            await writeResponseToFile(await fetch(rawImageDownloadUrl(appName, image.id)), file)
+            completed += 1
+          } catch { failed += 1 }
+        }
+        setNotice(`已保存 ${completed} 张原图到电脑目录「${directory.name}」${skipped}${failed ? `，${failed} 张保存失败，请重试` : ''}。`)
+      } else {
+        downloadToComputer(rawImageExportUrl(appName, result.download_id), result.filename)
+        setNotice(`已开始下载 ${result.image_count} 张原图（ZIP）${skipped}。${localDownloadHint}`)
+      }
+    } catch (error) {
+      if (!isSaveCancelled(error)) setNotice(apiErrorMessage(error))
+    } finally { setExporting(false) }
+  }
 
   const chooseTimePreset = (preset: Exclude<TimePreset, 'custom'>) => {
     const now = new Date()
@@ -137,17 +205,25 @@ export default function RecordsPage() {
       </span>
       <div className="records-header-actions">
         <button className="rec-btn" onClick={load}>↻ 刷新</button>
-        <button className="rec-btn rec-btn-danger" disabled={clearing || stats.count === 0}
-          onClick={async () => {
-            if (!appName || !confirm(`确定清空全部 ${stats.count} 条待上报记录？此操作不可撤销。`)) return
-            setClearing(true)
-            try { await deleteAllRecords(appName); load() }
-            catch { setError('清空失败') }
-            finally { setClearing(false) }
-          }}>{clearing ? '清空中…' : '清空全部'}
+        <button className="rec-btn" disabled={exporting || clearing || stats.count === 0}
+          onClick={exportImages}>{exporting ? '导出中…' : selectedIds.size ? '导出所选原始图片' : '导出全部原始图片'}</button>
+        <button className="rec-btn rec-btn-danger" disabled={clearing || exporting || stats.count === 0}
+          onClick={clearRecords}>{clearing ? '清空中…' : selectedIds.size ? '清空所选记录' : '清空全部'}
         </button>
       </div>
     </div>
+    <div className="records-selection-bar">
+      <label><input type="checkbox" disabled={!shown.length || clearing || exporting}
+        checked={shown.length > 0 && shown.every(record => selectedIds.has(record.id))}
+        ref={element => { if (element) element.indeterminate = shown.some(record => selectedIds.has(record.id)) && !shown.every(record => selectedIds.has(record.id)) }}
+        onChange={event => setSelectedIds(event.target.checked ? new Set(shown.map(record => record.id)) : new Set())} />
+        全选</label>
+      {selectedIds.size > 0 && <span>已选择 {selectedIds.size} 条</span>}
+      {selectedIds.size > 0 && <button className="rec-btn rec-btn-secondary" disabled={clearing || exporting}
+        onClick={() => setSelectedIds(new Set())}>取消选择</button>}
+      <span className="records-save-hint">原图保存到电脑；不支持目录选择时下载 ZIP</span>
+    </div>
+    {notice && <div className="records-notice" role="status">{notice}</div>}
     <div className="records-toolbar">
       <div className="records-filters">
         {(['all', 'data', 'image', 'video'] as const).map(item =>
@@ -195,12 +271,16 @@ export default function RecordsPage() {
             const visibleDeliveries = record.deliveries.slice(0, 1)
             const mediaLabel = record.has_video ? '视频'
               : record.has_annotated_image || record.has_raw_image ? '图片' : '仅数据'
-            return <article key={record.id} className="rec-card rec-card-clickable"
+            return <article key={record.id} className={`rec-card rec-card-clickable${selectedIds.has(record.id) ? ' selected' : ''}`}
               role="button" tabIndex={0} onClick={() => openRecord(record)}
               onKeyDown={event => {
                 if (event.target !== event.currentTarget) return
                 if (event.key === 'Enter' || event.key === ' ') openRecord(record)
               }}>
+              <label className="rec-select" onClick={event => event.stopPropagation()}>
+                <input type="checkbox" aria-label={`选择记录 ${record.id}`} checked={selectedIds.has(record.id)}
+                  disabled={clearing || exporting} onChange={() => toggleSelection(record.id)} />
+              </label>
               <div className="rec-media">
                 {record.has_video
                   ? <video className="rec-thumb" src={recordVideoUrl(appName!, record.id)}
@@ -255,19 +335,19 @@ export default function RecordsPage() {
                       另有 {record.deliveries.length - visibleDeliveries.length} 个投递目标
                     </div>}
                 </div>
+              </div>
                 <div className="rec-actions" onClick={event => event.stopPropagation()}>
                   <button className="rec-btn rec-btn-secondary"
-                    onClick={() => openDetail(record)}>查看数据</button>{' '}
+                    onClick={() => openDetail(record)}>查看详情</button>{' '}
                   <button className="rec-btn" onClick={async () => {
                     await retryRecord(appName!, record.id); load()
-                  }}>重试</button>{' '}
+                  }}>重试发送</button>{' '}
                   <button className="rec-btn rec-btn-danger" onClick={async () => {
                     if (confirm('确定删除这条告警记录？')) {
                       await deleteRecord(appName!, record.id); load()
                     }
                   }}>删除</button>
                 </div>
-              </div>
             </article>
           })}</div>}
 

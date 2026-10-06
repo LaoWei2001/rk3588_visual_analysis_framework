@@ -49,7 +49,6 @@ bool low_score_detection_keeps_confirmed_track() {
   tracker.update(frame);
   CHECK(frame.size() == 1);
   CHECK(frame[0].track_id == 1);
-  CHECK(frame[0].track_hits == 3);
 
   frame = {detection(0.9f, 26)};
   tracker.update(frame);

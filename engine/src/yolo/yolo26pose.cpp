@@ -418,6 +418,7 @@ bool Yolo26Pose::run_and_decode(const Letterbox &letterbox, int image_width, int
     const auto inference_begin = Clock::now();
     if (rknn_run(context_, nullptr) < 0)
         return false;
+    const auto inference_end = Clock::now();
 
     rknn_output output{};
     output.index = 0;
@@ -427,7 +428,6 @@ bool Yolo26Pose::run_and_decode(const Letterbox &letterbox, int image_width, int
     output.size = static_cast<uint32_t>(native_output_.size());
     if (rknn_outputs_get(context_, 1, &output, nullptr) < 0)
         return false;
-    const auto inference_end = Clock::now();
 
     try
     {

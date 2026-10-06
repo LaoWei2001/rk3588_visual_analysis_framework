@@ -17,6 +17,8 @@
  */
 
 #include "runtime/app_ctrl.h"
+#include "runtime/pause_ctrl.h"
+#include "inference/inference_engine.h"
 #include "pipeline/image_convert.h"
 #include "display.h"
 #include "display_pipeline.h"
@@ -86,6 +88,24 @@ uint64_t display_buffer_offset(int chnId, int bytesPerPixel)
 }
 
 /*======================== 帧渲染提交 ========================*/
+/* 必须由该通道 display_worker 调用，图像生命周期与首帧合成保持一致。 */
+static void write_channel_view(int chnId, cv::Mat &view)
+{
+    render_channel_view(view, chnId, 0, &g_pCtrl->channels_state[chnId].performance_overlay);
+    auto runtime = app_ctrl_get_runtime_snapshot();
+    const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, chnId);
+    if (!channel || !channel->swap_rb)
+        cv::cvtColor(view, view, cv::COLOR_BGR2RGB);
+    constexpr int screen_bpp = 3;
+    char *front = *g_pCtrl->pDispBuffer;
+    cv::Mat front_roi(view.rows, view.cols, CV_8UC3,
+                      front + display_buffer_offset(chnId, screen_bpp),
+                      app_ctrl_get_disp_width() * screen_bpp);
+    display_lock();
+    view.copyTo(front_roi);
+    display_unlock();
+}
+
 /**
  * @brief 将单通道帧渲染到 GTK 显示缓冲区对应的 tile 区域。
  *
@@ -101,7 +121,6 @@ uint64_t display_buffer_offset(int chnId, int bytesPerPixel)
 void display_commit_frame(int chnId, const void *pSrcData, int srcFmt, int srcWidth, int srcHeight, int srcHStride,
                            int srcVStride)
 {
-    static constexpr int SCREEN_BPP = 3;
     char *pFront = *g_pCtrl->pDispBuffer;
     if (!pFront)
         return;
@@ -118,7 +137,6 @@ void display_commit_frame(int chnId, const void *pSrcData, int srcFmt, int srcWi
 
     const int tile_w = tile_width(chnId);
     const int tile_h = tile_height(chnId);
-    const int disp_w = app_ctrl_get_disp_width();
 
     /* RGA RGB888 要求目标 stride 为 16 像素的倍数，向上对齐 */
     const int tile_aligned_w = (tile_w + 15) & ~15;
@@ -181,45 +199,59 @@ void display_commit_frame(int chnId, const void *pSrcData, int srcFmt, int srcWi
         }
     }
 
-    /* 显示和录像共用同一个纯渲染函数；这里只负责写入显示缓冲。 */
-    render_channel_view(staging_view, chnId);
+    write_channel_view(chnId, staging_view);
+    cs.preview_rate.tick();
+}
 
-    /* BGR → RGB（GTK 期望 RGB），再 copyTo front tile（持 display_lock 防撕裂）。
-     * 本通道 swap_rb=1 时故意跳过这步：GTK 把 BGR 当 RGB 解析 → 屏幕上 R/B 互换显示
-     * （仅影响显示；推理/上报仍用正常 BGR，不受影响）。 */
-    auto runtime = app_ctrl_get_runtime_snapshot();
-    const ChannelConfig *channel_config = app_ctrl_runtime_channel_config(runtime, chnId);
-    if (!channel_config || !channel_config->swap_rb)
-        cv::cvtColor(staging_view, staging_view, cv::COLOR_BGR2RGB);
+void display_refresh_channel_overlays(int chnId)
+{
+    auto &cs = g_pCtrl->channels_state[chnId];
+    if (cs.tile_staging.empty() || !g_pCtrl->pDispBuffer || !*g_pCtrl->pDispBuffer)
+        return;
+    const int tile_w = tile_width(chnId), tile_h = tile_height(chnId);
+    if (cs.tile_staging.cols < tile_w || cs.tile_staging.rows != tile_h)
+        return;
+    auto &cache = cs.performance_overlay;
+    const bool show_perf = app_ctrl_get_performance_display();
+    RenderParams params;
+    params.chnId = chnId;
+    params.disp_fps = app_ctrl_get_disp_fps(chnId);
+    params.infer_fps = inference_get_infer_fps(chnId);
+    if (pause_ctrl::is_paused())
+        params.disp_fps = params.infer_fps = 0.0f;
+    if (show_perf == cache.visible &&
+        (!show_perf || (params.disp_fps == cache.render_fps && params.infer_fps == cache.infer_fps)))
+        return; // 数字没变：不拷贝、不画字、不写 framebuffer。
 
-    uint64_t dstOffset = display_buffer_offset(chnId, SCREEN_BPP);
-    cv::Mat front_roi(tile_h, tile_w, CV_8UC3, pFront + dstOffset, disp_w * SCREEN_BPP);
-    display_lock();
-    staging_view.copyTo(front_roi);
-    display_unlock();
-
-    /* 预览合成 FPS 统计（display_worker 独占 counter/timestamp）。
-     * RTSP 在网络抖动后可能把缓存帧短时突发交给 appsink；多路显示线程也会因
-     * RGA/内存带宽争用呈现“停一下再集中完成”的调度形态。原先 1 秒硬窗口会把
-     * 这种突发直接显示成 40+ FPS，下一秒又跌到个位数，容易被误认为摄像头真实帧率。
-     * 冷启动首轮用 1 秒快速取得有效值；之后使用 3 秒采样 + EMA，保留长期吞吐
-     * 变化，同时过滤窗口边界和短时调度尖峰。 */
-    auto now_ts =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count();
-    cs.fps_counter++;
-    int64_t elapsed = static_cast<int64_t>(now_ts) - static_cast<int64_t>(cs.last_fps_ts_ms);
-    const int64_t sample_window_ms = cs.disp_fps > 0.0f ? 3000 : 1000;
-    if (elapsed >= sample_window_ms)
+    cv::Mat view = cs.tile_staging(cv::Rect(0, 0, tile_w, tile_h));
+    const cv::Rect bounds = performance_overlay_bounds(view);
+    cv::Mat footer = view(bounds);
+    const auto runtime = app_ctrl_get_runtime_snapshot();
+    const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, chnId);
+    const bool swap_rb = channel && channel->swap_rb;
+    if (cache.background.empty())
     {
-        const float measured_fps = (1000.0f * cs.fps_counter) / static_cast<float>(elapsed);
-        const float new_disp_fps = cs.disp_fps > 0.0f
-                                       ? (cs.disp_fps * 0.65f + measured_fps * 0.35f)
-                                       : measured_fps;
-        cs.fps_counter = 0;
-        cs.last_fps_ts_ms = static_cast<uint64_t>(now_ts);
-        pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-        cs.disp_fps = new_disp_fps;
-        pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
+        // 停帧时刚打开性能显示：从当前显示帧取得背景，无需预先保存整帧。
+        footer.copyTo(cache.background);
+        if (!swap_rb)
+            cv::cvtColor(cache.background, cache.background, cv::COLOR_RGB2BGR);
     }
+    if (cache.background.size() != footer.size())
+        return;
+    cache.background.copyTo(footer);
+    render_performance_overlay(view, params);
+    if (!swap_rb)
+        cv::cvtColor(footer, footer, cv::COLOR_BGR2RGB);
+    constexpr int screen_bpp = 3;
+    char *front = *g_pCtrl->pDispBuffer;
+    cv::Mat front_roi(tile_h, tile_w, CV_8UC3, front + display_buffer_offset(chnId, screen_bpp),
+                      app_ctrl_get_disp_width() * screen_bpp);
+    display_lock();
+    footer.copyTo(front_roi(bounds));
+    display_unlock();
+    cache.visible = show_perf;
+    cache.render_fps = params.disp_fps;
+    cache.infer_fps = params.infer_fps;
+    if (!show_perf)
+        cache.background.release();
 }

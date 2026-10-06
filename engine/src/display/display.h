@@ -8,6 +8,19 @@
  *   channel_logic.h → display.h → channel_logic.h */
 struct RenderParams;
 
+/* 仅缓存 FPS 文字下方的一条背景，关闭性能显示时不保存图像。 */
+struct PerformanceOverlayCache
+{
+    cv::Mat background;
+    float render_fps = 0.0f;
+    float infer_fps = 0.0f;
+    bool visible = false;
+};
+
+cv::Rect performance_overlay_bounds(const cv::Mat &view);
+void render_performance_overlay(cv::Mat &view, const RenderParams &params,
+                                PerformanceOverlayCache *cache = nullptr);
+
 typedef struct
 {
     const char *winTitle;
@@ -34,8 +47,10 @@ bool display_try_lock();
  *
  * RenderParams 完整定义在 channel_logic.h，调用方 .cpp 须先 include channel_logic.h。
  */
-void render_overlays(cv::Mat &screen_roi, const RenderParams &p);
+void render_overlays(cv::Mat &screen_roi, const RenderParams &p,
+                     PerformanceOverlayCache *performance_cache = nullptr);
 
 /* Render one channel with the same rules as the live view. The caller owns the
  * BGR image and target size; this function never reads or writes framebuffer. */
-void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms = 0);
+void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms = 0,
+                         PerformanceOverlayCache *performance_cache = nullptr);

@@ -7,6 +7,7 @@
 #include "app_ctrl.h"
 
 #include "pipeline/pipeline_runtime.h"
+#include "runtime/pause_ctrl.h"
 #include "pipeline/frame_transform.h"
 #include "config/config_registry.h"
 #include <algorithm>
@@ -907,12 +908,6 @@ int app_ctrl_get_performance_display(void)
     return snapshot ? (snapshot->config.performance_display ? 1 : 0) : 0;
 }
 
-int app_ctrl_get_debug_display(void)
-{
-    auto snapshot = app_ctrl_get_runtime_snapshot();
-    return snapshot ? (snapshot->config.debug_display ? 1 : 0) : 0;
-}
-
 /*======================== 通道数据查询 ========================*/
 std::vector<AlgoResult> app_ctrl_get_results(int chnId)
 {
@@ -952,10 +947,10 @@ std::vector<AlgoResult> app_ctrl_get_results_fresh(int chnId, int max_age_ms)
 
 float app_ctrl_get_disp_fps(int chnId)
 {
-    if (!app_ctrl_has_channel(chnId))
+    if (!app_ctrl_has_channel(chnId) || pause_ctrl::is_paused())
         return 0.0f;
     pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-    float v = g_pCtrl->channels_state[chnId].disp_fps;
+    float v = g_pCtrl->channels_state[chnId].preview_rate.value();
     pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
     return v;
 }
@@ -1016,11 +1011,13 @@ static void fill_channel_logic_snapshot_locked(int chnId, const ChannelState &st
     out->src_width = state.published_src_width;
     out->src_height = state.published_src_height;
     out->infer_enabled = state.published_infer_enabled != 0;
-    out->disp_fps = state.disp_fps;
+    out->disp_fps = state.preview_rate.value();
     out->online_state = state.online_state;
     out->online_state_changed_steady_ms =
         state.online_state == CH_ONLINE ? state.online_ts_ms : state.offline_ts_ms;
     out->outputs = state.logic_outputs;
+    out->media = state.published_media;
+    out->global_draw_commands_by_owner = state.global_draw_cmds_by_owner;
     if (published_runtime)
         *published_runtime = state.published_runtime;
 }
@@ -1056,37 +1053,10 @@ int app_ctrl_get_channel_logic_snapshot(int chnId, ChannelLogicSnapshot *out)
 
 int app_ctrl_get_channel_frame_snapshot(int chnId, ChannelFrameSnapshot *out)
 {
-    if (!out || !app_ctrl_has_channel(chnId))
+    ChannelLogicSnapshot snapshot;
+    if (!out || !app_ctrl_get_channel_logic_snapshot(chnId, &snapshot))
         return 0;
-
-    *out = ChannelFrameSnapshot();
-    const float infer_fps = inference_get_infer_fps(chnId);
-
-    std::shared_ptr<LazyVideoFrame> lazy_frame;
-    std::shared_ptr<const AppRuntimeSnapshot> published_runtime;
-    {
-        pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-        const auto &cs = g_pCtrl->channels_state[chnId];
-        lazy_frame = cs.last_lazy_frame;
-        out->results = cs.last_results;
-        out->draw_cmds = cs.draw_cmds;
-        cs.append_global_draw_commands(&out->draw_cmds);
-        fill_channel_logic_snapshot_locked(chnId, cs, &out->logic, &published_runtime);
-        pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
-    }
-    if (lazy_frame)
-    {
-        const cv::Mat *frame = lazy_frame->model_frame();
-        if (frame)
-            out->frame = frame->clone();
-    }
-    out->logic.has_frame = !out->frame.empty();
-    fill_channel_publication_config(chnId, published_runtime, &out->logic);
-    const std::vector<RoiZone> *rois = app_ctrl_runtime_channel_rois(published_runtime, chnId);
-    if (rois)
-        out->rois = *rois;
-    out->logic.infer_fps = infer_fps;
-    return 1;
+    return app_ctrl_materialize_channel_frame_snapshot(snapshot, out);
 }
 
 void app_ctrl_set_global_draw_commands(int chnId, const std::string &owner,

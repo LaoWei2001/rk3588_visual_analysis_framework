@@ -9,6 +9,10 @@ htmlcov/
 Testing/
 test-results/
 playwright-report/
+# 测试、构建及运行日志
+*.log
+*.log.*
+/engine/tests/performance/results/
 build
 dist
 *.tsbuildinfo

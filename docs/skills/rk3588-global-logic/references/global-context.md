@@ -77,9 +77,9 @@
 推理/显示 FPS、在线状态、logic 名等。各通道分别原子采样，但不保证同一采集时刻；同步业务应
 比较 `frame_steady_ms` 并定义允许偏差。
 
-`get_channel_frame_snapshot(id, &out)` 深拷贝同帧图像、results、ROI 和绘制指令；若该通道已经
-更新到与本 tick 不同的 publication 版本则返回 false，避免混用版本。这是昂贵接口，只在确需
-图像/检测明细时使用。
+`get_channel_frame_snapshot(id, &out)` 从本 tick 保留的 publication 深拷贝同帧图像、results、ROI
+和绘制指令；后续通道发布不会替换这份证据，也不会因版本变化而抓图失败。无帧时返回 false。
+这是昂贵接口，只在确需图像/检测明细时使用。
 
 ## 调度与状态
 

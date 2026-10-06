@@ -45,7 +45,6 @@ export interface GlobalSettingsData {
   bytetrack_low_thresh: number
   bytetrack_low_iou_thresh: number
   performance_display: number
-  debug_display: number
   enable_pause_key: number
   enable_rtsp: number
   [key: string]: unknown
@@ -60,7 +59,7 @@ export const DEFAULT_GLOBAL_SETTINGS: GlobalSettingsData = {
   tracker_enable: 1, tracker_type: 'sort', tracker_iou_thresh: 0.3,
   tracker_max_miss: 30, tracker_min_hits: 3,
   bytetrack_low_thresh: 0.1, bytetrack_low_iou_thresh: 0.2,
-  performance_display: 0, debug_display: 0, enable_pause_key: 0,
+  performance_display: 0, enable_pause_key: 0,
   enable_rtsp: 1, rtsp_codec: 'h264',
 }
 
@@ -116,13 +115,9 @@ export default function GlobalSettingsPanel({ settings: s, onChange }: Props) {
               <input type="checkbox" checked={!!s.tracker_enable} onChange={e => set('tracker_enable', e.target.checked ? 1 : 0)} />
               启用跟踪器
             </label>
-            <label className="gs-toggle">
+            <label className="gs-toggle" title="显示性能统计并输出调试日志，保存配置后生效。">
               <input type="checkbox" checked={!!s.performance_display} onChange={e => set('performance_display', e.target.checked ? 1 : 0)} />
               性能显示
-            </label>
-            <label className="gs-toggle">
-              <input type="checkbox" checked={!!s.debug_display} onChange={e => set('debug_display', e.target.checked ? 1 : 0)} />
-              调试日志
             </label>
             <label className="gs-toggle">
               <input type="checkbox" checked={!!s.enable_display} onChange={e => set('enable_display', e.target.checked ? 1 : 0)} />

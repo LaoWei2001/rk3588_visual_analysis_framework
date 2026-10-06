@@ -288,14 +288,18 @@ export default function ReportForm({
         </div>}
         <div className="report-mapping-help">
           {imageMode === 'event_evidence'
-            ? '使用本次事件实际涉及的通道；旧逻辑未提供证据通道时使用所有连入通道。'
+            ? '使用本次事件实际涉及的通道：一路生成单路图片，多路自动拼接；旧逻辑未提供证据通道时使用所有连入通道。'
             : imageMode === 'selected'
               ? (selectedImageChannels.length
-                  ? `按顺序自动拼接：${selectedImageChannels.map(channelId => `通道 ${channelId}`).join('、')}`
+                  ? (selectedImageChannels.length === 1
+                      ? `单路图片：通道 ${selectedImageChannels[0]}`
+                      : `按顺序自动拼接：${selectedImageChannels.map(channelId => `通道 ${channelId}`).join('、')}`)
                   : '请至少选择一个图片通道。')
               : imageMode === 'connected'
                 ? (channelIds.length
-                    ? `自动拼接：${channelIds.map(channelId => `通道 ${channelId}`).join('、')}`
+                    ? (channelIds.length === 1
+                        ? `单路图片：通道 ${channelIds[0]}`
+                        : `自动拼接：${channelIds.map(channelId => `通道 ${channelId}`).join('、')}`)
                     : '全局逻辑没有连入通道，无法生成告警图片。')
                 : ''}
         </div>

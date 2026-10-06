@@ -285,9 +285,6 @@ struct ByteTracker::Impl
         if (track.confirmed)
         {
             detection.track_id = track.id;
-            detection.vx = estimate.at<float>(4);
-            detection.vy = estimate.at<float>(5);
-            detection.track_hits = track.hits;
         }
     }
 
@@ -308,7 +305,6 @@ struct ByteTracker::Impl
         {
             track.id = next_track_id++;
             detection.track_id = track.id;
-            detection.track_hits = 1;
         }
         tracks.push_back(std::move(track));
     }
@@ -327,9 +323,6 @@ struct ByteTracker::Impl
         for (auto &detection : detections)
         {
             detection.track_id = -1;
-            detection.vx = 0.0f;
-            detection.vy = 0.0f;
-            detection.track_hits = 0;
         }
 
         predict();

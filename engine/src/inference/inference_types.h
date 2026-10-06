@@ -28,13 +28,6 @@ struct AlgoResult
     int model_index = 0;       // 在本次有效模型列表中的顺序
     cv::Scalar box_color = cv::Scalar(-1, -1, -1); // (-1,-1,-1) means use default color
 
-    /* 卡尔曼速度 (模型输入像素/推理帧), 由 tracker 写入。
-     * 仅对 confirmed 轨迹 (track_id >= 0) 有效，用于显示层前向外推补偿管线延迟。
-     * 未经 tracker 处理时保持 0。*/
-    float vx = 0.0f;
-    float vy = 0.0f;
-    int track_hits = 0;
-
     cv::Point box_center() const
     {
         return cv::Point(box.x + box.width / 2, box.y + box.height / 2);

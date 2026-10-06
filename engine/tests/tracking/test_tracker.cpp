@@ -1,6 +1,5 @@
 #include "tracking/tracker.h"
 
-#include <cmath>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -55,7 +54,6 @@ bool confirms_after_consecutive_hits_and_recovers_fast_motion()
     frame = {detection(70)};
     tracker.update(frame);
     CHECK(frame[0].track_id == stable_id);
-    CHECK(frame[0].track_hits >= 4);
     return true;
 }
 
@@ -110,21 +108,15 @@ bool removes_interrupted_tentative_track()
     return true;
 }
 
-bool clears_stale_output_fields()
+bool clears_stale_track_id()
 {
     Tracker tracker(0.3f, 5, 3);
     AlgoResult result = detection(0);
     result.track_id = 99;
-    result.vx = 12.0f;
-    result.vy = -8.0f;
-    result.track_hits = 42;
     std::vector<AlgoResult> frame{result};
 
     tracker.update(frame);
     CHECK(frame[0].track_id == -1);
-    CHECK(std::fabs(frame[0].vx) < 1e-6f);
-    CHECK(std::fabs(frame[0].vy) < 1e-6f);
-    CHECK(frame[0].track_hits == 0);
     return true;
 }
 
@@ -134,7 +126,7 @@ int main()
 {
     if (!confirms_after_consecutive_hits_and_recovers_fast_motion() ||
         !preserves_ids_when_same_class_targets_cross() || !removes_interrupted_tentative_track() ||
-        !clears_stale_output_fields())
+        !clears_stale_track_id())
         return 1;
 
     std::cout << "tracker regression tests passed\n";

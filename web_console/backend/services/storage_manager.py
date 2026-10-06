@@ -266,8 +266,8 @@ def _event_info(store: Path, path: Path) -> Optional[Dict[str, Any]]:
                 active = True
                 break
     deliveries = delivery_doc.get("deliveries", [])
-    if isinstance(deliveries, list) and any(
-        isinstance(value, dict) and value.get("status") == "uploading" for value in deliveries
+    if not isinstance(deliveries, list) or not deliveries or any(
+        not isinstance(value, dict) or value.get("status") != "delivered" for value in deliveries
     ):
         active = True
 

@@ -5,7 +5,8 @@
 标准化后写入 MP4，避免不同摄像头 H265/H265+ 参数集、时间戳和 hvc1 封装差异。
 USB MJPEG/NV12/YUYV 统一转换为 I420，再以受控码率编码为高质量 H264。USB
 路径保留 x264 软件编码，以正确处理 MJPEG full-range 色彩和非 16 对齐高度，
-同时避免 MJPEG 原帧直存造成文件过大。Web 只负责控制进程和消费低帧率预览。
+同时避免 MJPEG 原帧直存造成文件过大。MP4 经独立管道直接传到访问网页的电脑，
+板端不创建录像文件。Web 同时控制录制、保存文件和消费低帧率预览。
 """
 from __future__ import annotations
 
@@ -14,6 +15,8 @@ import os
 import re
 import shutil
 import signal
+import secrets
+import select
 import stat
 import subprocess
 import threading
@@ -21,7 +24,7 @@ import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Deque, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Deque, Dict, Iterable, List, Optional, Tuple, Union
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -564,15 +567,16 @@ def _rtsp_ingest(source: Dict[str, Any], probe: Dict[str, Any]) -> List[str]:
     ]
 
 
-def _mp4_record_tail(codec: str, output_path: Path) -> List[str]:
+def _mp4_record_tail(codec: str, output_path: Union[Path, int]) -> List[str]:
     parser = "h264parse" if codec == "h264" else "h265parse"
     stream_format = "avc" if codec == "h264" else "hvc1"
     caps = f"video/x-{codec},stream-format={stream_format},alignment=au"
+    sink = (["fdsink", f"fd={output_path}", "sync=false"] if isinstance(output_path, int)
+            else ["filesink", f"location={output_path}", "sync=false"])
     return [
         parser, "config-interval=-1", "!", caps, "!",
-        "mp4mux", "fragment-duration=1000", "!",
-        "filesink", f"location={output_path}", "sync=false",
-    ]
+        "mp4mux", "fragment-duration=1000",
+    ] + (["streamable=true"] if isinstance(output_path, int) else []) + ["!"] + sink
 
 
 def _pipeline_error_summary(lines: Iterable[str], fallback: str) -> str:
@@ -696,7 +700,7 @@ def build_preview_args(source: Dict[str, Any], probe: Dict[str, Any]) -> List[st
 
 
 def build_record_args(
-    source: Dict[str, Any], probe: Dict[str, Any], output_path: Path,
+    source: Dict[str, Any], probe: Dict[str, Any], output_path: Union[Path, int],
 ) -> List[str]:
     command = [GSTREAMER, "-q", "-e"]
     width = int(probe.get("width") or 0)
@@ -760,7 +764,7 @@ def _timestamp_stem(now: Optional[datetime] = None) -> str:
 
 
 class VideoCaptureManager:
-    """单实例采集器。预览和录像进程互斥，录像不依赖浏览器连接。"""
+    """单实例采集器；录像经有界管道直接下载到电脑，不落板端磁盘。"""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -783,6 +787,11 @@ class VideoCaptureManager:
         self._latest_preview_frame: Optional[bytes] = None
         self._preview_sequence = 0
         self._record_done = threading.Event()
+        self._download_id: Optional[str] = None
+        self._record_pipe: Optional[int] = None
+        self._record_stream_claimed = False
+        self._record_bytes = 0
+        self._last_download_at = 0.0
 
     def _source_summary(self) -> Optional[Dict[str, str]]:
         if not self._source:
@@ -818,7 +827,13 @@ class VideoCaptureManager:
                 "stop_reason": self._stop_reason,
                 "error": self._error,
                 "process_alive": process is not None and process.poll() is None,
+                "destination": "computer",
+                "download_id": self._download_id,
             }
+        if self._download_id:
+            result["file_size_bytes"] = self._record_bytes
+            result["storage"] = None
+            return result
         file_path = working_path if working_path and working_path.exists() else output_path
         if file_path:
             try:
@@ -838,7 +853,7 @@ class VideoCaptureManager:
         self._process = None
         self._preview_condition.notify_all()
 
-    def _spawn(self, command: List[str]) -> subprocess.Popen:
+    def _spawn(self, command: List[str], pass_fds: Tuple[int, ...] = ()) -> subprocess.Popen:
         try:
             return subprocess.Popen(
                 command,
@@ -846,6 +861,7 @@ class VideoCaptureManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 bufsize=0,
+                pass_fds=pass_fds,
             )
         except OSError as exc:
             raise VideoCaptureRuntimeError(f"无法启动视频采集管线：{exc}") from exc
@@ -969,7 +985,10 @@ class VideoCaptureManager:
                 self._started_unix_ms = None
                 self._record_started_monotonic = None
                 self._working_path = None
+                self._output_path = None
                 self._save_directory = None
+                self._download_id = None
+                self._record_bytes = 0
                 self._max_file_size_bytes = 0
                 self._stop_reason = None
                 self._error = None
@@ -1039,65 +1058,24 @@ class VideoCaptureManager:
 
         return generate()
 
-    def _validate_finished_file(self, path: Path) -> bool:
-        try:
-            if path.stat().st_size <= 0:
-                return False
-        except OSError:
-            return False
-        if shutil.which(FFPROBE) is None:
-            return True
-        try:
-            result = subprocess.run(
-                [
-                    FFPROBE, "-v", "error", "-select_streams", "v:0",
-                    "-show_entries", "stream=codec_name", "-of", "json", str(path),
-                ],
-                capture_output=True, text=True, timeout=15,
-            )
-            streams = json.loads(result.stdout).get("streams", []) if result.returncode == 0 else []
-            return bool(streams and streams[0].get("codec_name"))
-        except (OSError, subprocess.TimeoutExpired, ValueError, TypeError, json.JSONDecodeError):
-            return False
+    def _close_pending_record_pipe(self) -> None:
+        if self._record_pipe is not None:
+            os.close(self._record_pipe)
+            self._record_pipe = None
 
     def _finish_recording(self, process: subprocess.Popen, generation: int, return_code: int) -> None:
         with self._lock:
             if generation != self._generation or self._process is not process:
                 return
-            working_path = self._working_path
-            output_path = self._output_path
-            reason = self._stop_reason
-
-        valid = bool(working_path and output_path and self._validate_finished_file(working_path))
-        if valid and working_path and output_path:
-            try:
-                if output_path.exists():
-                    raise FileExistsError(str(output_path))
-                working_path.rename(output_path)
-            except OSError as exc:
-                valid = False
-                with self._lock:
-                    self._error = f"MP4 文件完成但重命名失败：{exc}"
-
-        with self._lock:
-            if generation != self._generation or self._process is not process:
-                return
+            expected = self._stop_reason in ("manual", "size_limit", "service_shutdown")
+            valid = self._record_bytes > 0 and (return_code == 0 or expected)
             self._reset_process_state()
             self._record_started_monotonic = None
-            if valid:
-                expected = reason in (
-                    "manual", "size_limit", "storage_guard", "service_shutdown",
-                )
-                if return_code == 0 or expected:
-                    self._state = "completed"
-                    self._error = None
-                else:
-                    self._state = "error"
-                    self._error = self._recent_pipeline_error("录像源异常中断，已保留可播放的 MP4")
-            else:
-                self._state = "error"
-                if self._error is None:
-                    self._error = self._recent_pipeline_error("录像没有生成可播放的 MP4 文件")
+            self._state = "completed" if valid else "error"
+            if not valid:
+                self._error = self._recent_pipeline_error(
+                    "录像下载已中断，请检查电脑的下载状态" if self._record_bytes else "录像未能传输到电脑")
+            self._close_pending_record_pipe()
             self._record_done.set()
 
     def _request_record_stop(self, process: subprocess.Popen, generation: int, reason: str) -> None:
@@ -1116,76 +1094,56 @@ class VideoCaptureManager:
                 pass
 
     def _monitor_recording(self, process: subprocess.Popen, generation: int) -> None:
-        stop_requested_at: Optional[float] = None
+        stop_requested_at = None
         while process.poll() is None:
             with self._lock:
                 if generation != self._generation or self._process is not process:
                     return
                 state = self._state
-                working_path = self._working_path
-                save_directory = self._save_directory
+                size = self._record_bytes
                 max_bytes = self._max_file_size_bytes
-
-            if state == "recording" and working_path is not None:
-                try:
-                    size = working_path.stat().st_size
-                except OSError:
-                    size = 0
+                last_download_at = self._last_download_at
+            if state == "recording":
                 stop_at = max(1, max_bytes - min(SIZE_STOP_MARGIN_BYTES, max_bytes // 10))
                 if size >= stop_at:
                     self._request_record_stop(process, generation, "size_limit")
                     stop_requested_at = time.monotonic()
-                elif save_directory is not None:
-                    try:
-                        disk = storage_snapshot(str(save_directory))
-                        if int(disk["available_bytes"]) <= int(disk["reserve_bytes"]) + FINALIZE_MARGIN_BYTES:
-                            self._request_record_stop(process, generation, "storage_guard")
-                            stop_requested_at = time.monotonic()
-                    except VideoCaptureError:
-                        self._request_record_stop(process, generation, "storage_guard")
-                        stop_requested_at = time.monotonic()
+                elif time.monotonic() - last_download_at > 30:
+                    self._request_record_stop(process, generation, "download_disconnected")
+                    self._terminate_process(process, graceful=False, timeout=2)
+                    break
             elif state == "stopping" and stop_requested_at is None:
                 stop_requested_at = time.monotonic()
-
             if stop_requested_at is not None and time.monotonic() - stop_requested_at > 15:
                 self._terminate_process(process, graceful=False, timeout=2)
                 break
-            time.sleep(0.5)
-
+            time.sleep(0.2)
         return_code = process.wait()
         with self._lock:
             if generation == self._generation and self._process is process and self._state == "recording":
                 self._stop_reason = "source_ended"
         self._finish_recording(process, generation, return_code)
 
-    def start_recording(
-        self, source_input: Dict[str, Any], save_path: str, max_file_size_bytes: int,
-    ) -> Dict[str, Any]:
+    def start_recording(self, source_input: Dict[str, Any], max_file_size_bytes: int) -> Dict[str, Any]:
+        if max_file_size_bytes < 64 * 1024 * 1024:
+            raise VideoCaptureInputError("单个 MP4 上限至少为 64 MB")
         with self._operation_lock:
             with self._lock:
                 if self._state in ("recording", "stopping"):
-                    raise VideoCaptureBusyError("已有录像正在进行")
-
-            initial_storage = storage_snapshot(save_path)
-            validate_recording_capacity(initial_storage, max_file_size_bytes)
-            directory = Path(initial_storage["path"])
-            _write_probe(directory)
-
+                    raise VideoCaptureBusyError("已有录像正在传输到电脑")
             self.stop_preview()
             source, probe = probe_source(source_input)
-
-            latest_storage = storage_snapshot(str(directory))
-            validate_recording_capacity(latest_storage, max_file_size_bytes)
-            stem = _timestamp_stem()
-            output_path = directory / f"{stem}.mp4"
-            working_path = directory / f".{stem}.mp4.part"
-            if output_path.exists() or working_path.exists():
-                raise VideoCaptureRuntimeError("录像文件名冲突，请稍后重新开始")
-
-            command = build_record_args(source, probe, working_path)
-            process = self._spawn(command)
+            read_fd, write_fd = os.pipe()
+            try:
+                process = self._spawn(build_record_args(source, probe, write_fd), (write_fd,))
+            except Exception:
+                os.close(read_fd)
+                raise
+            finally:
+                os.close(write_fd)
             now_ms = int(time.time() * 1000)
             with self._lock:
+                self._close_pending_record_pipe()
                 self._generation += 1
                 generation = self._generation
                 self._process = process
@@ -1194,9 +1152,9 @@ class VideoCaptureManager:
                 self._probe = probe
                 self._started_unix_ms = now_ms
                 self._record_started_monotonic = time.monotonic()
-                self._working_path = working_path
-                self._output_path = output_path
-                self._save_directory = directory
+                self._working_path = None
+                self._output_path = Path(f"{_timestamp_stem()}.mp4")
+                self._save_directory = None
                 self._max_file_size_bytes = max_file_size_bytes
                 self._stop_reason = None
                 self._error = None
@@ -1204,19 +1162,62 @@ class VideoCaptureManager:
                 self._latest_preview_frame = None
                 self._preview_sequence = 0
                 self._record_done = threading.Event()
-            threading.Thread(
-                target=self._drain_stderr, args=(process, generation), daemon=True,
-                name="video-capture-record-stderr",
-            ).start()
-            threading.Thread(
-                target=self._drain_preview_stdout, args=(process, generation), daemon=True,
-                name="video-capture-record-output",
-            ).start()
-            threading.Thread(
-                target=self._monitor_recording, args=(process, generation), daemon=True,
-                name="video-capture-record-watch",
-            ).start()
+                self._download_id = secrets.token_urlsafe(24)
+                self._record_pipe = read_fd
+                self._record_stream_claimed = False
+                self._record_bytes = 0
+                self._last_download_at = time.monotonic()
+            for target, suffix in ((self._drain_stderr, "stderr"),
+                                   (self._drain_preview_stdout, "preview"),
+                                   (self._monitor_recording, "watch")):
+                threading.Thread(target=target, args=(process, generation), daemon=True,
+                                 name=f"video-capture-record-{suffix}").start()
             return self.status()
+
+    def open_recording_stream(self, download_id: str) -> Iterable[bytes]:
+        with self._lock:
+            if download_id != self._download_id or self._record_pipe is None:
+                raise VideoCaptureInputError("录像下载已过期，请重新开始")
+            if self._record_stream_claimed:
+                raise VideoCaptureBusyError("录像下载连接已被使用")
+            self._record_stream_claimed = True
+            descriptor = os.dup(self._record_pipe)
+            self._close_pending_record_pipe()
+            generation = self._generation
+            process = self._process
+
+        def generate():
+            complete = False
+            try:
+                while True:
+                    with self._lock:
+                        if generation != self._generation:
+                            return
+                    ready, _, _ = select.select([descriptor], [], [], 0.25)
+                    if not ready:
+                        # 给 StreamingResponse 一个取消检查点，断开连接时能及时关闭管道。
+                        yield b""
+                        continue
+                    chunk = os.read(descriptor, 65536)
+                    if not chunk:
+                        complete = True
+                        return
+                    with self._lock:
+                        if generation != self._generation:
+                            return
+                        self._record_bytes += len(chunk)
+                        self._last_download_at = time.monotonic()
+                        stop_at = self._max_file_size_bytes - min(SIZE_STOP_MARGIN_BYTES, self._max_file_size_bytes // 10)
+                        size_limit = self._record_bytes >= stop_at
+                    if size_limit and process is not None:
+                        self._request_record_stop(process, generation, "size_limit")
+                    yield chunk
+            finally:
+                os.close(descriptor)
+                if not complete and process is not None:
+                    self._request_record_stop(process, generation, "download_disconnected")
+                    self._terminate_process(process, graceful=False, timeout=2)
+        return generate()
 
     def stop_recording(self, reason: str = "manual") -> Dict[str, Any]:
         with self._operation_lock:

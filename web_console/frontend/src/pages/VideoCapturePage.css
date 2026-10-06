@@ -323,25 +323,6 @@
   line-height: 1.5;
 }
 
-.capture-path-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px;
-  gap: 6px;
-}
-
-.capture-path-row button {
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--surface2);
-  color: var(--text2);
-  font-size: 17px;
-}
-
-.capture-path-row button:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--text);
-}
-
 .capture-secondary-button {
   width: 100%;
   min-height: 34px;
@@ -356,8 +337,7 @@
 }
 
 .capture-secondary-button:disabled,
-.capture-actions button:disabled,
-.capture-path-row button:disabled {
+.capture-actions button:disabled {
   cursor: not-allowed;
   opacity: 0.48;
 }

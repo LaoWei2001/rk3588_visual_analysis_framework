@@ -92,6 +92,8 @@ export interface CaptureStatus {
   error: string | null
   process_alive: boolean
   storage: CaptureStorageInfo | null
+  destination?: 'computer'
+  download_id?: string | null
 }
 
 export const fetchCaptureDevices = () =>
@@ -111,16 +113,18 @@ export const stopCapturePreview = () =>
 
 export const startCaptureRecording = (
   source: CaptureSourceInput,
-  savePath: string,
   maxFileSizeMb: number,
 ) => captureApi.post<CaptureStatus>('/recordings/start', {
   ...source,
-  save_path: savePath,
   max_file_size_mb: maxFileSizeMb,
 }).then(response => response.data)
 
 export const stopCaptureRecording = () =>
   captureApi.post<CaptureStatus>('/recordings/stop').then(response => response.data)
+
+export const captureRecordingUrl = (downloadId: string): string =>
+  `/api/video-capture/recordings/${encodeURIComponent(downloadId)}/stream`
+  + `?token=${encodeURIComponent(useAuthStore.getState().token ?? '')}`
 
 export const capturePreviewStreamUrl = (nonce: number): string => {
   const token = useAuthStore.getState().token ?? ''

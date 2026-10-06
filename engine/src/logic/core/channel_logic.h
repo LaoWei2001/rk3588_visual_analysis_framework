@@ -97,7 +97,6 @@ struct RenderParams
     int inputW = 0, inputH = 0;
     float disp_fps = 0.0f;
     float infer_fps = 0.0f;
-    int64_t result_age_ms = 0;
     int64_t result_frame_id = 0; /* 分割叠加缓存版本；同一推理结果可跨多个显示帧复用 */
     int show_fps = 1;
     uint8_t target_mask = DrawCommand::DISPLAY;
@@ -231,6 +230,9 @@ struct ChannelContext
 
     /* ---- 是否开启推理 ---- */
     int infer_enabled;
+    /* 成功发布的同帧推理结果为 true，空检测结果也可以有效。
+     * 多模型可能仅部分子模型成功；不能据此认定每个子模型都有效。 */
+    bool inference_valid = false;
 
     /* ---- 实时 fps ---- */
     float infer_fps;
@@ -273,7 +275,7 @@ struct ChannelContext
     std::string time_str() const; /* "YYYY-MM-DD HH:MM:SS" —— 上报/记录用 */
     FrameTime datetime() const; /* 拆成年月日时分秒独立 int(见 FrameTime), 不是字符串, 而是结构体元素 */
 
-    RenderParams render_params(int64_t result_age_ms = 0) const;
+    RenderParams render_params() const;
 
     /* ===== 跨通道安全取数 (本通道 或 任意其它通道) =====
      *

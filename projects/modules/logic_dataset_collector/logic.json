@@ -1,0 +1,189 @@
+{
+  "label": "条件式数据采集",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "title": "启用条件采集",
+        "default": false,
+        "x-hot-reload": "reset_state",
+        "description": "选择本逻辑后替换该通道原业务逻辑。采集通道只启用一个检测模型，满足条件就将原始图片保存到 RK3588 指定文件夹。"
+      },
+      "save_dir": {
+        "type": "string",
+        "title": "RK3588图片保存目录",
+        "default": "",
+        "x-hot-reload": "reset_state",
+        "description": "填写 RK3588 上的绝对路径。留空默认 /userdata/rk3588_dataset_samples/<程序名>；自动按 ch0、ch1 等通道建立子文件夹。",
+        "x-placeholder": "例如 /userdata/my_dataset"
+      },
+      "rules": {
+        "type": "array",
+        "title": "采集条件",
+        "default": [
+          {
+            "id": "person_without_helmet",
+            "name": "有人但没有安全帽",
+            "condition": {
+              "all": [
+                {
+                  "class": "person",
+                  "min_confidence": 0.3,
+                  "count": {
+                    "op": ">=",
+                    "value": 1
+                  }
+                },
+                {
+                  "class": "helmet",
+                  "min_confidence": 0.3,
+                  "count": {
+                    "op": "==",
+                    "value": 0
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "x-hot-reload": "reset_state",
+        "description": "同帧命中任一规则即可采集，多规则命中只保存一份。缺失条件表示当前检测范围内没有达到置信度的目标，不代表一定不存在。"
+      },
+      "roi_name": {
+        "type": "string",
+        "title": "采集ROI名称",
+        "default": "",
+        "x-hot-reload": "reset_state",
+        "description": "留空按推理输出范围统计。填写通道内已绘制的 ROI 名称，按目标中心或脚点判断区域；不改变模型推理范围。"
+      },
+      "roi_anchor": {
+        "type": "string",
+        "title": "ROI计数定位点",
+        "default": "center",
+        "x-hot-reload": "reset_state",
+        "enum": [
+          "center",
+          "foot"
+        ]
+      },
+      "trigger_mode": {
+        "type": "string",
+        "title": "触发方式",
+        "default": "periodic",
+        "x-hot-reload": "reset_state",
+        "enum": [
+          "periodic",
+          "on_enter"
+        ],
+        "description": "periodic：持续满足时按间隔采集；on_enter：每次进入满足状态只采集一次。"
+      },
+      "confirm_sec": {
+        "type": "number",
+        "title": "条件持续确认时间",
+        "default": 0,
+        "x-hot-reload": "reset_state",
+        "minimum": 0,
+        "maximum": 60,
+        "x-unit": "秒",
+        "x-step": 0.1
+      },
+      "interval_sec": {
+        "type": "number",
+        "title": "最小采集间隔",
+        "default": 2,
+        "x-hot-reload": "reset_state",
+        "minimum": 0.5,
+        "maximum": 86400,
+        "x-unit": "秒",
+        "x-step": 0.5
+      },
+      "max_gap_sec": {
+        "type": "number",
+        "title": "最大有效帧间隔",
+        "default": 2,
+        "x-hot-reload": "reset_state",
+        "minimum": 0.5,
+        "maximum": 30,
+        "description": "超过此时间的旧结果不采集；帧之间中断超过此时间时重新确认条件。",
+        "x-unit": "秒"
+      },
+      "max_samples": {
+        "type": "integer",
+        "title": "本次采集数量上限",
+        "default": 500,
+        "x-hot-reload": "reset_state",
+        "minimum": 1,
+        "maximum": 10000,
+        "description": "按本次通道逻辑运行累计；重启或重置配置后重新计数。"
+      },
+      "max_store_mb": {
+        "type": "integer",
+        "title": "通道保存目录容量上限",
+        "default": 1024,
+        "x-hot-reload": "reset_state",
+        "minimum": 16,
+        "maximum": 10240,
+        "description": "包含当前通道保存目录内的历史文件。达到容量时停止保存，保留已有图片；请在 RK3588 上备份并清理目录后继续。",
+        "x-unit": "MB"
+      },
+      "jpeg_quality": {
+        "type": "integer",
+        "title": "原图JPEG质量",
+        "default": 95,
+        "x-hot-reload": "reset_state",
+        "minimum": 60,
+        "maximum": 100
+      },
+      "save_prediction": {
+        "type": "boolean",
+        "title": "保存YOLO候选标注",
+        "default": false,
+        "x-hot-reload": "reset_state",
+        "description": "可选保存与图片同名的 .txt 候选标注和 .labels.txt 类别表。保留模型原类别编号；候选标注必须人工复核、补漏标。"
+      },
+      "save_metadata": {
+        "type": "boolean",
+        "title": "保存采集命中信息",
+        "default": false,
+        "x-hot-reload": "reset_state",
+        "description": "可选保存与图片同名的 .json，记录命中规则、帧时间和模型预测。默认关闭，只保存 JPG 图片。"
+      }
+    }
+  },
+  "outputs": [
+    {
+      "key": "collector_active",
+      "type": "boolean",
+      "label": "采集输入有效"
+    },
+    {
+      "key": "collector_status",
+      "type": "string",
+      "label": "采集状态"
+    },
+    {
+      "key": "collector_saved",
+      "type": "integer",
+      "label": "已保存样本数"
+    },
+    {
+      "key": "collector_pending",
+      "type": "integer",
+      "label": "等待保存样本数"
+    },
+    {
+      "key": "collector_matched",
+      "type": "integer",
+      "label": "满足采样条件帧数"
+    },
+    {
+      "key": "collector_skipped",
+      "type": "integer",
+      "label": "队列或保存失败次数"
+    }
+  ],
+  "report_fields": []
+}

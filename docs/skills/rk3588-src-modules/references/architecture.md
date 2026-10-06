@@ -63,8 +63,11 @@ FPS、logic 名和不可变 outputs。通道提交新版本时递增 publication
 新发布时，全局实例按 `poll_interval_ms` 兜底运行。每次分发分别原子读取各通道，因此每一路内部
 一致，但多路不保证同一采集时刻。快速连续发布可以合并为一次最新状态读取，而不是无损帧队列。
 
-带图 `ChannelFrameSnapshot` 深拷贝模型帧、results、ROI 和 draw commands。全局的 exact snapshot
-接口会核对 publication seq，通道在抓图前已进入下一版时返回 false，不拼接不同版本。
+轻量快照同时保留该 publication 的不可变媒体引用，不转换或复制像素。带图
+`ChannelFrameSnapshot` 从这份引用深拷贝模型帧、results、ROI 和 draw commands；
+全局抓图使用 tick 采样的版本，通道后续发布不会替换它或使抓图失败。
+全局 tick 结束释放媒体引用，图片任务只持有复制后的 CPU 图片。异步 DMA-BUF 源同时持有
+`GstBuffer`，避免解码池提前复用。预览、上报图片和录像叠加均按检测结果的实际坐标绘制框。
 
 ## 断流和重连
 

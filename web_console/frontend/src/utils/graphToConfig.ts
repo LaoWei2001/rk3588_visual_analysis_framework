@@ -408,7 +408,6 @@ export function graphToConfig(
     bytetrack_low_thresh: g.bytetrack_low_thresh ?? 0.1,
     bytetrack_low_iou_thresh: g.bytetrack_low_iou_thresh ?? 0.2,
     performance_display: g.performance_display ?? 0,
-    debug_display:       g.debug_display       ?? 0,
     enable_pause_key:   g.enable_pause_key   ?? 0,
     enable_rtsp:        g.enable_rtsp        ?? 1,
     rtsp_codec:         'h264',

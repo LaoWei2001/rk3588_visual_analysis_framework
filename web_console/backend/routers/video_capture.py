@@ -33,7 +33,6 @@ class CaptureSourceRequest(BaseModel):
 
 
 class RecordingStartRequest(CaptureSourceRequest):
-    save_path: str = Field(min_length=1, max_length=4096)
     max_file_size_mb: int = Field(ge=64, le=1024 * 1024)
 
 
@@ -106,11 +105,23 @@ async def start_capture_recording(req: RecordingStartRequest):
             req.model_dump(include={
                 "source_type", "rtsp_url", "usb_device", "usb_width", "usb_height",
             }),
-            req.save_path,
             req.max_file_size_mb * 1024 * 1024,
         )
     except VideoCaptureError as exc:
         _raise_http(exc)
+
+
+@router.get("/recordings/{download_id}/stream")
+async def download_capture_recording(download_id: str):
+    try:
+        stream = capture_manager.open_recording_stream(download_id)
+        filename = capture_manager.status()["output_path"]
+    except VideoCaptureError as exc:
+        _raise_http(exc)
+    return StreamingResponse(stream, media_type="video/mp4", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-store", "X-Accel-Buffering": "no",
+    })
 
 
 @router.post("/recordings/stop")

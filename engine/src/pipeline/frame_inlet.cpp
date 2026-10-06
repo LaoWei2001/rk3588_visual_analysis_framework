@@ -29,6 +29,7 @@
 #include "pipeline_runtime.h"
 #include "pipeline_internal.h"
 #include "frame_transform.h"
+#include "frame_source_owner.h"
 #include "common/logging.h"
 
 /*======================== 送帧统计（每通道，仅 pipeline_submit_frame 访问）========================*/
@@ -80,6 +81,8 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
     const ChannelConfig *channel_config = app_ctrl_runtime_channel_config(runtime, ch);
     if (!channel_config)
         return -1;
+    if (g_feed[ch].log_last_ms == 0)
+        g_feed[ch].log_last_ms = frame_steady_ms;
 
     /* 原始分辨率事件录像入口。函数内部按配置FPS节流，回调线程只复制命中的源帧；
      * 颜色转换、JPEG环形缓冲和MP4编码均在录像线程执行。 */
@@ -180,12 +183,16 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
     raw_frame.frame_unix_ms = frame_unix_ms;
     if (!infer_enabled && will_process)
     {
-        auto imported = rga_import_src_fd(imgDesc.fd, imgDesc.width, imgDesc.height, imgDesc.horStride,
-                                          imgDesc.verStride, fmt_int);
+        auto source_owner = retain_frame_source_buffer(imgDesc.source_buffer);
+        auto imported = source_owner
+                            ? rga_import_src_fd(imgDesc.fd, imgDesc.width, imgDesc.height, imgDesc.horStride,
+                                                imgDesc.verStride, fmt_int)
+                            : nullptr;
         const bool has_imported_source = static_cast<bool>(imported);
         raw_frame.lazy_frame = std::make_shared<LazyVideoFrame>(
             ch, std::move(imported), imgDesc.width, imgDesc.height, imgDesc.horStride, imgDesc.verStride, fmt_int,
-            g_pCtrl->inputW, g_pCtrl->inputH, has_imported_source ? nullptr : imgData);
+            g_pCtrl->inputW, g_pCtrl->inputH, has_imported_source ? nullptr : imgData,
+            has_imported_source ? std::move(source_owner) : std::shared_ptr<void>{});
         if (!has_imported_source)
         {
             /* 无 DMA-BUF 时只保留原始字节，不在回调里做 BGR/缩放。这使文件、USB
@@ -206,12 +213,13 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
     {
         const int enq_ret = inference_process_source(
             ch, imgData, imgDesc.fd, imgDesc.width, imgDesc.height, fmt_int, imgDesc.horStride, imgDesc.verStride,
-            current_frame_seq, raw_frame.frame_steady_ms, raw_frame.frame_unix_ms);
+            current_frame_seq, raw_frame.frame_steady_ms, raw_frame.frame_unix_ms,
+            retain_frame_source_buffer(imgDesc.source_buffer));
         if (enq_ret > 0)
         {
             g_feed[ch].enq++;
-            if (enq_ret == 2)
-                g_feed[ch].replace++;
+            if (enq_ret > 1)
+                g_feed[ch].replace += static_cast<uint64_t>(enq_ret - 1);
         }
         else
         {
@@ -304,41 +312,28 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
     /* ---- 统计 recv ---- */
     g_feed[ch].recv++;
 
-    /* ---- 周期性统计日志（每 5 秒一次）---- */
+    /* ---- 周期性统计日志：所有数量和输入/入队速率来自同一实际窗口 ---- */
     const uint64_t now_ms = steady_now_ms();
-    const uint64_t last_ms = g_feed[ch].log_last_ms;
-    if (last_ms == 0)
+    const uint64_t elapsed_ms = now_ms - g_feed[ch].log_last_ms;
+    if (elapsed_ms >= FEED_LOG_WINDOW_MS)
     {
         g_feed[ch].log_last_ms = now_ms;
-    }
-    else if (now_ms - last_ms >= FEED_LOG_WINDOW_MS)
-    {
-        g_feed[ch].log_last_ms = now_ms;
-
-        const uint64_t recv_s = g_feed[ch].recv;
-        g_feed[ch].recv = 0;
-        const uint64_t enq_s = g_feed[ch].enq;
-        g_feed[ch].enq = 0;
-        const uint64_t drop_s = g_feed[ch].drop;
-        g_feed[ch].drop = 0;
-        const uint64_t replace_s = g_feed[ch].replace;
-        g_feed[ch].replace = 0;
-        const uint64_t throttle_s = g_feed[ch].throttle;
-        g_feed[ch].throttle = 0;
-
-        const uint64_t q_total_s = enq_s + drop_s;
-        const float q_drop_rate = q_total_s > 0 ? (100.0f * (float)drop_s / (float)q_total_s) : 0.0f;
-        const float infer_fps_val = inference_get_infer_fps(ch);
-
-        const int show_perf = app_ctrl_get_performance_display();
-        if (show_perf)
+        const FeedStats &feed = g_feed[ch];
+        const double seconds = static_cast<double>(elapsed_ms) / 1000.0;
+        const uint64_t attempts = feed.enq + feed.drop;
+        const double fail_rate = attempts ? 100.0 * feed.drop / attempts : 0.0;
+        if (app_ctrl_get_performance_display())
         {
-            log_printf_threadsafe("[Feed][ch%02d][5s] recv=%llu throttle=%llu enq=%llu replace=%llu "
-                                  "qdrop=%llu(%.1f%%) infer=%.1ffps\n",
-                                  ch, (unsigned long long)recv_s, (unsigned long long)throttle_s,
-                                  (unsigned long long)enq_s, (unsigned long long)replace_s,
-                                  (unsigned long long)drop_s, q_drop_rate, infer_fps_val);
+            log_printf_threadsafe(
+                "[Feed][ch%02d] window=%.3fs recv=%llu recv_fps=%.2f "
+                "throttle_skip=%llu enq=%llu enq_fps=%.2f pending_discard=%llu "
+                "enqueue_fail=%llu(%.1f%%) | render_fps_1s=%.1f infer_fps_1s=%.1f\n",
+                ch, seconds, (unsigned long long)feed.recv, feed.recv / seconds,
+                (unsigned long long)feed.throttle, (unsigned long long)feed.enq, feed.enq / seconds,
+                (unsigned long long)feed.replace, (unsigned long long)feed.drop, fail_rate,
+                app_ctrl_get_disp_fps(ch), inference_get_infer_fps(ch));
         }
+        g_feed[ch].recv = g_feed[ch].enq = g_feed[ch].drop = g_feed[ch].replace = g_feed[ch].throttle = 0;
     }
 
     return 0;

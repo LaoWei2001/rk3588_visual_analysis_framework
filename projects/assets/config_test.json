@@ -51,12 +51,12 @@
               "enabled": true,
               "connection_id": "connection_1",
               "contract_id": "global_crane_safety_controller.http_alarm",
-              "contract_revision": "b12554aa15356b9db1781bcbe86f874f532873f3da0e04322aeeefdf51905375",
+              "contract_revision": "102104fa46d30f7dbbb1ff66a572a11ef7139a61ffab1d30715c3127778a832f",
               "media": [
                 "annotated_image",
                 "raw_image"
               ],
-              "contract_label": "JNU 行车安全拼接图片告警",
+              "contract_label": "JNU 行车安全图片告警",
               "when": {
                 "event_types": [
                   "crane_hook_outside",
@@ -74,7 +74,7 @@
           "video_fps": 15,
           "merge_window_sec": 5,
           "image_selection": {
-            "mode": "connected"
+            "mode": "event_evidence"
           }
         },
         "report_parameters": {}

@@ -29,6 +29,7 @@ if((NOT "${arch_value}" STREQUAL "armv7l") AND (NOT "${arch_value}" STREQUAL "aa
         )
     endif()
 endif()
+
 # ===================== 交叉编译工具链 END =====================
 
 project(vision_analysis LANGUAGES C CXX)
@@ -291,4 +292,83 @@ if(BUILD_INFERENCE_ROI_TESTS)
     target_compile_options(inference_roi_filter_tests PRIVATE -UNDEBUG)
     target_link_libraries(inference_roi_filter_tests PRIVATE ${OpenCV_LIBS})
     add_test(NAME inference_roi_filter_regression COMMAND inference_roi_filter_tests)
+endif()
+
+option(BUILD_FRAME_SNAPSHOT_TESTS "Build frame evidence and buffer ownership regression tests" OFF)
+if(BUILD_FRAME_SNAPSHOT_TESTS)
+    enable_testing()
+    add_executable(event_retention_tests tests/event/test_event_retention.cpp ${cjson_src})
+    target_include_directories(event_retention_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(event_retention_tests PRIVATE -UNDEBUG)
+    add_test(NAME event_retention_regression COMMAND event_retention_tests)
+    add_executable(frame_snapshot_tests
+        tests/event/test_frame_snapshot.cpp
+        src/runtime/channel_snapshot.cpp
+        src/pipeline/frame_transform.cpp
+        src/pipeline/image_convert.cpp
+        src/display/display.cpp
+        src/display/text_overlay.cpp
+    )
+    target_include_directories(frame_snapshot_tests PRIVATE ${custom_inc} ${api_inc})
+    target_compile_options(frame_snapshot_tests PRIVATE -UNDEBUG -ffunction-sections -fdata-sections)
+    # 仅链接公共绘制函数，未使用的 GUI/实时播放入口不进入独立测试。
+    set_target_properties(frame_snapshot_tests PROPERTIES LINK_FLAGS "-Wl,--gc-sections")
+    target_link_libraries(frame_snapshot_tests PRIVATE ${OpenCV_LIBS} ${GSTOPT_LIBS} rga Threads::Threads)
+    add_test(NAME frame_snapshot_regression COMMAND frame_snapshot_tests)
+endif()
+
+option(BUILD_DATASET_TESTS "Build dataset rule and bounded writer regression tests" OFF)
+if(BUILD_DATASET_TESTS)
+    enable_testing()
+    add_executable(dataset_tests
+        tests/dataset/test_dataset.cpp
+        ${VISION_PROJECTS_ROOT}/modules/logic_dataset_collector/rules.cpp
+        ${VISION_PROJECTS_ROOT}/modules/logic_dataset_collector/writer.cpp
+        ${cjson_src}
+    )
+    target_include_directories(dataset_tests PRIVATE ${custom_inc} ${api_inc}
+        ${VISION_PROJECTS_ROOT}/modules/logic_dataset_collector)
+    target_compile_options(dataset_tests PRIVATE -UNDEBUG)
+    target_link_libraries(dataset_tests PRIVATE ${OpenCV_LIBS} Threads::Threads)
+    add_test(NAME dataset_regression COMMAND dataset_tests)
+endif()
+
+option(BUILD_PERFORMANCE_TESTS "Build standalone performance counter regression tests" OFF)
+if(BUILD_PERFORMANCE_TESTS)
+    enable_testing()
+    add_executable(performance_metrics_tests tests/performance/test_performance_metrics.cpp)
+    target_include_directories(performance_metrics_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(performance_metrics_tests PRIVATE -UNDEBUG)
+    target_link_libraries(performance_metrics_tests PRIVATE Threads::Threads)
+    add_test(NAME performance_metrics_regression COMMAND performance_metrics_tests)
+
+    add_executable(display_metrics_tests
+        tests/performance/test_display_metrics.cpp
+        src/display/display_render.cpp
+        src/display/display.cpp
+        src/display/text_overlay.cpp
+        src/runtime/pause_ctrl.cpp
+    )
+    target_include_directories(display_metrics_tests PRIVATE ${custom_inc} ${api_inc})
+    target_compile_options(display_metrics_tests PRIVATE -UNDEBUG -ffunction-sections -fdata-sections)
+    set_target_properties(display_metrics_tests PROPERTIES LINK_FLAGS "-Wl,--gc-sections")
+    target_link_libraries(display_metrics_tests PRIVATE ${OpenCV_LIBS} ${GSTOPT_LIBS} Threads::Threads)
+    add_test(NAME display_metrics_regression COMMAND display_metrics_tests)
+endif()
+
+option(BUILD_PERFORMANCE_BENCHMARKS "Build RK3588 hardware display microbenchmark" OFF)
+if(BUILD_PERFORMANCE_BENCHMARKS)
+    add_executable(display_performance_benchmark
+        tests/performance/benchmark_display.cpp
+        src/display/display_render.cpp
+        src/display/display.cpp
+        src/display/text_overlay.cpp
+        src/runtime/pause_ctrl.cpp
+        src/pipeline/frame_transform.cpp
+        src/pipeline/image_convert.cpp
+    )
+    target_include_directories(display_performance_benchmark PRIVATE ${custom_inc} ${api_inc})
+    target_compile_options(display_performance_benchmark PRIVATE -ffunction-sections -fdata-sections)
+    set_target_properties(display_performance_benchmark PROPERTIES LINK_FLAGS "-Wl,--gc-sections")
+    target_link_libraries(display_performance_benchmark PRIVATE ${OpenCV_LIBS} ${GSTOPT_LIBS} rga Threads::Threads)
 endif()

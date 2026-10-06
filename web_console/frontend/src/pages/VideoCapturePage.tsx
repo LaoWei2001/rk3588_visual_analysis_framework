@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   capturePreviewStreamUrl,
+  captureRecordingUrl,
   fetchCaptureDevices,
   fetchCaptureStatus,
-  fetchCaptureStorage,
   startCapturePreview,
   startCaptureRecording,
   stopCapturePreview,
@@ -12,10 +12,10 @@ import {
   type CaptureSourceInput,
   type CaptureSourceType,
   type CaptureStatus,
-  type CaptureStorageInfo,
   type UsbCaptureDevice,
   type UsbCaptureResolution,
 } from '../api/videoCapture'
+import { chooseLocalFile, downloadToComputer, isSaveCancelled, localDownloadHint, writeResponseToFile } from '../utils/localFiles'
 import './VideoCapturePage.css'
 
 
@@ -43,10 +43,10 @@ const formatDuration = (seconds: number): string => {
 }
 
 const stopReasonText: Record<string, string> = {
-  manual: '已手动停止并保存',
-  size_limit: '达到单文件大小上限，已自动停止并保存',
-  storage_guard: '达到磁盘保护线，已自动停止并保存',
-  service_shutdown: '服务退出前已安全停止并保存',
+  manual: '已手动停止，请确认电脑下载完成',
+  size_limit: '达到单文件大小上限，已自动停止，请确认电脑下载完成',
+  service_shutdown: '服务退出前已停止录制',
+  download_disconnected: '电脑下载连接已中断，录制已停止',
   source_ended: '视频源已结束',
 }
 
@@ -64,11 +64,11 @@ export default function VideoCapturePage() {
   const [usbWidth, setUsbWidth] = useState(0)
   const [usbHeight, setUsbHeight] = useState(0)
   const [usbDevices, setUsbDevices] = useState<UsbCaptureDevice[]>([])
-  const [savePath, setSavePath] = useState('/userdata')
   const [maxFileSizeMb, setMaxFileSizeMb] = useState(1024)
-  const [storage, setStorage] = useState<CaptureStorageInfo | null>(null)
-  const [storageError, setStorageError] = useState('')
-  const [storageLoading, setStorageLoading] = useState(false)
+  const [localDestination, setLocalDestination] = useState('')
+  const [localSaving, setLocalSaving] = useState(false)
+  const [saveMessage, setSaveMessage] = useState('')
+  const nativeSaveRef = useRef(false)
   const [status, setStatus] = useState<CaptureStatus>(emptyStatus)
   const [busy, setBusy] = useState<'preview' | 'record' | 'stop' | ''>('')
   const [actionError, setActionError] = useState('')
@@ -78,6 +78,12 @@ export default function VideoCapturePage() {
   const statusRef = useRef(status)
 
   statusRef.current = status
+
+  useEffect(() => {
+    if (status.state === 'completed' && !nativeSaveRef.current) {
+      setSaveMessage('录制已结束，请在电脑浏览器的下载列表确认文件保存完成。')
+    }
+  }, [status.state])
 
   const source = useMemo<CaptureSourceInput>(() => ({
     source_type: sourceType,
@@ -97,31 +103,10 @@ export default function VideoCapturePage() {
     ? /^rtsps?:\/\//i.test(rtspUrl.trim())
     : /^\/dev\/video\d+$/.test(usbDevice.trim())
   const requestedBytes = Math.max(0, Number(maxFileSizeMb) || 0) * MIB
-  const capacityReady = storage?.writable === true
-    && requestedBytes >= 64 * MIB
-    && requestedBytes <= storage.max_recording_file_bytes
-  const controlsLocked = status.recording || status.state === 'stopping'
+  const capacityReady = Number.isInteger(maxFileSizeMb) && maxFileSizeMb >= 64 && maxFileSizeMb <= 1024 * 1024
+  const controlsLocked = status.recording || status.state === 'stopping' || localSaving
 
-  const loadStorage = async (path = savePath) => {
-    const normalized = path.trim()
-    if (!normalized) {
-      setStorage(null)
-      setStorageError('请输入板端保存路径')
-      return
-    }
-    setStorageLoading(true)
-    try {
-      const result = await fetchCaptureStorage(normalized)
-      setStorage(result)
-      setStorageError('')
-    } catch (error) {
-      setStorage(null)
-      setStorageError(videoCaptureErrorMessage(error))
-    } finally {
-      setStorageLoading(false)
-    }
-  }
-
+  const recordingFilename = () => `capture_${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_')}.mp4`
   useEffect(() => {
     let disposed = false
     fetchCaptureDevices()
@@ -163,30 +148,11 @@ export default function VideoCapturePage() {
     }
   }, [])
 
-  useEffect(() => {
-    let disposed = false
-    const timer = window.setTimeout(() => {
-      if (!disposed) void loadStorage(savePath)
-    }, 350)
-    const refresh = window.setInterval(() => {
-      if (!disposed) void loadStorage(savePath)
-    }, 5000)
-    return () => {
-      disposed = true
-      window.clearTimeout(timer)
-      window.clearInterval(refresh)
-    }
-  }, [savePath]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // 录像由板端独立维持；刷新页面重新进入时，以后端正在使用的真实路径为准。
-  useEffect(() => {
-    if (status.recording && status.storage?.path && status.storage.path !== savePath) {
-      setSavePath(status.storage.path)
-    }
-  }, [status.recording, status.storage?.path, savePath])
-
   useEffect(() => () => {
-    if (!statusRef.current.recording && statusRef.current.state !== 'stopping') {
+    // 本地文件写入依赖此页面；离开页面时停止录制并完成已传输的 MP4。
+    if (statusRef.current.recording || statusRef.current.state === 'stopping') {
+      void stopCaptureRecording().catch(() => {})
+    } else {
       void stopCapturePreview().catch(() => {})
     }
   }, [])
@@ -213,21 +179,36 @@ export default function VideoCapturePage() {
     if (!sourceReady || !capacityReady || controlsLocked) return
     setBusy('record')
     setActionError('')
-    setPreviewError(false)
-    setPreviewLoading(true)
+    setSaveMessage('')
+    let started = false
     try {
-      // 后端会在启动瞬间再次检查同一路径容量，页面显示不是唯一保护线。
-      const result = await startCaptureRecording(source, storage!.path, Math.floor(maxFileSizeMb))
+      const file = await chooseLocalFile(recordingFilename(), 'video/mp4', '.mp4')
+      nativeSaveRef.current = !!file
+      const result = await startCaptureRecording(source, Math.floor(maxFileSizeMb))
+      started = true
+      if (!result.download_id || !result.output_path) throw new Error('录像下载地址未生成')
       setStatus(result)
+      setPreviewError(false)
+      setPreviewLoading(true)
       setPreviewNonce(Date.now())
-      await loadStorage(storage!.path)
+      const url = captureRecordingUrl(result.download_id)
+      setLocalDestination(file?.name ?? '浏览器下载位置')
+      if (file) {
+        setLocalSaving(true)
+        void fetch(url).then(response => writeResponseToFile(response, file)).then(() => {
+          setSaveMessage(`录像已保存到电脑：${file.name}`)
+        }).catch(error => {
+          setActionError(`保存到电脑失败：${videoCaptureErrorMessage(error)}`)
+          void stopCaptureRecording().catch(() => {})
+        }).finally(() => setLocalSaving(false))
+      } else {
+        downloadToComputer(url, result.output_path)
+        setSaveMessage(`正在通过浏览器下载录像。${localDownloadHint}`)
+      }
     } catch (error) {
-      setPreviewLoading(false)
-      setActionError(videoCaptureErrorMessage(error))
-      await loadStorage()
-    } finally {
-      setBusy('')
-    }
+      if (started) void stopCaptureRecording().catch(() => {})
+      if (!isSaveCancelled(error)) setActionError(videoCaptureErrorMessage(error))
+    } finally { setBusy('') }
   }
 
   const stopRecording = async () => {
@@ -237,12 +218,8 @@ export default function VideoCapturePage() {
       const result = await stopCaptureRecording()
       setStatus(result)
       setPreviewLoading(false)
-      await loadStorage(result.storage?.path ?? savePath)
-    } catch (error) {
-      setActionError(videoCaptureErrorMessage(error))
-    } finally {
-      setBusy('')
-    }
+    } catch (error) { setActionError(videoCaptureErrorMessage(error)) }
+    finally { setBusy('') }
   }
 
   const changeSourceType = (next: CaptureSourceType) => {
@@ -274,7 +251,8 @@ export default function VideoCapturePage() {
     + (resolution.max_fps > 0 ? `（最高 ${resolution.max_fps} FPS）` : '')
   )
 
-  const stateText = status.state === 'recording' ? '正在录制'
+  const stateText = localSaving && status.state === 'completed' ? '正在保存到电脑'
+    : status.state === 'recording' ? '正在录制'
     : status.state === 'stopping' ? '正在完成 MP4'
       : status.state === 'previewing' ? '正在预览'
         : status.state === 'completed' ? '录制完成'
@@ -303,11 +281,12 @@ export default function VideoCapturePage() {
           <span>
             {status.stop_reason && stopReasonText[status.stop_reason]
               ? `${stopReasonText[status.stop_reason]}：` : '录像文件：'}
-            <code>{status.output_path}</code>
+            <code>{localDestination && localDestination !== '浏览器下载位置' ? localDestination : status.output_path}</code>
           </span>
         </div>
       )}
 
+      {saveMessage && <div className="capture-message">{saveMessage}</div>}
       <div className="video-capture-workspace">
         <section className="capture-preview-panel">
           <div className="capture-panel-title">
@@ -389,36 +368,6 @@ export default function VideoCapturePage() {
 
             <div className="capture-section">
               <div className="capture-section-label">文件保存</div>
-              <div className="capture-field">
-                <label>板端保存路径</label>
-                <div className="capture-path-row">
-                  <input value={savePath} disabled={controlsLocked}
-                    placeholder="/mnt/recordings" onChange={event => setSavePath(event.target.value)} />
-                  <button disabled={storageLoading} onClick={() => void loadStorage()} title="刷新容量">↻</button>
-                </div>
-                <small>目录必须已经存在；录像文件直接写入该目录，不创建子文件夹。</small>
-              </div>
-
-              {storageLoading && !storage && <div className="capture-storage-loading">正在读取存储空间……</div>}
-              {storageError && <div className="capture-storage-error">{storageError}</div>}
-              {storage && <div className={`capture-storage-card ${storage.writable ? '' : 'invalid'}`}>
-                <div className="capture-storage-head">
-                  <strong>{storage.mount_point}</strong>
-                  <span>{storage.filesystem || 'unknown'}</span>
-                </div>
-                <div className="capture-storage-meter">
-                  <i style={{ width: `${Math.min(100, storage.total_bytes > 0
-                    ? storage.used_bytes * 100 / storage.total_bytes : 0)}%` }} />
-                </div>
-                <div className="capture-storage-grid">
-                  <span>磁盘总容量<strong>{formatBytes(storage.total_bytes)}</strong></span>
-                  <span>当前剩余<strong>{formatBytes(storage.available_bytes)}</strong></span>
-                  <span>安全保留<strong>{formatBytes(storage.reserve_bytes)}</strong></span>
-                  <span>最大可录文件<strong>{formatBytes(storage.max_recording_file_bytes)}</strong></span>
-                </div>
-                {!storage.writable && <div className="capture-storage-warning">该目录不可写，不能开始录像。</div>}
-              </div>}
-
               <div className="capture-field capture-size-field">
                 <label>单个 MP4 最大大小（MB）</label>
                 <input type="number" min={64} max={1024 * 1024} step={64}
@@ -426,12 +375,7 @@ export default function VideoCapturePage() {
                   onChange={event => setMaxFileSizeMb(Number(event.target.value))} />
                 <small>达到上限后自动停止并完成当前 MP4，不生成第二个文件。</small>
               </div>
-              {storage && requestedBytes > storage.max_recording_file_bytes && (
-                <div className="capture-storage-error">
-                  设置的 {formatBytes(requestedBytes)} 超过该路径最大安全可录文件
-                  {formatBytes(storage.max_recording_file_bytes)}，请降低上限或更换路径。
-                </div>
-              )}
+
             </div>
           </div>
 
@@ -441,17 +385,16 @@ export default function VideoCapturePage() {
               onClick={stopRecording}>
               {status.state === 'stopping' || busy === 'stop' ? '正在完成 MP4……' : '停止并保存'}
             </button> : <button className="capture-record-button"
-              disabled={!sourceReady || !capacityReady || busy !== ''}
+              disabled={!sourceReady || !capacityReady || controlsLocked || busy !== ''}
               title={!sourceReady ? '请先填写视频来源'
-                : !storage ? '请先确认保存路径和剩余空间'
-                  : !capacityReady ? '单文件大小超过安全可用空间' : ''}
+                : !capacityReady ? '单个 MP4 上限至少为 64 MB' : ''}
               onClick={startRecording}>
               <span />{busy === 'record' ? '正在启动……' : '开始录制'}
             </button>}
             <div className="capture-action-hint">
               {status.recording
                 ? `${formatDuration(status.elapsed_seconds)} · ${formatBytes(status.file_size_bytes)} / ${formatBytes(status.max_file_size_bytes)}`
-                : capacityReady ? `本次最多写入 ${formatBytes(requestedBytes)}` : '确认来源和存储空间后才能录制'}
+                : capacityReady ? `本次最多保存 ${formatBytes(requestedBytes)} 到电脑` : '请填写视频来源和有效的文件大小上限'}
             </div>
           </div>
         </section>
