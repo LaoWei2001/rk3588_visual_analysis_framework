@@ -22,6 +22,7 @@ void inference_request_stop();
  */
 bool inference_take_results(int chnId, std::vector<AlgoResult> &out, std::shared_ptr<LazyVideoFrame> &out_frame,
                             int64_t &out_frame_id, uint64_t &out_frame_steady_ms, uint64_t &out_frame_unix_ms);
+/* 历史接口名保留：返回固定 640×640 业务画布尺寸；实际 NPU 输入由 ModelBase 决定。 */
 int inference_get_input_w();
 int inference_get_input_h();
 float inference_get_infer_fps(int chnId);

@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "config/config.h"
+#include "common/business_coordinates.h"
 #include "runtime/app_ctrl.h"
 #include "event/event_report.h"
 #include "logic_action.h"
@@ -156,6 +157,11 @@ class ChannelInput
 
 struct GlobalContext
 {
+    int business_width() const { return business_coordinates::WIDTH; }
+    int business_height() const { return business_coordinates::HEIGHT; }
+    cv::Size business_size() const { return business_coordinates::size(); }
+    cv::Point business_center() const { return business_coordinates::center(); }
+
     /** 本全局 logic 实例配置，实例存活期间稳定。 */
     const GlobalLogicConfig *config = nullptr;
 
@@ -170,8 +176,9 @@ struct GlobalContext
 
     /** 采样本 tick 时系统当前不可变运行配置的 generation。 */
     uint64_t runtime_generation = 0;
-    int model_width = 0;
-    int model_height = 0;
+    /* 历史字段名保留：表示统一业务画布尺寸，不表示 NPU 输入。 */
+    int model_width = business_coordinates::WIDTH;
+    int model_height = business_coordinates::HEIGHT;
 
     /** 本实例跨 tick 状态和已按 Schema 解析的全局 logic 参数。 */
     std::shared_ptr<void> *state = nullptr;

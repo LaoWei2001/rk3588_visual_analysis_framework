@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "common/performance_metrics.h"
+#include "common/business_coordinates.h"
 #include "config/config.h"
 #include "inference_engine.h"
 #include "pipeline/frame_transform.h" /* RgaImportedBuffer / LazyVideoFrame */
@@ -99,7 +100,9 @@ struct InferenceRuntime
     pthread_rwlock_t dispatch_mtx;
 
     std::vector<std::vector<std::shared_ptr<ModelBase>>> models_per_chn{MAX_CHANNEL_NUM};
-    int input_w{640}, input_h{640};
+    /* 兼容内部字段名：这是业务画布，不是某个模型的输入。编译期固定，模型不可改写。 */
+    static constexpr int input_w = business_coordinates::WIDTH;
+    static constexpr int input_h = business_coordinates::HEIGHT;
 
     std::atomic<float> obj_thresh[MAX_CHANNEL_NUM]{};
     std::atomic<float> nms_thresh[MAX_CHANNEL_NUM]{};

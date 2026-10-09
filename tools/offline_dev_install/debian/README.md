@@ -57,6 +57,12 @@ sudo bash install_source_update.sh
 管理的符号链接，会将它切换到新版。它不会自动替换正在运行的程序；安装结束会打印主程序、
 `first_net_config` 和 Web 控制台的构建或部署命令。
 
+部署新版 Web 控制台时，在安装输出的新版源码目录执行 `sudo ./install.sh offline`。
+新版源码没有 `frontend/dist` 时，该命令会使用复用的 `node_modules` 自动离线构建前端，
+再部署前后端，无需重新下载依赖或再次安装完整包。更新器会按 `package-lock.json` 查找
+依赖匹配的旧源码目录，将前端依赖复制到 `/var/lib/vision-analysis/frontend-dependencies/`
+的独立缓存供新版使用；成功建立缓存后，前端依赖不再依赖旧源码目录。
+
 快速模式会与最近一次 `full-bundle` 中的源码进行检查。下列内容变化时会拒绝生成快速包，并
 提示使用 `--full`：
 

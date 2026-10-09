@@ -42,7 +42,10 @@ pipeline 初始化过程中启动；图片/录像 worker 按需创建。
 
 推理完成后，dispatch worker 原子取得同一结果版本的 `LazyVideoFrame + results + frame id/time`，再
 调用 `process_channel_results()`。它先运行每通道 tracker，再构造 `ChannelContext`。调用
-`model_frame()`/`source_frame()` 时才产生 BGR；logic 完全不取像素就没有这一步开销。
+`business_frame()`/`model_frame()`/`source_frame()` 时才产生 BGR；logic 完全不取像素就没有这一步开销。
+`business_frame()` 和历史名称 `model_frame()` 共用固定 640×640 业务缓存；`source_frame()` 是原图。
+NPU 输入尺寸来自每个模型，始终从原始缓冲生成；结果在进入跟踪、业务和绘图前映射到固定业务画布。
+业务尺寸由 `common/business_coordinates.h` 定义，不随模型初始化或热切换变化。
 
 ## 同步与发布
 

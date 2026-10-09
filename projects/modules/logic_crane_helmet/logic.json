@@ -5,11 +5,14 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "alarm_mode": { "type": "string", "title": "安全帽告警判断方式", "default": "missing_helmet", "enum": ["bare_head", "missing_helmet"], "x-hot-reload": "reset_state", "description": "裸头模式：区域内人员匹配到未戴帽头部才触发；只露出腿、没有头部证据时不触发。旧模式：人员框不与安全帽框相交就触发。切换后重新累计确认时间，旧配置默认沿用旧模式。" },
       "roi_name": { "type": "string", "title": "装卸区域ROI名称", "default": "loading_zone", "x-hot-reload": "reset_state" },
       "person_labels": { "type": "string", "title": "人员标签", "default": "person", "x-hot-reload": "reset_state" },
       "helmet_labels": { "type": "string", "title": "安全帽标签", "default": "helmet", "x-hot-reload": "reset_state" },
+      "bare_head_labels": { "type": "string", "title": "未戴帽头部标签", "default": "bare_head", "x-hot-reload": "reset_state", "description": "与模型类别表中的实际名称一致，多个标签用逗号分隔。仅在裸头模式下作为违规证据。" },
       "person_min_score": { "type": "number", "title": "人员最低置信度", "default": 0.3, "minimum": 0.0, "maximum": 1.0, "x-step": 0.05, "x-hot-reload": "preserve_state" },
       "helmet_min_score": { "type": "number", "title": "安全帽最低置信度", "default": 0.3, "minimum": 0.0, "maximum": 1.0, "x-step": 0.05, "x-hot-reload": "preserve_state" },
+      "bare_head_min_score": { "type": "number", "title": "未戴帽头部最低置信度", "default": 0.3, "minimum": 0.0, "maximum": 1.0, "x-step": 0.05, "x-hot-reload": "preserve_state" },
       "confirm_sec": { "type": "number", "title": "违规确认时间", "default": 0.5, "minimum": 0.0, "maximum": 30.0, "x-unit": "秒", "x-step": 0.1, "x-hot-reload": "preserve_state" },
       "clear_sec": { "type": "number", "title": "告警解除时间", "default": 1.0, "minimum": 0.0, "maximum": 30.0, "x-unit": "秒", "x-step": 0.1, "x-hot-reload": "preserve_state" }
     }
@@ -18,7 +21,8 @@
     { "key": "helmet_roi_available", "type": "boolean", "label": "安全帽ROI是否有效" },
     { "key": "helmet_alarm", "type": "boolean", "label": "未戴安全帽告警" },
     { "key": "helmet_person_count", "type": "integer", "label": "装卸区域人员数" },
-    { "key": "unhelmeted_count", "type": "integer", "label": "未戴安全帽人数" }
+    { "key": "unhelmeted_count", "type": "integer", "label": "未戴安全帽人数" },
+    { "key": "helmet_unknown_count", "type": "integer", "label": "头部状态无法判断的人员数" }
   ],
   "report_fields": [],
   "actions": [

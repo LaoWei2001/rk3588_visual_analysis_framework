@@ -4,30 +4,24 @@
 
 bool convert_raw_to_bgr(const void *pSrcData, int srcW, int srcH, int srcStrH, int srcStrV, int srcFmt, cv::Mat &out)
 {
-    out.release();
     if (!pSrcData || srcW <= 0 || srcH <= 0 || srcStrH < srcW || srcStrV < srcH)
     {
+        out.release();
         log_printf_threadsafe("[ImageUtils] Invalid input arguments! pSrcData=%p, w=%d, h=%d, strW=%d, strH=%d\n",
                               pSrcData, srcW, srcH, srcStrH, srcStrV);
         return false;
     }
 
-    // NV12 = 0x1, NV21 = 0x2, BGR = 0x3, RGB = 0x4 (RK_FORMAT_*)
-    // Wait, the caller passes either RK_FORMAT_* or pixel_format from channel_raw.
-    // Let's rely on RK_FORMAT_ constants from RgaApi.h
-    // RK_FORMAT_YCbCr_420_SP = 0x0A, RK_FORMAT_YCrCb_420_SP = 0x0B
-    // RK_FORMAT_BGR_888 = 0x0D, RK_FORMAT_RGB_888 = 0x0E
+    // 使用当前 RGA SDK 的真实枚举；保留历史软件帧 0x0D/0x0E 编码。
+    const int baseFmt = srcFmt & 0x0FFF;
 
-    // Extract base format using mask, as RK_FORMAT_ constants might have context/version high bits
-    int baseFmt = srcFmt & 0x0FFF;
-
-    if (baseFmt == 0x0D /* RK_FORMAT_BGR_888 */)
+    if (srcFmt == RK_FORMAT_BGR_888 || baseFmt == 0x0D)
     {
         cv::Mat bgr_padded(srcStrV, srcStrH, CV_8UC3, const_cast<void *>(pSrcData), static_cast<size_t>(srcStrH) * 3);
-        out = bgr_padded(cv::Rect(0, 0, srcW, srcH)).clone();
+        bgr_padded(cv::Rect(0, 0, srcW, srcH)).copyTo(out); // 复用 worker 输出内存。
         return true;
     }
-    if (baseFmt == 0x0E /* RK_FORMAT_RGB_888 */)
+    if (srcFmt == RK_FORMAT_RGB_888 || baseFmt == 0x0E)
     {
         cv::Mat rgb_padded(srcStrV, srcStrH, CV_8UC3, const_cast<void *>(pSrcData), static_cast<size_t>(srcStrH) * 3);
         cv::cvtColor(rgb_padded(cv::Rect(0, 0, srcW, srcH)), out, cv::COLOR_RGB2BGR);
@@ -35,7 +29,6 @@ bool convert_raw_to_bgr(const void *pSrcData, int srcW, int srcH, int srcStrH, i
     }
 
     // NV12/NV21 (0x0A / 0x0B, or 0xA00 / 0xB00 if shifted)
-    // Wait, the log showed 0xA00 exactly. Let's handle both possible shifts.
     if (baseFmt == 0x0A || baseFmt == 0xA00 || srcFmt == 0xA00 || baseFmt == 0x0B || baseFmt == 0xB00 ||
         srcFmt == 0xB00)
     {
@@ -53,16 +46,19 @@ bool convert_raw_to_bgr(const void *pSrcData, int srcW, int srcH, int srcStrH, i
         }
         catch (const cv::Exception &e)
         {
+            out.release();
             log_printf_threadsafe("[ImageUtils] cvtColor exception: %s\n", e.what());
             return false;
         }
         catch (...)
         {
+            out.release();
             log_printf_threadsafe("[ImageUtils] cvtColor unknown exception caught!\n");
             return false;
         }
     }
 
+    out.release();
     log_printf_threadsafe("[ImageUtils] Unsupported srcFmt: 0x%02X (%d)\n", srcFmt, srcFmt);
     return false;
 }

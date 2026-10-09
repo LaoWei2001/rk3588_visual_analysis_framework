@@ -1,36 +1,7 @@
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
-
-const api = axios.create({ baseURL: '/api' })
-
-export const apiErrorMessage = (error: unknown): string => {
-  if (axios.isAxiosError(error)) {
-    const detail = error.response?.data?.detail ?? error.response?.data?.message
-    return typeof detail === 'string' ? detail : error.message
-  }
-  return error instanceof Error ? error.message : String(error)
-}
-
-// ── Request: attach Bearer token ──────────────────────────────────────────
-api.interceptors.request.use(config => {
-  const token = useAuthStore.getState().token
-  if (token) config.headers.Authorization = `Bearer ${token}`
-  return config
-})
-
-// ── Response: 401 → clear auth and redirect to /login ────────────────────
-api.interceptors.response.use(
-  res => res,
-  err => {
-    if (err.response?.status === 401) {
-      useAuthStore.getState().clearAuth()
-      if (!window.location.pathname.startsWith('/login')) {
-        window.location.href = '/login'
-      }
-    }
-    return Promise.reject(err)
-  }
-)
+import { api } from './http'
+export { apiErrorMessage } from './http'
 
 // ── Auth ──────────────────────────────────────────────────────────────────
 export const apiLogin = (username: string, password: string) =>
@@ -71,6 +42,43 @@ export interface AppAssets {
   labels: string[]
   videos: string[]
 }
+
+export interface ModelInfo {
+  ok: boolean
+  error?: string
+  path: string
+  file_version: string
+  width?: number
+  height?: number
+  format?: string
+}
+
+export interface ModelRuntime {
+  status: string
+  config: string | null
+  error?: string
+  business_width?: number
+  business_height?: number
+  channels: Array<{
+    channel_id: number
+    state: 'loading' | 'applied' | 'failed' | 'disabled' | 'stopped'
+    error: string
+    active_models: Array<{
+      id: string; model_type: string; model_path: string; file_version: string
+      width: number; height: number
+    }>
+  }>
+}
+
+export const fetchModelInfo = (name: string, path: string, modelType: string) =>
+  api.get<ModelInfo>(`/apps/${encodeURIComponent(name)}/models/info`, {
+    params: { path, model_type: modelType },
+  }).then(r => r.data)
+
+export const fetchModelRuntime = (name: string) =>
+  api.get<ModelRuntime>(`/apps/${encodeURIComponent(name)}/models/runtime`, {
+    params: { _status_ts: Date.now() },
+  }).then(r => r.data)
 
 export const fetchApps = () => api.get<AppInfo[]>('/apps', {
   params: { _status_ts: Date.now() },

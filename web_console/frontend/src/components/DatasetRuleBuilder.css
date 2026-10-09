@@ -1,17 +1,18 @@
-.ncp.ncp-dataset { width: clamp(330px, 25vw, 390px); }
-.dataset-collector-settings { display: flex; flex-direction: column; gap: 10px; }
-.dataset-step { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; font-weight: 600; color: #e0e9f6; }
-.dataset-step > span { display: inline-flex; align-items: center; justify-content: center; width: 21px; height: 21px; border-radius: 50%; background: #284969; color: #b8dcff; font-size: 11px; }
 .dataset-rule { padding: 12px; margin-bottom: 10px; border: 1px solid #36455d; background: #141e2e88; border-radius: 8px; }
 .dataset-rule-builder button { padding: 6px 9px; background: #22334b; color: #dce6f5; border: 1px solid #3b506d; border-radius: 5px; cursor: pointer; font-size: 12px; }
 .dataset-rule-builder button:disabled { opacity: .4; cursor: default; }
 .dataset-rule-heading { display: flex; justify-content: space-between; gap: 8px; align-items: center; color: #c3d8f2; margin-bottom: 10px; font-size: 12px; }
-.dataset-match { display: flex; border: 1px solid #3b506d; border-radius: 6px; overflow: hidden; }
+.dataset-match { display: flex; border: 1px solid #3b506d; border-radius: 6px; overflow: hidden; margin-bottom: 10px; }
 .dataset-match > button { flex: 1; border: 0; border-radius: 0; color: #9aacc2; background: #182437; }
 .dataset-match > button[aria-pressed="true"] { background: #2d5c8b; color: #fff; }
-.dataset-match-hint { margin: 6px 0 10px; color: #9ba9bd; font-size: 11px; line-height: 1.6; }
-.dataset-basic-row { display: grid; grid-template-columns: 94px minmax(0, 1fr) 28px; gap: 6px; margin-bottom: 8px; align-items: center; }
+.dataset-basic-row { display: grid; grid-template-columns: max-content minmax(0, 1fr) 28px; gap: 6px; margin-bottom: 8px; align-items: center; }
 .dataset-basic-row > input, .dataset-basic-row > select { width: 100%; min-width: 0; box-sizing: border-box; }
+@media (max-width: 600px) {
+  .dataset-basic-row { grid-template-columns: minmax(0, 1fr) 28px; }
+  .dataset-basic-row > select { grid-column: 1 / -1; }
+  .dataset-basic-row > input { grid-column: 1; grid-row: 2; }
+  .dataset-basic-row > .dataset-remove { grid-column: 2; grid-row: 2; }
+}
 .dataset-rule-builder .dataset-remove { padding: 3px; font-size: 18px; color: #c5cdd8; background: transparent; }
 .dataset-rule-builder .dataset-add { background: transparent; border-style: dashed; }
 .dataset-rule-preview { margin: 12px 0 8px; padding: 9px 10px; background: #17355077; border-radius: 6px; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; color: #c1e1ff; }
@@ -21,6 +22,11 @@
 .dataset-details-body { display: flex; flex-direction: column; gap: 10px; padding-top: 5px; }
 .dataset-rule-name { font-size: 12px; color: #adb8c8; }.dataset-rule-name > input { display: block; width: 100%; box-sizing: border-box; margin-top: 5px; }
 .dataset-condition { min-width: 0; }
+.dataset-rule-mode { display: block; color: #b9c7d9; font-size: 12px; margin-bottom: 12px; }
+.dataset-rule-mode > select { display: block; width: 100%; margin-top: 5px; box-sizing: border-box; }
+.dataset-condition .dataset-inline-check { display: flex; align-items: center; gap: 8px; line-height: 1.5; }
+.dataset-condition .dataset-inline-check > input { width: auto; margin: 0; }
+.dataset-direct-condition { border: 0; background: transparent; padding: 0; }
 .dataset-condition label { display: block; font-size: 12px; margin-top: 10px; color: #b9c7d9; }
 .dataset-condition label input, .dataset-condition label select { display: block; width: 100%; min-width: 0; box-sizing: border-box; margin-top: 5px; }
 .dataset-detection { padding: 0 10px 10px; border: 1px solid #36455d; background: #182437; border-radius: 6px; }
@@ -36,6 +42,3 @@
 .dataset-nesting-tools { margin-top: 10px; border-top: 1px solid #36455d; padding-top: 6px; }
 .dataset-nesting-tools > summary { cursor: pointer; font-size: 11px; color: #99adc9; padding: 4px 0; }
 .dataset-nesting-tools > button { display: block; margin-top: 6px; }
-.dataset-saving-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }.dataset-saving-grid .node-field { min-width: 0; }
-.dataset-extra-settings { border-top: 1px solid #334258; padding-top: 4px; }
-.dataset-collector-settings .ncp-hint { color: #9ba9bd; }

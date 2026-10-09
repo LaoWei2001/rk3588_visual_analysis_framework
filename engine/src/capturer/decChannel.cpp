@@ -739,15 +739,27 @@ int DecChannel::createVideoDecChannel(bool start_thread)
         return -1;
     }
 
+    // new-sample 同步执行所有复用通道的帧入口。appsink 的 drop 属性不会
+    // 跳过正在回调中阻塞的旧帧，单独的解码后队列将回调和解码线程隔开。
+    // 只丢已解码的旧画面，保留压缩流完整性及送入推理的同帧数据。
+    GstElement *decoded_queue = gst_element_factory_make("queue", "latest_decoded_frame");
+    if (!decoded_queue)
+    {
+        g_printerr("[DecChannel] Failed to create latest decoded frame queue\n");
+        release_failed_pipeline(mGstChn);
+        return -1;
+    }
+    g_object_set(decoded_queue, "max-size-buffers", 1, "max-size-bytes", 0, "max-size-time", (guint64)0,
+                 "leaky", 2, nullptr);
     g_object_set(mGstChn.vSink, "sync", FALSE, NULL);
     g_object_set(mGstChn.vSink, "emit-signals", TRUE, NULL);
     g_object_set(mGstChn.vSink, "max-buffers", 2, "drop", TRUE, NULL);
     g_signal_connect(mGstChn.vSink, "new-sample", G_CALLBACK(new_sample), &mGstChn);
 
     gst_bin_add_many(GST_BIN(mGstChn.pipeline), mGstChn.source, mGstChn.h26xRTPDepay, mGstChn.h26xParse, mGstChn.vDec,
-                     mGstChn.vSink, NULL);
+                     decoded_queue, mGstChn.vSink, NULL);
 
-    if (!gst_element_link_many(mGstChn.h26xRTPDepay, mGstChn.h26xParse, mGstChn.vDec, mGstChn.vSink, NULL))
+    if (!gst_element_link_many(mGstChn.h26xRTPDepay, mGstChn.h26xParse, mGstChn.vDec, decoded_queue, mGstChn.vSink, NULL))
     {
         g_printerr("[DecChannel] Failed to link RTSP video elements\n");
         release_failed_pipeline(mGstChn);

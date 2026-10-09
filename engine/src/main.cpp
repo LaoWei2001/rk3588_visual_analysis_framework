@@ -71,6 +71,7 @@
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
 #include "runtime/process_signals.h"
+#include "yolo/model_inspection.h"
 
 /* config_monitor_thread_func — 由 app_ctrl.cpp 导出 (C++ mangling) */
 extern "C" void *config_monitor_thread_func(void *arg);
@@ -206,6 +207,9 @@ int main(int argc, char **argv)
         printf("[Config] validation passed: %s (%zu channels)\n", argv[2], config.channels.size());
         return 0;
     }
+
+    if (argc == 3 && strcmp(argv[1], "--inspect-model") == 0)
+        return inspect_model_cli(argv[2]);
 
     const char *cfgPath = (argc > 1) ? argv[1] : "./assets/config.json";
     int exit_code = 0;

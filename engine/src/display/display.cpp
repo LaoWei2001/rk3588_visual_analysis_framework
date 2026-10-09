@@ -305,7 +305,7 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p, PerformanceOver
         }
     }
 
-    // ROI 区域(可多个)：顶点均为模型输入坐标系(同检测框)，统一按 inputW/inputH 缩放到当前窗口后逐个画。
+    // ROI 区域(可多个)：顶点均为业务坐标系(640×640)(同检测框)，统一按 inputW/inputH 缩放到当前窗口后逐个画。
     if (p.show_system_overlays && p.roi_zones && !p.roi_zones->empty() && p.inputW > 0 && p.inputH > 0)
     {
         const float sx = static_cast<float>(screen_roi.cols) / static_cast<float>(p.inputW);
@@ -323,7 +323,7 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p, PerformanceOver
         }
     }
 
-    // 检测框 / draw_cmds 使用模型输入坐标系（inputW×inputH）
+    // 检测框 / draw_cmds 使用业务坐标系(640×640)（inputW×inputH）
     const float scale_x = static_cast<float>(screen_roi.cols) / static_cast<float>(p.inputW);
     const float scale_y = static_cast<float>(screen_roi.rows) / static_cast<float>(p.inputH);
 
@@ -359,10 +359,8 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p, PerformanceOver
                 continue;
 
             const cv::Scalar color = (res.box_color[0] >= 0) ? res.box_color : cv::Scalar(0, 255, 0);
-            /* 检测框随后会转为 NV12 4:2:0 并进行 H264 编码。过细的高饱和度线条落在
-             * 不同色度采样网格上时，某些边会只保留亮度而呈灰色；至少3像素可让四条边
-             * 都覆盖完整色度样本，同时仍按窗口比例继续放大。 */
-            const int detection_thickness = std::max(3, thk(2));
+            // 检测框至少保留 2 像素，较大的输出画面继续按窗口比例放大。
+            const int detection_thickness = std::max(2, thk(2));
             cv::rectangle(screen_roi, box, color, detection_thickness);
             std::string txt = res.label;
             if (res.track_id >= 0)

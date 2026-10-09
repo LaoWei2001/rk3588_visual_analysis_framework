@@ -140,7 +140,7 @@ file path 可相对 App 工作目录或使用绝对路径。当前初始验证�
 ### ROI、logic 与事件
 
 `roi_zones[]` 每项为 `name` 和归一化 `[x,y]` polygon。加载时会去掉重复闭合末点，运行快照只保留
-至少 3 点并转换为模型输入坐标。旧 `roi_polygon` 已拒绝。
+至少 3 点并转换为固定 640×640 业务坐标（与模型实际输入尺寸独立）。旧 `roi_polygon` 已拒绝。
 
 `logic_parameters` 必须是对象，按当前注册 logic 的嵌入 Schema 补默认值和校验。事件 policy 与
 delivery 见[事件与上报开发](../../rk3588-console-ops/references/event-reporting.md)。旧的独立

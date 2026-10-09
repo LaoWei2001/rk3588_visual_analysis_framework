@@ -16,6 +16,7 @@
  */
 
 #pragma once
+#include "common/business_coordinates.h"
 
 #include "common/performance_metrics.h"
 #include "config/config.h"
@@ -286,8 +287,8 @@ struct APP_CTRL
     int capturer_count;                            /*!< 有效采集器数量 */
 
     /*!< 4. 推理子系统 */
-    int inputW; /*!< 模型输入宽度 */
-    int inputH; /*!< 模型输入高度 */
+    int inputW = business_coordinates::WIDTH; /*!< 业务坐标宽度；保留历史字段名 */
+    int inputH = business_coordinates::HEIGHT; /*!< 业务坐标高度；与 NPU 输入独立 */
 
     /*!< 5. 通道运行时状态 (索引=通道号) */
     ChannelState channels_state[MAX_CHANNEL_NUM]; /*!< 每通道独立状态 */

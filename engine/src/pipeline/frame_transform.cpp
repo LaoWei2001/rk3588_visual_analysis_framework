@@ -311,6 +311,19 @@ const cv::Mat *LazyVideoFrame::source_frame()
     return source_bgr_.empty() ? nullptr : &source_bgr_;
 }
 
+bool LazyVideoFrame::resized_frame(int width, int height, cv::Mat &output)
+{
+    if (width <= 0 || height <= 0)
+        return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    const bool converted = source_ &&
+                           rga_convert_resize_handle_to_bgr(channel_id_, *source_, width, height, output);
+    if (converted || materialize_borrowed(width, height, output))
+        return true;
+    output.release();
+    return false;
+}
+
 bool LazyVideoFrame::retain_borrowed_source(size_t byte_count)
 {
     std::lock_guard<std::mutex> lock(mutex_);

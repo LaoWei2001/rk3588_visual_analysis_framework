@@ -1,4 +1,5 @@
 #include "logic_control.h"
+#include "remote_dataset.h"
 
 #include <atomic>
 #include <cerrno>
@@ -23,6 +24,7 @@
 #include "runtime/app_ctrl.h"
 #include "logic/core/global_logic.h"
 #include "third_party/json/cJSON.h"
+#include "inference/model_status.h"
 
 namespace
 {
@@ -162,6 +164,13 @@ void handle_client(int client_fd)
     if (!action_name || !action_name[0])
     {
         send_all(client_fd, make_response(false, req_id, channel_id, "", "", "empty action"));
+        cJSON_Delete(root);
+        return;
+    }
+
+    if (strcmp(scope, "models") == 0 && strcmp(action_name, "status") == 0)
+    {
+        send_all(client_fd, inference_model_status_json() + "\n");
         cJSON_Delete(root);
         return;
     }
@@ -329,12 +338,16 @@ int logic_control_init(void)
 
     g_running.store(true);
     g_server_thread = std::thread(server_loop);
+    const char *dataset_path = std::getenv("RK_DATASET_SOCKET");
+    if (remote_dataset_init(dataset_path && dataset_path[0] ? dataset_path : g_socket_path + ".dataset") != 0)
+        std::fprintf(stderr, "[Dataset] cannot start optional collection socket\n");
     std::printf("[LogicControl] listening on %s\n", g_socket_path.c_str());
     return 0;
 }
 
 void logic_control_deinit(void)
 {
+    remote_dataset_deinit();
     g_running.store(false);
     if (g_server_thread.joinable())
         g_server_thread.join();

@@ -14,13 +14,13 @@ usage() {
     cat <<'EOF'
 用法：
   sudo ./install.sh online              联网准备全部依赖并部署平台
-  sudo ./install.sh offline             使用已准备好的离线环境和前端产物安装平台
+  sudo ./install.sh offline             使用已有依赖构建前端并离线部署平台
   ./install.sh status                   查看平台、GPIO和Web服务状态
   sudo ./install.sh uninstall [--yes]   卸载平台服务，保留应用和GPIO持久状态
 
 说明：
   online 适合仍可访问 APT、PyPI 和 npm 镜像的新设备。
-  offline 适合已经由完整离线包准备好依赖、源码和前端产物的设备。
+  offline 适合已经准备好依赖的设备；缺少前端产物时使用本地依赖构建。
   完整离线 bundle 首次部署仍直接运行 bundle 根目录的 install_offline.sh。
 EOF
 }
@@ -75,6 +75,53 @@ show_status() {
     fi
 }
 
+prepare_offline_frontend() {
+    local frontend_dir="$PROJECT_ROOT/web_console/frontend"
+    local source_version=""
+    [ ! -f "$PROJECT_ROOT/.vision-analysis-source-version" ] \
+        || source_version="$(cat "$PROJECT_ROOT/.vision-analysis-source-version")"
+
+    [ ! -f "$frontend_dir/dist/index.html" ] || return 0
+
+    # 兼容已经提供预构建页面、没有本地前端依赖的旧完整包。
+    if [[ "$source_version" != *+src ]] \
+            && [ ! -d "$frontend_dir/node_modules" ] \
+            && [ -f /usr/share/vision-analysis/frontend/dist/index.html ]; then
+        return 0
+    fi
+
+    local dependency_restorer="$PROJECT_ROOT/tools/offline_dev_install/debian/restore_frontend_dependencies.sh"
+    if [ -f "$dependency_restorer" ]; then
+        sh "$dependency_restorer" "$PROJECT_ROOT" || exit 1
+    fi
+
+    if [ -d "$frontend_dir/node_modules" ]; then
+        local command_name
+        for command_name in node npm; do
+            if ! command -v "$command_name" >/dev/null 2>&1; then
+                echo "[错误] 缺少前端构建命令：$command_name。" >&2
+                echo "       请检查设备已安装的 Node.js/npm 是否在 PATH 中。" >&2
+                exit 1
+            fi
+        done
+        echo ">>> 新版源码尚未构建前端，使用已有 node_modules 离线构建..."
+        if ! (cd "$frontend_dir" && npm --offline --no-audit --no-fund run build); then
+            echo "[错误] 前端离线构建失败，请检查上面的具体错误；平台尚未部署。" >&2
+            exit 1
+        fi
+        if [ ! -f "$frontend_dir/dist/index.html" ]; then
+            echo "[错误] 前端构建没有生成 dist/index.html；平台尚未部署。" >&2
+            exit 1
+        fi
+        return 0
+    fi
+
+    echo "[错误] 新版源码没有前端产物，也没有可用的本地前端依赖：$frontend_dir/node_modules。" >&2
+    echo "       源码更新会复用旧源码的 node_modules，请检查旧目录是否仍存在、依赖链接是否有效。" >&2
+    echo "       依赖已准备好后，在本目录重新执行 sudo ./install.sh offline 即可。" >&2
+    exit 1
+}
+
 check_offline_source_environment() {
     local command_name
     for command_name in cmake pkg-config cc; do
@@ -84,12 +131,7 @@ check_offline_source_environment() {
             exit 1
         fi
     done
-    if [ ! -f "$PROJECT_ROOT/web_console/frontend/dist/index.html" ] \
-            && [ ! -f /usr/share/vision-analysis/frontend/dist/index.html ]; then
-        echo "[错误] 没有找到离线Web前端产物。" >&2
-        echo "       请使用完整离线 bundle，或在有网环境改用 online。" >&2
-        exit 1
-    fi
+    prepare_offline_frontend
 }
 
 install_platform() {

@@ -62,6 +62,8 @@ Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` �
 
 完整索引见 [`skills/README.md`](skills/README.md)。
 
+数据集采集相关文档：[使用、构建与部署](computer-dataset-collection.md)、[条件语义](dataset-capture-rules.md)、[代码职责与依赖边界](dataset-collection-architecture.md)。
+
 ## 当前实现快照
 
 ### C++ 模块
@@ -69,7 +71,7 @@ Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` �
 `engine/src/` 当前包含：
 
 ```text
-capturer  common  config  control  display  event  gpio  inference
+capturer  common  config  control  dataset  display  event  gpio  inference
 logic     pipeline  recorder  rtsp  runtime  third_party  tracking  yolo
 ```
 

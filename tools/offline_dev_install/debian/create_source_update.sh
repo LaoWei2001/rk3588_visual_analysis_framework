@@ -239,7 +239,7 @@ cat > "$PACKAGE_SHARE/README.txt" <<EOF
 实际目录: $SOURCE_INSTALL_PATH
 固定入口: /userdata/rk3588_visual_analysis_framework
 
-本包不重复携带 node_modules；安装时会复用上一版完整源码中的前端依赖。
+本包不重复携带 node_modules；安装时查找匹配的旧源码依赖并保存到独立缓存。
 
 主程序编译与安装：
   cd $SOURCE_INSTALL_PATH
@@ -267,13 +267,6 @@ version_dir='$SOURCE_INSTALL_PATH'
 stable_path='/userdata/rk3588_visual_analysis_framework'
 archive='/usr/share/vision-analysis/source/source.tar.gz'
 
-previous_path=''
-if [ -L "\$stable_path" ]; then
-    previous_path="\$(readlink -f "\$stable_path" 2>/dev/null || true)"
-elif [ -d "\$stable_path" ]; then
-    previous_path="\$stable_path"
-fi
-
 mkdir -p /userdata
 if [ ! -d "\$version_dir" ]; then
     stage="\${version_dir}.new.\$\$"
@@ -284,15 +277,8 @@ if [ ! -d "\$version_dir" ]; then
     mv "\$stage" "\$version_dir"
 fi
 
-frontend_dir="\$version_dir/web_console/frontend"
-if [ ! -e "\$frontend_dir/node_modules" ] \
-        && [ -n "\$previous_path" ] \
-        && [ -d "\$previous_path/web_console/frontend/node_modules" ]; then
-    previous_modules="\$(readlink -f \
-        "\$previous_path/web_console/frontend/node_modules" 2>/dev/null || true)"
-    [ -z "\$previous_modules" ] \
-        || ln -s "\$previous_modules" "\$frontend_dir/node_modules"
-fi
+# 在切换入口前查找所有匹配的旧版本，并保存独立依赖缓存。
+sh "\$version_dir/tools/offline_dev_install/debian/restore_frontend_dependencies.sh" "\$version_dir"
 
 if [ -L "\$stable_path" ] || [ ! -e "\$stable_path" ]; then
     ln -sfn "\$version_dir" "\$stable_path"
@@ -301,10 +287,6 @@ else
     echo "       新版源码位于: \$version_dir" >&2
 fi
 
-if [ ! -e "\$frontend_dir/node_modules" ]; then
-    echo "[警告] 没有找到可复用的前端 node_modules；C/C++ 源码仍可正常编译。" >&2
-    echo "       如需构建前端，请重新安装完整 full-bundle。" >&2
-fi
 EOF
 
 cat > "$PACKAGE_ROOT/DEBIAN/prerm" <<EOF

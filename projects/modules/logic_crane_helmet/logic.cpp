@@ -25,6 +25,9 @@ struct HelmetLogicState
     bool controls_initialized = false;
     float person_min_score = 0.3f;
     float helmet_min_score = 0.3f;
+    float bare_head_min_score = 0.3f;
+    crane_safety::HelmetConfig configured;
+    crane_safety::HelmetConfig::AlarmMode alarm_mode = crane_safety::HelmetConfig::MissingHelmet;
     uint64_t confirm_ms = 500;
     uint64_t clear_ms = 1000;
     HelmetSetting selected_setting = PERSON_MIN_SCORE;
@@ -39,23 +42,31 @@ void draw_outlined_status(ChannelContext *ctx, const char *text, const cv::Point
 
 void initialize_controls(ChannelContext *ctx, HelmetLogicState &state)
 {
-    if (state.controls_initialized)
-        return;
-    state.person_min_score = ctx->param_float("person_min_score");
-    state.helmet_min_score = ctx->param_float("helmet_min_score");
-    state.confirm_ms = crane_safety::seconds_to_ms(ctx->param_float("confirm_sec"));
-    state.clear_ms = crane_safety::seconds_to_ms(ctx->param_float("clear_sec"));
+    // 网页修改的参数立即生效；按钮覆盖值在该项配置未改变时继续保留。
+    const float person = ctx->param_float("person_min_score");
+    const float helmet = ctx->param_float("helmet_min_score");
+    const float head = ctx->param_float("bare_head_min_score");
+    const uint64_t confirm = crane_safety::seconds_to_ms(ctx->param_float("confirm_sec"));
+    const uint64_t clear = crane_safety::seconds_to_ms(ctx->param_float("clear_sec"));
+    if (!state.controls_initialized || person != state.configured.person_min_score) state.person_min_score = person;
+    if (!state.controls_initialized || helmet != state.configured.helmet_min_score) state.helmet_min_score = helmet;
+    if (!state.controls_initialized || head != state.configured.bare_head_min_score) state.bare_head_min_score = head;
+    if (!state.controls_initialized || confirm != state.configured.confirm_ms) state.confirm_ms = confirm;
+    if (!state.controls_initialized || clear != state.configured.clear_ms) state.clear_ms = clear;
+    state.configured.person_min_score = person; state.configured.helmet_min_score = helmet;
+    state.configured.bare_head_min_score = head; state.configured.confirm_ms = confirm; state.configured.clear_ms = clear;
+    state.alarm_mode = ctx->param_string("alarm_mode") == "bare_head" ? crane_safety::HelmetConfig::BareHead : crane_safety::HelmetConfig::MissingHelmet;
     state.controls_initialized = true;
 }
 
-const char *helmet_setting_name(HelmetSetting setting)
+const char *helmet_setting_name(HelmetSetting setting, const HelmetLogicState &state)
 {
     switch (setting)
     {
     case PERSON_MIN_SCORE:
         return "人员最低置信度";
     case HELMET_MIN_SCORE:
-        return "安全帽最低置信度";
+        return state.alarm_mode == crane_safety::HelmetConfig::BareHead ? "未戴帽头部最低置信度" : "安全帽最低置信度";
     case HELMET_CONFIRM_TIME:
         return "违规确认时间";
     case HELMET_CLEAR_TIME:
@@ -69,17 +80,17 @@ const char *helmet_setting_name(HelmetSetting setting)
 void format_selected_setting(const HelmetLogicState &state, char *text, size_t size)
 {
     if (state.selected_setting == HELMET_CONFIRM_TIME)
-        std::snprintf(text, size, "参数: %s = %.1fs", helmet_setting_name(state.selected_setting),
+        std::snprintf(text, size, "参数: %s = %.1fs", helmet_setting_name(state.selected_setting, state),
                       state.confirm_ms / 1000.0);
     else if (state.selected_setting == HELMET_CLEAR_TIME)
-        std::snprintf(text, size, "参数: %s = %.1fs", helmet_setting_name(state.selected_setting),
+        std::snprintf(text, size, "参数: %s = %.1fs", helmet_setting_name(state.selected_setting, state),
                       state.clear_ms / 1000.0);
     else
     {
         float value = state.person_min_score;
         if (state.selected_setting == HELMET_MIN_SCORE)
-            value = state.helmet_min_score;
-        std::snprintf(text, size, "参数: %s = %.2f", helmet_setting_name(state.selected_setting), value);
+            value = state.alarm_mode == crane_safety::HelmetConfig::BareHead ? state.bare_head_min_score : state.helmet_min_score;
+        std::snprintf(text, size, "参数: %s = %.2f", helmet_setting_name(state.selected_setting, state), value);
     }
 }
 
@@ -92,8 +103,11 @@ void adjust_selected_setting(HelmetLogicState &state, bool increase)
         state.person_min_score = std::max(0.0f, std::min(1.0f, state.person_min_score + direction * 0.05f));
         break;
     case HELMET_MIN_SCORE:
-        state.helmet_min_score = std::max(0.0f, std::min(1.0f, state.helmet_min_score + direction * 0.05f));
+    {
+        float &score = state.alarm_mode == crane_safety::HelmetConfig::BareHead ? state.bare_head_min_score : state.helmet_min_score;
+        score = std::max(0.0f, std::min(1.0f, score + direction * 0.05f));
         break;
+    }
     case HELMET_CONFIRM_TIME:
         if (increase)
             state.confirm_ms = std::min<uint64_t>(30000U, state.confirm_ms + 300U);
@@ -116,10 +130,13 @@ crane_safety::HelmetConfig read_config(ChannelContext *ctx, HelmetLogicState &st
     initialize_controls(ctx, state);
     crane_safety::HelmetConfig config;
     config.enabled = true;
+    config.alarm_mode = state.alarm_mode;
     config.person_labels = crane_safety::split_labels(ctx->param_string("person_labels"));
     config.helmet_labels = crane_safety::split_labels(ctx->param_string("helmet_labels"));
+    config.bare_head_labels = crane_safety::split_labels(ctx->param_string("bare_head_labels"));
     config.person_min_score = state.person_min_score;
     config.helmet_min_score = state.helmet_min_score;
+    config.bare_head_min_score = state.bare_head_min_score;
     config.confirm_ms = state.confirm_ms;
     config.clear_ms = state.clear_ms;
     return config;
@@ -144,7 +161,7 @@ static LogicActionResult logic_crane_helmet_action(ChannelContext *ctx, const Lo
     {
         state.selected_setting = static_cast<HelmetSetting>(
             (static_cast<int>(state.selected_setting) + 1) % static_cast<int>(HELMET_SETTING_COUNT));
-        return {true, std::string("当前参数：") + helmet_setting_name(state.selected_setting)};
+        return {true, std::string("当前参数：") + helmet_setting_name(state.selected_setting, state)};
     }
     if (action->name == "helmet_setting_decrease" || action->name == "helmet_setting_increase")
     {
@@ -174,6 +191,7 @@ static void logic_crane_helmet(ChannelContext *ctx)
         ctx->publish_bool("helmet_alarm", false);
         ctx->publish_int("helmet_person_count", 0);
         ctx->publish_int("unhelmeted_count", 0);
+        ctx->publish_int("helmet_unknown_count", 0);
         draw_outlined_status(ctx, "安全帽检测: 已关闭", cv::Point(18, 32),
                              cv::Scalar(180, 180, 180));
         return;
@@ -186,19 +204,23 @@ static void logic_crane_helmet(ChannelContext *ctx)
     ctx->publish_bool("helmet_alarm", result.alarm);
     ctx->publish_int("helmet_person_count", result.person_count);
     ctx->publish_int("unhelmeted_count", result.unhelmeted_count);
+    ctx->publish_int("helmet_unknown_count", result.unknown_count);
 
     char line1[192];
     char line2[192];
     char line3[192];
     char line4[192];
     char line5[192];
+    char mode_line[192];
     if (!result.roi_available)
         std::snprintf(line1, sizeof(line1), "安全帽检测: 未找到ROI %s", roi_name.c_str());
     else
-        std::snprintf(line1, sizeof(line1), "人员: %d  未戴: %d  告警: %s",
-                      result.person_count, result.unhelmeted_count, result.alarm ? "是" : "否");
+        std::snprintf(line1, sizeof(line1), "人员: %d  未戴: %d  待判断: %d  告警: %s",
+                      result.person_count, result.unhelmeted_count, result.unknown_count, result.alarm ? "是" : "否");
+    std::snprintf(mode_line, sizeof(mode_line), "判断方式: %s", config.alarm_mode == crane_safety::HelmetConfig::BareHead ? "检测到未戴帽头部" : "未匹配安全帽(旧模式)");
     std::snprintf(line2, sizeof(line2), "人员置信度: %.2f", state.person_min_score);
-    std::snprintf(line3, sizeof(line3), "安全帽置信度: %.2f", state.helmet_min_score);
+    std::snprintf(line3, sizeof(line3), "%s置信度: %.2f", config.alarm_mode == crane_safety::HelmetConfig::BareHead ? "未戴帽头部" : "安全帽",
+                  config.alarm_mode == crane_safety::HelmetConfig::BareHead ? state.bare_head_min_score : state.helmet_min_score);
     std::snprintf(line4, sizeof(line4), "违规确认: %.1f/%.1fs",
                   result.confirm_elapsed_ms / 1000.0, state.confirm_ms / 1000.0);
     std::snprintf(line5, sizeof(line5), "告警解除: %.1f/%.1fs",
@@ -207,13 +229,14 @@ static void logic_crane_helmet(ChannelContext *ctx)
     const cv::Scalar selected_color(0, 255, 255);
     draw_outlined_status(ctx, line1, cv::Point(18, 32),
                          result.alarm ? cv::Scalar(0, 0, 255) : cv::Scalar(240, 240, 240));
-    draw_outlined_status(ctx, line2, cv::Point(18, 62),
+    draw_outlined_status(ctx, mode_line, cv::Point(18, 62), normal_color);
+    draw_outlined_status(ctx, line2, cv::Point(18, 92),
                          state.selected_setting == PERSON_MIN_SCORE ? selected_color : normal_color);
-    draw_outlined_status(ctx, line3, cv::Point(18, 92),
+    draw_outlined_status(ctx, line3, cv::Point(18, 122),
                          state.selected_setting == HELMET_MIN_SCORE ? selected_color : normal_color);
-    draw_outlined_status(ctx, line4, cv::Point(18, 122),
+    draw_outlined_status(ctx, line4, cv::Point(18, 152),
                          state.selected_setting == HELMET_CONFIRM_TIME ? selected_color : normal_color);
-    draw_outlined_status(ctx, line5, cv::Point(18, 152),
+    draw_outlined_status(ctx, line5, cv::Point(18, 182),
                          state.selected_setting == HELMET_CLEAR_TIME ? selected_color : normal_color);
 }
 

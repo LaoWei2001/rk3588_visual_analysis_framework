@@ -1010,3 +1010,12 @@
   color: var(--text2);
   line-height: 1.45;
 }
+.model-information {
+  padding: 10px;
+  border: 1px solid var(--border, #334155);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.model-information-note { opacity: .75; }

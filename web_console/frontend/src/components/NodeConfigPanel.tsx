@@ -16,9 +16,9 @@ import { getSrcType, SRC_TYPES } from '../utils/streamSource'
 import { MODEL_ID_MAX_LENGTH, validateModelId } from '../utils/modelId'
 import AssetPicker         from './AssetPicker'
 import NumberField         from './NumberField'
-import DatasetRuleBuilder from './DatasetRuleBuilder'
 import ReportForm          from './ReportForm'
 import InferenceROIEditor  from './InferenceROIEditor'
+import ModelInformation from './ModelInformation'
 import './NodeConfigPanel.css'
 
 // Stable empty-array constant — MUST NOT be an inline `[]` literal inside a Zustand selector,
@@ -39,6 +39,7 @@ interface Props {
   reportConfigJson?: string | null
   reportConfigPath?: string | null
   modelIdError?: string | null
+  modelChannelId?: number
   globalTrackerType?: string
   globalTrackerEnable?: number
 }
@@ -64,7 +65,7 @@ const HEADER_CLASS: Record<string, string> = {
 
 export default function NodeConfigPanel({
   node, onUpdate, channelIds = [], allChannelIds = [], globalInputs = [],
-  reportConfigJson = null, reportConfigPath = null, modelIdError = null,
+  reportConfigJson = null, reportConfigPath = null, modelIdError = null, modelChannelId,
   globalTrackerType = 'sort', globalTrackerEnable = 1,
 }: Props) {
   if (!node) {
@@ -80,7 +81,7 @@ export default function NodeConfigPanel({
   const headerCls = HEADER_CLASS[node.type ?? ''] ?? ''
 
   return (
-    <div className={`ncp ${node.type === 'report' ? 'ncp-report' : node.type === 'logic' && node.data.logic === 'logic_dataset_collector' ? 'ncp-dataset' : ''}`}>
+    <div className={`ncp ${node.type === 'report' ? 'ncp-report' : ''}`}>
       <div className={`ncp-header ${headerCls}`}>
         <span>{icon}</span>
         <span>{title}</span>
@@ -91,7 +92,7 @@ export default function NodeConfigPanel({
         {node.type === 'stream' && <StreamForm node={node} onUpdate={onUpdate}
           globalTrackerType={globalTrackerType} globalTrackerEnable={globalTrackerEnable} />}
         {node.type === 'model'  && <ModelForm   node={node} onUpdate={onUpdate}
-          duplicateIdError={modelIdError} />}
+          duplicateIdError={modelIdError} channelId={modelChannelId} />}
         {node.type === 'logic'  && <LogicForm   node={node} onUpdate={onUpdate} />}
         {node.type === 'globalLogic' &&
           <GlobalLogicForm node={node} onUpdate={onUpdate} inputs={globalInputs} />}
@@ -489,11 +490,13 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
 // ─────────────────────────────────────────────────────────────────────────────
 // Model form
 // ─────────────────────────────────────────────────────────────────────────────
-function ModelForm({ node, onUpdate, duplicateIdError }: {
+function ModelForm({ node, onUpdate, duplicateIdError, channelId }: {
   node: Node
   onUpdate: Props['onUpdate']
   duplicateIdError?: string | null
+  channelId?: number
 }) {
+  const appName = useEditorStore(s => s.appName)
   const assets     = useEditorStore(s => s.assets)
   const assetsReady = useEditorStore(s => s.assetsStatus === 'ready'
     && s.assetsForApp === s.appName)
@@ -561,6 +564,10 @@ function ModelForm({ node, onUpdate, duplicateIdError }: {
           onDelete={deleteModel}
         />
       </F>
+
+      <ModelInformation key={node.id} app={appName} path={String(d.model_path ?? '')}
+        modelType={String(d.model_type ?? 'yolov8_det')} modelId={modelId}
+        channelId={channelId} assetsRevision={assets} />
 
       <F label="标签文件 (.txt)">
         <AssetPicker
@@ -694,7 +701,6 @@ function LogicParameterFields({ node, params, onUpdate }: {
   params: LogicParam[]
   onUpdate: Props['onUpdate']
 }) {
-  const appName = useEditorStore(state => state.appName)
   const data = node.data as Record<string, unknown>
   const moduleParameters = data.logic_parameters && typeof data.logic_parameters === 'object' &&
     !Array.isArray(data.logic_parameters)
@@ -707,36 +713,12 @@ function LogicParameterFields({ node, params, onUpdate }: {
     })
   }
 
-  if (data.logic === 'logic_dataset_collector') {
-    const primaryKeys = new Set(['enabled', 'rules', 'save_dir', 'interval_sec', 'max_samples'])
-    const render = (key: string, label?: string, help?: string) => {
-      const param = params.find(item => item.key === key)
-      if (!param) return null
-      return <ParamField key={key} compact param={{ ...param, label: label ?? param.label, help: help ?? param.help }} value={valueOf(param)} onChange={value => setParam(param, value)} />
-    }
-    const ruleParam = params.find(param => param.key === 'rules')
-    return <div className="dataset-collector-settings">
-      {render('enabled', '启用抓图')}
-      <div className="dataset-step"><span>1</span>什么时候抓图</div>
-      {ruleParam && <DatasetRuleBuilder value={valueOf(ruleParam) ?? ruleParam.default} onChange={value => setParam(ruleParam, value)} />}
-      <div className="dataset-step"><span>2</span>图片怎么保存</div>
-      {render('save_dir', 'RK3588 上的保存文件夹', `留空使用 /userdata/rk3588_dataset_samples/${appName || '程序名'}，各通道分开保存。`)}
-      <div className="dataset-saving-grid">
-        {render('interval_sec', '抓图间隔', '避免连续保存相似图片。')}
-        {render('max_samples', '最多保存几张', '本次运行达到上限就停止抓图。')}
-      </div>
-      <details className="dataset-details dataset-extra-settings">
-        <summary>高级设置</summary>
-        <div className="dataset-details-body">
-          <p className="dataset-match-hint">通常保持默认即可。修改采集参数会重新计数，已保存的图片保留。</p>
-          {params.filter(param => !primaryKeys.has(param.key)).map(param => <ParamField key={param.key} compact param={param} value={valueOf(param)} onChange={value => setParam(param, value)} />)}
-        </div>
-      </details>
-    </div>
-  }
-
+  const helmetMode = String(moduleParameters.alarm_mode ?? 'missing_helmet')
+  const visibleParams = data.logic === 'logic_crane_helmet'
+    ? params.filter(param => helmetMode === 'bare_head' || !['bare_head_labels', 'bare_head_min_score'].includes(param.key))
+    : params
   return <>
-    {params.map(param => (
+    {visibleParams.map(param => (
       <ParamField
         key={param.key}
         param={param}
@@ -748,14 +730,13 @@ function LogicParameterFields({ node, params, onUpdate }: {
 }
 
 // 按参数类型动态渲染一个表单控件（int/float/string/bool/enum/text）
-function ParamField({ param, value, onChange, compact = false }: {
-  compact?: boolean
+function ParamField({ param, value, onChange }: {
   param: LogicParam
   value: unknown
   onChange: (v: unknown) => void
 }) {
   const label = `${param.label ?? param.key}${param.unit ? `（${param.unit}）` : ''}`
-  const reloadHint = compact ? '' : param.hot_reload === 'restart_required'
+  const reloadHint = param.hot_reload === 'restart_required'
     ? '修改后需要重启程序。'
     : param.hot_reload === 'reset_state'
       ? '修改后会清空当前通道的逻辑状态。' : ''
@@ -777,7 +758,9 @@ function ParamField({ param, value, onChange, compact = false }: {
       <F label={label}>
         <select value={value !== undefined ? String(value) : String(param.default ?? '')}
           onChange={e => onChange(e.target.value)}>
-          {(param.options ?? []).map(o => <option key={o} value={o}>{compact ? ({ center: '目标中心', foot: '脚点', periodic: '满足条件时按间隔抓图', on_enter: '每次刚满足时抓一次' } as Record<string, string>)[o] ?? o : o}</option>)}
+          {(param.options ?? []).map(o => <option key={o} value={o}>{param.key === 'alarm_mode'
+            ? ({ bare_head: '检测到未戴帽头部才告警', missing_helmet: '人员未匹配安全帽就告警（旧模式）' } as Record<string, string>)[o] ?? o
+            : o}</option>)}
         </select>
         {hint}
       </F>

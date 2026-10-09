@@ -175,6 +175,7 @@ aux_source_directory(${PROJECT_SOURCE_DIR}/src/pipeline                 dir_srcs
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/inference                dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/tracking                 dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/control                  dir_srcs)
+aux_source_directory(${PROJECT_SOURCE_DIR}/src/dataset                  dir_srcs)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/gpio                     dir_srcs)
 # 框架仅保留 src/logic/core；可自由组合的业务逻辑统一位于 projects/。
 # 递归收集让新增/删除模块无需修改 CMakeLists.txt；重新运行 cmake 即可刷新列表。
@@ -216,6 +217,10 @@ file(GLOB_RECURSE logic_validation_files
     "${VISION_PROJECTS_ROOT}/global_modules/*.hpp"
 )
 set(logic_catalog_cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/logic_catalog_embedded.cpp")
+# 文件列表变化也要刷新清单，避免删除模块后仍沿用缓存的参数 Schema。
+set(logic_catalog_inputs "${CMAKE_CURRENT_BINARY_DIR}/generated/logic_catalog_inputs.txt")
+file(GENERATE OUTPUT "${logic_catalog_inputs}"
+    CONTENT "${logic_manifest_files}\n${logic_validation_files}\n")
 add_custom_command(
     OUTPUT "${logic_catalog_cpp}"
     COMMAND "${PYTHON3_EXECUTABLE}"
@@ -223,6 +228,7 @@ add_custom_command(
             --logic-root "${VISION_PROJECTS_ROOT}"
             --cpp-output "${logic_catalog_cpp}"
     DEPENDS
+            "${logic_catalog_inputs}"
             "${LOGIC_CATALOG_GENERATOR}"
             "${VISION_PROJECTS_ROOT}/catalog.json"
             ${logic_manifest_files}
@@ -249,6 +255,18 @@ set_target_properties(vision_analysis PROPERTIES
     BUILD_WITH_INSTALL_RPATH TRUE
     INSTALL_RPATH "$ORIGIN/libs"
 )
+
+# 推流回归测试使用真实 GStreamer 队列验证慢消费者，不依赖摄像头或 NPU。
+option(BUILD_RTSP_TESTS "Build live preview backpressure regression tests" OFF)
+if(BUILD_RTSP_TESTS)
+    enable_testing()
+    add_executable(rtsp_live_source_tests tests/rtsp/test_live_source.cpp)
+    target_include_directories(rtsp_live_source_tests PRIVATE ${custom_inc} ${api_inc})
+    target_compile_options(rtsp_live_source_tests PRIVATE -UNDEBUG)
+    target_link_libraries(rtsp_live_source_tests PRIVATE ${GSTOPT_LIBS} Threads::Threads)
+    add_test(NAME rtsp_live_source_regression COMMAND rtsp_live_source_tests)
+    set_tests_properties(rtsp_live_source_regression PROPERTIES TIMEOUT 10)
+endif()
 
 # 跟踪器回归测试不依赖 RKNN/GStreamer 运行时，默认不纳入产品构建。
 option(BUILD_TRACKER_TESTS "Build standalone tracker regression tests" OFF)
@@ -292,6 +310,34 @@ if(BUILD_INFERENCE_ROI_TESTS)
     target_compile_options(inference_roi_filter_tests PRIVATE -UNDEBUG)
     target_link_libraries(inference_roi_filter_tests PRIVATE ${OpenCV_LIBS})
     add_test(NAME inference_roi_filter_regression COMMAND inference_roi_filter_tests)
+
+    add_executable(business_coordinates_tests
+        tests/inference/test_business_coordinates.cpp
+        src/inference/inference_result_mapping.cpp
+        src/inference/inference_roi_geometry.cpp
+        src/inference/inference_roi_filter.cpp
+        src/pipeline/frame_transform.cpp
+        src/pipeline/image_convert.cpp
+        src/logic/core/channel_logic.cpp
+        src/display/display.cpp
+        src/display/text_overlay.cpp
+    )
+    target_include_directories(business_coordinates_tests PRIVATE ${custom_inc} ${api_inc} ${RKNN_API_INCLUDE_DIR})
+    target_compile_options(business_coordinates_tests PRIVATE -UNDEBUG -ffunction-sections -fdata-sections)
+    set_target_properties(business_coordinates_tests PROPERTIES LINK_FLAGS "-Wl,--gc-sections")
+    target_link_libraries(business_coordinates_tests PRIVATE ${OpenCV_LIBS} ${GSTOPT_LIBS} rga Threads::Threads)
+    add_test(NAME business_coordinates_regression COMMAND business_coordinates_tests)
+
+    add_executable(model_status_tests
+        tests/inference/test_model_status.cpp
+        src/inference/model_status.cpp
+        src/yolo/composite_model.cpp
+        ${cjson_src}
+    )
+    target_include_directories(model_status_tests PRIVATE ${custom_inc})
+    target_compile_options(model_status_tests PRIVATE -UNDEBUG)
+    target_link_libraries(model_status_tests PRIVATE ${OpenCV_LIBS} Threads::Threads)
+    add_test(NAME model_status_regression COMMAND model_status_tests)
 endif()
 
 option(BUILD_FRAME_SNAPSHOT_TESTS "Build frame evidence and buffer ownership regression tests" OFF)
@@ -317,20 +363,40 @@ if(BUILD_FRAME_SNAPSHOT_TESTS)
     add_test(NAME frame_snapshot_regression COMMAND frame_snapshot_tests)
 endif()
 
-option(BUILD_DATASET_TESTS "Build dataset rule and bounded writer regression tests" OFF)
+option(BUILD_DATASET_TESTS "Build dataset rule and remote collection regression tests" OFF)
 if(BUILD_DATASET_TESTS)
     enable_testing()
-    add_executable(dataset_tests
-        tests/dataset/test_dataset.cpp
-        ${VISION_PROJECTS_ROOT}/modules/logic_dataset_collector/rules.cpp
-        ${VISION_PROJECTS_ROOT}/modules/logic_dataset_collector/writer.cpp
+    add_executable(dataset_rules_tests
+        tests/dataset/test_rules.cpp
+        src/dataset/rules.cpp
         ${cjson_src}
     )
-    target_include_directories(dataset_tests PRIVATE ${custom_inc} ${api_inc}
-        ${VISION_PROJECTS_ROOT}/modules/logic_dataset_collector)
-    target_compile_options(dataset_tests PRIVATE -UNDEBUG)
-    target_link_libraries(dataset_tests PRIVATE ${OpenCV_LIBS} Threads::Threads)
-    add_test(NAME dataset_regression COMMAND dataset_tests)
+    target_include_directories(dataset_rules_tests PRIVATE ${custom_inc} ${api_inc})
+    target_compile_options(dataset_rules_tests PRIVATE -UNDEBUG)
+    target_link_libraries(dataset_rules_tests PRIVATE ${OpenCV_LIBS} Threads::Threads)
+    add_test(NAME dataset_rules_regression COMMAND dataset_rules_tests)
+    add_executable(remote_dataset_tests tests/dataset/test_remote_dataset.cpp
+        src/control/remote_dataset.cpp
+        src/dataset/rules.cpp ${cjson_src})
+    target_include_directories(remote_dataset_tests PRIVATE ${custom_inc} ${api_inc})
+    target_compile_options(remote_dataset_tests PRIVATE -UNDEBUG)
+    target_link_libraries(remote_dataset_tests PRIVATE ${OpenCV_LIBS} Threads::Threads)
+    add_test(NAME remote_dataset_regression COMMAND remote_dataset_tests)
+    set_tests_properties(remote_dataset_regression PROPERTIES TIMEOUT 20)
+endif()
+
+option(BUILD_HELMET_TESTS "Build helmet evidence and alarm mode regression tests" OFF)
+if(BUILD_HELMET_TESTS)
+    enable_testing()
+    add_executable(helmet_tests
+        tests/helmet/test_helmet_guard.cpp
+        ${VISION_PROJECTS_ROOT}/modules/logic_crane_helmet/helmet_guard.cpp
+    )
+    target_include_directories(helmet_tests PRIVATE ${custom_inc} ${api_inc}
+        ${VISION_PROJECTS_ROOT}/modules/logic_crane_helmet)
+    target_compile_options(helmet_tests PRIVATE -UNDEBUG)
+    target_link_libraries(helmet_tests PRIVATE ${OpenCV_LIBS})
+    add_test(NAME helmet_regression COMMAND helmet_tests)
 endif()
 
 option(BUILD_PERFORMANCE_TESTS "Build standalone performance counter regression tests" OFF)

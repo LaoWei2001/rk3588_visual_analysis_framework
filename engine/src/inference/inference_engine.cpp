@@ -25,6 +25,7 @@
 #include "common/logging.h"
 #include "inference_engine.h"
 #include "inference_internal.h"
+#include "model_status.h"
 #include "pipeline/frame_transform.h"
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
@@ -129,11 +130,11 @@ bool inference_take_results(int chnId, std::vector<AlgoResult> &out, std::shared
 
 int inference_init(const AppConfig &cfg)
 {
-    /* 统一业务坐标系默认 640x640；若成功加载模型，则首个模型决定本次进程的
-     * canonical 尺寸。显式复位可避免同一进程反初始化后，在无模型配置下沿用
-     * 上一次运行的模型尺寸，导致业务 ROI/传统逻辑坐标悄然变化。 */
-    g_inference.input_w = 640;
-    g_inference.input_h = 640;
+    model_status_reset(cfg);
+    /* 业务坐标始终为 640×640；每个模型独立读取实际输入尺寸。
+     * 载入顺序、无模型启动、热切换和反初始化后重启均不能改变业务坐标。 */
+    log_printf_threadsafe("[Inference] business canvas %dx%d (independent of model inputs)\n",
+                          g_inference.input_w, g_inference.input_h);
 
     /* 初始化 pthread 同步原语 */
     pthread_rwlock_init(&g_inference.dispatch_mtx, nullptr);
@@ -215,6 +216,7 @@ int inference_init(const AppConfig &cfg)
 
         try
         {
+            model_status_begin(channel_id, chn_cfg);
             int threads_for_chn = chn_cfg.threads > 0 ? chn_cfg.threads : 1;
             g_inference.models_per_chn[channel_id].clear();
             std::vector<ChannelModelConfig> active_models;
@@ -263,9 +265,7 @@ int inference_init(const AppConfig &cfg)
                                                    decode_thresh, spec.nms_thresh);
                     if (!model)
                     {
-                        printf("[Inference] Unsupported model_type '%s' for channel %d\n", spec.model_type.c_str(),
-                               channel_id);
-                        continue;
+                        throw std::runtime_error("unsupported model_type: " + spec.model_type);
                     }
                     model->set_result_source(spec.id.empty() ? "model_0" : spec.id, spec.model_type, 0);
                     log_printf_threadsafe("[Inference] Created %s instance for ch%d (Core %s, thread %d/%d)\n",
@@ -273,11 +273,6 @@ int inference_init(const AppConfig &cfg)
                                           t, threads_for_chn);
                 }
 
-                if (loaded_models_count == 0)
-                {
-                    g_inference.input_w = model->input_width();
-                    g_inference.input_h = model->input_height();
-                }
                 g_inference.models_per_chn[channel_id].push_back(model);
                 loaded_models_count++;
             }
@@ -285,6 +280,9 @@ int inference_init(const AppConfig &cfg)
         catch (const std::exception &e)
         {
             log_printf_threadsafe("[Inference] Load error ch%d: %s\n", channel_id, e.what());
+            loaded_models_count -= g_inference.models_per_chn[channel_id].size();
+            g_inference.models_per_chn[channel_id].clear();
+            model_status_failed(channel_id, e.what(), true);
         }
     }
 
@@ -322,6 +320,8 @@ int inference_init(const AppConfig &cfg)
             if (!g_inference.models_per_chn[i].empty())
             {
                 InferenceTaskQueue *tq = g_inference.task_queues[q_idx].get();
+                bool all_started = true;
+                int started_count = 0;
                 for (const auto &model : g_inference.models_per_chn[i])
                 {
                     InferenceWorkerArgs *wa = new InferenceWorkerArgs{i, tq, model};
@@ -330,14 +330,23 @@ int inference_init(const AppConfig &cfg)
                     g_inference.worker_tids.push_back(tid);
                     g_inference.worker_started.push_back(create_rc == 0 ? 1 : 0);
                     if (create_rc == 0)
+                    {
+                        ++started_count;
                         log_printf_threadsafe("[Inference] infer_worker created: ch%d tid=%lu\n", i,
                                               (unsigned long)tid);
+                    }
                     else
                     {
+                        all_started = false;
                         delete wa;
                         log_printf_threadsafe("[Inference] infer_worker create failed: ch%d rc=%d\n", i, create_rc);
                     }
                 }
+                for (const auto &channel : cfg.channels)
+                    if (channel.id == i && started_count > 0)
+                        model_status_applied(i, channel, g_inference.models_per_chn[i]);
+                if (!all_started)
+                    model_status_failed(i, "推理线程创建失败", started_count == 0);
                 g_inference.channel_results[i].latest_seq = 0;
                 q_idx++;
             }
@@ -370,6 +379,7 @@ void inference_request_stop()
 void inference_deinit()
 {
     inference_request_stop();
+    model_status_stopped();
 
     for (size_t i = 0; i < g_inference.worker_tids.size(); ++i)
         if (i < g_inference.worker_started.size() && g_inference.worker_started[i])
@@ -643,14 +653,30 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
     if (chnId < 0 || chnId >= MAX_CHANNEL_NUM || !g_inference.running)
         return false;
 
-    pthread_rwlock_wrlock(&g_inference.dispatch_mtx);
+    struct DispatchLock
+    {
+        pthread_rwlock_t *mutex;
+        explicit DispatchLock(pthread_rwlock_t *value) : mutex(value) { pthread_rwlock_wrlock(mutex); }
+        ~DispatchLock() { pthread_rwlock_unlock(mutex); }
+    } dispatch_lock(&g_inference.dispatch_mtx);
+
+    // Reports every early return, while preserving the previous active model on rollback.
+    struct ReloadStatus
+    {
+        int channel;
+        bool applied = false;
+        bool clear_active = false;
+        std::string error = "模型切换失败，已尝试恢复原模型";
+        ~ReloadStatus() { if (!applied) model_status_failed(channel, error, clear_active); }
+    } status{chnId};
+    model_status_begin(chnId, new_cfg);
 
     /* 找到此通道的任务队列（定义在 inference_executor.cpp，声明在 inference_internal.h）*/
     int q_idx = get_queue_idx_for_chn(chnId);
     if (q_idx < 0 || q_idx >= (int)g_inference.task_queues.size())
     {
+        status.error = "通道没有推理队列，需要重启程序启用推理";
         log_printf_threadsafe("[Inference] ch%d has no task queue, skipping model reload\n", chnId);
-        pthread_rwlock_unlock(&g_inference.dispatch_mtx);
         return false;
     }
     InferenceTaskQueue *tq = g_inference.task_queues[q_idx].get();
@@ -665,9 +691,9 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
     const int requested_worker_count = new_cfg.threads > 0 ? new_cfg.threads : 1;
     if (requested_worker_count != worker_count)
     {
+        status.error = "线程数量变更需要重启程序";
         log_printf_threadsafe("[Inference] ch%d worker topology change rejected (%d -> %d); restart required\n", chnId,
                               worker_count, requested_worker_count);
-        pthread_rwlock_unlock(&g_inference.dispatch_mtx);
         return false;
     }
     const std::vector<std::shared_ptr<ModelBase>> old_models = g_inference.models_per_chn[chnId];
@@ -752,7 +778,11 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
         g_inference.detect_classes[chnId] = old_detect_classes;
         pthread_mutex_unlock(&g_inference.detect_classes_mtx);
         if (!restart_workers(old_models))
+        {
+            status.clear_active = true;
+            status.error += "; 原模型线程恢复失败，需要重启程序";
             log_printf_threadsafe("[Inference] CRITICAL: failed to restore all workers for ch%d\n", chnId);
+        }
     };
 
     if (!config_utils::is_channel_infer_enabled(new_cfg))
@@ -761,11 +791,11 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
         {
             stop_reloaded_workers();
             restore_old_workers();
-            pthread_rwlock_unlock(&g_inference.dispatch_mtx);
             return false;
         }
         log_printf_threadsafe("[Inference] ch%d inference disabled after reload\n", chnId);
-        pthread_rwlock_unlock(&g_inference.dispatch_mtx);
+        model_status_applied(chnId, new_cfg, {});
+        status.applied = true;
         return true;
     }
 
@@ -822,10 +852,10 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
     }
     catch (const std::exception &e)
     {
+        status.error = e.what();
         log_printf_threadsafe("[Inference] Model load error ch%d: %s\n", chnId, e.what());
         /* 旧 worker 已经停止；新模型加载失败时恢复旧模型，避免该通道永久停止推理。 */
         restore_old_workers();
-        pthread_rwlock_unlock(&g_inference.dispatch_mtx);
         return false;
     }
 
@@ -834,7 +864,6 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
         log_printf_threadsafe("[Inference] Model reload incomplete for ch%d (%zu/%d workers); restoring old model\n",
                               chnId, new_models.size(), worker_count);
         restore_old_workers();
-        pthread_rwlock_unlock(&g_inference.dispatch_mtx);
         return false;
     }
     else
@@ -858,12 +887,12 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
         {
             stop_reloaded_workers();
             restore_old_workers();
-            pthread_rwlock_unlock(&g_inference.dispatch_mtx);
             return false;
         }
         log_printf_threadsafe("[Inference] ch%d model reload complete (%zu configured models)\n", chnId,
                               active_models.size());
     }
-    pthread_rwlock_unlock(&g_inference.dispatch_mtx);
+    model_status_applied(chnId, new_cfg, new_models);
+    status.applied = true;
     return true;
 }

@@ -23,6 +23,7 @@
 #include "control/logic_control.h"
 #include "pipeline_runtime.h"
 #include "pipeline_internal.h"
+#include "control/remote_dataset.h"
 #include "frame_transform.h"
 #include "logic/core/channel_logic.h"
 #include "tracking/bytetrack.h"
@@ -321,6 +322,23 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
     if (!channel_config || !runtime_rois || !runtime_logic_parameters)
         return;
     const std::string &logic_name = channel_config->logic;
+
+    // Collect before the business Logic mutates results or releases the source frame.
+    if (remote_dataset_active(chnId))
+    {
+        ChannelContext sample;
+        sample.chnId = chnId; sample.config = channel_config; sample.rois = runtime_rois;
+        sample.results = &current_results; sample.frame_id = frame_id;
+        sample.timestamp_ms = timestamp_ms; sample.unix_ms = unix_ms;
+        sample.infer_enabled = infer_enabled; sample.inference_valid = inference_valid;
+        if (raw_frame && raw_frame->lazy_frame)
+        {
+            sample.src_width = raw_frame->width; sample.src_height = raw_frame->height;
+            sample.source_frame_getter = get_source_frame_bgr;
+            sample.frame_getter_opaque = raw_frame->lazy_frame.get();
+        }
+        remote_dataset_observe(sample, runtime);
+    }
 
     /* 未配置后处理模块：不构造 ChannelContext，也不调用任何业务函数。
      * 仍提交严格同帧的 frame/results，供通用检测框绘制、快照和跨通道读取使用。 */

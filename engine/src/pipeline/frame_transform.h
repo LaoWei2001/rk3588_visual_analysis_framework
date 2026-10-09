@@ -5,7 +5,7 @@
  * 职责:
  * - RGA 硬件加速的图像格式转换与缩放
  * - DMA-BUF 导入与生命周期管理
- * - 模型帧和原始分辨率 BGR 帧的按需生成
+ * - 业务画布和原始分辨率 BGR 帧的按需生成
  *
  * 注意: RGA 部分代码禁止修改内部逻辑, 盒子容易死机! 硬性约束 (在 frame_transform.cpp 中):
  *   opt.core = IM_SCHEDULER_RGA3_CORE0 | IM_SCHEDULER_RGA3_CORE1
@@ -64,7 +64,8 @@ struct RgaImportedBuffer
 /**
  * 同一业务帧的惰性图像容器。
  * - source handle 保留 DMA-BUF，source_owner 保留解码缓冲区，阻止池重用像素；
- * - model_frame()/source_frame() 各自在第一次调用时生成一份 BGR 并缓存；
+ * - model_frame() 是业务画布 BGR（运行时固定 640×640），source_frame() 是原图 BGR；
+ *   各自在第一次调用时生成一份并缓存；
  * - borrowed_data 仅服务同步解码回调，回调结束前必须 clear_borrowed_source()；
  * - DMA-BUF 不可用时可用 retain_borrowed_source() 只保留原始字节，延后到 worker 转换。
  */
@@ -77,6 +78,9 @@ class LazyVideoFrame
 
     const cv::Mat *model_frame();
     const cv::Mat *source_frame();
+    /** CPU 推理回退：从原始缓冲直接生成实际模型尺寸 BGR。
+     * output 由 worker 私有持有，可跨帧复用内存；不提前生成原图或业务画布缓存。 */
+    bool resized_frame(int width, int height, cv::Mat &output);
     /** DMA-BUF 不可用时，只复制原始字节延长生命周期，颜色转换仍延后到 worker。 */
     bool retain_borrowed_source(size_t byte_count);
     void clear_borrowed_source();

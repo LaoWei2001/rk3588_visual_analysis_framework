@@ -31,7 +31,7 @@ import { configToGraph }   from '../utils/configToGraph'
 import { saveLastConfig }  from '../utils/lastConfig'
 import { validateModelId } from '../utils/modelId'
 import {
-  fetchConfig, saveConfig, saveConfigFile, deleteConfigFile,
+  apiErrorMessage, fetchConfig, saveConfig, saveConfigFile, deleteConfigFile,
   fetchConfigFiles, loadConfigFile, fetchAppLogics,
 } from '../api/client'
 import GlobalSettingsPanel, { GlobalSettingsData, DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
@@ -1423,7 +1423,7 @@ export default function EditorPage() {
       showToast(`保存成功 ✓（${cfgBase(currentFile)}）`)
       return true
     } catch (e: unknown) {
-      showToast(`保存失败: ${e instanceof Error ? e.message : String(e)}`, false)
+      showToast(`保存失败: ${apiErrorMessage(e)}`, false)
       return false
     } finally { setSaving(false) }
   }
@@ -1450,7 +1450,7 @@ export default function EditorPage() {
       showToast(`已另存为 ${fname}，现在编辑的是这份副本`)
       try { setImportFiles(await fetchConfigFiles(appName)) } catch { /* 列表刷新失败不致命 */ }
     } catch (e: unknown) {
-      showToast(`另存失败: ${e instanceof Error ? e.message : String(e)}`, false)
+      showToast(`另存失败: ${apiErrorMessage(e)}`, false)
     } finally { setSaving(false) }
   }
 
@@ -1666,6 +1666,11 @@ export default function EditorPage() {
             reportConfigJson={selectedReportConfig?.json ?? null}
             reportConfigPath={selectedReportConfig?.path ?? null}
             modelIdError={selectedModelIdError}
+            modelChannelId={selectedNode?.type === 'model' ? (() => {
+              const edge = edges.find(item => item.target === selectedNode.id && item.targetHandle === 'stream-in')
+              const stream = edge ? nodes.find(item => item.id === edge.source && item.type === 'stream') : undefined
+              return stream ? Number(stream.data.channel_id ?? 0) : undefined
+            })() : undefined}
             globalTrackerType={String(globalSettings.tracker_type ?? 'sort')}
             globalTrackerEnable={Number(globalSettings.tracker_enable ?? 1)}
           />

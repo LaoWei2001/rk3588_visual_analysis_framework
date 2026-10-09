@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "platform": "windows-amd64",
+  "python_version": "3.13.16",
+  "runtime_url": "https://www.python.org/ftp/python/3.13.16/python-3.13.16-embed-amd64.zip",
+  "runtime_sha256": "97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297",
+  "receiver_sha256": "9aaa2dd0f9412a87e00f179a2ac277ca0b5aaa679358a8d39f7701084b946650",
+  "sha256": "d3de96bb29c75393112057117c0fe3dec1694becd8f46d141f6c066860958490",
+  "go_version": "go version go1.27.1 linux/arm64"
+}

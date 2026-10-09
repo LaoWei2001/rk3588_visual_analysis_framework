@@ -1,10 +1,15 @@
+import errno
 import json
 import os
+import stat
+import tempfile
 from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.concurrency import run_in_threadpool
+from services.model_info import validate_model_config
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 
@@ -21,9 +26,36 @@ def _app_dir(name: str) -> Path:
 
 
 def _atomic_write(path: Path, data: Any) -> None:
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=4), encoding="utf-8")
-    os.replace(tmp, path)
+    tmp = None
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as handle:
+            tmp = Path(handle.name)
+            json.dump(data, handle, ensure_ascii=False, indent=4)
+        tmp.chmod(mode)
+        os.replace(tmp, path)
+    except OSError as exc:
+        if exc.errno in (errno.ENOSPC, errno.EDQUOT):
+            raise HTTPException(
+                status_code=507,
+                detail="保存失败：配置所在分区空间不足，请释放磁盘空间后重试。原配置未修改。",
+            ) from exc
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            detail = "保存失败：配置目录没有写入权限。原配置未修改。"
+        elif exc.errno == errno.EROFS:
+            detail = "保存失败：配置所在文件系统为只读。原配置未修改。"
+        else:
+            detail = f"保存配置失败：{exc.strerror or '磁盘写入错误'}。原配置未修改。"
+        raise HTTPException(status_code=500, detail=detail) from exc
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _safe_config_target(app_dir: Path, path: str) -> Path:
@@ -141,6 +173,10 @@ async def get_config(name: str):
 @router.post("/apps/{name}/config")
 async def save_config(name: str, body: Dict[str, Any]):
     app_dir    = _app_dir(name)
+    try:
+        await run_in_threadpool(validate_model_config, app_dir, body)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     assets_dir = app_dir / "assets"
     assets_dir.mkdir(exist_ok=True)
     _atomic_write(assets_dir / "config.json", body)
@@ -156,6 +192,10 @@ async def save_config_file(name: str, path: str, body: Dict[str, Any]):
     """
     app_dir = _app_dir(name)
     target  = _safe_config_target(app_dir, path)
+    try:
+        await run_in_threadpool(validate_model_config, app_dir, body)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     target.parent.mkdir(exist_ok=True)
     _atomic_write(target, body)
     return {"ok": True, "path": str(target.relative_to(app_dir)).replace("\\", "/")}

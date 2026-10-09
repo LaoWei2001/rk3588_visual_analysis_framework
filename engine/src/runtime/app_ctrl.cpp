@@ -110,7 +110,7 @@ std::shared_ptr<const AppRuntimeSnapshot> app_ctrl_build_runtime_snapshot(const 
             return std::shared_ptr<const AppRuntimeSnapshot>();
         }
 
-        /* ROI 配置统一是归一化坐标；运行快照在发布前一次性转换到模型坐标系。 */
+        /* ROI 配置统一是归一化坐标；运行快照在发布前一次性转换到固定业务坐标系(640×640)。 */
         auto &runtime_rois = snapshot->roi_zones[channel.id];
         auto add_zone = [&](const std::string &name, const std::vector<std::pair<double, double>> &polygon) {
             size_t point_count = polygon.size();
@@ -779,9 +779,9 @@ int app_ctrl_init(const char *cfgPath)
         g_pCtrl->channels_state[i].last_logic_ts_ms = now_ms;
     }
 
-    /* pipeline 初始化模型前 input 尺寸尚未知，先发布无 ROI 的启动快照；
-     * pipeline_init 随后会以真实 inputW/inputH 原子替换它。 */
-    app_ctrl_store_runtime_snapshot(app_ctrl_build_runtime_snapshot(g_pCtrl->config, 0, 0, g_pCtrl->config_generation));
+    /* 业务尺寸无需等待模型初始化；首代 ROI 快照就使用固定 640×640 坐标。 */
+    app_ctrl_store_runtime_snapshot(app_ctrl_build_runtime_snapshot(
+        g_pCtrl->config, g_pCtrl->inputW, g_pCtrl->inputH, g_pCtrl->config_generation));
 
     g_pCtrl->b_init = 1;
     g_pCtrl->isRunning.store(true);

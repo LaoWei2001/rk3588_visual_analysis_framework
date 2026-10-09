@@ -530,8 +530,8 @@ Python/通用动态库、Rockchip GStreamer 硬件插件，以及项目和 `/opt
 `engine/vendor/rockchip/PLATFORM_COMPATIBILITY.env`；只有完成硬件冒烟测试后
 才应更新该基线。
 
-已经用 `install_deps.sh` 准备好依赖和前端，或者前端产物已随完整源码复制到断网设备时，
-可以使用严格断网模式完成统一安装：
+已经用 `install_deps.sh` 或完整离线包准备好依赖时，可以使用离线模式完成统一安装。
+源码更新后的目录如果没有前端产物，安装器会使用已有 `node_modules` 自动离线构建前端：
 
 ```bash
 sudo ./install.sh offline
@@ -677,13 +677,26 @@ Web 画布中“业务 ROI”节点直接连接视频流节点，表示它归属
 局部再推理一次），以及 `full_frame_roi_filter`（保持整帧尺度推理一次，只输出区域内目标）。局部
 取景可选 `stretch`（直接拉伸）、`expand`（扩展周边画面匹配模型比例，触边后只对不足部分补黑）
 或 `letterbox`（保持比例并补黑边）。多边形使用 `stretch`/`letterbox` 时，多边形外的模型输入严格
-填黑；使用 `expand` 时则保留扩展后的真实周边上下文。Web 编辑器按与 C++ 相同的像素取整、偶数边界
-对齐、缩放和填黑规则预览模型输入；扩展动画结束后的无叠加画面就是最终模型视野。`roi_only` 和
+填黑；使用 `expand` 时则保留扩展后的真实周边上下文。Web 编辑器以 640×640 参考画布预览取景，使用相同类型的偶数边界
+对齐、缩放和填黑规则；实际输入的像素取整仍以加载模型的宽高为准。`roi_only` 和
 `full_frame_roi_filter` 要求业务 ROI 的全部顶点和边完全位于推理区域内。检测框、姿态关键点和分割
 掩码都会使用完整画面坐标；结果受限模式还会清除区域外掩码，
 `full_plus_roi` 的两批结果则会执行跨批次 NMS，因此业务逻辑不需要感知推理裁剪或结果过滤。
 已配置的推理 ROI 会作为青色边框叠加到实时显示、带叠加的录像和上报图片；该边框只在推理完成后的
 统一输出渲染阶段绘制，不会进入模型输入或污染业务逻辑读取的源帧。
+
+业务画布固定为 **640×640**，与视频源分辨率、模型实际输入尺寸独立。模型读取 `.rknn` 中的
+输入宽高，并从原始视频缓冲直接生成所需输入；检测框、姿态关键点和分割掩码在进入跟踪/业务逻辑前
+统一映射到完整画面的 640×640 坐标。启动顺序、模型热切换和重启不会改变业务坐标。
+因此原来的 `(320,320)` 中心、业务像素距离/面积阈值和 ROI 均可沿用；更改摄像头取景或裁剪方式后，
+仍需检查物理测量标定。分割模型的输出结构须与解码器兼容，固定业务画布不代表所有模型已支持任意尺寸。
+
+业务代码可用 `ctx->business_width()` / `business_height()` / `business_size()` / `business_center()`
+查询画布，不触发取帧。`ctx->business_frame()` 和保留的 `ctx->model_frame()` 共用同一份惰性 640×640
+BGR 缓存；只有读取像素时才转换。`ctx->source_frame()` 保留原图尺寸，原图上的检测坐标需显式按
+`src_width/640`、`src_height/640` 转换。`inference_get_input_w/h()` 和全局逻辑的历史字段
+`model_width/model_height` 也表示业务尺寸，不用于查询实际 NPU 输入。
+坐标约定、迁移示例和回归验证见 [固定业务坐标与模型输入尺寸](docs/business-coordinates.md)。
 
 ```json
 {
@@ -824,8 +837,9 @@ REGISTER_LOGIC(logic_people_count);
 | `logic_crane_motion`、`logic_crane_hook` | 行车运动检测，以及固定半径、随吊钩高度插值圆心的吊钩状态检测 |
 | `logic_crane_hook_calibration` | 播放视频时按需保存正常铅垂圆心和 `box_scale` 标定样本 |
 | `logic_crane_intrusion`、`logic_crane_helmet` | 行车投影区域入侵和静止安全帽检测 |
-| `logic_training_negative_capture` | 目标丢失期间按间隔采集视频源分辨率的训练集负样本 |
 | `logic_relay` | Action 控制继电器 |
+
+数据集采集统一从 Web 侧边栏配置，复用通道已有推理结果，图片保存到电脑，不占用业务 Logic。详见[数据集采集说明](docs/computer-dataset-collection.md)。
 
 当前全局 Logic 包括 `global_person_count_alarm_demo` 和 `global_crane_safety_controller`。
 

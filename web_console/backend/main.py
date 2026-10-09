@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from routers import (apps, assets, auth, camera_settings, logic_control, file_playback, config_io, logs, network_settings,
                      ota_config, process, records, services, snapshot, storage_settings, stream,
-                     system_settings, terminal, delivery_config, video_capture)
+                     system_settings, terminal, delivery_config, video_capture, dataset)
 from services.auth_service import get_session
 from services import process_manager as process_manager
 from services import runtime_state
@@ -21,6 +21,7 @@ from services import network_manager
 from services import camera_manager
 from services.camera_web_proxy import camera_web_proxy
 from services.video_capture_manager import capture_manager
+from services.dataset_manager import dataset_manager
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
@@ -87,6 +88,7 @@ async def lifespan(app: FastAPI):
     # systemctl/Popen 都是阻塞调用，放入工作线程，避免卡住事件循环。
     await asyncio.to_thread(restore_runtime)
     storage_task = asyncio.create_task(storage_settings.maintenance_loop())
+    dataset_task = asyncio.create_task(dataset_manager.maintenance())
     try:
         yield
     finally:
@@ -96,6 +98,9 @@ async def lifespan(app: FastAPI):
         # 确保正在写入的单个 MP4 可以正常收尾。
         await asyncio.to_thread(capture_manager.shutdown)
         storage_task.cancel()
+        dataset_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await dataset_task
         with suppress(asyncio.CancelledError):
             await storage_task
 
@@ -126,6 +131,7 @@ async def auth_middleware(request: Request, call_next):
         or path in _PUBLIC_API
         or path == "/health"
         or public_logic_action
+        or dataset.is_public_receiver_request(request.method, path)
     ):
         return await call_next(request)
 
@@ -172,6 +178,7 @@ app.include_router(network_settings.router, prefix="/api")
 app.include_router(camera_settings.router, prefix="/api")
 app.include_router(system_settings.router, prefix="/api")
 app.include_router(video_capture.router, prefix="/api")
+app.include_router(dataset.router, prefix="/api")
 app.include_router(logs.router)      # WebSocket has its own /ws prefix
 app.include_router(terminal.router)  # WebSocket terminal
 

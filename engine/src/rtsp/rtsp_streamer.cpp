@@ -16,6 +16,7 @@
  *                       → h264parse → rtph264pay(pay0) → gst-rtsp-server
  */
 #include "rtsp_streamer.h"
+#include "live_source.h"
 
 #include <algorithm>
 #include <atomic>
@@ -397,11 +398,12 @@ static void on_media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media
         gst_object_unref(encoder);
     }
 
-    /* 实时源 + 自动打时间戳 + 满了不阻塞(丢帧保实时) */
+    /* 非阻塞 appsrc 的 max-bytes 只触发 enough-data，不会自动丢帧。
+     * feeder 同时检查实际积压，禁止继续灌入旧画面。 */
     const guint64 frame_bytes = g_st.use_hw ? (guint64)g_st.enc_w * g_st.enc_h * 3 / 2
                                             : (guint64)g_st.enc_w * g_st.enc_h * 3;
     g_object_set(G_OBJECT(appsrc), "format", GST_FORMAT_TIME, "is-live", TRUE, "do-timestamp", TRUE, "block", FALSE,
-                 "max-bytes", frame_bytes * 3, nullptr);
+                 "max-bytes", frame_bytes * 2, nullptr);
 
     GstCaps *caps =
         gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, g_st.use_hw ? "NV12" : "RGB", "width",
@@ -440,6 +442,8 @@ static void *rtsp_feeder_thread(void *arg)
     GstAllocator *dmabuf_allocator = g_st.use_hw ? gst_dmabuf_allocator_new() : nullptr;
 
     auto push_buffer = [](GstElement *appsrc, GstBuffer *buffer) {
+        // 时间戳仍由实时源时钟产生，丢帧后的时间缺口不能压缩成慢动作。
+        GST_BUFFER_DURATION(buffer) = GST_SECOND / std::max(1, g_st.fps);
         GstFlowReturn ret = GST_FLOW_OK;
         g_signal_emit_by_name(appsrc, "push-buffer", buffer, &ret);
         if (ret != GST_FLOW_OK)
@@ -458,7 +462,9 @@ static void *rtsp_feeder_thread(void *arg)
             src = (GstElement *)gst_object_ref(g_st.appsrc);
         pthread_mutex_unlock(&g_st.appsrc_mtx);
 
-        if (src)
+        const guint64 frame_bytes = g_st.use_hw ? (guint64)dst_w * dst_h * 3 / 2
+                                                : (guint64)rgb_frame_bytes;
+        if (src && rtsp_source_has_room(src, frame_bytes))
         {
             char *front = (g_pCtrl->pDispBuffer) ? *g_pCtrl->pDispBuffer : nullptr;
             if (front && g_st.use_hw && dma_pool && dmabuf_allocator)
@@ -526,8 +532,9 @@ static void *rtsp_feeder_thread(void *arg)
                 if (buffer)
                     gst_buffer_unref(buffer);
             }
-            gst_object_unref(src);
         }
+        if (src)
+            gst_object_unref(src);
         /* 绝对节拍：RGA/编码前准备耗时包含在本周期内，不再“处理耗时 + 固定 sleep”
          * 造成目标30FPS实际只有二十几帧。严重超时时直接从当前时刻重新起算，禁止追帧突发。 */
         next_wakeup += period;
@@ -599,7 +606,7 @@ static std::string build_launch_string(void)
     {
         /* 硬件编码属性在 media-configure 中按插件实际支持项设置，避免版本差异导致 launch 解析失败。 */
         snprintf(launch, sizeof(launch),
-                 "( appsrc name=mysrc ! queue max-size-buffers=4 leaky=downstream "
+                 "( appsrc name=mysrc ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream "
                  "! video/x-raw,format=NV12 ! %s name=video_encoder "
                  "! %s ! %s name=pay0 pt=96 config-interval=1 )",
                  enc_hw, parse_elem, pay_elem);
@@ -610,7 +617,7 @@ static std::string build_launch_string(void)
     {
         const char *enc_sw = h265 ? "x265enc" : "x264enc";
         snprintf(launch, sizeof(launch),
-                 "( appsrc name=mysrc ! queue max-size-buffers=4 leaky=downstream "
+                 "( appsrc name=mysrc ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream "
                  "! videoconvert ! %s name=video_encoder tune=zerolatency speed-preset=ultrafast bitrate=%d "
                  "! %s ! %s name=pay0 pt=96 config-interval=1 )",
                  enc_sw, g_st.bitrate, parse_elem, pay_elem);

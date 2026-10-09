@@ -21,6 +21,7 @@
 #pragma once
 
 #include "inference/inference_engine.h"
+#include "common/business_coordinates.h"
 #include "config/config.h"
 #include "logic_action.h"
 #include "logic_outputs.h"
@@ -35,7 +36,7 @@ struct ChannelFrameSnapshot;
 
 /*======================== ROI 区域 (一个通道可配置多个) ========================*/
 /**
- * 一个 ROI 区域 = 区域名 + 多边形顶点。顶点坐标系 = 模型输入尺寸(通常 640×640),
+ * 一个 ROI 区域 = 区域名 + 多边形顶点。顶点坐标系 = 固定业务画布(640×640),
  * 与 ctx->results[].box 完全一致 —— 逻辑里可直接 cv::pointPolygonTest, 无需再缩放。
  *
  * 通道逻辑通过 ctx->rois (全部区域) 或 ctx->roi_by_name("xxx") / ctx->roi_polygon_at(i)
@@ -44,7 +45,7 @@ struct ChannelFrameSnapshot;
 struct RoiZone
 {
     std::string name;               /* 区域名(可空), 如 "entrance"/"exit"; 供逻辑按名取用 */
-    std::vector<cv::Point> polygon; /* 顶点, 模型输入坐标系; >=3 个点才算有效区域 */
+    std::vector<cv::Point> polygon; /* 顶点, 业务坐标系(640×640); >=3 个点才算有效区域 */
 };
 
 /*======================== 绘制指令 ========================*/
@@ -74,7 +75,7 @@ struct DrawCommand
     cv::Point center;
     int radius = 0;
     cv::Point pt1, pt2;
-    std::vector<cv::Point> points; /* POLYLINE: 折线顶点(模型坐标系) */
+    std::vector<cv::Point> points; /* POLYLINE: 折线顶点(640×640 业务坐标系) */
     bool closed = false;           /* POLYLINE: 是否闭合 */
     double alpha = 1.0;            /* 透明度 0~1, <1 半透明叠加(RECT/CIRCLE/POLYLINE/POLY_FILLED 均支持) */
     std::string text;
@@ -105,7 +106,7 @@ struct RenderParams
 
     /* 推理 ROI 使用完整视频归一化坐标，仅供最终显示层绘制；绝不参与模型输入构造。 */
     const InferenceRoiConfig *inference_roi = nullptr;
-    /* 本通道全部 ROI 区域(顶点均为模型输入坐标系); render_overlays 按 inputW/inputH 缩放后逐个绘制。 */
+    /* 本通道全部 ROI 区域(顶点均为业务坐标系(640×640)); render_overlays 按 inputW/inputH 缩放后逐个绘制。 */
     const std::vector<RoiZone> *roi_zones = nullptr;
     const std::vector<AlgoResult> *results = nullptr;
     const std::vector<DrawCommand> *draw_cmds = nullptr;
@@ -137,23 +138,31 @@ typedef const cv::Mat *(*ChannelFrameGetter)(void *opaque);
 
 struct ChannelContext
 {
+    /* 不触发取帧/转换。中心始终为 (320,320)，与实际模型输入尺寸独立。 */
+    int business_width() const { return business_coordinates::WIDTH; }
+    int business_height() const { return business_coordinates::HEIGHT; }
+    cv::Size business_size() const { return business_coordinates::size(); }
+    cv::Point business_center() const { return business_coordinates::center(); }
+
     /* ---- 唯一通道身份：config.channels[].id ---- */
     int chnId = -1;
 
     /* ---- 当前帧数据 ---- */
     /* 原始视频分辨率(摄像头/视频源解码出的真实尺寸, 如 1920×1080)。
-     * 与 model_frame() 的区别: model_frame() 是缩放后的模型输入尺寸；下面是视频源真实宽高。
+     * 与 model_frame() 的区别: model_frame() 是固定 640×640 业务画布；下面是视频源真实宽高。
      * 首帧解码前可能为 0, 逻辑里用前可自行判一下 > 0。 */
     int src_width = 0;
     int src_height = 0;
 
     /* ---- 当前视频帧（惰性获取）----
-     * model_frame(): 模型输入尺寸 BGR，坐标与 results/ROI 一致。
+     * model_frame()/business_frame(): 固定 640×640 完整画面 BGR，坐标与 results/ROI 一致。
      * source_frame(): 原始视频分辨率 BGR，保留 src_width×src_height。
      * 每个函数只在本帧第一次调用时转换，之后复用同一份不可变缓存；完全不调用就没有转换开销。
      * 推理与非推理通道使用相同接口。返回对象只读，业务代码不得修改或跨帧保存指针；
      * 如需异步持有或修改，请显式 clone()。取帧失败返回 nullptr。 */
     const cv::Mat *model_frame() const;
+    /* 新代码可使用更明确的名称；与 model_frame() 共用同一惰性缓存，没有额外转换。 */
+    const cv::Mat *business_frame() const { return model_frame(); }
     const cv::Mat *source_frame() const;
 
     /* 框架内部的惰性取帧绑定，业务 logic 不直接访问。 */
@@ -193,7 +202,7 @@ struct ChannelContext
     void publish_bool(const char *key, bool value) const;
     void publish_json(const char *key, const std::string &json) const;
 
-    /* ---- ROI (已缩放到模型输入坐标系) ----
+    /* ---- ROI (已缩放到业务坐标系(640×640)) ----
      * rois 是本通道全部 ROI 区域；单个区域用 roi_polygon_at()/roi_by_name() 获取。 */
     const std::vector<RoiZone> *rois = nullptr;
 
@@ -212,7 +221,7 @@ struct ChannelContext
      * 返回 false 表示图片为空、类型不支持，或当前上下文没有显示输出绑定。 */
     bool replace_display_frame(cv::Mat frame);
 
-    /* ---- 可写模型尺寸显示画布 ----
+    /* ---- 可写业务尺寸显示画布 ----
      * 想"拿到显示画面 → 自由改像素 → 再显示"时调 display_canvas():
      * 返回一张可写的 640×640 BGR 图(首次调用 = 当前帧副本)，随意 cv:: 处理/贴图/写字；
      * 调用即表示"本帧用这张图当显示底图"。不调用则显示走原实时采集帧，行为不变。
@@ -246,7 +255,7 @@ struct ChannelContext
 
     /* ===== ROI 区域访问 (本通道) =====
      * 一个通道可配置多个 ROI 区域(网页上各画一个、各取个名字)。下面这组按序号/名字取区域。
-     * 所有多边形顶点都是模型输入坐标系, 与检测框同坐标系。 */
+     * 所有多边形顶点都是业务坐标系(640×640), 与检测框同坐标系。 */
 
     /* 本通道有效 ROI 区域数量 */
     int roi_count() const;
@@ -281,7 +290,7 @@ struct ChannelContext
      *
      * get_channel_frame_snapshot(ch, out) 在一把 chn_mtx 锁内原子读出该通道的
      * frame + results + outputs + 绘制指令和发布元信息。frame 若存在则与 results 必定同帧；
-     * 只有调用该带图快照接口时，框架才会惰性生成目标通道的模型尺寸图，
+     * 只有调用该带图快照接口时，框架才会惰性生成目标通道的 640×640 业务图，
      * 返回后不持锁。失败会明确返回 false，不用空对象猜测通道是否存在。
      *
      * 典型用法 (在 channel logic 或 global logic 中):
@@ -352,7 +361,7 @@ void draw_text(ChannelContext *ctx, const char *text, const cv::Point &pos,
  * @brief 按单通道 8-bit 蒙版对 display_canvas() 做批量颜色融合。
  *
  * 底层使用 OpenCV SIMD/NEON 路径和线程局部复用缓冲，业务模块不应再写
- * 逐像素 C++ 双层循环。mask 与模型帧尺寸不同时会自动最近邻缩放。
+ * 逐像素 C++ 双层循环。mask 与业务画布尺寸不同时会自动最近邻缩放。
  */
 bool blend_display_mask(ChannelContext *ctx, const cv::Mat &mask, const cv::Scalar &color, double alpha);
 
@@ -363,7 +372,7 @@ void draw_polyline(ChannelContext *ctx, const std::vector<cv::Point> &points,
                    bool closed = false, DrawCommand::Target target = DrawCommand::ALL);
 
 /* 填充多边形(实心色块); alpha<1 半透明叠加 —— 给一块 ROI/区域铺半透明底色高亮最常用。
- * 顶点为模型输入坐标系(与 ROI/检测框同坐标系); 少于 3 个点不绘制。
+ * 顶点为业务坐标系(640×640)(与 ROI/检测框同坐标系); 少于 3 个点不绘制。
  * 例: draw_poly_filled(ctx, *ctx->roi_polygon_at(0), 红, 0.3)  → 把首个 ROI 铺成半透明红。 */
 void draw_poly_filled(ChannelContext *ctx, const std::vector<cv::Point> &points,
                       const cv::Scalar &color = cv::Scalar(0, 255, 0), double alpha = 0.3,

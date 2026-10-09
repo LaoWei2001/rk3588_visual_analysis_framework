@@ -19,15 +19,13 @@ import {
 import { useAuthStore } from '../store/authStore'
 import { videoTimelineLayout, type VideoLayout } from './videoTimelineLayout'
 import './LiveViewPage.css'
+import { livePlaybackTarget } from './livePlayback'
 
 type RtspState = 'idle' | 'checking' | 'enabled' | 'disabled' | 'error'
 
 const STREAM_MAX_RETRY = 25
 const STREAM_STALL_MS = 15000
 const STREAM_INIT_LIMIT = 4 * 1024 * 1024
-const STREAM_START_BUFFER_SECONDS = 0.6
-const STREAM_TARGET_LATENCY_SECONDS = 0.75
-const STREAM_SEEK_THRESHOLD_SECONDS = 2
 const LIVE_SIDE_WIDTH_STORAGE_KEY = 'rk3588.liveView.sidePanelWidth'
 const LIVE_SIDE_WIDTH_DEFAULT = 380
 const LIVE_SIDE_WIDTH_MIN = 310
@@ -849,6 +847,16 @@ export default function LiveViewPage() {
     video.src = objectUrl
     video.muted = true
     let playbackStarted = false
+    video.playbackRate = 1
+    const syncLivePosition = () => {
+      if (!sourceBuffer || disposed || sourceBuffer.updating || !sourceBuffer.buffered.length) return
+      const last = sourceBuffer.buffered.length - 1
+      const target = livePlaybackTarget(video.currentTime, sourceBuffer.buffered.start(last), sourceBuffer.buffered.end(last), playbackStarted)
+      if (target !== null) {
+        video.currentTime = target
+        if (!playbackStarted) void video.play().catch(() => {})
+      }
+    }
 
     const append = async (bytes: Uint8Array) => {
       if (!sourceBuffer || mediaSource.readyState !== 'open' || disposed) return
@@ -863,22 +871,8 @@ export default function LiveViewPage() {
       }
       await sourceBufferOperation(sourceBuffer, () => sourceBuffer!.appendBuffer(sourceBufferBytes(bytes)))
 
-      if (sourceBuffer.buffered.length > 0) {
-        const liveEdge = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1)
-        const bufferedStart = sourceBuffer.buffered.start(0)
-        const bufferedDuration = liveEdge - bufferedStart
-        const lag = liveEdge - video.currentTime
-
-        // 旧逻辑每收到约 1 秒的 MP4 分片就跳到末尾前 80ms，解码余量不足一个
-        // 网络/调度抖动周期，必然反复耗尽缓冲。启动时先攒约 600ms；运行中只在
-        // 真正落后超过 2 秒时跳帧，正常情况下让 video 连续播放。
-        if (!playbackStarted && bufferedDuration >= STREAM_START_BUFFER_SECONDS) {
-          video.currentTime = Math.max(bufferedStart, liveEdge - STREAM_TARGET_LATENCY_SECONDS)
-          void video.play().catch(() => {})
-        } else if (playbackStarted && lag > STREAM_SEEK_THRESHOLD_SECONDS) {
-          video.currentTime = Math.max(bufferedStart, liveEdge - STREAM_TARGET_LATENCY_SECONDS)
-        }
-      }
+      // 正常播放保持原速；积压超过一秒直接舍弃过期画面。
+      syncLivePosition()
       if (playbackStarted && video.paused) void video.play().catch(() => {})
     }
 
@@ -968,6 +962,7 @@ export default function LiveViewPage() {
         lastPlaybackTime = video.currentTime
         return
       }
+      syncLivePosition()
       if (video.currentTime > lastPlaybackTime + 0.05) {
         lastPlaybackTime = video.currentTime
         lastPlaybackAdvanceAt = Date.now()
@@ -975,12 +970,27 @@ export default function LiveViewPage() {
         scheduleStreamRetry(500, '实时画面已停滞超过 15 秒')
         abortController.abort()
       }
-    }, 2500)
+    }, 250)
+    let hiddenAt = document.hidden ? Date.now() : 0
+    const onVisibilityChange = () => {
+      if (document.hidden) hiddenAt = Date.now()
+      else if (hiddenAt && Date.now() - hiddenAt > 1000) {
+        // 后台页的网络、解码和定时器可能暂停，重新连接清掉上游积压。
+        hiddenAt = 0
+        scheduleStreamRetry(0, '')
+        abortController.abort()
+      } else {
+        hiddenAt = 0
+        syncLivePosition()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
 
     return () => {
       disposed = true
       clearTimeout(startupTimer)
       clearInterval(playbackWatchdog)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
       abortController.abort()
       reader?.cancel().catch(() => {})
       video.removeEventListener('error', onVideoError)

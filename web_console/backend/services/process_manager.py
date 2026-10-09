@@ -508,6 +508,7 @@ def start_app(app_name: str, config_name: Optional[str] = None) -> int:
         control_sock.unlink(missing_ok=True)
         playback_sock.unlink(missing_ok=True)
         env["RK_LOGIC_CONTROL_SOCKET"] = str(control_sock)
+        env["RK_DATASET_SOCKET"] = str(app_dir / "run.dataset.sock")
         env["RK_FILE_PLAYBACK_CONTROL_SOCKET"] = str(playback_sock)
         env["ASSETS_DIR"] = str(assets_dir)
         env["EVENT_STORE_DIR"] = str(data_dir(app_name) / "event_store")

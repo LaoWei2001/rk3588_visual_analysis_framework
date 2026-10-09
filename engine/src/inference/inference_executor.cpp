@@ -37,6 +37,7 @@
 #include "inference_internal.h"
 #include "inference_roi_filter.h"
 #include "inference_roi_geometry.h"
+#include "inference_result_mapping.h"
 #include "pipeline/frame_transform.h"
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
@@ -184,7 +185,7 @@ std::shared_ptr<ModelBase> create_inference_model(const std::string &type, const
  * DMA-BUF -> RGA -> RKNN input memory 的零拷贝路径；失败时才回退 CPU Mat。
  */
 static cv::Mat ensure_cpu_frame(const InferenceTask &task, int model_width, int model_height, bool use_roi,
-                                const InferenceRoiTransform &roi_transform, bool mask_polygon)
+                                const InferenceRoiTransform &roi_transform, bool mask_polygon, cv::Mat &input_cache)
 {
     if (!task.frame || model_width <= 0 || model_height <= 0)
         return {};
@@ -207,94 +208,14 @@ static cv::Mat ensure_cpu_frame(const InferenceTask &task, int model_width, int 
         const cv::Mat *frame = task.frame->model_frame();
         return frame ? *frame : cv::Mat();
     }
-    const cv::Mat *source = task.frame->source_frame();
-    if (!source || source->empty())
-        return {};
-    cv::Mat resized;
-    cv::resize(*source, resized, cv::Size(model_width, model_height), 0.0, 0.0, cv::INTER_LINEAR);
-    return resized;
-}
-
-/* 每次推理看到的是 source_rect 经拉伸或等比例缩放后落入 model_content_rect 的图像。
- * 无论是全图、ROI、RGA 零拷贝还是 CPU 回退，所有结果都在 tracker/logic 之前
- * 映射到框架统一的完整画面业务坐标系，业务 ROI 不需要理解模型尺寸、裁剪与黑边。 */
-static void map_results_to_canonical_frame(const InferenceTask &task, const InferenceRoiTransform &transform,
-                                           int model_width, int model_height, std::vector<AlgoResult> &results)
-{
-    if (task.srcW <= 0 || task.srcH <= 0 || model_width <= 0 || model_height <= 0 || g_inference.input_w <= 0 ||
-        g_inference.input_h <= 0)
-        return;
-
-    const cv::Rect visible_source = transform.source_rect & cv::Rect(0, 0, task.srcW, task.srcH);
-    const cv::Rect content = transform.model_content_rect & cv::Rect(0, 0, model_width, model_height);
-    if (visible_source.empty() || content.empty())
-        return;
-    const float scale_x = static_cast<float>(visible_source.width) * g_inference.input_w /
-                          (static_cast<float>(content.width) * task.srcW);
-    const float scale_y = static_cast<float>(visible_source.height) * g_inference.input_h /
-                          (static_cast<float>(content.height) * task.srcH);
-    const float offset_x = static_cast<float>(visible_source.x) * g_inference.input_w / task.srcW - content.x * scale_x;
-    const float offset_y = static_cast<float>(visible_source.y) * g_inference.input_h / task.srcH - content.y * scale_y;
-    const cv::Rect full_bounds(0, 0, g_inference.input_w, g_inference.input_h);
-
-    const int mask_x0 =
-        std::max(0, std::min(g_inference.input_w, static_cast<int>(std::lround(offset_x + content.x * scale_x))));
-    const int mask_y0 =
-        std::max(0, std::min(g_inference.input_h, static_cast<int>(std::lround(offset_y + content.y * scale_y))));
-    const int mask_x1 =
-        std::max(mask_x0, std::min(g_inference.input_w,
-                                   static_cast<int>(std::lround(offset_x + (content.x + content.width) * scale_x))));
-    const int mask_y1 =
-        std::max(mask_y0, std::min(g_inference.input_h,
-                                   static_cast<int>(std::lround(offset_y + (content.y + content.height) * scale_y))));
-    const cv::Rect mask_roi(mask_x0, mask_y0, mask_x1 - mask_x0, mask_y1 - mask_y0);
-
-    for (AlgoResult &result : results)
-    {
-        const cv::Point model_center = result.box_center();
-        const bool center_in_content = model_center.x >= content.x && model_center.x < content.x + content.width &&
-                                       model_center.y >= content.y && model_center.y < content.y + content.height;
-        const float left = offset_x + result.box.x * scale_x;
-        const float top = offset_y + result.box.y * scale_y;
-        const float right = offset_x + (result.box.x + result.box.width) * scale_x;
-        const float bottom = offset_y + (result.box.y + result.box.height) * scale_y;
-        const cv::Rect mapped(static_cast<int>(std::floor(left)), static_cast<int>(std::floor(top)),
-                              std::max(0, static_cast<int>(std::ceil(right)) - static_cast<int>(std::floor(left))),
-                              std::max(0, static_cast<int>(std::ceil(bottom)) - static_cast<int>(std::floor(top))));
-        result.box = mapped & full_bounds;
-        if (!center_in_content)
-            result.box = cv::Rect();
-
-        for (cv::Point2f &point : result.keypoints)
-        {
-            if (!std::isfinite(point.x) || !std::isfinite(point.y) || point.x < 0.0f || point.y < 0.0f)
-                continue;
-            point.x =
-                std::max(0.0f, std::min(static_cast<float>(g_inference.input_w - 1), offset_x + point.x * scale_x));
-            point.y =
-                std::max(0.0f, std::min(static_cast<float>(g_inference.input_h - 1), offset_y + point.y * scale_y));
-        }
-
-        if (!result.boxMask.empty() && !mask_roi.empty())
-        {
-            const float mask_scale_x = static_cast<float>(result.boxMask.cols) / model_width;
-            const float mask_scale_y = static_cast<float>(result.boxMask.rows) / model_height;
-            const cv::Rect mask_content(static_cast<int>(std::floor(content.x * mask_scale_x)),
-                                        static_cast<int>(std::floor(content.y * mask_scale_y)),
-                                        std::max(1, static_cast<int>(std::ceil(content.width * mask_scale_x))),
-                                        std::max(1, static_cast<int>(std::ceil(content.height * mask_scale_y))));
-            const cv::Rect clipped_content = mask_content & cv::Rect(0, 0, result.boxMask.cols, result.boxMask.rows);
-            cv::Mat resized;
-            cv::resize(result.boxMask(clipped_content), resized, mask_roi.size(), 0.0, 0.0, cv::INTER_NEAREST);
-            cv::Mat full = cv::Mat::zeros(g_inference.input_h, g_inference.input_w, result.boxMask.type());
-            resized.copyTo(full(mask_roi));
-            result.boxMask = std::move(full);
-        }
-    }
+    // 大模型回退也直接从原始缓冲缩放，避免先生成完整原图 BGR 再缩放。
+    // worker 私有 input_cache 复用跨帧像素内存；零拷贝成功时此路径完全不执行。
+    return task.frame->resized_frame(model_width, model_height, input_cache) ? input_cache : cv::Mat();
 }
 
 static bool run_model_task(int chnId, const InferenceTask &task, const std::shared_ptr<ModelBase> &model,
-                           std::vector<AlgoResult> &results, YoloPerfStat &perf, float &lock_wait_ms)
+                           std::vector<AlgoResult> &results, YoloPerfStat &perf, float &lock_wait_ms,
+                           cv::Mat &input_cache)
 {
     if (!model)
         return false;
@@ -348,7 +269,7 @@ static bool run_model_task(int chnId, const InferenceTask &task, const std::shar
                 const auto cpu_pre_begin = std::chrono::steady_clock::now();
                 cv::Mat cpu_frame =
                     ensure_cpu_frame(task, model->input_width(), model->input_height(), use_roi, roi_transform,
-                                     mask_polygon);
+                                     mask_polygon, input_cache);
                 input_prepare_ms += std::chrono::duration<float, std::milli>(
                     std::chrono::steady_clock::now() - cpu_pre_begin).count();
                 pass_perf = YoloPerfStat{};
@@ -371,8 +292,8 @@ static bool run_model_task(int chnId, const InferenceTask &task, const std::shar
 
         if (full_ok)
         {
-            map_results_to_canonical_frame(task, full_transform, model->input_width(), model->input_height(),
-                                           full_results);
+            map_results_to_business_frame(task.srcW, task.srcH, full_transform, model->input_width(),
+                                          model->input_height(), full_results);
             model->annotate_results(full_results);
             if (task.roi_mode == InferenceRoiMode::FullFrameRoiFilter)
                 filter_results_to_inference_roi(full_results, task.roi_config, g_inference.input_w,
@@ -380,8 +301,8 @@ static bool run_model_task(int chnId, const InferenceTask &task, const std::shar
         }
         if (roi_ok)
         {
-            map_results_to_canonical_frame(task, roi_transform, model->input_width(), model->input_height(),
-                                           roi_results);
+            map_results_to_business_frame(task.srcW, task.srcH, roi_transform, model->input_width(),
+                                          model->input_height(), roi_results);
             model->annotate_results(roi_results);
             /* 补边区域也可能产生候选框；局部推理批次必须始终按用户区域门控。
              * full_plus_roi 的整帧批次仍完整保留，不改变增强模式语义。 */
@@ -401,9 +322,10 @@ static bool run_model_task(int chnId, const InferenceTask &task, const std::shar
                 if (found == source.end())
                     return;
                 if (merged_mask.empty())
-                    merged_mask = found->boxMask.clone();
+                    merged_mask = found->boxMask; // 单次推理仅转移引用，不复制整张掩码。
                 else if (merged_mask.size() == found->boxMask.size() && merged_mask.type() == found->boxMask.type())
                 {
+                    merged_mask = merged_mask.clone(); // 只有真正合并整帧/ROI 两张掩码才创建可写副本。
                     cv::Mat foreground;
                     cv::compare(found->boxMask, 0, foreground, cv::CMP_NE);
                     found->boxMask.copyTo(merged_mask, foreground);
@@ -559,6 +481,7 @@ class ParallelCompositeExecutor
     void child_loop(size_t index)
     {
         Slot &slot = *slots_[index];
+        cv::Mat input_cache; // 每个模型线程独立复用；无需额外互斥或共享图像写入。
         while (true)
         {
             const InferenceTask *task = nullptr;
@@ -575,7 +498,7 @@ class ParallelCompositeExecutor
             {
                 child_succeeded_[index] =
                     run_model_task(chnId_, *task, composite_->entries()[index].model, child_results_[index],
-                                   child_perf_[index], child_lock_wait_ms_[index])
+                                   child_perf_[index], child_lock_wait_ms_[index], input_cache)
                         ? 1
                         : 0;
             }
@@ -641,6 +564,7 @@ void *inference_worker_thread(void *arg)
             parallel_executor.reset();
     }
 
+    cv::Mat input_cache;
     while (g_inference.running && !g_inference.chn_reload_stop[chnId])
     {
         InferenceTask task;
@@ -678,7 +602,7 @@ void *inference_worker_thread(void *arg)
         if (parallel_executor)
             ret = parallel_executor->run(task, results, perf, lock_wait_ms);
         else
-            ret = run_model_task(task.chnId, task, model_ptr, results, perf, lock_wait_ms);
+            ret = run_model_task(task.chnId, task, model_ptr, results, perf, lock_wait_ms, input_cache);
 
         if (ret)
         {

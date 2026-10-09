@@ -4,10 +4,29 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
+from services import model_info
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 
 router = APIRouter()
+
+
+@router.get("/apps/{name}/models/info")
+async def get_model_info(name: str, path: str, model_type: str = ""):
+    try:
+        app = model_info.app_directory(APPS_ROOT, name)
+        return await run_in_threadpool(model_info.inspect_model, app, path, model_type)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/apps/{name}/models/runtime")
+async def get_model_runtime(name: str):
+    try:
+        app = model_info.app_directory(APPS_ROOT, name)
+        return await run_in_threadpool(model_info.runtime_status, app, name)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 # 资源文件类型 → 类别（与 list_assets 的归类保持一致）
 _MODEL_EXT = {".rknn"}
