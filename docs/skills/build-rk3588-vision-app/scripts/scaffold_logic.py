@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
 
 def module_content(kind: str, name: str, label: str) -> tuple[str, str]:
     if kind == "channel":
-        cpp = f'''#include "logic/core/logic_common.h"
+        cpp = f'''#include <channel.h>
 
 static void {name}(ChannelContext *ctx)
 {{
@@ -57,7 +57,7 @@ REGISTER_LOGIC({name});
             "report_fields": [],
         }
     else:
-        cpp = f'''#include "logic/core/global_logic.h"
+        cpp = f'''#include <global.h>
 
 static void {name}(GlobalContext *gctx)
 {{

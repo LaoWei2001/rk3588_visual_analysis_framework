@@ -1,6 +1,6 @@
 #include "safety_controller.h"
 
-#include "gpio/gpio.h"
+#include <gpio.h>
 
 namespace crane_safety
 {

@@ -2,7 +2,7 @@
   "global": {
     "enable_display": 0,
     "disp_width": 1280,
-    "disp_height": 640,
+    "disp_height": 1280,
     "tile_rows": 1,
     "tile_cols": 2,
     "max_fps": 25,
@@ -18,7 +18,58 @@
     "performance_display": 1,
     "enable_pause_key": 0,
     "enable_rtsp": 1,
-    "rtsp_codec": "h264"
+    "rtsp_codec": "h264",
+    "global_logics": [
+      {
+        "instance_id": "global_globalLogic-3-1791537195825",
+        "enable": true,
+        "logic": "global_crane_safety_controller",
+        "channels": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "poll_interval_ms": 200,
+        "logic_parameters": {
+          "motion_channel_id": 0,
+          "hook_channel_id": 1,
+          "helmet_channel_id": 2,
+          "intrusion_channel_id": 3,
+          "lamp_settle_sec": 0.8,
+          "hardware_enabled": true,
+          "horn_pin": "GPIO6_A0",
+          "horn_active_level": 1,
+          "lamp_pin": "GPIO6_A2",
+          "lamp_active_level": 1
+        },
+        "report_policy": {
+          "enabled": true,
+          "deliveries": [
+            {
+              "id": "delivery_report-4-1791537210848",
+              "enabled": true,
+              "connection_id": "connection_1",
+              "contract_id": "global_crane_safety_controller.http_alarm",
+              "contract_revision": "102104fa46d30f7dbbb1ff66a572a11ef7139a61ffab1d30715c3127778a832f",
+              "media": [
+                "annotated_image",
+                "raw_image"
+              ],
+              "contract_label": "JNU 行车安全图片告警"
+            }
+          ],
+          "parameters": [],
+          "image_overlay": "custom",
+          "video_overlay": "custom",
+          "video_pre_sec": 3,
+          "video_post_sec": 3,
+          "video_fps": 15,
+          "merge_window_sec": 5
+        },
+        "report_parameters": {}
+      }
+    ]
   },
   "channels": [
     {
@@ -27,9 +78,9 @@
       "infer_enable": true,
       "swap_rb": false,
       "stream": {
-        "src_type": "file",
-        "url": "assets/10_9.mp4",
-        "loop": true
+        "src_type": "rtsp",
+        "url": "rtsp://admin:weifu147258@10.205.30.34/Streaming/Channels/101",
+        "video_enc": "h264"
       },
       "models": [
         {
@@ -37,23 +88,72 @@
           "enable": true,
           "model_type": "yolov8_det",
           "model_path": "assets/diaogou_s_107.rknn",
-          "label_path": "assets/labels_helmet.txt",
+          "label_path": "assets/labels_hook.txt",
           "version": "",
           "obj_thresh": 0.3,
           "nms_thresh": 0.45,
           "detect_classes": [],
-          "npu_core": 0
+          "npu_core": -1
         }
       ],
-      "logic": "logic_default",
+      "logic": "logic_crane_motion",
       "report_policy": {
         "enabled": false,
         "deliveries": [],
         "parameters": []
       },
       "report_parameters": {},
-      "logic_parameters": {},
-      "roi_zones": []
+      "logic_parameters": {
+        "motion_roi_name": "detect_area",
+        "hook_class_id": 0,
+        "hook_min_score": 0.3,
+        "hook_motion_threshold_px": 3,
+        "hook_motion_window_sec": 0.2,
+        "hook_still_reset_sec": 10,
+        "diff_threshold": 10,
+        "change_ratio": 0.015,
+        "moving_confirm_sec": 0.2,
+        "still_confirm_sec": 2
+      },
+      "roi_zones": [
+        {
+          "name": "detect_area",
+          "polygon": [
+            [
+              0.0072,
+              0.98956
+            ],
+            [
+              0.43902,
+              0.98148
+            ],
+            [
+              0.44242,
+              0.39966
+            ],
+            [
+              0.72765,
+              0.39966
+            ],
+            [
+              0.72083,
+              0.98754
+            ],
+            [
+              0.98447,
+              0.9835
+            ],
+            [
+              0.9822,
+              0.01987
+            ],
+            [
+              0.01515,
+              0.00774
+            ]
+          ]
+        }
+      ]
     },
     {
       "id": 1,
@@ -61,9 +161,55 @@
       "infer_enable": true,
       "swap_rb": false,
       "stream": {
-        "src_type": "file",
-        "url": "assets/10_9.mp4",
-        "loop": true
+        "src_type": "rtsp",
+        "url": "rtsp://admin:weifu147258@10.205.30.34/Streaming/Channels/101",
+        "video_enc": "h264"
+      },
+      "models": [
+        {
+          "id": "model_0",
+          "enable": true,
+          "model_type": "yolov8_det",
+          "model_path": "assets/diaogou_s_107.rknn",
+          "label_path": "assets/labels_hook.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": -1
+        }
+      ],
+      "logic": "logic_crane_hook",
+      "report_policy": {
+        "enabled": false,
+        "deliveries": [],
+        "parameters": []
+      },
+      "report_parameters": {},
+      "logic_parameters": {
+        "hook_class_id": 0,
+        "min_score": 0.3,
+        "safe_center_x": 330,
+        "safe_center_y": 360,
+        "dynamic_center_enabled": true,
+        "center_calibration_path": "assets/hook_height_calibration_samples.csv",
+        "calibration_scale_bin": 5,
+        "safe_radius": 130,
+        "confirm_sec": 0.3,
+        "clear_sec": 3,
+        "lost_tolerance_sec": 0.5
+      },
+      "roi_zones": []
+    },
+    {
+      "id": 2,
+      "enable": true,
+      "infer_enable": true,
+      "swap_rb": false,
+      "stream": {
+        "src_type": "rtsp",
+        "url": "rtsp://admin:weifu147258@10.205.30.34/Streaming/Channels/101",
+        "video_enc": "h264"
       },
       "models": [
         {
@@ -76,47 +222,256 @@
           "obj_thresh": 0.3,
           "nms_thresh": 0.45,
           "detect_classes": [],
-          "npu_core": 1
+          "npu_core": -1
         }
       ],
-      "logic": "logic_default",
+      "logic": "logic_crane_helmet",
       "report_policy": {
         "enabled": false,
         "deliveries": [],
         "parameters": []
       },
       "report_parameters": {},
-      "logic_parameters": {},
-      "roi_zones": []
+      "logic_parameters": {
+        "alarm_mode": "missing_helmet",
+        "roi_name": "loading_zone",
+        "person_labels": "person",
+        "helmet_labels": "helmet",
+        "bare_head_labels": "bare_head",
+        "person_min_score": 0.3,
+        "helmet_min_score": 0.3,
+        "bare_head_min_score": 0.3,
+        "confirm_sec": 0.5,
+        "clear_sec": 1
+      },
+      "roi_zones": [
+        {
+          "name": "loading_zone",
+          "polygon": [
+            [
+              0.4779,
+              0.0046
+            ],
+            [
+              0.43586,
+              0.06723
+            ],
+            [
+              0.4154,
+              0.1541
+            ],
+            [
+              0.41086,
+              0.24501
+            ],
+            [
+              0.4404,
+              0.32581
+            ],
+            [
+              0.49609,
+              0.37026
+            ],
+            [
+              0.56086,
+              0.3743
+            ],
+            [
+              0.61086,
+              0.31773
+            ],
+            [
+              0.63586,
+              0.22682
+            ],
+            [
+              0.63699,
+              0.11773
+            ],
+            [
+              0.61427,
+              0.05713
+            ],
+            [
+              0.58131,
+              0.00662
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "enable": true,
+      "infer_enable": true,
+      "swap_rb": false,
+      "stream": {
+        "src_type": "rtsp",
+        "url": "rtsp://admin:weifu147258@10.205.30.34/Streaming/Channels/101",
+        "video_enc": "h264"
+      },
+      "models": [
+        {
+          "id": "model_0",
+          "enable": true,
+          "model_type": "yolov8_det",
+          "model_path": "assets/helmet_n960_109.rknn",
+          "label_path": "assets/labels_helmet.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": -1
+        }
+      ],
+      "logic": "logic_crane_intrusion",
+      "report_policy": {
+        "enabled": false,
+        "deliveries": [],
+        "parameters": []
+      },
+      "report_parameters": {},
+      "logic_parameters": {
+        "roi_name": "projection_zone",
+        "person_labels": "person",
+        "min_score": 0.4,
+        "confirm_sec": 0.3,
+        "clear_sec": 1
+      },
+      "roi_zones": [
+        {
+          "name": "projection_zone",
+          "polygon": [
+            [
+              0.4779,
+              0.0046
+            ],
+            [
+              0.43586,
+              0.06723
+            ],
+            [
+              0.4154,
+              0.1541
+            ],
+            [
+              0.41086,
+              0.24501
+            ],
+            [
+              0.4404,
+              0.32581
+            ],
+            [
+              0.49609,
+              0.37026
+            ],
+            [
+              0.56086,
+              0.3743
+            ],
+            [
+              0.61086,
+              0.31773
+            ],
+            [
+              0.63586,
+              0.22682
+            ],
+            [
+              0.63699,
+              0.11773
+            ],
+            [
+              0.61427,
+              0.05713
+            ],
+            [
+              0.58131,
+              0.00662
+            ]
+          ]
+        }
+      ]
     }
   ],
   "_editor_layout": {
     "0": {
       "stream": {
-        "x": 115,
-        "y": 165
+        "x": 75,
+        "y": 54
       },
       "model": {
-        "x": 416,
-        "y": 185
+        "x": 385,
+        "y": 54
+      },
+      "roi": {
+        "x": 48,
+        "y": -175
       },
       "logic": {
-        "x": 694,
-        "y": 158
+        "x": 770,
+        "y": 51
       }
     },
     "1": {
       "stream": {
-        "x": 131,
-        "y": 271
+        "x": 86,
+        "y": 286
       },
       "model": {
-        "x": 432,
-        "y": 291
+        "x": 392,
+        "y": 286
       },
       "logic": {
-        "x": 710,
-        "y": 264
+        "x": 767,
+        "y": 288
+      }
+    },
+    "2": {
+      "stream": {
+        "x": 67,
+        "y": 684
+      },
+      "model": {
+        "x": 366,
+        "y": 685
+      },
+      "roi": {
+        "x": 56,
+        "y": 451
+      },
+      "logic": {
+        "x": 753,
+        "y": 688
+      }
+    },
+    "3": {
+      "stream": {
+        "x": 84,
+        "y": 981
+      },
+      "model": {
+        "x": 393,
+        "y": 981
+      },
+      "roi": {
+        "x": 73,
+        "y": 775
+      },
+      "logic": {
+        "x": 771,
+        "y": 984
+      }
+    },
+    "global": {
+      "logic_0": {
+        "x": 1155,
+        "y": 477
+      },
+      "report_0_0": {
+        "x": 1459,
+        "y": 478
       }
     }
   }

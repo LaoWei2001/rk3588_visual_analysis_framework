@@ -501,6 +501,7 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
     }
 
     /* 0/2/4 是三个检测头，1/3/5 是对应 mask 系数，6 是 proto。
+     *
      * 旧循环还会调用三个必然立即返回的奇数分支，并在 i=6 时形成 ANCHORS[3] 越界地址。 */
     for (int i = 0; i < 6; i += 2)
     {
@@ -527,8 +528,8 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
         process_i8(outputs, 6, nullptr, proto_grid_h, proto_grid_w, model_h_, model_w_, 1, num_classes_, filterBoxes,
                    filterSegments, proto, objProbs, classId, obj_thresh_);
     else
-        process_fp32(outputs, 6, nullptr, proto_grid_h, proto_grid_w, model_h_, model_w_, 1, num_classes_,
-                     filterBoxes, filterSegments, proto, objProbs, classId, obj_thresh_);
+        process_fp32(outputs, 6, nullptr, proto_grid_h, proto_grid_w, model_h_, model_w_, 1, num_classes_, filterBoxes,
+                     filterSegments, proto, objProbs, classId, obj_thresh_);
 
     if (validCount <= 0)
     {
@@ -601,7 +602,8 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
         return 0;
 
     /* Mask generation: OpenCV GEMM 会使用平台优化内核（RK3588 上可走 NEON），替代
-     * boxes × 32 × 25600 的手写标量三重循环。 */
+     * boxes × 32 ×
+     * 25600 的手写标量三重循环。 */
     cv::Mat coefficients(boxes_num, PROTO_CHANNEL, CV_32FC1, filterSegments_by_nms.data());
     cv::Mat proto_matrix(PROTO_CHANNEL, PROTO_HEIGHT * PROTO_WEIGHT, CV_32FC1, proto);
     cv::Mat matmul_out;

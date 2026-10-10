@@ -1,0 +1,3 @@
+/userdata/rk3588_visual_analysis_framework/service/gpio_state/build/CMakeFiles/rebuild_cache.dir
+/userdata/rk3588_visual_analysis_framework/service/gpio_state/build/CMakeFiles/edit_cache.dir
+/userdata/rk3588_visual_analysis_framework/service/gpio_state/build/CMakeFiles/rk3588-gpio-daemon.dir

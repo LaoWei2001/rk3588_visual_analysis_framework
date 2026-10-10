@@ -40,6 +40,7 @@
  * 信号 → isRunning=0 → 唤醒所有等待线程 → 逆序 join → 释放资源
  */
 
+#include "logic/core/logic_registry.h"
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -62,8 +63,7 @@
 #include "display/display.h"
 #include "display/display_pipeline.h"
 #include "event/event_report.h"
-#include "gpio/gpio.h"
-#include "logic/core/channel_logic.h"
+#include "gpio/gpio_runtime.h"
 #include "logic/core/global_logic.h"
 #include "pipeline/pipeline_runtime.h"
 #include "recorder/event_video_recorder.h"
@@ -72,6 +72,8 @@
 #include "runtime/pause_ctrl.h"
 #include "runtime/process_signals.h"
 #include "yolo/model_inspection.h"
+#include <channel.h>
+#include <gpio.h>
 
 /* config_monitor_thread_func — 由 app_ctrl.cpp 导出 (C++ mangling) */
 extern "C" void *config_monitor_thread_func(void *arg);
@@ -239,14 +241,20 @@ int main(int argc, char **argv)
     }
 
     {
-        struct sigaction sa{};
+        struct sigaction sa
+        {
+        };
         sa.sa_handler = signal_handler;
         sigaction(SIGINT, &sa, nullptr);
         sigaction(SIGTERM, &sa, nullptr);
-        struct sigaction sa_usr{};
+        struct sigaction sa_usr
+        {
+        };
         sa_usr.sa_handler = sigusr1_handler;
         sigaction(SIGUSR1, &sa_usr, nullptr);
-        struct sigaction sa_pipe{};
+        struct sigaction sa_pipe
+        {
+        };
         sa_pipe.sa_handler = SIG_IGN;
         sigaction(SIGPIPE, &sa_pipe, nullptr);
     }

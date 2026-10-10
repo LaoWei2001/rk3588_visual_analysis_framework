@@ -1,0 +1,44 @@
+{
+  "label": "SDK 示例：区域持续占用报警",
+  "event_types": [{"id": "roi_dwell", "label": "区域持续占用"}],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "target_label": {
+        "type": "string", "title": "目标标签", "default": "person",
+        "description": "必须与模型输出的类别名称一致。",
+        "x-hot-reload": "reset_state"
+      },
+      "roi_name": {
+        "type": "string", "title": "区域名称", "default": "alarm_zone",
+        "description": "指定一个已绘制的 ROI；不存在时停止计时并显示 roi_missing。",
+        "x-hot-reload": "reset_state"
+      },
+      "hold_ms": {
+        "type": "integer", "title": "持续时间", "default": 2000,
+        "minimum": 0, "maximum": 3600000, "x-unit": "ms",
+        "x-hot-reload": "reset_state"
+      },
+      "max_gap_ms": {
+        "type": "integer", "title": "最大帧间隔", "default": 1000,
+        "minimum": 1, "maximum": 60000, "x-unit": "ms",
+        "description": "相邻业务帧间隔超过此值就重新计时，避免断流时间计入持续占用。",
+        "x-hot-reload": "reset_state"
+      }
+    }
+  },
+  "outputs": [
+    {"key": "target_count", "type": "integer", "label": "区域目标数"},
+    {"key": "dwell_ms", "type": "integer", "label": "持续出现毫秒数"},
+    {"key": "alarm_active", "type": "boolean", "label": "已达到报警条件"},
+    {"key": "event_accepted", "type": "boolean", "label": "本次事件已被接受"},
+    {"key": "status", "type": "string", "label": "当前状态"}
+  ],
+  "report_fields": [
+    {"key": "target_label", "type": "string", "label": "目标类别"},
+    {"key": "roi_name", "type": "string", "label": "区域名称"},
+    {"key": "target_count", "type": "number", "label": "区域目标数"},
+    {"key": "dwell_ms", "type": "number", "label": "持续出现毫秒数"}
+  ]
+}

@@ -1,21 +1,41 @@
+#include "inference/model_status.h"
+#include "yolo/composite_model.h"
 #include <cassert>
 #include <iostream>
+#include <json.h>
 #include <thread>
-#include "inference/model_status.h"
-#include "third_party/json/cJSON.h"
-#include "yolo/composite_model.h"
 
 class FakeModel : public ModelBase
 {
     int dimension_;
-public:
-    explicit FakeModel(int dimension) : dimension_(dimension) {}
-    bool infer(cv::Mat &, std::vector<AlgoResult> &, YoloPerfStat *) override { return true; }
-    int input_width() const override { return dimension_; }
-    int input_height() const override { return dimension_; }
-    void set_thresh(float, float) override {}
-    float get_obj_thresh() const override { return .3f; }
-    float get_nms_thresh() const override { return .45f; }
+
+  public:
+    explicit FakeModel(int dimension) : dimension_(dimension)
+    {
+    }
+    bool infer(cv::Mat &, std::vector<AlgoResult> &, YoloPerfStat *) override
+    {
+        return true;
+    }
+    int input_width() const override
+    {
+        return dimension_;
+    }
+    int input_height() const override
+    {
+        return dimension_;
+    }
+    void set_thresh(float, float) override
+    {
+    }
+    float get_obj_thresh() const override
+    {
+        return .3f;
+    }
+    float get_nms_thresh() const override
+    {
+        return .45f;
+    }
 };
 
 void check(const char *state, int width, int active_count = 1)
@@ -58,15 +78,21 @@ int main()
     model_status_applied(2, channel, {std::make_shared<FakeModel>(960)});
     check("applied", 960);
     // Polling and lifecycle writes can proceed concurrently with no inference lock.
-    std::thread reader([] { for (int i = 0; i < 500; ++i) check("applied", 960); });
+    std::thread reader([] {
+        for (int i = 0; i < 500; ++i)
+            check("applied", 960);
+    });
     for (int i = 0; i < 500; ++i)
         model_status_applied(2, channel, {std::make_shared<FakeModel>(960)});
     reader.join();
     channel.models.push_back(spec);
     CompositeModel::Entry first, second;
-    first.id = "a"; first.model = std::make_shared<FakeModel>(960);
-    second.id = "b"; second.model = std::make_shared<FakeModel>(960);
-    model_status_applied(2, channel, {std::make_shared<CompositeModel>(std::vector<CompositeModel::Entry>{first, second})});
+    first.id = "a";
+    first.model = std::make_shared<FakeModel>(960);
+    second.id = "b";
+    second.model = std::make_shared<FakeModel>(960);
+    model_status_applied(2, channel,
+                         {std::make_shared<CompositeModel>(std::vector<CompositeModel::Entry>{first, second})});
     check("applied", 960, 2);
     model_status_applied(2, channel, {});
     check("disabled", 0, 0);

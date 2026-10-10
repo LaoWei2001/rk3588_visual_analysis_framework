@@ -19,7 +19,7 @@
 /*
     使用本地视频进行检测:
 */
-#include "logic/core/logic_common.h"
+#include <channel.h>
 
 static void logic_course_10(ChannelContext *ctx)
 {

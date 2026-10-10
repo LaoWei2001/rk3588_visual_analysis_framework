@@ -1,4 +1,5 @@
 #include "logic_control.h"
+#include "logic/core/logic_registry.h"
 #include "remote_dataset.h"
 
 #include <atomic>
@@ -21,10 +22,10 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#include "runtime/app_ctrl.h"
-#include "logic/core/global_logic.h"
-#include "third_party/json/cJSON.h"
 #include "inference/model_status.h"
+#include "logic/core/global_logic.h"
+#include "runtime/app_ctrl.h"
+#include <json.h>
 
 namespace
 {
@@ -200,8 +201,8 @@ void handle_client(int client_fd)
         action.payload_json = payload_text ? payload_text : "{}";
         action.logic_name = logic_name;
         action.received_unix_ms = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count());
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count());
         if (payload_text)
             cJSON_free(payload_text);
 
@@ -269,7 +270,9 @@ void server_loop()
 {
     while (g_running.load())
     {
-        struct pollfd pfd{};
+        struct pollfd pfd
+        {
+        };
         pfd.fd = g_server_fd;
         pfd.events = POLLIN;
         const int pr = poll(&pfd, 1, 200);
@@ -282,7 +285,9 @@ void server_loop()
         if (client_fd < 0)
             continue;
 
-        struct timeval tv{};
+        struct timeval tv
+        {
+        };
         tv.tv_sec = 2;
         tv.tv_usec = 0;
         setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));

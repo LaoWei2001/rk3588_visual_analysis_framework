@@ -7,7 +7,7 @@
  */
 #pragma once
 
-#include "inference/inference_types.h"
+#include <types.h>
 
 #include <memory>
 #include <string>

@@ -456,9 +456,8 @@ int YoloPose::process_quantized(const T *input, int grid_h, int grid_w, int stri
     const int grid_len = grid_h * grid_w;
     const float threshold_logit = unsigmoid(obj_thresh_);
     const long quantized_threshold = std::lround(threshold_logit / scale + zp);
-    const T threshold = static_cast<T>(std::max<long>(std::numeric_limits<T>::min(),
-                                                       std::min<long>(std::numeric_limits<T>::max(),
-                                                                      quantized_threshold)));
+    const T threshold = static_cast<T>(std::max<long>(
+        std::numeric_limits<T>::min(), std::min<long>(std::numeric_limits<T>::max(), quantized_threshold)));
     int valid_count = 0;
     for (int h = 0; h < grid_h; ++h)
     {
@@ -543,13 +542,13 @@ int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std:
         int stride = model_h_ / grid_h;
 
         if (is_quant_ && out_attrs_[i].type == RKNN_TENSOR_INT8)
-            validCount += process_quantized(static_cast<const int8_t *>(outputs[i].buf), grid_h, grid_w, stride,
-                                            filterBoxes, objProbs, classId, out_attrs_[i].zp, out_attrs_[i].scale,
-                                            index);
+            validCount +=
+                process_quantized(static_cast<const int8_t *>(outputs[i].buf), grid_h, grid_w, stride, filterBoxes,
+                                  objProbs, classId, out_attrs_[i].zp, out_attrs_[i].scale, index);
         else if (is_quant_ && out_attrs_[i].type == RKNN_TENSOR_UINT8)
-            validCount += process_quantized(static_cast<const uint8_t *>(outputs[i].buf), grid_h, grid_w, stride,
-                                            filterBoxes, objProbs, classId, out_attrs_[i].zp, out_attrs_[i].scale,
-                                            index);
+            validCount +=
+                process_quantized(static_cast<const uint8_t *>(outputs[i].buf), grid_h, grid_w, stride, filterBoxes,
+                                  objProbs, classId, out_attrs_[i].zp, out_attrs_[i].scale, index);
         else
             validCount += process_fp32(static_cast<float *>(outputs[i].buf), grid_h, grid_w, stride, filterBoxes,
                                        objProbs, classId, out_attrs_[i].zp, out_attrs_[i].scale, index);
@@ -630,10 +629,10 @@ int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std:
             res.keypoint_scores.resize(keypoint_count_);
             for (int j = 0; j < keypoint_count_; ++j)
             {
-                float kx = (keypoint_value(keypoint_output, keypoint_attr, j, 0, keypoints_index) - lb.x_pad) /
-                           lb.scale;
-                float ky = (keypoint_value(keypoint_output, keypoint_attr, j, 1, keypoints_index) - lb.y_pad) /
-                           lb.scale;
+                float kx =
+                    (keypoint_value(keypoint_output, keypoint_attr, j, 0, keypoints_index) - lb.x_pad) / lb.scale;
+                float ky =
+                    (keypoint_value(keypoint_output, keypoint_attr, j, 1, keypoints_index) - lb.y_pad) / lb.scale;
                 float keypoint_score = keypoint_value(keypoint_output, keypoint_attr, j, 2, keypoints_index);
                 if (keypoint_score < 0.0f || keypoint_score > 1.0f)
                     keypoint_score = sigmoid(keypoint_score);

@@ -80,8 +80,8 @@ extern "C" void *display_worker_thread(void *arg)
         const bool show_perf = app_ctrl_get_performance_display();
         if (!has_frame)
         {
-            const bool consumer_active = app_ctrl_get_enable_disp() ||
-                (app_ctrl_get_enable_rtsp() && rtsp_streamer_has_active_client());
+            const bool consumer_active =
+                app_ctrl_get_enable_disp() || (app_ctrl_get_enable_rtsp() && rtsp_streamer_has_active_client());
             if (consumer_active && (show_perf || had_performance_display))
                 display_refresh_channel_overlays(chnId);
             had_performance_display = show_perf;
@@ -99,7 +99,7 @@ extern "C" void *display_worker_thread(void *arg)
          * overlay 在 display_commit_frame 内读取共享 last_results，
          * 按检测结果的实际坐标绘制框。*/
         display_commit_frame(task.chnId, dq.pool.front_buf(), task.srcFmt, task.srcWidth, task.srcHeight,
-                              task.srcHStride, task.srcVStride);
+                             task.srcHStride, task.srcVStride);
     }
 
     return nullptr;

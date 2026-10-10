@@ -1,6 +1,6 @@
 # ChannelContext API
 
-本文只描述当前 `engine/src/logic/core/channel_logic.h` 暴露的通道接口。修改公共头文件后，
+本文只描述当前 `engine/include/channel.h` 暴露的通道接口。修改公共头文件后，
 必须同步复核本文。
 
 ## 目录
@@ -32,7 +32,7 @@
 
 ### 两种帧接口
 
-- `model_frame()`：模型输入尺寸的 BGR 图，坐标与 `results[].box` 和 ROI 完全一致。
+- `business_frame()` / `model_frame()`：固定 640×640 业务 BGR 图，坐标与 `results[].box` 和 ROI 完全一致；与实际 NPU 输入尺寸独立。
 - `source_frame()`：源分辨率 BGR 图，尺寸对应 `src_width × src_height`。
 
 两者都惰性转换：本帧第一次调用时生成，之后复用同一不可变缓存；取帧失败返回 `nullptr`。
@@ -45,7 +45,7 @@
 
 | 字段 | 含义 |
 |---|---|
-| `box` | 模型输入坐标系检测框 |
+| `box` | 固定 640×640 业务坐标系检测框 |
 | `label`, `class_id`, `score` | 标签、类别 ID、置信度 |
 | `track_id` | 跟踪 ID |
 | `chn_id`, `frame_id`, `timestamp_ms` | 结果来源与时间 |
@@ -74,7 +74,7 @@ C++ 与 manifest 中重复定义成不同契约。
 
 ## 类型化 outputs
 
-每帧的 `outputs` 是一份新的 `LogicOutputSet`，logic 可调用：
+框架为每个业务帧创建新的输出集合，logic 通过以下方法发布，不直接访问内部输出绑定：
 
 - `publish_string(key, value)`；
 - `publish_number(key, value)`；
@@ -88,7 +88,7 @@ C++ 与 manifest 中重复定义成不同契约。
 
 ## ROI
 
-`rois` 中的多边形已经缩放到模型输入坐标系。可用接口：
+`rois` 中的多边形已经缩放到固定 640×640 业务坐标系。可用接口：
 
 - `roi_count()`、`roi_at(i)`、`roi_polygon_at(i)`、`roi_name_at(i)`；
 - `roi_by_name(name)`、`roi_find(ctx, name)`；
@@ -115,21 +115,23 @@ C++ 与 manifest 中重复定义成不同契约。
 | `ALL` | 7 | 三种出口 |
 
 `replace_display_frame(frame)` 接受 `CV_8UC1/3/4` 的任意尺寸 Mat；模型帧可取得时，
-`display_canvas()` 首次调用会克隆一份可写的模型尺寸 BGR 画布，取帧失败时返回空 Mat，调用方应
+`display_canvas()` 首次调用会克隆一份可写的 640×640 业务 BGR 画布，取帧失败时返回空 Mat，调用方应
 检查 `empty()`。两者都只改变当前显示底图，不改变推理帧或事件媒体源；系统标注和 draw 指令仍会
 在显示出口叠加。
 
 ## 状态和生命周期
 
-`state` 的类型是 `std::shared_ptr<void>*`，每个通道实例独立。典型初始化：
+`get_state<T>()` 返回每个逻辑实例独立的状态，首次构造、后续复用：
 
 ```cpp
-if (!*ctx->state)
-    *ctx->state = std::make_shared<MyState>();
-auto &state = *std::static_pointer_cast<MyState>(*ctx->state);
+auto *state = ctx->get_state<MyState>();
+if (!state) return;
 ```
 
-不要缓存 `ctx`、`results`、`rois`、`draw_cmds` 或帧指针。参数热重载是否保留状态取决于变更参数
+构造参数可通过 `get_state<MyState>(args...)` 传入；同一个模块的普通回调和 Action 使用同一个类型。
+原始 `state` 的类型仍为 `std::shared_ptr<void>*`，已有模块可以继续使用。
+
+不要缓存状态借用指针、`ctx`、`results`、`rois` 或帧指针。绘图绑定是框架私有字段，业务通过绘图函数提交指令。参数热重载是否保留状态取决于变更参数
 的 `x-hot-reload` 策略；切换 logic 会建立与新模块匹配的状态。
 
 ## 跨通道快照

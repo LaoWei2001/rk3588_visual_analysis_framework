@@ -1,8 +1,8 @@
 #pragma once
+#include <channel.h>
 #include <memory>
 #include <string>
 #include <vector>
-#include "logic/core/channel_logic.h"
 struct AppRuntimeSnapshot;
 
 // An optional observer of the same inference frame, independent of channel Logic.

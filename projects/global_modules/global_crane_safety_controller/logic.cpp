@@ -1,6 +1,6 @@
-#include "control/logic_control.h"
-#include "event/event_report.h"
-#include "logic/core/global_logic.h"
+#include <control.h>
+#include <events.h>
+#include <global.h>
 #include "safety_controller.h"
 
 #include <algorithm>

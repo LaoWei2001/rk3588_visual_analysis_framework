@@ -10,8 +10,8 @@
 
 #include <opencv2/opencv.hpp>
 
-#include "inference/inference_types.h"
-#include "logic/core/channel_logic.h"
+#include <types.h>
+#include <channel.h>
 
 namespace crane_safety
 {

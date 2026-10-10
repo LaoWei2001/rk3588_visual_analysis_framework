@@ -1,9 +1,9 @@
 #pragma once
+#include <atomic>
 #include <gst/gst.h>
+#include <mutex>
 #include <stdbool.h>
 #include <stdint.h>
-#include <atomic>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -132,10 +132,10 @@ class DecChannel
     std::atomic<int> mReconnectCount;
     int mRecoverOkCount;
     int mRecoverFailCount;
-    bool mIsFileSrc;            // 是否为文件源
-    bool mIsUsbSrc;             // 是否为USB摄像头源
-    bool mLoop;                 // 文件播放循环
-    bool mStopRequested{false}; // 安全停止标志
+    bool mIsFileSrc;                   // 是否为文件源
+    bool mIsUsbSrc;                    // 是否为USB摄像头源
+    bool mLoop;                        // 文件播放循环
+    bool mStopRequested{false};        // 安全停止标志
     std::atomic<bool> mFileEos{false}; // 非循环文件已播到末尾，保留管道供 Web 回拖
 
     /** 只保护 pipeline 指针的发布/取引用；GStreamer 对对象操作本身是线程安全的。 */

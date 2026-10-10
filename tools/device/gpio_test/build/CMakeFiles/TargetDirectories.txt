@@ -1,0 +1,7 @@
+/userdata/rk3588_visual_analysis_framework/gpio_test/build/CMakeFiles/install/strip.dir
+/userdata/rk3588_visual_analysis_framework/gpio_test/build/CMakeFiles/install/local.dir
+/userdata/rk3588_visual_analysis_framework/gpio_test/build/CMakeFiles/install.dir
+/userdata/rk3588_visual_analysis_framework/gpio_test/build/CMakeFiles/list_install_components.dir
+/userdata/rk3588_visual_analysis_framework/gpio_test/build/CMakeFiles/rebuild_cache.dir
+/userdata/rk3588_visual_analysis_framework/gpio_test/build/CMakeFiles/edit_cache.dir
+/userdata/rk3588_visual_analysis_framework/gpio_test/build/CMakeFiles/rk3588-gpioctl.dir

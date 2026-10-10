@@ -1,16 +1,17 @@
 #include "display.h"
+#include "common/logging.h"
 #include "inference/inference_engine.h"
+#include "logic/core/context_access.h"
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
 #include "runtime/process_signals.h"
-#include "common/logging.h"
-#include "text_overlay.h"
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <dirent.h>
+#include <drawing.h>
 #include <gtk/gtk.h>
 #include <mutex>
 #include <opencv2/opencv.hpp>
@@ -18,6 +19,23 @@
 #include <unistd.h>
 #include <utility>
 #include <vector>
+
+RenderParams channel_render_params(const ChannelContext &ctx)
+{
+    RenderParams p;
+    const cv::Mat *frame = ctx.model_frame();
+    p.chnId = ctx.chnId;
+    p.inputW = frame ? frame->cols : 0;
+    p.inputH = frame ? frame->rows : 0;
+    p.disp_fps = ctx.disp_fps;
+    p.infer_fps = ctx.infer_fps;
+    p.result_frame_id = ctx.frame_id;
+    p.inference_roi = ctx.config && ctx.config->inference_roi.has_roi() ? &ctx.config->inference_roi : nullptr;
+    p.roi_zones = ctx.rois;
+    p.results = ctx.results;
+    p.draw_cmds = VisionContextAccess::drawing(ctx);
+    return p;
+}
 
 /* 唯一文字绘制出口：普通文字和重影文字共用同一个缓存渲染器。
  * FreeType 字形、加粗蒙版和重影膨胀蒙版只在缓存未命中时生成；命中时只在文字实际包围框
@@ -95,10 +113,10 @@ struct SegmentationColorLuts
     SegmentationColorLuts()
     {
         static const unsigned char class_colors[][3] = {
-            {255, 56, 56},  {255, 157, 151}, {255, 112, 31},  {255, 178, 29}, {207, 210, 49},
-            {72, 249, 10},  {146, 204, 23}, {61, 219, 134},  {26, 147, 52},  {0, 212, 187},
-            {44, 153, 168}, {0, 194, 255},  {52, 69, 147},  {100, 115, 255}, {0, 24, 236},
-            {132, 56, 255}, {82, 0, 133},   {203, 56, 255}, {255, 149, 200}, {255, 55, 199}};
+            {255, 56, 56},  {255, 157, 151}, {255, 112, 31}, {255, 178, 29},  {207, 210, 49},
+            {72, 249, 10},  {146, 204, 23},  {61, 219, 134}, {26, 147, 52},   {0, 212, 187},
+            {44, 153, 168}, {0, 194, 255},   {52, 69, 147},  {100, 115, 255}, {0, 24, 236},
+            {132, 56, 255}, {82, 0, 133},    {203, 56, 255}, {255, 149, 200}, {255, 55, 199}};
 
         b = cv::Mat::zeros(1, 256, CV_8UC1);
         g = cv::Mat::zeros(1, 256, CV_8UC1);
@@ -402,11 +420,10 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p, PerformanceOver
                         const cv::Rect bounds = clipped_draw_bounds(
                             screen_roi, static_cast<int64_t>(r.x) - pad, static_cast<int64_t>(r.y) - pad,
                             static_cast<int64_t>(r.x) + r.width + pad, static_cast<int64_t>(r.y) + r.height + pad);
-                        draw_alpha_region(screen_roi, bounds, cmd.alpha,
-                                          [&](cv::Mat &overlay, const cv::Point &origin) {
-                                              cv::rectangle(overlay, cv::Rect(r.tl() - origin, r.size()), cmd.color,
-                                                            thickness);
-                                          });
+                        draw_alpha_region(
+                            screen_roi, bounds, cmd.alpha, [&](cv::Mat &overlay, const cv::Point &origin) {
+                                cv::rectangle(overlay, cv::Rect(r.tl() - origin, r.size()), cmd.color, thickness);
+                            });
                     }
                     else
                         cv::rectangle(screen_roi, r, cmd.color, thk(cmd.thickness));
@@ -425,15 +442,13 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p, PerformanceOver
                 {
                     const int thickness = thk(cmd.thickness);
                     const int pad = draw_padding(thickness, true);
-                    const cv::Rect bounds = clipped_draw_bounds(
-                        screen_roi, static_cast<int64_t>(ec.x) - es.width - pad,
-                        static_cast<int64_t>(ec.y) - es.height - pad,
-                        static_cast<int64_t>(ec.x) + es.width + pad + 1,
-                        static_cast<int64_t>(ec.y) + es.height + pad + 1);
-                    draw_alpha_region(screen_roi, bounds, cmd.alpha,
-                                      [&](cv::Mat &overlay, const cv::Point &origin) {
-                                          cv::ellipse(overlay, ec - origin, es, 0, 0, 360, cmd.color, thickness);
-                                      });
+                    const cv::Rect bounds = clipped_draw_bounds(screen_roi, static_cast<int64_t>(ec.x) - es.width - pad,
+                                                                static_cast<int64_t>(ec.y) - es.height - pad,
+                                                                static_cast<int64_t>(ec.x) + es.width + pad + 1,
+                                                                static_cast<int64_t>(ec.y) + es.height + pad + 1);
+                    draw_alpha_region(screen_roi, bounds, cmd.alpha, [&](cv::Mat &overlay, const cv::Point &origin) {
+                        cv::ellipse(overlay, ec - origin, es, 0, 0, 360, cmd.color, thickness);
+                    });
                 }
                 else
                     cv::ellipse(screen_roi, ec, es, 0, 0, 360, cmd.color, thk(cmd.thickness));
@@ -459,19 +474,18 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p, PerformanceOver
                     const int thickness = thk(cmd.thickness);
                     const int pad = draw_padding(thickness, true);
                     const cv::Rect point_bounds = cv::boundingRect(pts);
-                    const cv::Rect bounds = clipped_draw_bounds(
-                        screen_roi, static_cast<int64_t>(point_bounds.x) - pad,
-                        static_cast<int64_t>(point_bounds.y) - pad,
-                        static_cast<int64_t>(point_bounds.x) + point_bounds.width + pad,
-                        static_cast<int64_t>(point_bounds.y) + point_bounds.height + pad);
-                    draw_alpha_region(screen_roi, bounds, cmd.alpha,
-                                      [&](cv::Mat &overlay, const cv::Point &origin) {
-                                          std::vector<cv::Point> local_pts;
-                                          local_pts.reserve(pts.size());
-                                          for (const cv::Point &point : pts)
-                                              local_pts.push_back(point - origin);
-                                          cv::polylines(overlay, local_pts, cmd.closed, cmd.color, thickness, cv::LINE_AA);
-                                      });
+                    const cv::Rect bounds =
+                        clipped_draw_bounds(screen_roi, static_cast<int64_t>(point_bounds.x) - pad,
+                                            static_cast<int64_t>(point_bounds.y) - pad,
+                                            static_cast<int64_t>(point_bounds.x) + point_bounds.width + pad,
+                                            static_cast<int64_t>(point_bounds.y) + point_bounds.height + pad);
+                    draw_alpha_region(screen_roi, bounds, cmd.alpha, [&](cv::Mat &overlay, const cv::Point &origin) {
+                        std::vector<cv::Point> local_pts;
+                        local_pts.reserve(pts.size());
+                        for (const cv::Point &point : pts)
+                            local_pts.push_back(point - origin);
+                        cv::polylines(overlay, local_pts, cmd.closed, cmd.color, thickness, cv::LINE_AA);
+                    });
                 }
                 else
                 {
@@ -490,16 +504,15 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p, PerformanceOver
                 {
                     const int pad = draw_padding(/*filled*/ -1, true);
                     const cv::Rect point_bounds = cv::boundingRect(pts);
-                    const cv::Rect bounds = clipped_draw_bounds(
-                        screen_roi, static_cast<int64_t>(point_bounds.x) - pad,
-                        static_cast<int64_t>(point_bounds.y) - pad,
-                        static_cast<int64_t>(point_bounds.x) + point_bounds.width + pad,
-                        static_cast<int64_t>(point_bounds.y) + point_bounds.height + pad);
-                    draw_alpha_region(screen_roi, bounds, cmd.alpha,
-                                      [&](cv::Mat &overlay, const cv::Point &origin) {
-                                          cv::fillPoly(overlay, std::vector<std::vector<cv::Point>>{pts}, cmd.color,
-                                                       cv::LINE_AA, 0, cv::Point(-origin.x, -origin.y));
-                                      });
+                    const cv::Rect bounds =
+                        clipped_draw_bounds(screen_roi, static_cast<int64_t>(point_bounds.x) - pad,
+                                            static_cast<int64_t>(point_bounds.y) - pad,
+                                            static_cast<int64_t>(point_bounds.x) + point_bounds.width + pad,
+                                            static_cast<int64_t>(point_bounds.y) + point_bounds.height + pad);
+                    draw_alpha_region(screen_roi, bounds, cmd.alpha, [&](cv::Mat &overlay, const cv::Point &origin) {
+                        cv::fillPoly(overlay, std::vector<std::vector<cv::Point>>{pts}, cmd.color, cv::LINE_AA, 0,
+                                     cv::Point(-origin.x, -origin.y));
+                    });
                 }
                 else
                     cv::fillPoly(screen_roi, std::vector<std::vector<cv::Point>>{pts}, cmd.color, cv::LINE_AA);
@@ -520,8 +533,8 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p, PerformanceOver
                     if (measure_text_unicode(cmd.text, font_height, /*filled*/ -1, text_size, baseline))
                         text_pos.x -= text_size.width;
                 }
-                const int shadow_width = std::max(
-                    1, static_cast<int>(std::lround(cmd.text_shadow_width * (scale_x + scale_y) * 0.5f)));
+                const int shadow_width =
+                    std::max(1, static_cast<int>(std::lround(cmd.text_shadow_width * (scale_x + scale_y) * 0.5f)));
                 put_text_auto(screen_roi, cmd.text, text_pos, adapted_font_scale, cmd.color, cmd.thickness,
                               cmd.text_shadow_enabled, cmd.text_shadow_color, shadow_width);
                 break;
@@ -545,8 +558,7 @@ void render_performance_overlay(cv::Mat &screen_roi, const RenderParams &p, Perf
     if (app_ctrl_get_performance_display() && p.show_fps)
     {
         char fps_text[80];
-        snprintf(fps_text, sizeof(fps_text), "Ch%d render %.1f / infer %.1f FPS",
-                 p.chnId, p.disp_fps, p.infer_fps);
+        snprintf(fps_text, sizeof(fps_text), "Ch%d render %.1f / infer %.1f FPS", p.chnId, p.disp_fps, p.infer_fps);
         if (cache)
         {
             screen_roi(performance_overlay_bounds(screen_roi)).copyTo(cache->background);

@@ -38,13 +38,15 @@ Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` �
 
 关键真源：
 
+二次开发公共接口与迁移说明见 [公共 SDK](sdk/README.md)。
+
 | 主题 | 真源 |
 |---|---|
-| 通道 API | `engine/src/logic/core/channel_logic.h`、`logic_action.h` |
-| 全局 API | `engine/src/logic/core/global_logic.h/.cpp` |
+| 通道 API | `engine/include/channel.h`、`engine/include/actions.h` |
+| 全局 API | `engine/include/global.h`、`engine/src/logic/core/global_logic.cpp` |
 | 逻辑清单 | `projects/modules/*/logic.json`、`projects/global_modules/*/logic.json` |
 | 配置与热重载 | `engine/src/config/`、`src/runtime/app_ctrl.cpp` |
-| 事件与媒体 | `engine/src/event/event_report.h/.cpp`、`src/recorder/` |
+| 事件与媒体 | `engine/include/events.h`、`engine/src/event/event_report.cpp`、`src/recorder/` |
 | 网络投递 | `services/framework/upload/` |
 | Web 行为 | `web_console/backend/`、`web_console/frontend/src/` |
 | 打包产物 | 根目录 `build.sh`、`tools/build/` 下的两个生成器 |

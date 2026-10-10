@@ -1,3 +1,7 @@
+/** @file actions.h
+ * @brief 逻辑动作：统一的动作名、JSON 参数和处理结果；通过 REGISTER_*_ACTION 注册回调。
+ * 功能索引与用法见同目录 README.md。
+ */
 #pragma once
 
 #include <cstdint>

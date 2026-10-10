@@ -12,8 +12,8 @@
  */
 #pragma once
 
-#include "inference/inference_types.h"
 #include <memory>
+#include <types.h>
 #include <vector>
 
 class Tracker

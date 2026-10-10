@@ -16,33 +16,33 @@
  */
 
 #include <algorithm>
-#include <cstring>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <pthread.h>
 #include <utility>
 
-#include "runtime/pause_ctrl.h"
+#include "common/logging.h"
+#include "frame_source_owner.h"
+#include "frame_transform.h"
+#include "inference/inference_engine.h"
+#include "pipeline_internal.h"
+#include "pipeline_runtime.h"
 #include "recorder/event_video_recorder.h"
 #include "rtsp/rtsp_streamer.h"
-#include "inference/inference_engine.h"
-#include "pipeline_runtime.h"
-#include "pipeline_internal.h"
-#include "frame_transform.h"
-#include "frame_source_owner.h"
-#include "common/logging.h"
+#include "runtime/pause_ctrl.h"
 
 /*======================== 送帧统计（每通道，仅 pipeline_submit_frame 访问）========================*/
 
 struct FeedStats
 {
-    uint64_t recv = 0;      /* appsink 收到的总帧数 */
-    uint64_t enq = 0;       /* 成功入推理队列的帧数 */
-    uint64_t replace = 0;   /* 用新帧替换尚未处理的旧 pending 帧 */
-    uint64_t drop = 0;      /* 未能送入推理引擎的帧数（停机、重载或帧导入失败） */
-    uint64_t throttle = 0;  /* FPS 节流跳过的帧数 */
+    uint64_t recv = 0;     /* appsink 收到的总帧数 */
+    uint64_t enq = 0;      /* 成功入推理队列的帧数 */
+    uint64_t replace = 0;  /* 用新帧替换尚未处理的旧 pending 帧 */
+    uint64_t drop = 0;     /* 未能送入推理引擎的帧数（停机、重载或帧导入失败） */
+    uint64_t throttle = 0; /* FPS 节流跳过的帧数 */
     uint64_t log_last_ms = 0;
-    uint64_t next_due_us = 0; /* FPS 节流：下次允许推理的时刻（微秒） */
+    uint64_t next_due_us = 0;         /* FPS 节流：下次允许推理的时刻（微秒） */
     uint64_t preview_token_ts_us = 0; /* 自动预览令牌桶上次补充时间 */
     double preview_tokens = 1.0;      /* 小容量令牌桶：吸收实时流到帧抖动，不积累画面 */
 };
@@ -184,10 +184,9 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
     if (!infer_enabled && will_process)
     {
         auto source_owner = retain_frame_source_buffer(imgDesc.source_buffer);
-        auto imported = source_owner
-                            ? rga_import_src_fd(imgDesc.fd, imgDesc.width, imgDesc.height, imgDesc.horStride,
-                                                imgDesc.verStride, fmt_int)
-                            : nullptr;
+        auto imported = source_owner ? rga_import_src_fd(imgDesc.fd, imgDesc.width, imgDesc.height, imgDesc.horStride,
+                                                         imgDesc.verStride, fmt_int)
+                                     : nullptr;
         const bool has_imported_source = static_cast<bool>(imported);
         raw_frame.lazy_frame = std::make_shared<LazyVideoFrame>(
             ch, std::move(imported), imgDesc.width, imgDesc.height, imgDesc.horStride, imgDesc.verStride, fmt_int,
@@ -211,10 +210,10 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
      * NPU 与传统 CV 都在预览整帧拷贝之前发布，可与后续显示处理重叠执行。 */
     if (will_process && infer_enabled)
     {
-        const int enq_ret = inference_process_source(
-            ch, imgData, imgDesc.fd, imgDesc.width, imgDesc.height, fmt_int, imgDesc.horStride, imgDesc.verStride,
-            current_frame_seq, raw_frame.frame_steady_ms, raw_frame.frame_unix_ms,
-            retain_frame_source_buffer(imgDesc.source_buffer));
+        const int enq_ret =
+            inference_process_source(ch, imgData, imgDesc.fd, imgDesc.width, imgDesc.height, fmt_int, imgDesc.horStride,
+                                     imgDesc.verStride, current_frame_seq, raw_frame.frame_steady_ms,
+                                     raw_frame.frame_unix_ms, retain_frame_source_buffer(imgDesc.source_buffer));
         if (enq_ret > 0)
         {
             g_feed[ch].enq++;
@@ -254,9 +253,8 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
         }
         else
         {
-            const uint64_t elapsed_us = now_us >= g_feed[ch].preview_token_ts_us
-                                            ? now_us - g_feed[ch].preview_token_ts_us
-                                            : 0;
+            const uint64_t elapsed_us =
+                now_us >= g_feed[ch].preview_token_ts_us ? now_us - g_feed[ch].preview_token_ts_us : 0;
             g_feed[ch].preview_token_ts_us = now_us;
             const double refill = static_cast<double>(elapsed_us) * constants::PREVIEW_MAX_FPS / 1000000.0;
             g_feed[ch].preview_tokens = std::min(2.0, g_feed[ch].preview_tokens + refill);
@@ -324,14 +322,13 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
         const double fail_rate = attempts ? 100.0 * feed.drop / attempts : 0.0;
         if (app_ctrl_get_performance_display())
         {
-            log_printf_threadsafe(
-                "[Feed][ch%02d] window=%.3fs recv=%llu recv_fps=%.2f "
-                "throttle_skip=%llu enq=%llu enq_fps=%.2f pending_discard=%llu "
-                "enqueue_fail=%llu(%.1f%%) | render_fps_1s=%.1f infer_fps_1s=%.1f\n",
-                ch, seconds, (unsigned long long)feed.recv, feed.recv / seconds,
-                (unsigned long long)feed.throttle, (unsigned long long)feed.enq, feed.enq / seconds,
-                (unsigned long long)feed.replace, (unsigned long long)feed.drop, fail_rate,
-                app_ctrl_get_disp_fps(ch), inference_get_infer_fps(ch));
+            log_printf_threadsafe("[Feed][ch%02d] window=%.3fs recv=%llu recv_fps=%.2f "
+                                  "throttle_skip=%llu enq=%llu enq_fps=%.2f pending_discard=%llu "
+                                  "enqueue_fail=%llu(%.1f%%) | render_fps_1s=%.1f infer_fps_1s=%.1f\n",
+                                  ch, seconds, (unsigned long long)feed.recv, feed.recv / seconds,
+                                  (unsigned long long)feed.throttle, (unsigned long long)feed.enq, feed.enq / seconds,
+                                  (unsigned long long)feed.replace, (unsigned long long)feed.drop, fail_rate,
+                                  app_ctrl_get_disp_fps(ch), inference_get_infer_fps(ch));
         }
         g_feed[ch].recv = g_feed[ch].enq = g_feed[ch].drop = g_feed[ch].replace = g_feed[ch].throttle = 0;
     }

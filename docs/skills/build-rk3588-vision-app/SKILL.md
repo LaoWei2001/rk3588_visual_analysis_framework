@@ -32,7 +32,7 @@ the missing capability and stop instead of asking for wider access. Read the wiz
 3. Inspect the target module's C++ and `logic.json` together.
 4. Inspect the public header that owns the API being used.
 5. For Web behavior, inspect both the FastAPI route and the React caller.
-6. For reporting, inspect `engine/src/event/event_report.h/.cpp`, the module template, Adapter catalog,
+6. For reporting, inspect `engine/include/events.h` and `engine/src/event/event_report.cpp`, the module template, Adapter catalog,
    and delivery service.
 7. Compare any referenced example name against actual `REGISTER_*` macros or run the built binary's list command.
 

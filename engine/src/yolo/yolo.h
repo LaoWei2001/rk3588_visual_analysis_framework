@@ -45,7 +45,10 @@ class YOLO : public ModelBase
     {
         return obj_thresh_;
     }
-    virtual float get_nms_thresh() const override { return nms_thresh_; }
+    virtual float get_nms_thresh() const override
+    {
+        return nms_thresh_;
+    }
 
   private:
     void init_rknn(const std::string &model_path, int core_mask);

@@ -1,9 +1,9 @@
 #pragma once
 
-#include "inference/inference_types.h"
 #include <opencv2/opencv.hpp>
 #include <pthread.h>
 #include <string>
+#include <types.h>
 #include <utility>
 #include <vector>
 
@@ -79,7 +79,10 @@ class ModelBase
     /**
      * @brief 绑定配置中的模型身份，并统一写入该模型产生的每条结果。
      *
-     * 单模型和组合模型必须遵守同一来源元数据契约；具体后处理器不需要知道配置节点 ID。
+     *
+     * 单模型和组合模型必须遵守同一来源元数据契约；具体后处理器不需要知道配置节点
+     * ID。
+
      */
     void set_result_source(std::string model_id, std::string model_type, int model_index)
     {

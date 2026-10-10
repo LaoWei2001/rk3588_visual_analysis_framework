@@ -3,7 +3,9 @@
 // 按钮控制算法逻辑的本质是什么？按下按钮后，算法逻辑是怎么接收到信号的
 // 难度:★★★☆☆
 
-#include "logic/core/logic_common.h"
+#include <channel.h>
+#include <drawing.h>
+#include <cstdio>
 
 // 跨帧状态
 struct ButtonDemoState

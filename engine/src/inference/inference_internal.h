@@ -26,11 +26,11 @@
 #include <vector>
 
 #include "common/performance_metrics.h"
-#include "common/business_coordinates.h"
 #include "config/config.h"
 #include "inference_engine.h"
 #include "pipeline/frame_transform.h" /* RgaImportedBuffer / LazyVideoFrame */
 #include "yolo/yolo.h"                /* ModelBase */
+#include <coordinates.h>
 
 /*======================== 内部任务结构 ========================*/
 
@@ -87,10 +87,22 @@ struct FpsTracker
         rate.reset();
         frame_seq.store(0);
     }
-    void tick() { rate.tick(); }
-    float value() const { return rate.value(); }
-    void reset_rate() { rate.reset(); }
-    int64_t next_frame_seq() { return ++frame_seq; }
+    void tick()
+    {
+        rate.tick();
+    }
+    float value() const
+    {
+        return rate.value();
+    }
+    void reset_rate()
+    {
+        rate.reset();
+    }
+    int64_t next_frame_seq()
+    {
+        return ++frame_seq;
+    }
 };
 
 /*======================== 推理引擎主状态（模块级单例）========================*/

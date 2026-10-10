@@ -132,7 +132,7 @@ required_project_files=(
     "tools/device/gpio_test/build.sh"
     "tools/device/gpio_test/main.c"
     "engine/src/gpio/gpio.cpp"
-    "engine/src/gpio/gpio.h"
+    "engine/include/gpio.h"
     "$GPIO_SERVICE_INSTALLER_REL"
     "services/framework/gpio_state/CMakeLists.txt"
     "services/framework/gpio_state/gpio_control_daemon.c"

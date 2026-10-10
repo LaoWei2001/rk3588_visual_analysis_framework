@@ -1,128 +1,17 @@
-/**
- * @file channel_logic.h
- * @brief 通道自定义业务逻辑接口 — C-style
- *
- * 架构说明:
- * - 跟踪器 (Tracker) 已移至 pipeline.cpp 全局执行
- * - 此模块仅用于用户自定义业务扩展
- *
- * 扩展方式 (每种逻辑一个独立模块目录, 自注册):
- *   1. 新建 projects/modules/logic_xxx/logic.cpp 和 logic.json
- *      logic.cpp 顶部 #include "logic/core/logic_common.h"
- *   2. 实现 static void logic_xxx(ChannelContext* ctx)
- *   3. 文件末尾注册: REGISTER_LOGIC(logic_xxx);
- *      需要像素时直接调用 ctx->model_frame() / ctx->source_frame()，框架会惰性取帧。
- *   4. 需要该后处理时，在 config.json 中把对应通道的 "logic" 字段设为 "logic_xxx"；
- *      不写或留空则只运行视频/模型管线，不执行任何业务模块。
- *
- * 删除一个逻辑: 直接删掉 projects/ 下对应的模块目录即可 —— 业务 C++ 源文件由 CMake
- * 递归收集编译, 自注册和模块元数据也随之消失, 不牵连其它模块。
+/** @file channel.h
+ * @brief 通道业务入口：帧、目标、ROI、参数、跨帧状态和业务变量。只在框架回调期间使用上下文。
+ * 功能索引与用法见同目录 README.md。
  */
 #pragma once
 
-#include "inference/inference_engine.h"
-#include "common/business_coordinates.h"
-#include "config/config.h"
-#include "logic_action.h"
-#include "logic_outputs.h"
-#include <cstdint>
+#include <actions.h>
+#include <config_types.h>
+#include <drawing.h>
 #include <memory>
-#include <opencv2/opencv.hpp>
-#include <string>
-#include <vector>
-
-/* 前置声明 */
-struct ChannelFrameSnapshot;
-
-/*======================== ROI 区域 (一个通道可配置多个) ========================*/
-/**
- * 一个 ROI 区域 = 区域名 + 多边形顶点。顶点坐标系 = 固定业务画布(640×640),
- * 与 ctx->results[].box 完全一致 —— 逻辑里可直接 cv::pointPolygonTest, 无需再缩放。
- *
- * 通道逻辑通过 ctx->rois (全部区域) 或 ctx->roi_by_name("xxx") / ctx->roi_polygon_at(i)
- * 等便捷方法访问本通道的各个区域。
- */
-struct RoiZone
-{
-    std::string name;               /* 区域名(可空), 如 "entrance"/"exit"; 供逻辑按名取用 */
-    std::vector<cv::Point> polygon; /* 顶点, 业务坐标系(640×640); >=3 个点才算有效区域 */
-};
-
-/*======================== 绘制指令 ========================*/
-struct DrawCommand
-{
-    enum Type
-    {
-        RECT,
-        CIRCLE,
-        LINE,
-        TEXT,
-        POLYLINE,
-        POLY_FILLED
-    } type;
-
-    enum Target : uint8_t
-    {
-        DISPLAY = 0x01,
-        IMAGE = 0x02,
-        VIDEO = 0x04,
-        MEDIA = IMAGE | VIDEO,
-        ALL = DISPLAY | IMAGE | VIDEO
-    };
-    uint8_t target = ALL;
-
-    cv::Rect rect;
-    cv::Point center;
-    int radius = 0;
-    cv::Point pt1, pt2;
-    std::vector<cv::Point> points; /* POLYLINE: 折线顶点(640×640 业务坐标系) */
-    bool closed = false;           /* POLYLINE: 是否闭合 */
-    double alpha = 1.0;            /* 透明度 0~1, <1 半透明叠加(RECT/CIRCLE/POLYLINE/POLY_FILLED 均支持) */
-    std::string text;
-    cv::Point text_pos;
-    /* true 时 text_pos.x 表示文字右边界；用于与窗口宽度无关的右对齐状态标签。 */
-    bool text_align_right = false;
-    double font_scale = 0.6;
-    bool text_shadow_enabled = false;
-    cv::Scalar text_shadow_color = cv::Scalar(0, 0, 0);
-    int text_shadow_width = 2;
-
-    cv::Scalar color = cv::Scalar(0, 255, 0);
-    int thickness = 2;
-};
-
-/*======================== render_overlays 参数包 ========================*/
-struct RenderParams
-{
-    int chnId = 0;
-    int inputW = 0, inputH = 0;
-    float disp_fps = 0.0f;
-    float infer_fps = 0.0f;
-    int64_t result_frame_id = 0; /* 分割叠加缓存版本；同一推理结果可跨多个显示帧复用 */
-    int show_fps = 1;
-    uint8_t target_mask = DrawCommand::DISPLAY;
-    bool show_system_overlays = true; /* ROI、检测框、姿态、分割 */
-    bool show_custom_overlays = true; /* logic 的 draw_* 指令 */
-
-    /* 推理 ROI 使用完整视频归一化坐标，仅供最终显示层绘制；绝不参与模型输入构造。 */
-    const InferenceRoiConfig *inference_roi = nullptr;
-    /* 本通道全部 ROI 区域(顶点均为业务坐标系(640×640)); render_overlays 按 inputW/inputH 缩放后逐个绘制。 */
-    const std::vector<RoiZone> *roi_zones = nullptr;
-    const std::vector<AlgoResult> *results = nullptr;
-    const std::vector<DrawCommand> *draw_cmds = nullptr;
-};
-
-/*======================== 帧时间 (年月日时分秒, 由 ctx->datetime() 拆出) ========================*/
-struct FrameTime
-{
-    int year;   /* 如 2026 */
-    int month;  /* 1~12 */
-    int day;    /* 1~31 */
-    int hour;   /* 0~23 */
-    int minute; /* 0~59 */
-    int second; /* 0~59 */
-    int millis; /* 0~999 */
-};
+#include <outputs.h>
+#include <snapshot.h>
+#include <types.h>
+#include <utility>
 
 /*======================== 通道业务上下文  ========================*/
 // 自定义的算法逻辑变量请勿加入本结构体中
@@ -136,13 +25,74 @@ typedef void (*ChannelLogicFunc)(struct ChannelContext *ctx);
 typedef LogicActionResult (*ChannelLogicActionFunc)(struct ChannelContext *ctx, const LogicAction *action);
 typedef const cv::Mat *(*ChannelFrameGetter)(void *opaque);
 
+/* ROI_ALL 保持既有语义：区域并集，没有区域时为整帧。
+ * ROI_FRAME 明确忽略区域；ROI_NONE 表示名称查询失败，绝不能当成整帧。 */
+enum
+{
+    ROI_ALL = -1,
+    ROI_NONE = -2,
+    ROI_FRAME = -3
+};
+
+enum class TargetAnchor
+{
+    Center,       /* 框中心，整数宽/高的一半，与既有 ROI 查询一致。 */
+    BottomCenter  /* 框底边中点，常用于判断脚点是否进入区域。 */
+};
+
+/** 所有条件同时满足；labels 中任意一个标签命中即可，空列表表示不限类别。
+ * 默认查整帧，min_score 为有限的 [0,1] 数值，阈值包含等号。
+ * roi 可以是 ROI_FRAME、ROI_ALL，或 roi_find() 返回的区域编号。
+ * 标签列表由调用方持有，可保存在业务 state 中复用。 */
+struct TargetQuery
+{
+    std::vector<std::string> labels;
+    float min_score = 0.0f;
+    int roi = ROI_FRAME;
+    TargetAnchor anchor = TargetAnchor::Center;
+};
+
+enum class TargetQueryStatus
+{
+    OK,
+    INFERENCE_UNAVAILABLE,
+    ROI_NOT_FOUND,
+    INVALID_ROI,   /* 指定区域不足三个顶点；ROI_ALL 要求所有已配置区域均满足此条件。 */
+    INVALID_QUERY  /* 非法置信度、区域选择值或判断点枚举。 */
+};
+
+struct TargetQueryResult
+{
+    TargetQueryStatus status = TargetQueryStatus::INFERENCE_UNAVAILABLE;
+    int count = 0;
+    /* 当前回调内借用的最高置信度目标；同分取原结果顺序中的第一个。
+     * 不复制目标/图像，不得缓存指针跨帧使用或在使用前修改 results 容器。 */
+    const AlgoResult *best = nullptr;
+
+    bool valid() const { return status == TargetQueryStatus::OK; }
+};
+
+const char *target_query_status_name(TargetQueryStatus status);
+
 struct ChannelContext
 {
     /* 不触发取帧/转换。中心始终为 (320,320)，与实际模型输入尺寸独立。 */
-    int business_width() const { return business_coordinates::WIDTH; }
-    int business_height() const { return business_coordinates::HEIGHT; }
-    cv::Size business_size() const { return business_coordinates::size(); }
-    cv::Point business_center() const { return business_coordinates::center(); }
+    int business_width() const
+    {
+        return business_coordinates::WIDTH;
+    }
+    int business_height() const
+    {
+        return business_coordinates::HEIGHT;
+    }
+    cv::Size business_size() const
+    {
+        return business_coordinates::size();
+    }
+    cv::Point business_center() const
+    {
+        return business_coordinates::center();
+    }
 
     /* ---- 唯一通道身份：config.channels[].id ---- */
     int chnId = -1;
@@ -162,13 +112,20 @@ struct ChannelContext
      * 如需异步持有或修改，请显式 clone()。取帧失败返回 nullptr。 */
     const cv::Mat *model_frame() const;
     /* 新代码可使用更明确的名称；与 model_frame() 共用同一惰性缓存，没有额外转换。 */
-    const cv::Mat *business_frame() const { return model_frame(); }
+    const cv::Mat *business_frame() const
+    {
+        return model_frame();
+    }
     const cv::Mat *source_frame() const;
 
+  private:
+    friend struct VisionContextAccess;
     /* 框架内部的惰性取帧绑定，业务 logic 不直接访问。 */
     ChannelFrameGetter model_frame_getter = nullptr;
     ChannelFrameGetter source_frame_getter = nullptr;
     void *frame_getter_opaque = nullptr;
+
+  public:
     // 帧号
     int64_t frame_id;
     /* 近似系统开机后运行的毫秒数 */
@@ -178,13 +135,16 @@ struct ChannelContext
     // 当前一帧与上一帧的间隔(毫秒)
     float dt_ms;
     // 推理结果
-    std::vector<AlgoResult> *results;
+    std::vector<AlgoResult> *results = nullptr;
 
     /* ---- 配置 (只读) ---- */
     const ChannelConfig *config;
 
     /* ---- 当前 logic 的专有参数（启动/热重载时已按模块 Schema 解析并补默认值） ---- */
+  private:
     const LogicParameterSet *logic_parameters = nullptr;
+
+  public:
     bool has_param(const char *key) const;
     float param_float(const char *key) const;
     int64_t param_int(const char *key) const;
@@ -195,7 +155,10 @@ struct ChannelContext
     /* ---- 向全局 logic 发布同帧业务变量 ----
      * outputs 每帧重新创建并与 frame/results 一起原子发布。
      * 请在 logic.json 的 outputs[] 中声明相同的 key/type，便于画布展示数据契约。 */
+  private:
     LogicOutputSet *outputs = nullptr;
+
+  public:
     void publish_string(const char *key, const std::string &value) const;
     void publish_number(const char *key, double value) const;
     void publish_int(const char *key, int64_t value) const;
@@ -210,8 +173,10 @@ struct ChannelContext
      * 框架在每次 logic 调用前创建并绑定；draw_text/draw_rect 等辅助函数会向其中
      * push DrawCommand，logic 返回后再由显示/图片/视频出口按 Target 延迟渲染。
      * 业务代码通常不直接操作，也绝不能缓存该指针跨帧使用。 */
+  private:
     std::vector<DrawCommand> *draw_cmds = nullptr;
 
+  public:
     /* ---- 显示输出（只影响当前通道的视频窗口）----
      * replace_display_frame(frame): 直接把处理后的图片作为本帧显示底图。
      * - 接受任意分辨率的 CV_8UC1 灰度图、CV_8UC3 BGR 图或 CV_8UC4 BGRA 图；
@@ -226,19 +191,34 @@ struct ChannelContext
      * 返回一张可写的 640×640 BGR 图(首次调用 = 当前帧副本)，随意 cv:: 处理/贴图/写字；
      * 调用即表示"本帧用这张图当显示底图"。不调用则显示走原实时采集帧，行为不变。
      * 注意: 只改"显示"; 推理/上报仍用 model_frame()。draw_cmds(含中文 draw_text)仍叠加在它上面。*/
+  private:
     cv::Mat *canvas = nullptr;   /* 两种显示接口共用的本帧输出缓冲 */
     bool *show_canvas = nullptr; /* 任一显示接口成功调用后置 true */
-    cv::Mat &display_canvas();   /* 取可写显示画布并标记启用(见上) */
+  public:
+    cv::Mat &display_canvas(); /* 取可写显示画布并标记启用(见上) */
 
-  /* ---- 跨帧持久化状态 ---- */
-  // state是指向 std::shared_ptr<void> 对象的普通指针。
-  // ctx->state：外层指针
-  // *(ctx->state)：外层指针指向的 shared_ptr 对象
-  // ctx->state->get()：shared_ptr 管理的原始 void* 指针
-  std::shared_ptr<void>* state;
+    /* ---- 跨帧持久化状态 ---- */
+    // state是指向 std::shared_ptr<void> 对象的普通指针。
+    // ctx->state：外层指针
+    // *(ctx->state)：外层指针指向的 shared_ptr 对象
+    // ctx->state->get()：shared_ptr 管理的原始 void* 指针
+    std::shared_ptr<void> *state = nullptr;
+
+    /** 获取本逻辑实例的跨帧状态，首次调用按 args 构造，后续调用复用。
+     * 同一个模块的帧回调和 Action 必须使用相同的 T；不同实例的状态互相隔离。
+     * 返回借用指针，仅在当前回调内使用；上下文未绑定状态时返回 nullptr。
+     * 示例：auto *state = ctx->get_state<MyState>(); */
+    template <typename T, typename... Args> T *get_state(Args &&...args) const
+    {
+        if (!state)
+            return nullptr;
+        if (!*state)
+            *state = std::make_shared<T>(std::forward<Args>(args)...);
+        return static_cast<T *>(state->get());
+    }
 
     /* ---- 是否开启推理 ---- */
-    int infer_enabled;
+    int infer_enabled = 0;
     /* 成功发布的同帧推理结果为 true，空检测结果也可以有效。
      * 多模型可能仅部分子模型成功；不能据此认定每个子模型都有效。 */
     bool inference_valid = false;
@@ -252,6 +232,14 @@ struct ChannelContext
      * C 风格自由函数 roi_contains / roi_has_target / roi_count_target(传 ctx 指针)。 */
     int has_target(const char *label) const;   /* 整帧: 是否有 label 类目标 */
     int target_count(const char *label) const; /* 整帧: label 类目标数量 */
+
+    /** 一次遍历返回匹配数量和最高置信度目标，不构造匹配目标数组。
+     * 先校验查询/区域，再检查 infer_enabled、inference_valid 和 results 是否绑定。
+     * OK + count=0 是有效的空结果，失败时 count=0、best=nullptr。
+     * 跳过非法置信度（非有限值或不在 [0,1]）及非正宽/高的检测框，区域包含边界。
+     * 多模型下 OK 只表示本批结果有效，不保证每个子模型都成功，不去重不同模型的结果。
+     * 旧 has_target/target_count/roi_* 的调用和有效性语义保持不变。 */
+    TargetQueryResult query_targets(const TargetQuery &query = TargetQuery()) const;
 
     /* ===== ROI 区域访问 (本通道) =====
      * 一个通道可配置多个 ROI 区域(网页上各画一个、各取个名字)。下面这组按序号/名字取区域。
@@ -284,8 +272,6 @@ struct ChannelContext
     std::string time_str() const; /* "YYYY-MM-DD HH:MM:SS" —— 上报/记录用 */
     FrameTime datetime() const; /* 拆成年月日时分秒独立 int(见 FrameTime), 不是字符串, 而是结构体元素 */
 
-    RenderParams render_params() const;
-
     /* ===== 跨通道安全取数 (本通道 或 任意其它通道) =====
      *
      * get_channel_frame_snapshot(ch, out) 在一把 chn_mtx 锁内原子读出该通道的
@@ -310,16 +296,11 @@ struct ChannelContext
  * 处理 ROI_ALL/具体区域/ROI_NONE。“C 风格”不表示这些 C++ 类型接口具有 C ABI。
  * 不用重载/默认参: 用一个 int idx 选区域 —— 单区域、多区域同一个函数。
  *   idx == ROI_ALL       → 所有区域(并集; 没画区域=整帧, 不设限);
+ *   idx == ROI_FRAME     → 整帧，忽略已配置区域;
  *   idx >= 0             → 仅第 idx 个区域;
  *   其它(ROI_NONE/非法)  → 无此区域, 返回 0。
  * 按名字查: 先用 roi_find(ctx, "名字") 拿到序号再传入 —— 名字不存在返回 ROI_NONE,
  *           故绝不会被误当成 ROI_ALL。框中心落在第几个区域用 ctx->roi_index_of(box)。 */
-enum
-{
-    ROI_ALL = -1,
-    ROI_NONE = -2
-};
-
 // 判断检测框 box 是否属于编号为 idx 的 ROI
 int roi_contains(const ChannelContext *ctx, const cv::Rect &box, int idx);
 
@@ -332,66 +313,7 @@ int roi_count_target(const ChannelContext *ctx, const char *label, int idx);
 // 根据 ROI 名称 name 查询该 ROI 的编号
 int roi_find(const ChannelContext *ctx, const char *name); /* 名字→序号; 找不到=ROI_NONE */
 
-/*======================== 绘制辅助函数 ========================*/
-/* 矩形/圆: thickness=-1(负数) = 填充; alpha<1 = 半透明叠加(目标/画面可透出来, 适合高亮报警区)。
- * 例: draw_rect(ctx, zone, 红, -1, 0.3)  → 半透明红色块盖住 zone, 区域内的人仍看得见。 */
-void draw_rect(ChannelContext *ctx, const cv::Rect &rect, const cv::Scalar &color = cv::Scalar(0, 255, 0),
-               int thickness = 2, double alpha = 1.0, DrawCommand::Target target = DrawCommand::ALL);
-
-void draw_circle(ChannelContext *ctx, const cv::Point &center, int radius,
-                 const cv::Scalar &color = cv::Scalar(0, 255, 0), int thickness = 2, double alpha = 1.0,
-                 DrawCommand::Target target = DrawCommand::ALL);
-
-void draw_line(ChannelContext *ctx, const cv::Point &pt1, const cv::Point &pt2,
-               const cv::Scalar &color = cv::Scalar(0, 255, 0), int thickness = 2,
-               DrawCommand::Target target = DrawCommand::ALL);
-
-/* 统一文字绘制接口：
- * - thickness: <=1 普通填充字；>=2 在填充字上增加同色笔画。
- * - shadow_enabled: 是否启用深色重影/外描边；打开后由底层缓存一次字形蒙版并膨胀，
- *   不会把同一段文字重复栅格化两次。
- * - target: DISPLAY / IMAGE / VIDEO；MEDIA 表示图片+视频，ALL 表示三者。
- * 报警大字示例: draw_text(ctx,"报警",pos,红,1.0,4)。 */
-void draw_text(ChannelContext *ctx, const char *text, const cv::Point &pos,
-               const cv::Scalar &color = cv::Scalar(255, 255, 255), double font_scale = 0.6, int thickness = 1,
-               DrawCommand::Target target = DrawCommand::ALL, bool shadow_enabled = false,
-               const cv::Scalar &shadow_color = cv::Scalar(0, 0, 0), int shadow_width = 2);
-
-/**
- * @brief 按单通道 8-bit 蒙版对 display_canvas() 做批量颜色融合。
- *
- * 底层使用 OpenCV SIMD/NEON 路径和线程局部复用缓冲，业务模块不应再写
- * 逐像素 C++ 双层循环。mask 与业务画布尺寸不同时会自动最近邻缩放。
- */
-bool blend_display_mask(ChannelContext *ctx, const cv::Mat &mask, const cv::Scalar &color, double alpha);
-
-/* 折线: 把一串点连成线; alpha<1 时半透明叠加(可让画面/手透过来, 看着更清楚)。
- * 比逐段 draw_line 更高效(一条指令), 且自交叠处不会因半透明而叠暗。 */
-void draw_polyline(ChannelContext *ctx, const std::vector<cv::Point> &points,
-                   const cv::Scalar &color = cv::Scalar(0, 255, 0), int thickness = 2, double alpha = 1.0,
-                   bool closed = false, DrawCommand::Target target = DrawCommand::ALL);
-
-/* 填充多边形(实心色块); alpha<1 半透明叠加 —— 给一块 ROI/区域铺半透明底色高亮最常用。
- * 顶点为业务坐标系(640×640)(与 ROI/检测框同坐标系); 少于 3 个点不绘制。
- * 例: draw_poly_filled(ctx, *ctx->roi_polygon_at(0), 红, 0.3)  → 把首个 ROI 铺成半透明红。 */
-void draw_poly_filled(ChannelContext *ctx, const std::vector<cv::Point> &points,
-                      const cv::Scalar &color = cv::Scalar(0, 255, 0), double alpha = 0.3,
-                      DrawCommand::Target target = DrawCommand::ALL);
-
-/*======================== 逻辑分发表接口 ========================*/
-#define MAX_LOGIC_FUNCS 64
-
-struct LogicEntry
-{
-    const char *name;
-    ChannelLogicFunc func;
-};
-
-ChannelLogicFunc channel_logic_get(const char *name);
-ChannelLogicActionFunc channel_logic_action_get(const char *name);
-/** 返回当前二进制实际注册的通道逻辑名，供 --list-logics 等只读能力探测使用。 */
-std::vector<std::string> channel_logic_names();
-
+/*======================== 逻辑注册 ========================*/
 /** @brief 注册一个 logic 到分发表 (同名则覆盖)。一般不直接调用, 用 REGISTER_LOGIC 宏。 */
 void register_logic(const char *name, ChannelLogicFunc func);
 void register_logic_action(const char *name, ChannelLogicActionFunc func);

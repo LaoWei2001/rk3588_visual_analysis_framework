@@ -10,6 +10,8 @@
  *     两条路径: 推理通道 (new_results 非空) / 非推理异步 logic worker
  */
 
+#include "logic/core/context_access.h"
+#include "logic/core/logic_registry.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -21,13 +23,13 @@
 #include <vector>
 
 #include "control/logic_control.h"
-#include "pipeline_runtime.h"
-#include "pipeline_internal.h"
 #include "control/remote_dataset.h"
 #include "frame_transform.h"
-#include "logic/core/channel_logic.h"
+#include "pipeline_internal.h"
+#include "pipeline_runtime.h"
 #include "tracking/bytetrack.h"
 #include "tracking/tracker.h"
+#include <channel.h>
 
 /*======================== 跟踪器 (每通道一个实例) ========================*/
 
@@ -64,9 +66,9 @@ static std::unordered_map<std::string, float> model_high_thresholds(const Channe
 
 static std::unique_ptr<ByteTracker> make_bytetrack(const ChannelConfig &config)
 {
-    auto tracker = std::make_unique<ByteTracker>(config.tracker_iou_thresh, config.bytetrack_low_iou_thresh,
-                                                 config.bytetrack_low_thresh, config.tracker_max_miss,
-                                                 config.tracker_min_hits);
+    auto tracker =
+        std::make_unique<ByteTracker>(config.tracker_iou_thresh, config.bytetrack_low_iou_thresh,
+                                      config.bytetrack_low_thresh, config.tracker_max_miss, config.tracker_min_hits);
     tracker->setModelHighThresholds(model_high_thresholds(config));
     return tracker;
 }
@@ -298,8 +300,8 @@ static const cv::Mat *get_source_frame_bgr(void *opaque)
  * @param raw_frame       当前同步解码源帧；异步推理路径中不含有效 source_data
  */
 static std::shared_ptr<const ChannelPublicationMedia> make_publication_media(
-    const ChannelRawFrame *raw_frame, const std::vector<AlgoResult> &results,
-    const std::vector<DrawCommand> &commands, const std::shared_ptr<const AppRuntimeSnapshot> &runtime)
+    const ChannelRawFrame *raw_frame, const std::vector<AlgoResult> &results, const std::vector<DrawCommand> &commands,
+    const std::shared_ptr<const AppRuntimeSnapshot> &runtime)
 {
     if (!raw_frame || !raw_frame->lazy_frame)
         return {};
@@ -327,15 +329,20 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
     if (remote_dataset_active(chnId))
     {
         ChannelContext sample;
-        sample.chnId = chnId; sample.config = channel_config; sample.rois = runtime_rois;
-        sample.results = &current_results; sample.frame_id = frame_id;
-        sample.timestamp_ms = timestamp_ms; sample.unix_ms = unix_ms;
-        sample.infer_enabled = infer_enabled; sample.inference_valid = inference_valid;
+        sample.chnId = chnId;
+        sample.config = channel_config;
+        sample.rois = runtime_rois;
+        sample.results = &current_results;
+        sample.frame_id = frame_id;
+        sample.timestamp_ms = timestamp_ms;
+        sample.unix_ms = unix_ms;
+        sample.infer_enabled = infer_enabled;
+        sample.inference_valid = inference_valid;
         if (raw_frame && raw_frame->lazy_frame)
         {
-            sample.src_width = raw_frame->width; sample.src_height = raw_frame->height;
-            sample.source_frame_getter = get_source_frame_bgr;
-            sample.frame_getter_opaque = raw_frame->lazy_frame.get();
+            sample.src_width = raw_frame->width;
+            sample.src_height = raw_frame->height;
+            VisionContextAccess::bind_frames(sample, nullptr, get_source_frame_bgr, raw_frame->lazy_frame.get());
         }
         remote_dataset_observe(sample, runtime);
     }
@@ -404,9 +411,9 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
     ctx.dt_ms = dt_ms;
     ctx.results = &current_results;
     ctx.config = channel_config;
-    ctx.logic_parameters = runtime_logic_parameters;
+    VisionContextAccess::bind_parameters(ctx, runtime_logic_parameters);
     LogicOutputSet logic_outputs;
-    ctx.outputs = &logic_outputs;
+    VisionContextAccess::bind_outputs(ctx, &logic_outputs);
     /* 多 ROI 顶点均为模型坐标系。 */
     ctx.rois = runtime_rois;
     ctx.state = &logic_state;
@@ -417,20 +424,17 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
     /* model/source 两种尺寸共享同一个帧提供者，各自首次调用时才转换，且每帧最多一次。 */
     if (raw_frame && raw_frame->lazy_frame)
     {
-        ctx.model_frame_getter = get_model_frame_bgr;
-        ctx.source_frame_getter = get_source_frame_bgr;
-        ctx.frame_getter_opaque = raw_frame->lazy_frame.get();
+        VisionContextAccess::bind_frames(ctx, get_model_frame_bgr, get_source_frame_bgr, raw_frame->lazy_frame.get());
     }
 
     /* logic 在 chn_mtx 外运行。runtime shared_ptr 保证 config/ROI 在本帧全程有效；
      * ctx.state 由外层 g_process_mtx 保护，热更新只能在本帧 logic 返回后切换。 */
     std::vector<DrawCommand> draw_cmds;
-    ctx.draw_cmds = &draw_cmds;
+    VisionContextAccess::bind_drawing(ctx, &draw_cmds);
     /* 显示输出(可选): display_canvas()/replace_display_frame() 共用，不调用则零开销。 */
     cv::Mat canvas_buf;
     bool show_canvas = false;
-    ctx.canvas = &canvas_buf;
-    ctx.show_canvas = &show_canvas;
+    VisionContextAccess::bind_canvas(ctx, &canvas_buf, &show_canvas);
     std::vector<LogicAction> pending_actions;
     logic_control_take_channel(chnId, pending_actions);
     if (!pending_actions.empty())
@@ -531,9 +535,8 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
     if (new_results)
     {
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-        const bool stale_after_reconnect =
-            ch_state.online_ts_ms != 0 && raw_frame.frame_steady_ms != 0 &&
-            raw_frame.frame_steady_ms <= ch_state.online_ts_ms;
+        const bool stale_after_reconnect = ch_state.online_ts_ms != 0 && raw_frame.frame_steady_ms != 0 &&
+                                           raw_frame.frame_steady_ms <= ch_state.online_ts_ms;
         const bool reject_result = ch_state.online_state != CH_ONLINE || stale_after_reconnect;
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
         if (reject_result)
@@ -560,8 +563,8 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
 
         std::vector<AlgoResult> empty_results;
         const uint64_t frame_unix_ms = raw_frame.frame_unix_ms != 0 ? raw_frame.frame_unix_ms : system_now_ms();
-        invoke_channel_logic(chnId, empty_results, logic_frame_id, logic_time_ms, frame_unix_ms, dt_ms,
-                             infer_enabled, &raw_frame, runtime);
+        invoke_channel_logic(chnId, empty_results, logic_frame_id, logic_time_ms, frame_unix_ms, dt_ms, infer_enabled,
+                             &raw_frame, runtime);
         return empty_results;
     }
 
@@ -589,6 +592,7 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
     std::vector<AlgoResult> out = std::move(results);
     for (auto &result : out)
         result.chn_id = chnId;
-    invoke_channel_logic(chnId, out, frame_seq, frame_ts, frame_unix_ms, dt_ms, infer_enabled, &raw_frame, runtime, true);
+    invoke_channel_logic(chnId, out, frame_seq, frame_ts, frame_unix_ms, dt_ms, infer_enabled, &raw_frame, runtime,
+                         true);
     return out;
 }

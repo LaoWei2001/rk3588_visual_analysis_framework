@@ -1,7 +1,7 @@
 #pragma once
 #include "config/config.h"
-#include "inference/inference_types.h"
 #include <memory>
+#include <types.h>
 #include <vector>
 
 class LazyVideoFrame;

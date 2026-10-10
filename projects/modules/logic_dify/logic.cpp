@@ -16,8 +16,11 @@
  *   - report_templates/dify_periodic_snapshot.json：随模块打包的默认字段映射。
  */
 
-#include "logic/core/logic_common.h"
-#include "cJSON.h"
+#include <channel.h>
+#include <events.h>
+#include <algorithm>
+#include <cstdio>
+#include <json.h>
 
 #include <cstdint>
 #include <memory>

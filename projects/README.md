@@ -1,5 +1,15 @@
 # 上层业务工作区
 
+正式业务接口位于 `engine/include/`，开发说明见
+[公共 SDK](../docs/sdk/README.md)。通道模块使用 `<channel.h>`，全局模块使用
+`<global.h>`；业务编译目标只获得公开头文件和 OpenCV，不获得引擎内部包含路径。
+
+找函数从 [SDK 功能索引](../engine/include/README.md) 开始。通用能力由 SDK 提供，项目的
+类别、阈值、状态机和工艺判断保留在本目录；跨帧状态优先使用 `ctx->get_state<T>()`。
+
+完整示例：[区域持续占用报警](modules/logic_roi_dwell_demo/README.md)，包含参数、ROI、
+计时状态、绘图、事件、变量发布及可重复验收说明。
+
 `projects/` 是二次开发内容的唯一迁移单元。升级底层框架时，可以把旧仓库的整个
 `projects/` 复制到新仓库中，再执行校验和构建。这里的模块不绑定某个配置或客户项目；
 Web 画布仍会加载并允许自由组合全部通道 Logic 和全局 Logic。
@@ -45,7 +55,7 @@ projects/
 ## 新增通道逻辑
 
 1. 新建 `modules/logic_xxx/`（目录名建议与入口函数同名，但外部 logic ID 不从目录名取）。
-2. 在 `logic.cpp` 中包含 `logic/core/logic_common.h`，实现逻辑入口，并通过
+2. 在 `logic.cpp` 中包含 `channel.h`，实现逻辑入口，并通过
    `REGISTER_LOGIC(logic_xxx)` 注册。宏会把函数名自动转为 config/Web/外部 API 的 logic ID。
 3. 新建 `logic.json`，声明 `label`、参数、动作和上报字段；不要手写 `name`。
 4. 重新运行 CMake 和构建脚本。CMake 会递归收集模块源码，打包脚本会聚合模块清单。

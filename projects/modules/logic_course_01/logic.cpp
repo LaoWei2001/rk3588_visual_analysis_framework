@@ -16,7 +16,8 @@
 // 课程1：自定义文字和图形叠加
 // 实现效果:在屏幕上显示出文字和图形
 // 难度:★☆☆☆☆
-#include "logic/core/logic_common.h"
+#include <channel.h>
+#include <drawing.h>
 
 static void logic_course_01(ChannelContext *ctx)
 {

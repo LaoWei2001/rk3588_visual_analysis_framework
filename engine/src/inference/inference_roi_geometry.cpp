@@ -39,7 +39,8 @@ cv::Mat make_inference_roi_input(const cv::Mat &source, const InferenceRoiTransf
         return {};
     const cv::Rect clipped = transform.source_rect & cv::Rect(0, 0, source.cols, source.rows);
     const cv::Rect content = transform.model_content_rect & cv::Rect(0, 0, model_width, model_height);
-    if (clipped.empty() || content.empty() || clipped != transform.source_rect || content != transform.model_content_rect)
+    if (clipped.empty() || content.empty() || clipped != transform.source_rect ||
+        content != transform.model_content_rect)
         return {};
 
     cv::Mat output = cv::Mat::zeros(model_height, model_width, source.type());
@@ -53,10 +54,10 @@ cv::Mat make_inference_roi_input(const cv::Mat &source, const InferenceRoiTransf
     {
         const double source_x = point.first * source.cols;
         const double source_y = point.second * source.rows;
-        const int model_x = static_cast<int>(std::lround(
-            content.x + (source_x - clipped.x) * static_cast<double>(content.width) / clipped.width));
-        const int model_y = static_cast<int>(std::lround(
-            content.y + (source_y - clipped.y) * static_cast<double>(content.height) / clipped.height));
+        const int model_x = static_cast<int>(
+            std::lround(content.x + (source_x - clipped.x) * static_cast<double>(content.width) / clipped.width));
+        const int model_y = static_cast<int>(
+            std::lround(content.y + (source_y - clipped.y) * static_cast<double>(content.height) / clipped.height));
         points.emplace_back(model_x, model_y);
     }
     cv::Mat mask = cv::Mat::zeros(model_height, model_width, CV_8UC1);

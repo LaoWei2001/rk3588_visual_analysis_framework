@@ -1,12 +1,12 @@
 #include "event_video_recorder.h"
 
+#include "config/config.h"
+#include "display/display.h"
+#include "display/display_pipeline.h"
 #include "event/event_report.h"
 #include "inference/inference_engine.h"
 #include "pipeline/frame_transform.h"
-#include "config/config.h"
 #include "runtime/app_ctrl.h"
-#include "display/display.h"
-#include "display/display_pipeline.h"
 
 #include <gst/gst.h>
 #include <opencv2/imgcodecs.hpp>
@@ -375,9 +375,8 @@ static bool write_h264_mp4(VideoEvent &event, const char *encoder, const char *j
         gst_object_unref(pipeline);
         return false;
     }
-    GstCaps *caps =
-        gst_caps_new_simple("image/jpeg", "width", G_TYPE_INT, size.width, "height", G_TYPE_INT, size.height,
-                            "framerate", GST_TYPE_FRACTION, fps, 1, nullptr);
+    GstCaps *caps = gst_caps_new_simple("image/jpeg", "width", G_TYPE_INT, size.width, "height", G_TYPE_INT,
+                                        size.height, "framerate", GST_TYPE_FRACTION, fps, 1, nullptr);
     g_object_set(G_OBJECT(source), "caps", caps, nullptr);
     gst_caps_unref(caps);
 
@@ -402,9 +401,8 @@ static bool write_h264_mp4(VideoEvent &event, const char *encoder, const char *j
         GST_BUFFER_PTS(buffer) = (event.frames[source_index].timestamp_ms - first_ms) * GST_MSECOND;
         GST_BUFFER_DTS(buffer) = GST_CLOCK_TIME_NONE;
         if (source_index + 1 < event.frames.size())
-            GST_BUFFER_DURATION(buffer) = std::max<uint64_t>(
-                                              1, event.frames[source_index + 1].timestamp_ms -
-                                                     event.frames[source_index].timestamp_ms) *
+            GST_BUFFER_DURATION(buffer) = std::max<uint64_t>(1, event.frames[source_index + 1].timestamp_ms -
+                                                                    event.frames[source_index].timestamp_ms) *
                                           GST_MSECOND;
         else
             GST_BUFFER_DURATION(buffer) = frame_duration;
@@ -466,8 +464,7 @@ static bool write_video(VideoEvent &event)
     }
     if (event.request.output_path.empty())
     {
-        event_report_video_failed(event.request.event_id, event.request.output_path,
-                                  "video output path is empty");
+        event_report_video_failed(event.request.event_id, event.request.output_path, "video output path is empty");
         return false;
     }
 

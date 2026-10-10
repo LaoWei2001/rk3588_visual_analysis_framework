@@ -267,9 +267,7 @@ struct Tracker::Impl
             for (size_t col = 0; col < real_cols; ++col)
             {
                 const MatchMetric metric = metric_fn(track_indices[row], det_indices[col]);
-                cost[row][col] = metric.valid
-                                     ? -1.0f + tie_scale * std::max(0.0f, std::min(metric.cost, 1.0f))
-                                     : 0.0f;
+                cost[row][col] = metric.valid ? -1.0f + tie_scale * std::max(0.0f, std::min(metric.cost, 1.0f)) : 0.0f;
             }
         }
 
@@ -371,8 +369,8 @@ struct Tracker::Impl
                 const cv::Rect_<float> &pred = track.last_box;
                 const cv::Rect &det = dets[j].box;
                 if (track.model_id != dets[j].model_id || track.model_type != dets[j].model_type ||
-                    track.class_id != dets[j].class_id || pred.width <= 0.0f || pred.height <= 0.0f ||
-                    det.width <= 0 || det.height <= 0)
+                    track.class_id != dets[j].class_id || pred.width <= 0.0f || pred.height <= 0.0f || det.width <= 0 ||
+                    det.height <= 0)
                     return MatchMetric{};
 
                 const float pred_area = pred.width * pred.height;

@@ -33,7 +33,7 @@ chipName、chipLabel、controller 等字段。直接这样调用：
 - 兼容旧版 GPIO 后台和原有 pin_* 调用。
 
 接口定义全部位于 gpio.h，实现按“控制、状态、枚举/电压”分区集中在
-gpio.cpp。主程序已链接 libgpiod，逻辑模块只需包含 gpio/gpio.h。
+gpio.cpp。主程序已链接 libgpiod，逻辑模块直接包含 <gpio.h>。
 
 ## 方向与电平
 
@@ -54,7 +54,7 @@ gpio.cpp。主程序已链接 libgpiod，逻辑模块只需包含 gpio/gpio.h。
 gpio_read_input() 只允许读取输入线路。如果目标正在输出或被其他驱动占用，
 函数返回 -1，并设置 errno（常见为 EBUSY），不会偷偷改变方向。
 
-正式部署也可以启动时批量预注册：
+引擎启动阶段可通过内部 `gpio/gpio_runtime.h` 批量预注册；业务回调直接使用公共控制接口：
 
     static const GPIOCfg_t gpio_cfgs[] = {
         { "GPIO6_A2", DIR_OUTPUT, 0 },
@@ -168,7 +168,7 @@ GPIO 字符设备只能读取逻辑 0/1，不能测出 2.87V 之类的实际电�
 
 - 每次成功设置输出，后台都会在同一请求内更新 /var/lib/rk3588-gpio/GPIOx_Yz.state；
 - 切换成输入时，后台会在同一请求内删除该引脚旧的输出恢复值；
-- gpio_restore_outputs() 可以恢复全部已保存输出。
+- 引擎内部的 gpio_restore_outputs() 可以恢复全部已保存输出。
 
 保持开关关闭时仍可实时控制 GPIO，但不会读取、写入或删除原有开机恢复值。
 对 `gpio_set_output()`、`pin_out_val()`、`gpio_set_input()` 的调用方式没有变化；新版封装会优先

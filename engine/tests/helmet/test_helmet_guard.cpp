@@ -16,8 +16,7 @@ static AlgoResult detection(const char *label, cv::Rect box, int id = -1, float 
     return result;
 }
 
-static HelmetResult evaluate(std::vector<AlgoResult> &detections, const RoiZone &zone,
-                             const HelmetConfig &config)
+static HelmetResult evaluate(std::vector<AlgoResult> &detections, const RoiZone &zone, const HelmetConfig &config)
 {
     HelmetGuard guard;
     return guard.update(detections, &zone, 1000, config);

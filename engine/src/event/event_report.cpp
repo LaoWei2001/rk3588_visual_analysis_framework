@@ -1,12 +1,15 @@
 #include "event_report.h"
 #include "event_retention.h"
+#include "logic/core/context_access.h"
+#include "runtime/app_ctrl.h"
 
 #include "config/config.h"
 #include "display/display.h"
-#include "recorder/event_video_recorder.h"
-#include "third_party/json/cJSON.h"
-#include "logic/core/channel_logic.h"
 #include "logic/core/global_logic.h"
+#include "recorder/event_video_recorder.h"
+#include <channel.h>
+#include <drawing.h>
+#include <json.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -334,8 +337,9 @@ static void enforce_outbox_cap()
         const uint64_t now_ms = steady_now_ms();
         if (last_warning_ms == 0 || now_ms - last_warning_ms >= 30000)
         {
-            fprintf(stderr, "[event_outbox] storage pressure: retained undelivered events; "
-                            "used=%lld cap=%lld free=%lld min_free=%lld\n",
+            fprintf(stderr,
+                    "[event_outbox] storage pressure: retained undelivered events; "
+                    "used=%lld cap=%lld free=%lld min_free=%lld\n",
                     total, cap_bytes, free_bytes, min_free_bytes);
             last_warning_ms = now_ms;
         }
@@ -362,8 +366,8 @@ static std::string make_event_id(const std::string &scope)
     char stamp[32];
     strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tmv);
     char id[128];
-    snprintf(id, sizeof(id), "%s_%s_%03ld_%lu", event_scope_token(scope).c_str(), stamp,
-             ts.tv_nsec / 1000000L, ++g_seq);
+    snprintf(id, sizeof(id), "%s_%s_%03ld_%lu", event_scope_token(scope).c_str(), stamp, ts.tv_nsec / 1000000L,
+             ++g_seq);
     return id;
 }
 
@@ -1160,10 +1164,10 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
             actual_channel_ids.push_back(pane.channel_id);
         cJSON_AddStringToObject(source, "image_selection_mode", composite_image->selection_mode.c_str());
         cJSON_AddItemToObject(source, "requested_image_channel_ids",
-                             channel_ids_to_json(composite_image->requested_channel_ids));
+                              channel_ids_to_json(composite_image->requested_channel_ids));
         cJSON_AddItemToObject(source, "image_channel_ids", channel_ids_to_json(actual_channel_ids));
         cJSON_AddItemToObject(source, "missing_image_channel_ids",
-                             channel_ids_to_json(composite_image->missing_channel_ids));
+                              channel_ids_to_json(composite_image->missing_channel_ids));
         cJSON *image_frames = cJSON_CreateArray();
         for (const ImageJob::Pane &pane : composite_image->panes)
         {
@@ -1229,8 +1233,7 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
         const bool has_composite_frame =
             composite_image && std::any_of(composite_image->panes.begin(), composite_image->panes.end(),
                                            [](const ImageJob::Pane &pane) { return !pane.frame.empty(); });
-        if ((!composite_image && (!event_frame || event_frame->empty())) ||
-            (composite_image && !has_composite_frame))
+        if ((!composite_image && (!event_frame || event_frame->empty())) || (composite_image && !has_composite_frame))
         {
             const char *reason = composite_image ? "all selected channel frames are empty" : "current frame is empty";
             cJSON *image = cJSON_GetObjectItemCaseSensitive(media_entries, "image");
@@ -1262,7 +1265,7 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
                 job.raw = *event_frame;
                 if (job.need_annotated && image_overlay != "none")
                 {
-                    job.render_params = ctx->render_params();
+                    job.render_params = channel_render_params(*ctx);
                     job.render_params.show_fps = 0;
                     /* 上报图片自动复用实时画面的完整叠加层；同时允许开发者额外声明
                      * IMAGE 专用指令。业务 logic 不需要再在原图上重复画框/文字。 */
@@ -1275,8 +1278,8 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
                         job.rois = *ctx->rois;
                     if (ctx->results)
                         job.results = *ctx->results;
-                    if (ctx->draw_cmds)
-                        job.commands = *ctx->draw_cmds;
+                    if (VisionContextAccess::drawing(*ctx))
+                        job.commands = *VisionContextAccess::drawing(*ctx);
                     job.render_params.inference_roi = nullptr;
                     job.render_params.roi_zones = nullptr;
                     job.render_params.results = nullptr;
@@ -1381,8 +1384,7 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
     auto capture_report_frame = [&](int channel_id, ChannelFrameSnapshot *out) -> bool {
         if (!gctx->get_channel_frame_snapshot(channel_id, out))
             return false;
-        return out->logic.has_publication && out->logic.has_frame &&
-               out->logic.online_state == CH_ONLINE &&
+        return out->logic.has_publication && out->logic.has_frame && out->logic.online_state == CH_ONLINE &&
                out->logic.config_generation == runtime->generation;
     };
 
@@ -1399,16 +1401,17 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
             for (int channel_id : request.evidence_channel_ids)
                 append_unique_channel(image_channel_ids, channel_id);
         }
-        else if (gctx->connected_channel_ids)
+        else if (VisionContextAccess::connected_channels(*gctx))
         {
-            for (int channel_id : *gctx->connected_channel_ids)
+            for (int channel_id : *VisionContextAccess::connected_channels(*gctx))
                 append_unique_channel(image_channel_ids, channel_id);
         }
 
         /* 旧全局 Logic 可能尚未填写 evidence_channel_ids；这时使用全部连入通道，
          * 但绝不再挑其中一路冒充“主通道”。selected 为空则让图片明确失败。 */
-        if (image_channel_ids.empty() && image_selection.mode == "event_evidence" && gctx->connected_channel_ids)
-            for (int channel_id : *gctx->connected_channel_ids)
+        if (image_channel_ids.empty() && image_selection.mode == "event_evidence" &&
+            VisionContextAccess::connected_channels(*gctx))
+            for (int channel_id : *VisionContextAccess::connected_channels(*gctx))
                 append_unique_channel(image_channel_ids, channel_id);
 
         composite.width = runtime->config.disp_width & ~3;

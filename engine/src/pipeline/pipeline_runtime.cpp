@@ -32,14 +32,14 @@
 #include <utility>
 #include <vector>
 
-#include "recorder/event_video_recorder.h"
-#include "inference/inference_engine.h"
-#include "pipeline_runtime.h"
-#include "pipeline_internal.h" /* DisplayTask/DisplayQueue 定义、extern 声明、时间辅助 */
-#include "logic/core/channel_logic.h"
-#include "logic/core/global_logic.h"
-#include "runtime/app_ctrl.h"
 #include "common/logging.h"
+#include "inference/inference_engine.h"
+#include "logic/core/global_logic.h"
+#include "pipeline_internal.h" /* DisplayTask/DisplayQueue 定义、extern 声明、时间辅助 */
+#include "pipeline_runtime.h"
+#include "recorder/event_video_recorder.h"
+#include "runtime/app_ctrl.h"
+#include <channel.h>
 
 /*======================== 共享 extern 变量定义 ========================*/
 /* 声明在 pipeline_internal.h（extern），此处给出唯一定义。 */

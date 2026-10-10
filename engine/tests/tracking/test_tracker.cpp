@@ -29,7 +29,7 @@ bool check(bool condition, const char *expression, const char *test_name, int li
 #define CHECK(expr)                                                                                                    \
     do                                                                                                                 \
     {                                                                                                                  \
-        if (!check((expr), #expr, __func__, __LINE__))                                                                \
+        if (!check((expr), #expr, __func__, __LINE__))                                                                 \
             return false;                                                                                              \
     } while (false)
 
@@ -124,9 +124,8 @@ bool clears_stale_track_id()
 
 int main()
 {
-    if (!confirms_after_consecutive_hits_and_recovers_fast_motion() ||
-        !preserves_ids_when_same_class_targets_cross() || !removes_interrupted_tentative_track() ||
-        !clears_stale_track_id())
+    if (!confirms_after_consecutive_hits_and_recovers_fast_motion() || !preserves_ids_when_same_class_targets_cross() ||
+        !removes_interrupted_tentative_track() || !clears_stale_track_id())
         return 1;
 
     std::cout << "tracker regression tests passed\n";

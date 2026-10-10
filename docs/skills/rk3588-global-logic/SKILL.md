@@ -12,10 +12,10 @@ description: >-
 
 本 Skill 面向跨通道组合判断和独立周期任务。当前权威源码是：
 
-- `engine/src/logic/core/global_logic.h/.cpp`；
-- `engine/src/runtime/app_ctrl.h` 中的通道快照；
+- `engine/include/global.h`、`engine/src/logic/core/global_logic.cpp`；
+- `engine/include/snapshot.h` 中的通道快照；
 - `projects/global_modules/`；
-- `engine/src/config/config.h/.cpp` 中的 `GlobalLogicConfig`。
+- `engine/include/config_types.h` 中的 `GlobalLogicConfig`。
 
 每个启用的全局实例拥有一个 pthread 和一份独立 state。任一通道发布新业务快照时立即唤醒实例；
 `poll_interval_ms` 仅在没有新发布时提供周期性兜底，不是固定执行周期。
@@ -48,7 +48,7 @@ description: >-
 3. 实现 `static void global_xxx(GlobalContext *gctx)`，末尾写
    `REGISTER_GLOBAL_LOGIC(global_xxx);`。
 4. 普通业务从 `gctx->inputs()` 读取框架已经过滤的输入，不直接依赖通道私有 state。
-5. 跨 tick 状态放 `gctx->state`；周期基于 `timestamp_ms`/`dt_ms`，现实时间基于 `unix_ms`。
+5. 用 `gctx->get_state<T>()` 获取跨 tick 状态；周期基于 `timestamp_ms`/`dt_ms`，现实时间基于 `unix_ms`。
 6. 参数、事件、上报字段、Action 和模板声明遵循与通道模块相同的 manifest 规则。
 7. 给出在 `global.global_logics[]` 创建稳定唯一 `instance_id`、输入通道、兜底周期和视频来源的配置说明；
    `develop_feature` 不修改示例或应用配置文件。
@@ -57,7 +57,7 @@ description: >-
 最小骨架：
 
 ```cpp
-#include "logic/core/global_logic.h"
+#include <global.h>
 
 struct TotalState
 {
@@ -66,16 +66,15 @@ struct TotalState
 
 static void global_total(GlobalContext *gctx)
 {
-    if (!gctx || !gctx->state)
+    if (!gctx)
         return;
-    if (!*gctx->state)
-        *gctx->state = std::make_shared<TotalState>();
-    auto &state = *std::static_pointer_cast<TotalState>(*gctx->state);
+    auto *state = gctx->get_state<TotalState>();
+    if (!state) return;
 
     int64_t total = 0;
     for (const ChannelInput &input : gctx->inputs())
         total += input.get_int("person_count", 0);
-    state.last_total = total;
+    state->last_total = total;
 }
 
 REGISTER_GLOBAL_LOGIC(global_total);

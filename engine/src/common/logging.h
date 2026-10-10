@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdio.h>
 #include <stdarg.h>
+#include <stdio.h>
 
 static inline void log_printf_threadsafe(const char *fmt, ...)
 {
@@ -21,7 +21,7 @@ static inline void log_printf_threadsafe(const char *fmt, ...)
 #define DBG_PRINT(fmt, ...)                                                                                            \
     do                                                                                                                 \
     {                                                                                                                  \
-        if (app_ctrl_get_performance_display())                                                                       \
+        if (app_ctrl_get_performance_display())                                                                        \
             log_printf_threadsafe(fmt, ##__VA_ARGS__);                                                                 \
     } while (0)
 #else

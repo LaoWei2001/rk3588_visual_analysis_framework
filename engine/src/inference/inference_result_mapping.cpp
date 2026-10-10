@@ -1,5 +1,6 @@
 #include "inference/inference_result_mapping.h"
-#include "common/business_coordinates.h"
+#include <coordinates.h>
+#include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -41,10 +42,10 @@ void map_results_to_business_frame(int source_width, int source_height, const In
         }
         return;
     }
-    const float scale_x = static_cast<float>(visible_source.width) * width /
-                          (static_cast<float>(content.width) * source_width);
-    const float scale_y = static_cast<float>(visible_source.height) * height /
-                          (static_cast<float>(content.height) * source_height);
+    const float scale_x =
+        static_cast<float>(visible_source.width) * width / (static_cast<float>(content.width) * source_width);
+    const float scale_y =
+        static_cast<float>(visible_source.height) * height / (static_cast<float>(content.height) * source_height);
     const float offset_x = static_cast<float>(visible_source.x) * width / source_width - content.x * scale_x;
     const float offset_y = static_cast<float>(visible_source.y) * height / source_height - content.y * scale_y;
 
@@ -73,7 +74,8 @@ void map_results_to_business_frame(int source_width, int source_height, const In
             const int x = static_cast<int>(std::floor(left));
             const int y = static_cast<int>(std::floor(top));
             result.box = cv::Rect(x, y, std::max(0, static_cast<int>(std::ceil(right)) - x),
-                                 std::max(0, static_cast<int>(std::ceil(bottom)) - y)) & bounds;
+                                  std::max(0, static_cast<int>(std::ceil(bottom)) - y)) &
+                         bounds;
         }
         if (!center_in_content)
             result.box = cv::Rect();
@@ -105,10 +107,10 @@ void map_results_to_business_frame(int source_width, int source_height, const In
         {
             const int x0 = std::max(0, std::min(width, static_cast<int>(std::lround(offset_x + content.x * scale_x))));
             const int y0 = std::max(0, std::min(height, static_cast<int>(std::lround(offset_y + content.y * scale_y))));
-            const int x1 = std::max(x0, std::min(width, static_cast<int>(
-                std::lround(offset_x + (content.x + content.width) * scale_x))));
-            const int y1 = std::max(y0, std::min(height, static_cast<int>(
-                std::lround(offset_y + (content.y + content.height) * scale_y))));
+            const int x1 = std::max(
+                x0, std::min(width, static_cast<int>(std::lround(offset_x + (content.x + content.width) * scale_x))));
+            const int y1 = std::max(
+                y0, std::min(height, static_cast<int>(std::lround(offset_y + (content.y + content.height) * scale_y))));
             mask_roi = cv::Rect(x0, y0, x1 - x0, y1 - y0);
             mask_roi_ready = true;
         }

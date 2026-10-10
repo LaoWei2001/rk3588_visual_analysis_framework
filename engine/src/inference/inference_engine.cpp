@@ -133,8 +133,8 @@ int inference_init(const AppConfig &cfg)
     model_status_reset(cfg);
     /* 业务坐标始终为 640×640；每个模型独立读取实际输入尺寸。
      * 载入顺序、无模型启动、热切换和反初始化后重启均不能改变业务坐标。 */
-    log_printf_threadsafe("[Inference] business canvas %dx%d (independent of model inputs)\n",
-                          g_inference.input_w, g_inference.input_h);
+    log_printf_threadsafe("[Inference] business canvas %dx%d (independent of model inputs)\n", g_inference.input_w,
+                          g_inference.input_h);
 
     /* 初始化 pthread 同步原语 */
     pthread_rwlock_init(&g_inference.dispatch_mtx, nullptr);
@@ -656,8 +656,14 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
     struct DispatchLock
     {
         pthread_rwlock_t *mutex;
-        explicit DispatchLock(pthread_rwlock_t *value) : mutex(value) { pthread_rwlock_wrlock(mutex); }
-        ~DispatchLock() { pthread_rwlock_unlock(mutex); }
+        explicit DispatchLock(pthread_rwlock_t *value) : mutex(value)
+        {
+            pthread_rwlock_wrlock(mutex);
+        }
+        ~DispatchLock()
+        {
+            pthread_rwlock_unlock(mutex);
+        }
     } dispatch_lock(&g_inference.dispatch_mtx);
 
     // Reports every early return, while preserving the previous active model on rollback.
@@ -667,7 +673,11 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
         bool applied = false;
         bool clear_active = false;
         std::string error = "模型切换失败，已尝试恢复原模型";
-        ~ReloadStatus() { if (!applied) model_status_failed(channel, error, clear_active); }
+        ~ReloadStatus()
+        {
+            if (!applied)
+                model_status_failed(channel, error, clear_active);
+        }
     } status{chnId};
     model_status_begin(chnId, new_cfg);
 

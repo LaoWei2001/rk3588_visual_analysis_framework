@@ -1,6 +1,7 @@
 // 课程4:ROI区域信息获取示例
 // 难度:★☆☆☆☆
-#include "logic/core/logic_common.h"
+#include <channel.h>
+#include <cstdio>
 
 static void logic_course_04(ChannelContext *ctx)
 {

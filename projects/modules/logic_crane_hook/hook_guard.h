@@ -5,7 +5,7 @@
 
 #include <opencv2/opencv.hpp>
 
-#include "inference/inference_types.h"
+#include <types.h>
 
 namespace crane_safety
 {

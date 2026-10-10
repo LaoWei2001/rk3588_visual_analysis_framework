@@ -11,15 +11,42 @@ static FrameRateCounter infer_rate;
 static int show_performance = 1;
 
 /* 使用真实渲染和缓冲写入路径，只替代应用配置与硬件推理查询。 */
-int app_ctrl_get_performance_display() { return show_performance; }
-int app_ctrl_has_channel(int id) { return id == 0; }
-int app_ctrl_get_channel_display_order(int) { return 0; }
-int app_ctrl_get_disp_width() { return 640; }
-int app_ctrl_get_disp_height() { return 160; }
-int app_ctrl_get_tile_cols() { return 1; }
-int app_ctrl_get_tile_rows() { return 1; }
-float app_ctrl_get_disp_fps(int) { return g_pCtrl->channels_state[0].preview_rate.value(); }
-std::shared_ptr<const AppRuntimeSnapshot> app_ctrl_get_runtime_snapshot() { return runtime; }
+int app_ctrl_get_performance_display()
+{
+    return show_performance;
+}
+int app_ctrl_has_channel(int id)
+{
+    return id == 0;
+}
+int app_ctrl_get_channel_display_order(int)
+{
+    return 0;
+}
+int app_ctrl_get_disp_width()
+{
+    return 640;
+}
+int app_ctrl_get_disp_height()
+{
+    return 160;
+}
+int app_ctrl_get_tile_cols()
+{
+    return 1;
+}
+int app_ctrl_get_tile_rows()
+{
+    return 1;
+}
+float app_ctrl_get_disp_fps(int)
+{
+    return g_pCtrl->channels_state[0].preview_rate.value();
+}
+std::shared_ptr<const AppRuntimeSnapshot> app_ctrl_get_runtime_snapshot()
+{
+    return runtime;
+}
 const ChannelConfig *app_ctrl_runtime_channel_config(const std::shared_ptr<const AppRuntimeSnapshot> &, int)
 {
     return &runtime->config.channels[0];
@@ -28,7 +55,10 @@ const std::vector<RoiZone> *app_ctrl_runtime_channel_rois(const std::shared_ptr<
 {
     return &runtime->roi_zones[0];
 }
-float inference_get_infer_fps(int) { return infer_rate.value(); }
+float inference_get_infer_fps(int)
+{
+    return infer_rate.value();
+}
 
 int main()
 {

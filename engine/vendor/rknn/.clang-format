@@ -1,0 +1,3 @@
+# RKNN vendor files are pinned by byte-for-byte SHA-256 checksums.
+DisableFormat: true
+SortIncludes: false

@@ -1,11 +1,11 @@
 #include "model_status.h"
 
+#include "yolo/composite_model.h"
+#include <coordinates.h>
+#include <json.h>
 #include <map>
 #include <mutex>
 #include <sys/stat.h>
-#include "common/business_coordinates.h"
-#include "third_party/json/cJSON.h"
-#include "yolo/composite_model.h"
 
 namespace
 {
@@ -24,12 +24,15 @@ std::map<int, ChannelStatus> statuses;
 
 std::string file_version(const std::string &path)
 {
-    struct stat info{};
-    if (stat(path.c_str(), &info) != 0) return "";
+    struct stat info
+    {
+    };
+    if (stat(path.c_str(), &info) != 0)
+        return "";
     return std::to_string(info.st_ino) + ":" + std::to_string(info.st_size) + ":" +
            std::to_string(info.st_mtim.tv_sec) + ":" + std::to_string(info.st_mtim.tv_nsec);
 }
-}
+} // namespace
 
 void model_status_reset(const AppConfig &config)
 {
@@ -56,11 +59,12 @@ void model_status_applied(int channel, const ChannelConfig &config,
         size_t index = 0;
         for (const auto &spec : config.models)
         {
-            if (!spec.enable || spec.model_path.empty() || spec.model_type.empty()) continue;
+            if (!spec.enable || spec.model_path.empty() || spec.model_type.empty())
+                continue;
             const auto child = composite ? composite->entries().at(index).model : models[0];
-            active.push_back({spec.id.empty() ? "model_" + std::to_string(index) : spec.id,
-                              spec.model_type, spec.model_path, file_version(spec.model_path),
-                              child->input_width(), child->input_height()});
+            active.push_back({spec.id.empty() ? "model_" + std::to_string(index) : spec.id, spec.model_type,
+                              spec.model_path, file_version(spec.model_path), child->input_width(),
+                              child->input_height()});
             ++index;
         }
     }
@@ -77,7 +81,8 @@ void model_status_failed(int channel, const std::string &error, bool clear_activ
     auto &status = statuses[channel];
     status.state = "failed";
     status.error = error;
-    if (clear_active) status.active.clear();
+    if (clear_active)
+        status.active.clear();
 }
 
 void model_status_stopped()

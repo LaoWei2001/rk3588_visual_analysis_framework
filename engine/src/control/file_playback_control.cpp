@@ -16,7 +16,7 @@
 
 #include "capturer/decChannel.h"
 #include "runtime/app_ctrl.h"
-#include "third_party/json/cJSON.h"
+#include <json.h>
 
 namespace
 {
@@ -268,4 +268,3 @@ void file_playback_control_deinit(void)
     if (!g_socket_path.empty())
         unlink(g_socket_path.c_str());
 }
-

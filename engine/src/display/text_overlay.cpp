@@ -1,14 +1,16 @@
 /**
  * @file text_overlay.cpp
- * @brief 画面 UTF-8/中文 文本叠加实现 (见 text_overlay.h)
+ * @brief 画面 UTF-8/中文 文本叠加实现 (接口见 drawing.h)
  *
  * 画面文字统一用 OpenCV freetype 模块渲染(中英文)。freetype 为必需(CMake 已强制),
  * 不再回退 Hershey。字体加载失败会打印明显错误, 文字将不绘制。
  */
-#include "text_overlay.h"
+#include "display.h"
+#include <drawing.h>
+#include <opencv2/imgproc.hpp>
 
-#include <atomic>
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -125,8 +127,7 @@ struct TextMeasureValue
     int baseline = 0;
 
     TextMeasureValue() = default;
-    TextMeasureValue(cv::Size measured_size, int measured_baseline)
-        : size(measured_size), baseline(measured_baseline)
+    TextMeasureValue(cv::Size measured_size, int measured_baseline) : size(measured_size), baseline(measured_baseline)
     {
     }
 };
@@ -222,8 +223,7 @@ bool build_text_mask(const TextMaskKey &key, CachedTextMask &entry)
         return false;
     const cv::Rect full_bounds(0, 0, mask_width, mask_height);
     const cv::Rect paint_bounds(glyph_bounds.x - key.shadow_width, glyph_bounds.y - key.shadow_width,
-                                glyph_bounds.width + key.shadow_width * 2,
-                                glyph_bounds.height + key.shadow_width * 2);
+                                glyph_bounds.width + key.shadow_width * 2, glyph_bounds.height + key.shadow_width * 2);
     const cv::Rect paint_roi = paint_bounds & full_bounds;
     if (paint_roi.empty())
         return false;
@@ -233,8 +233,8 @@ bool build_text_mask(const TextMaskKey &key, CachedTextMask &entry)
     if (key.shadow_width > 0)
     {
         cv::Mat full_shadow;
-        const cv::Mat kernel = cv::getStructuringElement(
-            cv::MORPH_ELLIPSE, cv::Size(key.shadow_width * 2 + 1, key.shadow_width * 2 + 1));
+        const cv::Mat kernel =
+            cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(key.shadow_width * 2 + 1, key.shadow_width * 2 + 1));
         cv::dilate(full_glyph, full_shadow, kernel);
         entry.shadow_mask = full_shadow(paint_roi).clone();
     }
@@ -378,15 +378,17 @@ bool paint_text_mask(cv::Mat &img, const CachedTextMask &entry, cv::Point origin
 }
 
 bool draw_text_from_cached_glyphs(cv::Mat &img, const std::string &text, cv::Point origin, int font_height_px,
-                                  int stroke_width, int shadow_width, const cv::Scalar &color,
-                                  bool shadow_enabled, const cv::Scalar &shadow_color)
+                                  int stroke_width, int shadow_width, const cv::Scalar &color, bool shadow_enabled,
+                                  const cv::Scalar &shadow_color)
 {
     struct PositionedGlyph
     {
         CachedGlyphMask *glyph = nullptr;
         cv::Point origin;
 
-        PositionedGlyph(CachedGlyphMask *value, cv::Point value_origin) : glyph(value), origin(value_origin) {}
+        PositionedGlyph(CachedGlyphMask *value, cv::Point value_origin) : glyph(value), origin(value_origin)
+        {
+        }
     };
     std::vector<PositionedGlyph> layout;
     layout.reserve(text.size());
@@ -490,8 +492,7 @@ bool draw_text_unicode_cached(cv::Mat &img, const std::string &utf8, cv::Point o
     if (img.type() != CV_8UC3)
     {
         const int direct_shadow_width = std::max(1, std::min(shadow_width, 8));
-        if (shadow_enabled &&
-            !draw_text_unicode(img, utf8, org, font_height_px, shadow_color, direct_shadow_width))
+        if (shadow_enabled && !draw_text_unicode(img, utf8, org, font_height_px, shadow_color, direct_shadow_width))
             return false;
         if (!draw_text_unicode(img, utf8, org, font_height_px, color, /*filled*/ -1))
             return false;
@@ -506,8 +507,8 @@ bool draw_text_unicode_cached(cv::Mat &img, const std::string &utf8, cv::Point o
     CachedTextMask *entry =
         cached_text_mask(utf8, font_height_px, stroke_width, normalized_shadow_width, render_as_glyphs);
     if (render_as_glyphs)
-        return draw_text_from_cached_glyphs(img, utf8, org, font_height_px, stroke_width,
-                                            normalized_shadow_width, color, shadow_enabled, shadow_color);
+        return draw_text_from_cached_glyphs(img, utf8, org, font_height_px, stroke_width, normalized_shadow_width,
+                                            color, shadow_enabled, shadow_color);
     if (!entry || entry->glyph_mask.empty())
         return false;
 

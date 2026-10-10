@@ -34,16 +34,16 @@
 #include <unistd.h>
 #include <vector>
 
-#include <linux/dma-buf.h>
-#include <linux/dma-heap.h>
 #include <gst/allocators/gstdmabuf.h>
 #include <gst/gst.h>
 #include <gst/rtsp-server/rtsp-server.h>
 #include <gst/video/video.h>
+#include <linux/dma-buf.h>
+#include <linux/dma-heap.h>
 
-#include "runtime/app_ctrl.h"
-#include "pipeline/frame_transform.h"
 #include "display/display.h" /* display_lock / display_unlock */
+#include "pipeline/frame_transform.h"
+#include "runtime/app_ctrl.h"
 
 namespace
 {
@@ -69,7 +69,9 @@ struct DmaFrameSlot
 
 static bool dma_buf_sync_cpu(int fd, bool start)
 {
-    struct dma_buf_sync sync_request{};
+    struct dma_buf_sync sync_request
+    {
+    };
     sync_request.flags = (start ? DMA_BUF_SYNC_START : DMA_BUF_SYNC_END) | DMA_BUF_SYNC_WRITE;
     int ret;
     do
@@ -86,9 +88,9 @@ static bool dma_buf_sync_cpu(int fd, bool start)
 
 static int open_rtsp_dma_heap()
 {
-    static const char *const heap_paths[] = {
-        "/dev/dma_heap/rk-dma-heap-cma", "/dev/dma_heap/linux,cma", "/dev/dma_heap/cma",
-        "/dev/dma_heap/system-uncached", "/dev/dma_heap/system"};
+    static const char *const heap_paths[] = {"/dev/dma_heap/rk-dma-heap-cma", "/dev/dma_heap/linux,cma",
+                                             "/dev/dma_heap/cma", "/dev/dma_heap/system-uncached",
+                                             "/dev/dma_heap/system"};
     for (const char *path : heap_paths)
     {
         int fd = open(path, O_RDWR | O_CLOEXEC);
@@ -101,16 +103,17 @@ static int open_rtsp_dma_heap()
     return -1;
 }
 
-static std::shared_ptr<DmaFrameSlot> allocate_dma_slot(int heap_fd, size_t size, int width, int height,
-                                                       int stride_w, int stride_h, int format)
+static std::shared_ptr<DmaFrameSlot> allocate_dma_slot(int heap_fd, size_t size, int width, int height, int stride_w,
+                                                       int stride_h, int format)
 {
-    struct dma_heap_allocation_data allocation{};
+    struct dma_heap_allocation_data allocation
+    {
+    };
     allocation.len = size;
     allocation.fd_flags = O_RDWR | O_CLOEXEC;
     if (ioctl(heap_fd, DMA_HEAP_IOCTL_ALLOC, &allocation) < 0)
     {
-        fprintf(stderr, "[RTSP] DMA_HEAP_IOCTL_ALLOC failed: size=%zu errno=%d (%s)\n", size, errno,
-                strerror(errno));
+        fprintf(stderr, "[RTSP] DMA_HEAP_IOCTL_ALLOC failed: size=%zu errno=%d (%s)\n", size, errno, strerror(errno));
         return nullptr;
     }
 
@@ -164,9 +167,9 @@ struct DmaFramePool
         pool->src_h = source_height;
         pool->out_stride_w = output_width;
         pool->out_stride_h = output_height;
-        pool->rgb_source = allocate_dma_slot(heap_fd, static_cast<size_t>(source_width) * source_height * 3,
-                                             source_width, source_height, source_width, source_height,
-                                             RK_FORMAT_RGB_888);
+        pool->rgb_source =
+            allocate_dma_slot(heap_fd, static_cast<size_t>(source_width) * source_height * 3, source_width,
+                              source_height, source_width, source_height, RK_FORMAT_RGB_888);
         const size_t nv12_size = static_cast<size_t>(output_width) * output_height * 3 / 2;
         for (size_t index = 0; pool->rgb_source && index < RTSP_DMA_OUTPUT_SLOTS; ++index)
         {
@@ -274,8 +277,8 @@ static GstBuffer *make_dmabuf_video_buffer(GstAllocator *allocator, const std::s
     offsets[1] = static_cast<gsize>(width) * height;
     strides[0] = width;
     strides[1] = width;
-    gst_buffer_add_video_meta_full(buffer, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_NV12, width, height, 2,
-                                   offsets, strides);
+    gst_buffer_add_video_meta_full(buffer, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_NV12, width, height, 2, offsets,
+                                   strides);
 
     return buffer;
 }
@@ -294,7 +297,7 @@ struct RtspStreamer
     std::string codec = "h264";
     std::string encoder = "auto"; /* "auto"/"hw"/"sw" */
     bool use_hw = false;
-    int width = 0;                /* 源拼接大图尺寸 (= disp_width/disp_height) */
+    int width = 0; /* 源拼接大图尺寸 (= disp_width/disp_height) */
     int height = 0;
     int enc_w = 0; /* 送编码器/RTSP 的尺寸: 向上对齐到 16, 规避 MPP 编码器非对齐绿屏 */
     int enc_h = 0;
@@ -400,15 +403,14 @@ static void on_media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media
 
     /* 非阻塞 appsrc 的 max-bytes 只触发 enough-data，不会自动丢帧。
      * feeder 同时检查实际积压，禁止继续灌入旧画面。 */
-    const guint64 frame_bytes = g_st.use_hw ? (guint64)g_st.enc_w * g_st.enc_h * 3 / 2
-                                            : (guint64)g_st.enc_w * g_st.enc_h * 3;
+    const guint64 frame_bytes =
+        g_st.use_hw ? (guint64)g_st.enc_w * g_st.enc_h * 3 / 2 : (guint64)g_st.enc_w * g_st.enc_h * 3;
     g_object_set(G_OBJECT(appsrc), "format", GST_FORMAT_TIME, "is-live", TRUE, "do-timestamp", TRUE, "block", FALSE,
                  "max-bytes", frame_bytes * 2, nullptr);
 
-    GstCaps *caps =
-        gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, g_st.use_hw ? "NV12" : "RGB", "width",
-                            G_TYPE_INT, g_st.enc_w, "height", G_TYPE_INT, g_st.enc_h, "framerate", GST_TYPE_FRACTION,
-                            g_st.fps, 1, nullptr);
+    GstCaps *caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, g_st.use_hw ? "NV12" : "RGB", "width",
+                                        G_TYPE_INT, g_st.enc_w, "height", G_TYPE_INT, g_st.enc_h, "framerate",
+                                        GST_TYPE_FRACTION, g_st.fps, 1, nullptr);
     g_object_set(G_OBJECT(appsrc), "caps", caps, nullptr);
     gst_caps_unref(caps);
 
@@ -462,8 +464,7 @@ static void *rtsp_feeder_thread(void *arg)
             src = (GstElement *)gst_object_ref(g_st.appsrc);
         pthread_mutex_unlock(&g_st.appsrc_mtx);
 
-        const guint64 frame_bytes = g_st.use_hw ? (guint64)dst_w * dst_h * 3 / 2
-                                                : (guint64)rgb_frame_bytes;
+        const guint64 frame_bytes = g_st.use_hw ? (guint64)dst_w * dst_h * 3 / 2 : (guint64)rgb_frame_bytes;
         if (src && rtsp_source_has_room(src, frame_bytes))
         {
             char *front = (g_pCtrl->pDispBuffer) ? *g_pCtrl->pDispBuffer : nullptr;
@@ -519,11 +520,9 @@ static void *rtsp_feeder_thread(void *arg)
                     {
                         if (dst_w > src_w)
                             for (int y = 0; y < src_h; ++y)
-                                memset(map.data + (size_t)y * dst_stride + src_stride, 0,
-                                       (size_t)(dst_w - src_w) * 3);
+                                memset(map.data + (size_t)y * dst_stride + src_stride, 0, (size_t)(dst_w - src_w) * 3);
                         if (dst_h > src_h)
-                            memset(map.data + (size_t)src_h * dst_stride, 0,
-                                   (size_t)(dst_h - src_h) * dst_stride);
+                            memset(map.data + (size_t)src_h * dst_stride, 0, (size_t)(dst_h - src_h) * dst_stride);
                     }
                     gst_buffer_unmap(buffer, &map);
                 }
@@ -592,8 +591,7 @@ static std::string build_launch_string(void)
         g_st.dma_pool = DmaFramePool::create(g_st.width, g_st.height, g_st.enc_w, g_st.enc_h);
         if (!g_st.dma_pool)
         {
-            fprintf(stderr,
-                    "[RTSP] hardware DMA path unavailable; falling back to software encoder for portability\n");
+            fprintf(stderr, "[RTSP] hardware DMA path unavailable; falling back to software encoder for portability\n");
             use_hw = false;
         }
     }

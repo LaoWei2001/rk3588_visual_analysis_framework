@@ -11,9 +11,9 @@ int main()
         assert(event_deliveries_need_retention(root));
         cJSON_Delete(root);
     }
-    for (const char *text : {"{}", "{\"deliveries\":[]}", "{\"deliveries\":null}", "{\"deliveries\":[null]}",
-                             "{\"deliveries\":[{}]}",
-                             "{\"deliveries\":[{\"status\":\"delivered\"},{\"status\":\"retry\"}]}"})
+    for (const char *text :
+         {"{}", "{\"deliveries\":[]}", "{\"deliveries\":null}", "{\"deliveries\":[null]}", "{\"deliveries\":[{}]}",
+          "{\"deliveries\":[{\"status\":\"delivered\"},{\"status\":\"retry\"}]}"})
     {
         cJSON *root = cJSON_Parse(text);
         assert(event_deliveries_need_retention(root));

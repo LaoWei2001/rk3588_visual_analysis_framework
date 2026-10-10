@@ -1,4 +1,4 @@
-#include "logic/core/logic_common.h"
+#include <channel.h>
 
 static void logic_roi_person_count_demo(ChannelContext *ctx)
 {

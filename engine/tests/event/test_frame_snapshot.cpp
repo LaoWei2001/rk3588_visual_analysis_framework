@@ -1,7 +1,9 @@
 #include "display/display.h"
+#include "logic/core/context_access.h"
 #include "logic/core/global_logic.h"
 #include "pipeline/frame_source_owner.h"
 #include "pipeline/frame_transform.h"
+#include "runtime/app_ctrl.h"
 
 #include <cassert>
 #include <iostream>
@@ -19,8 +21,7 @@ namespace
 ChannelLogicSnapshot publication(int id, unsigned char marker)
 {
     cv::Mat pixels(160, 160, CV_8UC3, cv::Scalar(marker, marker, marker));
-    auto frame = std::make_shared<LazyVideoFrame>(0, nullptr, 160, 160, 160, 160,
-                                                 0x0D, 160, 160, pixels.data);
+    auto frame = std::make_shared<LazyVideoFrame>(0, nullptr, 160, 160, 160, 160, 0x0D, 160, 160, pixels.data);
     assert(frame->retain_borrowed_source(pixels.total() * pixels.elemSize()));
     pixels.setTo(cv::Scalar(99, 99, 99)); // 软件源回调结束后，原始内存可被复用。
     auto media = std::make_shared<ChannelPublicationMedia>();
@@ -49,7 +50,7 @@ ChannelLogicSnapshot publication(int id, unsigned char marker)
     snapshot.has_publication = true;
     snapshot.has_frame = true;
     snapshot.online_state = CH_ONLINE;
-    snapshot.media = media;
+    VisionContextAccess::media(snapshot) = media;
     auto outputs = std::make_shared<LogicOutputSet>();
     outputs->set_int("detected_x", marker);
     snapshot.outputs = outputs;
@@ -61,7 +62,7 @@ void test_tick_keeps_evidence_after_later_publications()
     auto latest = publication(10, 10);
     std::vector<ChannelLogicSnapshot> sampled{latest};
     GlobalContext context;
-    context.channel_snapshots = &sampled;
+    VisionContextAccess::bind_global(context, &sampled, nullptr, nullptr, nullptr);
     GlobalLogicConfig config;
     config.instance_id = "controller";
     context.config = &config;
@@ -70,10 +71,10 @@ void test_tick_keeps_evidence_after_later_publications()
     own.rect.x = 40;
     DrawCommand other = own;
     other.rect.x = 60;
-    sampled[0].global_draw_commands_by_owner["controller"] = {own};
-    sampled[0].global_draw_commands_by_owner["other"] = {other};
+    VisionContextAccess::layers(sampled[0])["controller"] = {own};
+    VisionContextAccess::layers(sampled[0])["other"] = {other};
     own.rect.x = 45;
-    context.image_draw_commands[0] = {own};
+    VisionContextAccess::overlays(context)[0] = {own};
     std::thread producer([&] {
         for (int id = 11; id <= 30; ++id)
             latest = publication(id, static_cast<unsigned char>(id));
@@ -93,9 +94,9 @@ void test_tick_keeps_evidence_after_later_publications()
     assert(captured.draw_cmds.size() == 3);
     assert(captured.draw_cmds[1].rect.x == 45); // 当前实例使用本 tick 的新叠加层。
     assert(captured.draw_cmds[2].rect.x == 60); // 其它实例使用采样时冻结的层。
-    assert(sampled[0].global_draw_commands_by_owner["controller"][0].rect.x == 40);
+    assert(VisionContextAccess::layers(sampled[0])["controller"][0].rect.x == 40);
     assert(captured.rois[0].name == "roi_10");
-    assert(!captured.logic.media); // 图片任务不再保留解码源。
+    assert(!VisionContextAccess::media(captured.logic)); // 图片任务不再保留解码源。
 
     captured.frame.setTo(cv::Scalar(99, 99, 99));
     captured.results[0].boxMask.setTo(cv::Scalar(99));
@@ -103,7 +104,7 @@ void test_tick_keeps_evidence_after_later_publications()
     assert(context.get_channel_frame_snapshot(0, &again));
     assert(again.frame.at<cv::Vec3b>(0, 0)[0] == 10);
     assert(again.results[0].boxMask.at<unsigned char>(0, 0) == 10);
-    context.image_draw_commands[0].clear();
+    VisionContextAccess::overlays(context)[0].clear();
     assert(context.get_channel_frame_snapshot(0, &again));
     assert(again.draw_cmds.size() == 2); // 清掉当前实例的层，不影响其它实例。
     assert(again.draw_cmds[1].rect.x == 60);
@@ -127,8 +128,7 @@ void test_decoder_pool_cannot_reuse_owned_buffer()
     GstBuffer *buffer = nullptr;
     assert(gst_buffer_pool_acquire_buffer(pool, &buffer, nullptr) == GST_FLOW_OK);
     auto owner = retain_frame_source_buffer(buffer);
-    auto frame = std::make_shared<LazyVideoFrame>(0, nullptr, 1, 1, 1, 1, 0x0D,
-                                                 1, 1, nullptr, owner);
+    auto frame = std::make_shared<LazyVideoFrame>(0, nullptr, 1, 1, 1, 1, 0x0D, 1, 1, nullptr, owner);
     owner.reset();
     gst_buffer_unref(buffer); // 模拟 appsink 回调结束。
 

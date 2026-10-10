@@ -16,9 +16,17 @@
  * 删除逻辑: 删掉对应模块目录即可, 不牵连其它模块。
  */
 
-#include "logic_common.h"
+#include "context_access.h"
+#include "inference/inference_engine.h"
+#include "logic/core/logic_registry.h"
 #include "logic_parameters.h"
+#include "runtime/app_ctrl.h"
+#include <algorithm>
+#include <channel.h>
+#include <cstring>
 #include <ctime>
+#include <drawing.h>
+#include <opencv2/imgproc.hpp>
 #include <utility>
 
 /*======================== 模块专有参数访问 ========================*/
@@ -99,7 +107,7 @@ int ChannelContext::channel_has_logic(int configuredId, const char *logicName) c
 }
 
 /*======================== ChannelContext 便捷查询方法实现 ========================
- * 这些方法原先内联在 channel_logic.h 的结构体定义里, 现统一挪到此处。好处:
+ * channel.h 声明的上下文查询方法在此实现。好处:
  *   - 头文件回归「纯 API 清单」, 一眼看清 ctx 能干啥;
  *   - 改任何函数体只需重编本文件, 不再波及 30+ 个 logic_*.cpp (原先内联时全得重编)。
  * 这些都是每帧级调用, 内部 string 比较 / pointPolygonTest 远重于一次函数调用,
@@ -118,7 +126,7 @@ int ChannelContext::has_target(const char *label) const
 }
 
 /*======================== ROI 查询自由函数 (C 风格) ========================
- * 见 channel_logic.h 结构体下方说明: 用一个 int idx 选区域, 单/多区域同一函数, 不用重载。
+ * 见 channel.h 结构体下方说明: 用一个 int idx 选区域, 单/多区域同一函数, 不用重载。
  *   idx==ROI_ALL → 所有区域(并集; 无区域=整帧); idx>=0 → 第 idx 区; 其它 → 无此区域=0。 */
 
 int roi_find(const ChannelContext *ctx, const char *name)
@@ -136,6 +144,8 @@ int roi_contains(const ChannelContext *ctx, const cv::Rect &box, int idx)
 {
     if (!ctx)
         return 0;
+    if (idx == ROI_FRAME)
+        return 1;
     if (idx == ROI_ALL) /* 所有区域 */
     {
         if (!ctx->rois || ctx->rois->empty())
@@ -152,6 +162,8 @@ int roi_has_target(const ChannelContext *ctx, const char *label, int idx)
 {
     if (!ctx || !ctx->results)
         return 0;
+    if (idx == ROI_FRAME)
+        return ctx->has_target(label);
     if (idx == ROI_ALL) /* 所有区域 */
     {
         if (!ctx->rois || ctx->rois->empty())
@@ -178,6 +190,8 @@ int roi_count_target(const ChannelContext *ctx, const char *label, int idx)
 {
     if (!ctx || !ctx->results)
         return 0;
+    if (idx == ROI_FRAME)
+        return ctx->target_count(label);
     if (idx == ROI_ALL) /* 所有区域(并集, 重叠不重复计) */
     {
         if (!ctx->rois || ctx->rois->empty())
@@ -212,6 +226,107 @@ int ChannelContext::target_count(const char *label) const
         if (r.label == s)
             ++n;
     return n;
+}
+
+namespace
+{
+// 本项目启用 -ffast-math，std::isfinite 可能被优化掉；按 IEEE-754 位模式检查。
+bool finite_confidence(float value)
+{
+    uint32_t bits;
+    static_assert(sizeof(bits) == sizeof(value), "confidence requires 32-bit float");
+    std::memcpy(&bits, &value, sizeof(bits));
+    return (bits & 0x7f800000U) != 0x7f800000U;
+}
+
+bool target_in_polygon(const AlgoResult &target, const RoiZone &zone, TargetAnchor anchor)
+{
+    // 先转为 double 再相加，避免异常检测坐标造成有符号整数溢出。
+    const double x = static_cast<double>(target.box.x) + target.box.width / 2;
+    const double y = static_cast<double>(target.box.y) +
+                     (anchor == TargetAnchor::Center ? target.box.height / 2 : target.box.height);
+    return cv::pointPolygonTest(zone.polygon, cv::Point2f(x, y), false) >= 0;
+}
+} // namespace
+
+const char *target_query_status_name(TargetQueryStatus status)
+{
+    switch (status)
+    {
+    case TargetQueryStatus::OK: return "ok";
+    case TargetQueryStatus::INFERENCE_UNAVAILABLE: return "inference_unavailable";
+    case TargetQueryStatus::ROI_NOT_FOUND: return "roi_not_found";
+    case TargetQueryStatus::INVALID_ROI: return "invalid_roi";
+    case TargetQueryStatus::INVALID_QUERY: return "invalid_query";
+    }
+    return "unknown";
+}
+
+TargetQueryResult ChannelContext::query_targets(const TargetQuery &query) const
+{
+    TargetQueryResult out;
+    if (!finite_confidence(query.min_score) || query.min_score < 0.0f || query.min_score > 1.0f ||
+        (query.anchor != TargetAnchor::Center && query.anchor != TargetAnchor::BottomCenter) ||
+        (query.roi < 0 && query.roi != ROI_FRAME && query.roi != ROI_ALL && query.roi != ROI_NONE))
+    {
+        out.status = TargetQueryStatus::INVALID_QUERY;
+        return out;
+    }
+
+    const RoiZone *zone = nullptr;
+    if (query.roi == ROI_NONE || query.roi >= 0)
+    {
+        zone = roi_at(query.roi);
+        if (!zone)
+        {
+            out.status = TargetQueryStatus::ROI_NOT_FOUND;
+            return out;
+        }
+        if (zone->polygon.size() < 3)
+        {
+            out.status = TargetQueryStatus::INVALID_ROI;
+            return out;
+        }
+    }
+    if (query.roi == ROI_ALL && rois)
+        for (const auto &candidate : *rois)
+            if (candidate.polygon.size() < 3)
+            {
+                out.status = TargetQueryStatus::INVALID_ROI;
+                return out;
+            }
+
+    if (!inference_valid || !infer_enabled || !results)
+        return out;
+
+    out.status = TargetQueryStatus::OK;
+    for (const auto &target : *results)
+    {
+        if (!finite_confidence(target.score) || target.score < query.min_score || target.score > 1.0f ||
+            target.box.width <= 0 || target.box.height <= 0)
+            continue;
+        if (!query.labels.empty() &&
+            std::find(query.labels.begin(), query.labels.end(), target.label) == query.labels.end())
+            continue;
+        if (zone && !target_in_polygon(target, *zone, query.anchor))
+            continue;
+        if (query.roi == ROI_ALL && rois && !rois->empty())
+        {
+            bool inside = false;
+            for (const auto &candidate : *rois)
+                if (target_in_polygon(target, candidate, query.anchor))
+                {
+                    inside = true;
+                    break;
+                }
+            if (!inside)
+                continue;
+        }
+        ++out.count;
+        if (!out.best || target.score > out.best->score)
+            out.best = &target;
+    }
+    return out;
 }
 
 int ChannelContext::roi_count() const
@@ -358,28 +473,11 @@ FrameTime ChannelContext::datetime() const
     return t;
 }
 
-RenderParams ChannelContext::render_params() const
-{
-    RenderParams p;
-    const cv::Mat *frame = model_frame();
-    p.chnId = chnId;
-    p.inputW = frame ? frame->cols : 0;
-    p.inputH = frame ? frame->rows : 0;
-    p.disp_fps = disp_fps;
-    p.infer_fps = infer_fps;
-    p.result_frame_id = frame_id;
-    p.inference_roi = config && config->inference_roi.has_roi() ? &config->inference_roi : nullptr;
-    p.roi_zones = rois;
-    p.results = results;
-    p.draw_cmds = draw_cmds;
-    return p;
-}
-
 /*======================== 绘制辅助函数实现 ========================*/
 void draw_rect(ChannelContext *ctx, const cv::Rect &rect, const cv::Scalar &color, int thickness, double alpha,
                DrawCommand::Target target)
 {
-    if (!ctx || !ctx->draw_cmds)
+    if (!ctx || !VisionContextAccess::drawing(*ctx))
         return;
     DrawCommand cmd;
     cmd.type = DrawCommand::RECT;
@@ -388,13 +486,13 @@ void draw_rect(ChannelContext *ctx, const cv::Rect &rect, const cv::Scalar &colo
     cmd.thickness = thickness;
     cmd.alpha = alpha;
     cmd.target = target;
-    ctx->draw_cmds->push_back(cmd);
+    VisionContextAccess::drawing(*ctx)->push_back(cmd);
 }
 
 void draw_circle(ChannelContext *ctx, const cv::Point &center, int radius, const cv::Scalar &color, int thickness,
                  double alpha, DrawCommand::Target target)
 {
-    if (!ctx || !ctx->draw_cmds)
+    if (!ctx || !VisionContextAccess::drawing(*ctx))
         return;
     DrawCommand cmd;
     cmd.type = DrawCommand::CIRCLE;
@@ -404,13 +502,13 @@ void draw_circle(ChannelContext *ctx, const cv::Point &center, int radius, const
     cmd.thickness = thickness;
     cmd.alpha = alpha;
     cmd.target = target;
-    ctx->draw_cmds->push_back(cmd);
+    VisionContextAccess::drawing(*ctx)->push_back(cmd);
 }
 
 void draw_line(ChannelContext *ctx, const cv::Point &pt1, const cv::Point &pt2, const cv::Scalar &color, int thickness,
                DrawCommand::Target target)
 {
-    if (!ctx || !ctx->draw_cmds)
+    if (!ctx || !VisionContextAccess::drawing(*ctx))
         return;
     DrawCommand cmd;
     cmd.type = DrawCommand::LINE;
@@ -419,14 +517,14 @@ void draw_line(ChannelContext *ctx, const cv::Point &pt1, const cv::Point &pt2, 
     cmd.color = color;
     cmd.thickness = thickness;
     cmd.target = target;
-    ctx->draw_cmds->push_back(cmd);
+    VisionContextAccess::drawing(*ctx)->push_back(cmd);
 }
 
 void draw_text(ChannelContext *ctx, const char *text, const cv::Point &pos, const cv::Scalar &color, double font_scale,
                int thickness, DrawCommand::Target target, bool shadow_enabled, const cv::Scalar &shadow_color,
                int shadow_width)
 {
-    if (!ctx || !ctx->draw_cmds || !text)
+    if (!ctx || !VisionContextAccess::drawing(*ctx) || !text)
         return;
     DrawCommand cmd;
     cmd.type = DrawCommand::TEXT;
@@ -439,7 +537,7 @@ void draw_text(ChannelContext *ctx, const char *text, const cv::Point &pos, cons
     cmd.text_shadow_color = shadow_color;
     cmd.text_shadow_width = std::max(1, shadow_width);
     cmd.target = target;
-    ctx->draw_cmds->push_back(cmd);
+    VisionContextAccess::drawing(*ctx)->push_back(cmd);
 }
 
 bool blend_display_mask(ChannelContext *ctx, const cv::Mat &mask, const cv::Scalar &color, double alpha)
@@ -501,7 +599,7 @@ bool blend_display_mask(ChannelContext *ctx, const cv::Mat &mask, const cv::Scal
 void draw_polyline(ChannelContext *ctx, const std::vector<cv::Point> &points, const cv::Scalar &color, int thickness,
                    double alpha, bool closed, DrawCommand::Target target)
 {
-    if (!ctx || !ctx->draw_cmds || points.size() < 2)
+    if (!ctx || !VisionContextAccess::drawing(*ctx) || points.size() < 2)
         return;
     DrawCommand cmd;
     cmd.type = DrawCommand::POLYLINE;
@@ -511,13 +609,13 @@ void draw_polyline(ChannelContext *ctx, const std::vector<cv::Point> &points, co
     cmd.color = color;
     cmd.thickness = thickness;
     cmd.target = target;
-    ctx->draw_cmds->push_back(cmd);
+    VisionContextAccess::drawing(*ctx)->push_back(cmd);
 }
 
 void draw_poly_filled(ChannelContext *ctx, const std::vector<cv::Point> &points, const cv::Scalar &color, double alpha,
                       DrawCommand::Target target)
 {
-    if (!ctx || !ctx->draw_cmds || points.size() < 3)
+    if (!ctx || !VisionContextAccess::drawing(*ctx) || points.size() < 3)
         return;
     DrawCommand cmd;
     cmd.type = DrawCommand::POLY_FILLED;
@@ -525,10 +623,16 @@ void draw_poly_filled(ChannelContext *ctx, const std::vector<cv::Point> &points,
     cmd.alpha = alpha;
     cmd.color = color;
     cmd.target = target;
-    ctx->draw_cmds->push_back(cmd);
+    VisionContextAccess::drawing(*ctx)->push_back(cmd);
 }
 
 /*======================== 逻辑分发表 ========================*/
+constexpr int MAX_LOGIC_FUNCS = 64;
+struct LogicEntry
+{
+    const char *name;
+    ChannelLogicFunc func;
+};
 static LogicEntry g_logic_registry[MAX_LOGIC_FUNCS];
 static int g_logic_count = 0;
 

@@ -1,10 +1,10 @@
 #pragma once
 
+#include "config/config.h"
+#include "yolo/model_base.h"
 #include <memory>
 #include <string>
 #include <vector>
-#include "config/config.h"
-#include "yolo/model_base.h"
 
 // Lifecycle-only updates. Readers never take the inference dispatch lock.
 void model_status_reset(const AppConfig &config);

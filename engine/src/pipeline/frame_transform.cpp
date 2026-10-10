@@ -16,15 +16,15 @@
  *   此文件的 RGA 调用段不得修改 core 参数。
  */
 
-#include "pipeline/image_convert.h"
 #include "frame_transform.h"
+#include "pipeline/image_convert.h"
 
 #include <atomic>
 #include <cstdio>
 #include <cstring>
-#include <utility>
 #include <opencv2/opencv.hpp>
 #include <rga/im2d.h>
+#include <utility>
 
 /*======================== RGA 虚拟地址路径 ========================*/
 
@@ -174,9 +174,8 @@ bool rga_convert_resize_handle(int chnId, const RgaImportedBuffer &src, int dst_
                                        dst_stride_w, dst_stride_h, dst_fmt, cached_dst_handle);
 }
 
-bool rga_crop_resize_handle(int chnId, const RgaImportedBuffer &src, const cv::Rect &source_roi, int dst_fd,
-                            int dst_w, int dst_h, int dst_stride_w, int dst_stride_h, int dst_fmt,
-                            int cached_dst_handle)
+bool rga_crop_resize_handle(int chnId, const RgaImportedBuffer &src, const cv::Rect &source_roi, int dst_fd, int dst_w,
+                            int dst_h, int dst_stride_w, int dst_stride_h, int dst_fmt, int cached_dst_handle)
 {
     return rga_crop_resize_handle_impl(chnId, src, source_roi, dst_fd, dst_w, dst_h, dst_stride_w, dst_stride_h,
                                        dst_fmt, cached_dst_handle);
@@ -188,8 +187,7 @@ bool rga_convert_resize_handle_to_bgr(int chnId, const RgaImportedBuffer &src, i
         return false;
 
     out.create(dst_h, dst_w, CV_8UC3);
-    rga_buffer_t src_buf =
-        wrapbuffer_handle(src.handle, src.width, src.height, src.format, src.stride_w, src.stride_h);
+    rga_buffer_t src_buf = wrapbuffer_handle(src.handle, src.width, src.height, src.format, src.stride_w, src.stride_h);
 
     /* librga 1.9+ 不允许同一次任务混用 handle 和裸地址。源帧来自 DMA-BUF，
      * 已经是 handle；因此把 cv::Mat 的目标内存也临时导入为 handle。目标 handle
@@ -234,9 +232,9 @@ LazyVideoFrame::LazyVideoFrame(int channel_id, std::shared_ptr<RgaImportedBuffer
                                int model_width, int model_height, const void *borrowed_data,
                                std::shared_ptr<void> source_owner)
     : channel_id_(channel_id), source_owner_(std::move(source_owner)), source_(std::move(source)),
-      source_width_(source_width), source_height_(source_height),
-      source_stride_w_(source_stride_w), source_stride_h_(source_stride_h), source_format_(source_format),
-      model_width_(model_width), model_height_(model_height), borrowed_data_(borrowed_data)
+      source_width_(source_width), source_height_(source_height), source_stride_w_(source_stride_w),
+      source_stride_h_(source_stride_h), source_format_(source_format), model_width_(model_width),
+      model_height_(model_height), borrowed_data_(borrowed_data)
 {
 }
 
@@ -248,7 +246,7 @@ bool LazyVideoFrame::materialize_borrowed(int dst_width, int dst_height, cv::Mat
 
     if (dst_width == source_width_ && dst_height == source_height_)
         return convert_raw_to_bgr(borrowed_data_, source_width_, source_height_, source_stride_w_, source_stride_h_,
-                              source_format_, out);
+                                  source_format_, out);
 
     out.create(dst_height, dst_width, CV_8UC3);
     RgaImage src_img;
@@ -272,7 +270,7 @@ bool LazyVideoFrame::materialize_borrowed(int dst_width, int dst_height, cv::Mat
 
     cv::Mat source_bgr;
     if (!convert_raw_to_bgr(borrowed_data_, source_width_, source_height_, source_stride_w_, source_stride_h_,
-                        source_format_, source_bgr))
+                            source_format_, source_bgr))
     {
         out.release();
         return false;
@@ -287,9 +285,8 @@ const cv::Mat *LazyVideoFrame::model_frame()
     if (!model_attempted_)
     {
         model_attempted_ = true;
-        const bool converted = source_ &&
-                               rga_convert_resize_handle_to_bgr(channel_id_, *source_, model_width_, model_height_,
-                                                                model_bgr_);
+        const bool converted =
+            source_ && rga_convert_resize_handle_to_bgr(channel_id_, *source_, model_width_, model_height_, model_bgr_);
         if (!converted)
             materialize_borrowed(model_width_, model_height_, model_bgr_);
     }
@@ -302,9 +299,8 @@ const cv::Mat *LazyVideoFrame::source_frame()
     if (!source_attempted_)
     {
         source_attempted_ = true;
-        const bool converted = source_ &&
-                               rga_convert_resize_handle_to_bgr(channel_id_, *source_, source_width_, source_height_,
-                                                                source_bgr_);
+        const bool converted = source_ && rga_convert_resize_handle_to_bgr(channel_id_, *source_, source_width_,
+                                                                           source_height_, source_bgr_);
         if (!converted)
             materialize_borrowed(source_width_, source_height_, source_bgr_);
     }
@@ -316,8 +312,7 @@ bool LazyVideoFrame::resized_frame(int width, int height, cv::Mat &output)
     if (width <= 0 || height <= 0)
         return false;
     std::lock_guard<std::mutex> lock(mutex_);
-    const bool converted = source_ &&
-                           rga_convert_resize_handle_to_bgr(channel_id_, *source_, width, height, output);
+    const bool converted = source_ && rga_convert_resize_handle_to_bgr(channel_id_, *source_, width, height, output);
     if (converted || materialize_borrowed(width, height, output))
         return true;
     output.release();

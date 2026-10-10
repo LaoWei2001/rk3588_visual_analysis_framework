@@ -13,15 +13,42 @@
 APP_CTRL *g_pCtrl = nullptr;
 static auto runtime = std::make_shared<AppRuntimeSnapshot>();
 static int show_performance = 1;
-int app_ctrl_get_performance_display() { return show_performance; }
-int app_ctrl_has_channel(int id) { return id >= 0 && id < 4; }
-int app_ctrl_get_channel_display_order(int id) { return id; }
-int app_ctrl_get_disp_width() { return 1920; }
-int app_ctrl_get_disp_height() { return 1280; }
-int app_ctrl_get_tile_cols() { return 2; }
-int app_ctrl_get_tile_rows() { return 2; }
-float app_ctrl_get_disp_fps(int id) { return g_pCtrl->channels_state[id].preview_rate.value(); }
-std::shared_ptr<const AppRuntimeSnapshot> app_ctrl_get_runtime_snapshot() { return runtime; }
+int app_ctrl_get_performance_display()
+{
+    return show_performance;
+}
+int app_ctrl_has_channel(int id)
+{
+    return id >= 0 && id < 4;
+}
+int app_ctrl_get_channel_display_order(int id)
+{
+    return id;
+}
+int app_ctrl_get_disp_width()
+{
+    return 1920;
+}
+int app_ctrl_get_disp_height()
+{
+    return 1280;
+}
+int app_ctrl_get_tile_cols()
+{
+    return 2;
+}
+int app_ctrl_get_tile_rows()
+{
+    return 2;
+}
+float app_ctrl_get_disp_fps(int id)
+{
+    return g_pCtrl->channels_state[id].preview_rate.value();
+}
+std::shared_ptr<const AppRuntimeSnapshot> app_ctrl_get_runtime_snapshot()
+{
+    return runtime;
+}
 const ChannelConfig *app_ctrl_runtime_channel_config(const std::shared_ptr<const AppRuntimeSnapshot> &, int id)
 {
     return &runtime->config.channels[id];
@@ -30,7 +57,10 @@ const std::vector<RoiZone> *app_ctrl_runtime_channel_rois(const std::shared_ptr<
 {
     return &runtime->roi_zones[id];
 }
-float inference_get_infer_fps(int) { return 25.0f; }
+float inference_get_infer_fps(int)
+{
+    return 25.0f;
+}
 using Clock = std::chrono::steady_clock;
 
 int main(int argc, char **argv)

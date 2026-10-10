@@ -4,8 +4,8 @@
 #include <string>
 #include <vector>
 
-#include "inference/inference_types.h"
-#include "logic/core/channel_logic.h"
+#include <types.h>
+#include <channel.h>
 #include "violation_latch.h"
 
 namespace crane_safety

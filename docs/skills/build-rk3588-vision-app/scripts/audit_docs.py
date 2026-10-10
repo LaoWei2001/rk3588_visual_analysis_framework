@@ -17,9 +17,9 @@ REQUIRED_PATHS = (
     "docs/skills/rk3588-channel-logic/SKILL.md",
     "docs/skills/rk3588-global-logic/SKILL.md",
     "docs/skills/rk3588-console-ops/SKILL.md",
-    "engine/src/logic/core/channel_logic.h",
-    "engine/src/logic/core/global_logic.h",
-    "engine/src/event/event_report.h",
+    "engine/include/channel.h",
+    "engine/include/global.h",
+    "engine/include/events.h",
 )
 STALE_PATTERNS = {
     r"里面有\*\*三个 Skill\*\*|先分清三个 Skill": "skill count predates build-rk3588-vision-app",

@@ -1,12 +1,14 @@
-#include "common/business_coordinates.h"
 #include "display/display.h"
 #include "inference/inference_internal.h"
 #include "inference/inference_result_mapping.h"
 #include "inference/inference_roi_filter.h"
-#include "logic/core/channel_logic.h"
+#include "logic/core/context_access.h"
 #include "logic/core/global_logic.h"
 #include "pipeline/frame_transform.h"
 #include "pipeline/image_convert.h"
+#include "runtime/app_ctrl.h"
+#include <channel.h>
+#include <coordinates.h>
 #include <rga/im2d.h>
 
 #include <cassert>
@@ -15,7 +17,10 @@
 #include <type_traits>
 
 // 独立渲染验证不启动配置监视器或性能文字。
-extern "C" int app_ctrl_get_performance_display() { return 0; }
+extern "C" int app_ctrl_get_performance_display()
+{
+    return 0;
+}
 
 namespace
 {
@@ -23,8 +28,7 @@ AlgoResult detection(const cv::Rect &box)
 {
     AlgoResult result;
     result.box = box;
-    result.keypoints = {cv::Point2f(box.x + box.width / 2.0f, box.y + box.height / 2.0f),
-                        cv::Point2f(-1, -1)};
+    result.keypoints = {cv::Point2f(box.x + box.width / 2.0f, box.y + box.height / 2.0f), cv::Point2f(-1, -1)};
     return result;
 }
 
@@ -53,11 +57,11 @@ void test_fixed_contract_and_model_switch()
     assert(control.inputW == 640 && control.inputH == 640);
 
     // 相同取景在不同模型下依次输入，包含切回 640、非正方形输入以及改变顺序。
-    for (const cv::Size model : {cv::Size(960, 960), cv::Size(640, 640), cv::Size(1280, 736),
-                                cv::Size(640, 640), cv::Size(960, 960)})
+    for (const cv::Size model :
+         {cv::Size(960, 960), cv::Size(640, 640), cv::Size(1280, 736), cv::Size(640, 640), cv::Size(960, 960)})
     {
-        std::vector<AlgoResult> results{detection(cv::Rect(model.width / 4, model.height / 4,
-                                                          model.width / 2, model.height / 2))};
+        std::vector<AlgoResult> results{
+            detection(cv::Rect(model.width / 4, model.height / 4, model.width / 2, model.height / 2))};
         const InferenceRoiTransform full{cv::Rect(0, 0, 1920, 1080), cv::Rect(0, 0, model.width, model.height)};
         map_results_to_business_frame(1920, 1080, full, model.width, model.height, results);
         expect_box(results[0].box, cv::Rect(160, 160, 320, 320));
@@ -83,8 +87,7 @@ void test_resized_and_shared_masks()
 {
     cv::Mat mask(960, 960, CV_8UC1, cv::Scalar(0));
     mask(cv::Rect(240, 240, 480, 480)).setTo(9);
-    std::vector<AlgoResult> results{detection(cv::Rect(240, 240, 480, 480)),
-                                    detection(cv::Rect(300, 300, 120, 120))};
+    std::vector<AlgoResult> results{detection(cv::Rect(240, 240, 480, 480)), detection(cv::Rect(300, 300, 120, 120))};
     for (auto &result : results)
         result.boxMask = mask;
     const InferenceRoiTransform full{cv::Rect(0, 0, 1920, 1080), cv::Rect(0, 0, 960, 960)};
@@ -102,8 +105,8 @@ void test_crop_padding_and_roi_filter()
     for (int model_size : {640, 960})
         for (const std::string mode : {"stretch", "letterbox", "expand"})
         {
-            const auto transform = make_inference_roi_transform(selection, 1920, 1080,
-                                                                  model_size, model_size, mode, true);
+            const auto transform =
+                make_inference_roi_transform(selection, 1920, 1080, model_size, model_size, mode, true);
             std::vector<AlgoResult> results{detection(transform.model_content_rect)};
             results[0].boxMask = cv::Mat(model_size, model_size, CV_8UC1, cv::Scalar(5));
             map_results_to_business_frame(1920, 1080, transform, model_size, model_size, results);
@@ -142,11 +145,10 @@ void test_lazy_business_frame_and_direct_model_input()
 {
     cv::Mat source(720, 1280, CV_8UC3, cv::Scalar(10, 20, 30));
     auto frame = std::make_shared<LazyVideoFrame>(0, nullptr, source.cols, source.rows, source.cols, source.rows,
-                                                 RK_FORMAT_BGR_888, 640, 640, source.data);
+                                                  RK_FORMAT_BGR_888, 640, 640, source.data);
     assert(frame->retain_borrowed_source(source.total() * source.elemSize()));
     ChannelContext channel{};
-    channel.frame_getter_opaque = frame.get();
-    channel.model_frame_getter = business_getter;
+    VisionContextAccess::bind_frames(channel, business_getter, nullptr, frame.get());
     const auto *business = channel.business_frame();
     assert(business && business->size() == cv::Size(640, 640));
     assert(channel.model_frame() == business);
@@ -184,8 +186,8 @@ void test_display_and_evidence_overlays_use_business_coordinates()
     std::vector<DrawCommand> commands{center};
     for (int model_size : {640, 960})
     {
-        std::vector<AlgoResult> results{detection(cv::Rect(model_size / 4, model_size / 4,
-                                                          model_size / 2, model_size / 2))};
+        std::vector<AlgoResult> results{
+            detection(cv::Rect(model_size / 4, model_size / 4, model_size / 2, model_size / 2))};
         const InferenceRoiTransform full{cv::Rect(0, 0, 1920, 1080), cv::Rect(0, 0, model_size, model_size)};
         map_results_to_business_frame(1920, 1080, full, model_size, model_size, results);
         RenderParams params;

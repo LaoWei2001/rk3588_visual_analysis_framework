@@ -1,4 +1,4 @@
-#include "logic/core/logic_common.h"
+#include <channel.h>
 
 /* Default channel logic: intentionally does nothing. */
 static void logic_default(ChannelContext *ctx)

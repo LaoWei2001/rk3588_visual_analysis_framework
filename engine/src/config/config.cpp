@@ -6,11 +6,11 @@
 #include "config_registry.h"
 #include "config_validator.h"
 #include "logic/core/logic_parameters.h"
-#include "third_party/json/cJSON.h"
 #include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <initializer_list>
+#include <json.h>
 #include <set>
 #include <sstream>
 #include <sys/stat.h>
@@ -461,10 +461,9 @@ bool load_config(const std::string &path, AppConfig &cfg)
 
         // 解析stream对象
         cJSON *stream_obj = cJSON_GetObjectItemCaseSensitive(item, "stream");
-        if (stream_obj &&
-            !validate_object_keys(stream_obj,
-                                  {"src_type", "url", "device", "video_enc", "loop", "usb_width", "usb_height"},
-                                  "channels[" + std::to_string(seq_idx) + "].stream"))
+        if (stream_obj && !validate_object_keys(
+                              stream_obj, {"src_type", "url", "device", "video_enc", "loop", "usb_width", "usb_height"},
+                              "channels[" + std::to_string(seq_idx) + "].stream"))
         {
             cJSON_Delete(root);
             return false;
@@ -576,8 +575,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 cJSON_ArrayForEach(point, polygon)
                 {
                     if (!cJSON_IsArray(point) || cJSON_GetArraySize(point) != 2 ||
-                        !cJSON_IsNumber(cJSON_GetArrayItem(point, 0)) ||
-                        !cJSON_IsNumber(cJSON_GetArrayItem(point, 1)))
+                        !cJSON_IsNumber(cJSON_GetArrayItem(point, 0)) || !cJSON_IsNumber(cJSON_GetArrayItem(point, 1)))
                     {
                         fprintf(stderr, "[Config] channel %d inference_roi polygon contains invalid point\n", ch.id);
                         cJSON_Delete(root);

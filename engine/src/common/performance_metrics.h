@@ -7,8 +7,9 @@
 
 inline uint64_t performance_now_ms()
 {
-    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    std::chrono::steady_clock::now().time_since_epoch()).count());
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count());
 }
 
 /* 最近一秒实际完成的次数。查询也淘汰旧样本，停流时无需新帧即可归零。
@@ -80,8 +81,8 @@ struct InferencePerfCounters
         uint64_t wait, lock, pre, npu, post, filter_nms, total;
     };
 
-    void accumulate(uint64_t wait, uint64_t lock, uint64_t pre, uint64_t npu, uint64_t post,
-                    uint64_t filter_nms, uint64_t total, bool wrote_new)
+    void accumulate(uint64_t wait, uint64_t lock, uint64_t pre, uint64_t npu, uint64_t post, uint64_t filter_nms,
+                    uint64_t total, bool wrote_new)
     {
         std::lock_guard<std::mutex> guard(mtx);
         wait_us += wait;
@@ -114,8 +115,8 @@ struct InferencePerfCounters
         std::lock_guard<std::mutex> guard(mtx);
         if (now_ms < last_log_ms || now_ms - last_log_ms < window_ms || (samples == 0 && failures == 0))
             return false;
-        out = Snapshot{samples, failures, published, now_ms - last_log_ms,
-                       wait_us, lock_us, pre_us, npu_us, post_us, filter_nms_us, total_us};
+        out = Snapshot{samples, failures, published, now_ms - last_log_ms, wait_us, lock_us,
+                       pre_us,  npu_us,   post_us,   filter_nms_us,        total_us};
         last_log_ms = now_ms;
         clear();
         return true;

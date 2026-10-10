@@ -4,7 +4,7 @@
 #include <deque>
 #include <opencv2/opencv.hpp>
 
-#include "logic/core/channel_logic.h"
+#include <channel.h>
 
 namespace crane_safety
 {

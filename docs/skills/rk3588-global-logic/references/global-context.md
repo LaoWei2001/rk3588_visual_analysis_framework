@@ -1,6 +1,6 @@
 # GlobalContext API
 
-本文对应当前 `logic/core/global_logic.h/.cpp` 和 `runtime/app_ctrl.h`。
+本文对应当前 `engine/include/global.h`、`engine/src/logic/core/global_logic.cpp` 和 `engine/include/snapshot.h`。
 
 ## Tick 和实例字段
 
@@ -14,7 +14,6 @@
 | `effective_poll_interval_ms` | 无通道更新时采用的兜底周期，至少 10 ms；不是固定回调周期 |
 | `runtime_generation` | 采样时不可变运行配置的 generation |
 | `state` | 每个 `instance_id` 一份的 `shared_ptr<void>*` |
-| `logic_parameters` | 已按全局模块 Schema 解析的参数 |
 
 参数读取方法与通道一致：`has_param()`、`param_float/int/bool/string/json()`。
 
@@ -49,7 +48,7 @@
 
 ## 更新版本
 
-`updated_channels` 记录上个 tick 到当前 tick 的版本变化。`ChannelUpdate` 字段：
+框架记录上个 tick 到当前 tick 的版本变化，业务通过更新查询方法读取。`ChannelUpdate` 字段：
 
 - `channel_id`；
 - `initial_snapshot`；
@@ -66,7 +65,7 @@
 
 ## 高级原始快照
 
-`channel_snapshots` 包含应用通道的本 tick 轻量快照。可通过以下方法读取：
+框架保存应用通道的本 tick 轻量快照，内部绑定不可直接访问。业务通过以下方法读取：
 
 - `channel_count()`、`channel_at(index)`；
 - `channel(configured_id)`、`contains_channel(id)`；

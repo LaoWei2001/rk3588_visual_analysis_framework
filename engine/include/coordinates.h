@@ -1,3 +1,7 @@
+/** @file coordinates.h
+ * @brief 统一业务坐标：ROI、检测结果与绘图共用的画布尺寸。
+ * 功能索引与用法见同目录 README.md。
+ */
 #pragma once
 
 #include <opencv2/core.hpp>
@@ -9,6 +13,12 @@ namespace business_coordinates
 constexpr int WIDTH = 640;
 constexpr int HEIGHT = 640;
 
-inline cv::Size size() { return cv::Size(WIDTH, HEIGHT); }
-inline cv::Point center() { return cv::Point(WIDTH / 2, HEIGHT / 2); }
+inline cv::Size size()
+{
+    return cv::Size(WIDTH, HEIGHT);
+}
+inline cv::Point center()
+{
+    return cv::Point(WIDTH / 2, HEIGHT / 2);
+}
 } // namespace business_coordinates

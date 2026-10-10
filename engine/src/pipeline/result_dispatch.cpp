@@ -20,10 +20,10 @@
 #include <utility>
 #include <vector>
 
+#include "common/logging.h"
+#include "frame_transform.h"
 #include "inference/inference_engine.h"
 #include "pipeline_internal.h"
-#include "frame_transform.h"
-#include "common/logging.h"
 
 /* 帧匹配诊断日志节流（每通道约 2 秒一次，由 performance_display 开关控制）*/
 static uint64_t g_sync_dbg_last_ms[MAX_CHANNEL_NUM] = {0};
@@ -95,10 +95,11 @@ extern "C" void *pipeline_dispatch_worker(void *arg)
             const int64_t input_seq_now = g_pCtrl->channels_state[chnId].input_frame_seq;
             pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
             const int64_t age_ms = result_frame_steady_ms && dbg_now >= result_frame_steady_ms
-                                       ? static_cast<int64_t>(dbg_now - result_frame_steady_ms) : -1;
+                                       ? static_cast<int64_t>(dbg_now - result_frame_steady_ms)
+                                       : -1;
             DBG_PRINT("[FrameSync][ch%02d] result_seq=%lld input_seq=%lld lag_frames=%lld "
-                      "age_ms=%lld dispatch_ms=%llu results=%zu\n", chnId,
-                      (long long)result_frame_id, (long long)input_seq_now,
+                      "age_ms=%lld dispatch_ms=%llu results=%zu\n",
+                      chnId, (long long)result_frame_id, (long long)input_seq_now,
                       (long long)(input_seq_now - result_frame_id), (long long)age_ms,
                       (unsigned long long)(dbg_now - process_begin_ms), current_results.size());
         }

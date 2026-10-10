@@ -2,11 +2,13 @@
 // 实现效果:视频画面上显示当前通道逻辑的总调用次数
 // 难度:★★★☆☆
 
-#include "logic/core/logic_common.h"
+#include <channel.h>
+#include <drawing.h>
+#include <cstdio>
 
 // 为什么要把变量保存在这个结构体中而不是保存在logic_course_06这个函数中?
 // 如果我把call_count这个变量直接定义在logic_course_06中进行运算会发生什么?（提示：变量生命周期）
-// 如果我不使用*ctx->state = std::make_shared<DemoState>();会发生什么（提示：如果多通道共用一个逻辑）
+// get_state 为每个逻辑实例保存一份状态；为什么不能用函数内 static 代替？
 struct DemoState
 {
     // 当前通道逻辑的累计调用次数
@@ -16,17 +18,14 @@ struct DemoState
 static void logic_course_06(ChannelContext *ctx)
 {
     // 空指针验证
-    if (!ctx || !(ctx->state))
+    if (!ctx)
     {
         return;
     }
-    if (!*ctx->state)
-    {
-        // 程序启动时初始化状态
-        *ctx->state = std::make_shared<DemoState>();
-    }
-    // 把无类型状态恢复为 DemoState
-    std::shared_ptr<DemoState> state = std::static_pointer_cast<DemoState>(*ctx->state);
+    // 首次自动构造，之后每一帧复用当前实例的状态。
+    DemoState *state = ctx->get_state<DemoState>();
+    if (!state)
+        return;
     (state->call_count)++;
 
     char num_display[128];

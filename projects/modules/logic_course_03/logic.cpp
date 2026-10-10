@@ -1,6 +1,7 @@
 // 课程3：模型检测结果调用
 // 难度:★☆☆☆☆
-#include "logic/core/logic_common.h"
+#include <channel.h>
+#include <cstdio>
 
 static void logic_course_03(ChannelContext *ctx)
 {

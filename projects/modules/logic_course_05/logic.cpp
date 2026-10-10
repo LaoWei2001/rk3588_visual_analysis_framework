@@ -3,7 +3,9 @@
 // 实现效果:输出在指定的ROI区域的目标名称,置信度,且在区域内部的目标的检测框变为红色
 // 难度:★★★☆☆
 
-#include "logic/core/logic_common.h"
+#include <channel.h>
+#include <opencv2/imgproc.hpp>
+#include <cstdio>
 
 // 函数作用:输入某个检测结果,输出该检测结果的中心点坐标
 cv::Point det_middle_point(const AlgoResult *single_result)

@@ -85,8 +85,14 @@ class LazyVideoFrame
     bool retain_borrowed_source(size_t byte_count);
     void clear_borrowed_source();
     bool available() const;
-    int source_width() const { return source_width_; }
-    int source_height() const { return source_height_; }
+    int source_width() const
+    {
+        return source_width_;
+    }
+    int source_height() const
+    {
+        return source_height_;
+    }
 
   private:
     bool materialize_borrowed(int dst_width, int dst_height, cv::Mat &out);
@@ -126,9 +132,8 @@ bool rga_convert_resize_handle(int chnId, const RgaImportedBuffer &src, int dst_
                                int dst_stride_w, int dst_stride_h, int dst_fmt, int cached_dst_handle = 0);
 
 /** 与 rga_convert_resize_handle 相同，但只读取源图中的 source_roi 后再缩放到完整模型输入。 */
-bool rga_crop_resize_handle(int chnId, const RgaImportedBuffer &src, const cv::Rect &source_roi, int dst_fd,
-                            int dst_w, int dst_h, int dst_stride_w, int dst_stride_h, int dst_fmt,
-                            int cached_dst_handle = 0);
+bool rga_crop_resize_handle(int chnId, const RgaImportedBuffer &src, const cv::Rect &source_roi, int dst_fd, int dst_w,
+                            int dst_h, int dst_stride_w, int dst_stride_h, int dst_fmt, int cached_dst_handle = 0);
 
 /** 用稳定的源 handle 按需生成 CPU BGR 图；供 Logic 截图和零拷贝推理失败兜底共用。 */
 bool rga_convert_resize_handle_to_bgr(int chnId, const RgaImportedBuffer &src, int dst_w, int dst_h, cv::Mat &out);

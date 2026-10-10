@@ -8,4 +8,3 @@
  */
 int file_playback_control_init(void);
 void file_playback_control_deinit(void);
-

@@ -9,10 +9,10 @@
 | `config/` | JSON 结构、注册字段、完整/热更验证 | `config.h/.cpp`、`config_validator.*` |
 | `control/` | Unix socket Action 入队和系统级 `infer_toggle` | `logic_control.h/.cpp` |
 | `display/` | 宫格合成、RGA 转换、系统/自定义叠加、FreeType 文本 | `display.h`、`display_pipeline.h` |
-| `event/` | EventRequest、本地 schema v3、图片任务、投递初始状态 | `event_report.h/.cpp` |
+| `event/` | EventRequest、本地 schema v3、图片任务、投递初始状态 | `events.h`、`event_report.cpp` |
 | `gpio/` | libgpiod 引脚解析、输入输出 | `gpio.h/.cpp` |
 | `inference/` | 模型实例、任务队列、RKNN worker、同帧结果发布与热换 | `inference_engine.h` |
-| `logic/core/` | Channel/Global Context、注册表、参数、outputs | `channel_logic.h`、`global_logic.h` |
+| `logic/core/` | Channel/Global Context、注册表、参数、outputs | `channel.h`、`global.h`、`channel_logic.cpp` |
 | `projects/modules/` | 单通道可插拔业务 | 每模块 `logic.cpp + logic.json` |
 | `projects/global_modules/` | 全局可插拔业务 | 每模块 `logic.cpp + logic.json` |
 | `pipeline/` | 帧入口、惰性转换、tracker 后业务调用、显示/结果分发 | `pipeline_runtime.h` |

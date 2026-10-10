@@ -52,22 +52,22 @@ static constexpr int NUM_CORES = 3; // RK3588 物理 NPU 核数, 固定
 
 /* 运行期全局开关 / 计数 */
 static std::atomic<bool> g_stop{false};
-static std::atomic<long> g_total{0};      // 仅供每秒实时监视, relaxed, 频率极低无争用
-static bool              g_readback = false;
+static std::atomic<long> g_total{0}; // 仅供每秒实时监视, relaxed, 频率极低无争用
+static bool g_readback = false;
 
 /* 每线程独占, 循环结束时写回, 无锁无争用 */
-static std::vector<long>   g_counts;   // 每个 context 的推理次数
-static std::vector<double> g_busy_ns;  // 每个 context 的 rknn_run 累计阻塞时间(ns)
+static std::vector<long> g_counts;    // 每个 context 的推理次数
+static std::vector<double> g_busy_ns; // 每个 context 的 rknn_run 累计阻塞时间(ns)
 
 /*======================== 单个 context 的资源 ========================*/
 struct BenchCtx
 {
-    rknn_context              ctx        = 0;
-    rknn_tensor_mem          *in_mem     = nullptr;
-    std::vector<rknn_tensor_mem *> out_mems;   // 仅 ceiling 模式绑定
-    int                       core       = -1; // 绑定的物理核(单核模式), -1 = driver 调度
-    int                       n_out      = 0;
-    bool                      is_quant   = false;
+    rknn_context ctx = 0;
+    rknn_tensor_mem *in_mem = nullptr;
+    std::vector<rknn_tensor_mem *> out_mems; // 仅 ceiling 模式绑定
+    int core = -1;                           // 绑定的物理核(单核模式), -1 = driver 调度
+    int n_out = 0;
+    bool is_quant = false;
 };
 
 /*======================== 工具 ========================*/
@@ -75,11 +75,13 @@ struct BenchCtx
 static unsigned char *load_file(const char *path, int *out_size)
 {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) return nullptr;
+    if (!f)
+        return nullptr;
     int sz = static_cast<int>(f.tellg());
     f.seekg(0);
     auto *buf = static_cast<unsigned char *>(malloc(sz));
-    if (!buf) return nullptr;
+    if (!buf)
+        return nullptr;
     f.read(reinterpret_cast<char *>(buf), sz);
     *out_size = sz;
     return buf;
@@ -89,7 +91,8 @@ static unsigned char *load_file(const char *path, int *out_size)
 static std::string read_npu_load()
 {
     std::ifstream f("/sys/kernel/debug/rknpu/load");
-    if (!f) return std::string();
+    if (!f)
+        return std::string();
     std::string line;
     std::getline(f, line);
     /* 去掉行内多余空白, 紧凑成一行 */
@@ -97,9 +100,11 @@ static std::string read_npu_load()
     bool prev_space = false;
     for (char c : line)
     {
-        if (c == '\n' || c == '\r') continue;
+        if (c == '\n' || c == '\r')
+            continue;
         bool sp = (c == ' ' || c == '\t');
-        if (sp && prev_space) continue;
+        if (sp && prev_space)
+            continue;
         out.push_back(sp ? ' ' : c);
         prev_space = sp;
     }
@@ -108,8 +113,7 @@ static std::string read_npu_load()
 
 /*======================== 单 context 初始化 ========================*/
 
-static bool setup_ctx(BenchCtx &bc, unsigned char *model_data, int model_size,
-                      int ctx_idx, int core_mode)
+static bool setup_ctx(BenchCtx &bc, unsigned char *model_data, int model_size, int ctx_idx, int core_mode)
 {
     int ret = rknn_init(&bc.ctx, model_data, model_size, 0, nullptr);
     if (ret < 0)
@@ -121,20 +125,34 @@ static bool setup_ctx(BenchCtx &bc, unsigned char *model_data, int model_size,
     /* 绑核策略 —— 与 algoProcess.cpp 对齐 */
     rknn_core_mask single[NUM_CORES] = {RKNN_NPU_CORE_0, RKNN_NPU_CORE_1, RKNN_NPU_CORE_2};
     rknn_core_mask mask;
-    if (core_mode == 1)      { mask = RKNN_NPU_CORE_0_1_2; bc.core = -1; }
-    else if (core_mode == 2) { mask = RKNN_NPU_CORE_AUTO;  bc.core = -1; }
-    else                     { bc.core = ctx_idx % NUM_CORES; mask = single[bc.core]; }
+    if (core_mode == 1)
+    {
+        mask = RKNN_NPU_CORE_0_1_2;
+        bc.core = -1;
+    }
+    else if (core_mode == 2)
+    {
+        mask = RKNN_NPU_CORE_AUTO;
+        bc.core = -1;
+    }
+    else
+    {
+        bc.core = ctx_idx % NUM_CORES;
+        mask = single[bc.core];
+    }
     if (rknn_set_core_mask(bc.ctx, mask) < 0)
         fprintf(stderr, "[ctx%d] warn: set_core_mask failed\n", ctx_idx);
 
     rknn_input_output_num io_num;
-    if (rknn_query(bc.ctx, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num)) < 0) return false;
+    if (rknn_query(bc.ctx, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num)) < 0)
+        return false;
     bc.n_out = io_num.n_output;
 
     rknn_tensor_attr in_attr;
     memset(&in_attr, 0, sizeof(in_attr));
     in_attr.index = 0;
-    if (rknn_query(bc.ctx, RKNN_QUERY_INPUT_ATTR, &in_attr, sizeof(in_attr)) < 0) return false;
+    if (rknn_query(bc.ctx, RKNN_QUERY_INPUT_ATTR, &in_attr, sizeof(in_attr)) < 0)
+        return false;
     const uint32_t W = in_attr.dims[2], H = in_attr.dims[1], C = in_attr.dims[3];
 
     /* 量化判定 —— 与 yolo.cpp::query_model_info() 同逻辑 */
@@ -142,8 +160,7 @@ static bool setup_ctx(BenchCtx &bc, unsigned char *model_data, int model_size,
     memset(&out0, 0, sizeof(out0));
     out0.index = 0;
     rknn_query(bc.ctx, RKNN_QUERY_OUTPUT_ATTR, &out0, sizeof(out0));
-    bc.is_quant = (out0.qnt_type == RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC &&
-                   out0.type != RKNN_TENSOR_FLOAT16);
+    bc.is_quant = (out0.qnt_type == RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC && out0.type != RKNN_TENSOR_FLOAT16);
 
     /* 输入零拷贝内存 —— 与 init_zero_copy_input() 完全一致 */
     uint32_t plain = W * H * C;
@@ -157,11 +174,11 @@ static bool setup_ctx(BenchCtx &bc, unsigned char *model_data, int model_size,
     memset(bc.in_mem->virt_addr, 114, alloc); // 填 letterbox 灰; NPU 计时与内容无关
 
     rknn_tensor_attr in_io = in_attr;
-    in_io.index        = 0;
-    in_io.type         = RKNN_TENSOR_UINT8;
-    in_io.fmt          = RKNN_TENSOR_NHWC;
-    in_io.pass_through = 0;   // ←★ 对齐你的真实设置 (driver 做 normalize), 不是参考仓库的 1
-    in_io.h_stride     = 0;
+    in_io.index = 0;
+    in_io.type = RKNN_TENSOR_UINT8;
+    in_io.fmt = RKNN_TENSOR_NHWC;
+    in_io.pass_through = 0; // ←★ 对齐你的真实设置 (driver 做 normalize), 不是参考仓库的 1
+    in_io.h_stride = 0;
     if (rknn_set_io_mem(bc.ctx, bc.in_mem, &in_io) < 0)
     {
         fprintf(stderr, "[ctx%d] rknn_set_io_mem(input) failed\n", ctx_idx);
@@ -179,9 +196,16 @@ static bool setup_ctx(BenchCtx &bc, unsigned char *model_data, int model_size,
             oa.index = o;
             rknn_query(bc.ctx, RKNN_QUERY_OUTPUT_ATTR, &oa, sizeof(oa));
             rknn_tensor_mem *m = rknn_create_mem(bc.ctx, oa.size_with_stride);
-            if (!m) { fprintf(stderr, "[ctx%d] create_mem(out%d) failed\n", ctx_idx, o); return false; }
+            if (!m)
+            {
+                fprintf(stderr, "[ctx%d] create_mem(out%d) failed\n", ctx_idx, o);
+                return false;
+            }
             if (rknn_set_io_mem(bc.ctx, m, &oa) < 0)
-            { fprintf(stderr, "[ctx%d] set_io_mem(out%d) failed\n", ctx_idx, o); return false; }
+            {
+                fprintf(stderr, "[ctx%d] set_io_mem(out%d) failed\n", ctx_idx, o);
+                return false;
+            }
             bc.out_mems.push_back(m);
         }
     }
@@ -192,11 +216,12 @@ static bool setup_ctx(BenchCtx &bc, unsigned char *model_data, int model_size,
 
 static void worker_loop(int tid, BenchCtx *bc)
 {
-    long   local   = 0;
+    long local = 0;
     double busy_ns = 0.0;
 
     std::vector<rknn_output> outs;
-    if (g_readback) outs.resize(bc->n_out);
+    if (g_readback)
+        outs.resize(bc->n_out);
 
     while (!g_stop.load(std::memory_order_relaxed))
     {
@@ -225,7 +250,7 @@ static void worker_loop(int tid, BenchCtx *bc)
         g_total.fetch_add(1, std::memory_order_relaxed);
     }
 
-    g_counts[tid]  = local;
+    g_counts[tid] = local;
     g_busy_ns[tid] = busy_ns;
 }
 
@@ -241,22 +266,32 @@ int main(int argc, char **argv)
         return 1;
     }
     const char *model_path = argv[1];
-    int contexts  = (argc > 2) ? atoi(argv[2]) : 12;
-    int seconds   = (argc > 3) ? atoi(argv[3]) : 15;
+    int contexts = (argc > 2) ? atoi(argv[2]) : 12;
+    int seconds = (argc > 3) ? atoi(argv[3]) : 15;
     int core_mode = (argc > 4) ? atoi(argv[4]) : 0;
-    g_readback    = (argc > 5) ? (atoi(argv[5]) != 0) : false;
-    if (contexts < 1) contexts = 1;
-    if (seconds  < 1) seconds  = 1;
-    if (core_mode < 0 || core_mode > 2) core_mode = 0;
+    g_readback = (argc > 5) ? (atoi(argv[5]) != 0) : false;
+    if (contexts < 1)
+        contexts = 1;
+    if (seconds < 1)
+        seconds = 1;
+    if (core_mode < 0 || core_mode > 2)
+        core_mode = 0;
 
     int model_size = 0;
     unsigned char *model_data = load_file(model_path, &model_size);
-    if (!model_data) { printf("模型加载失败: %s\n", model_path); return 1; }
+    if (!model_data)
+    {
+        printf("模型加载失败: %s\n", model_path);
+        return 1;
+    }
 
     std::vector<BenchCtx> ctxs(contexts);
     for (int i = 0; i < contexts; ++i)
         if (!setup_ctx(ctxs[i], model_data, model_size, i, core_mode))
-        { printf("ctx %d 初始化失败, 退出\n", i); return 1; }
+        {
+            printf("ctx %d 初始化失败, 退出\n", i);
+            return 1;
+        }
 
     g_counts.assign(contexts, 0);
     g_busy_ns.assign(contexts, 0.0);
@@ -279,35 +314,36 @@ int main(int argc, char **argv)
     std::vector<std::thread> ths;
     ths.reserve(contexts);
     auto t_start = std::chrono::steady_clock::now();
-    for (int i = 0; i < contexts; ++i) ths.emplace_back(worker_loop, i, &ctxs[i]);
+    for (int i = 0; i < contexts; ++i)
+        ths.emplace_back(worker_loop, i, &ctxs[i]);
 
     /* 每秒监视: 瞬时 FPS + NPU 占用 */
-    long   last_total = 0;
-    auto   last_tp    = t_start;
+    long last_total = 0;
+    auto last_tp = t_start;
     for (int s = 0; s < seconds; ++s)
     {
         std::this_thread::sleep_for(std::chrono::seconds(1));
-        auto now      = std::chrono::steady_clock::now();
-        long cur      = g_total.load(std::memory_order_relaxed);
-        double dt     = std::chrono::duration<double>(now - last_tp).count();
-        double inst   = dt > 0 ? (cur - last_total) / dt : 0;
+        auto now = std::chrono::steady_clock::now();
+        long cur = g_total.load(std::memory_order_relaxed);
+        double dt = std::chrono::duration<double>(now - last_tp).count();
+        double inst = dt > 0 ? (cur - last_total) / dt : 0;
         std::string ld = read_npu_load();
-        printf("[%2ds] 累计 %-7ld 瞬时 %6.1f FPS%s%s\n",
-               s + 1, cur, inst,
-               ld.empty() ? "" : "  | ", ld.c_str());
+        printf("[%2ds] 累计 %-7ld 瞬时 %6.1f FPS%s%s\n", s + 1, cur, inst, ld.empty() ? "" : "  | ", ld.c_str());
         fflush(stdout);
         last_total = cur;
-        last_tp    = now;
+        last_tp = now;
     }
 
     g_stop.store(true, std::memory_order_relaxed);
-    for (auto &t : ths) t.join();
+    for (auto &t : ths)
+        t.join();
     auto t_end = std::chrono::steady_clock::now();
 
     /* 汇总 */
     double elapsed = std::chrono::duration<double>(t_end - t_start).count();
-    long   total   = 0;
-    for (long c : g_counts) total += c;
+    long total = 0;
+    for (long c : g_counts)
+        total += c;
     double fps = total / elapsed;
 
     printf("\n===== 结果 =====\n");
@@ -318,10 +354,16 @@ int main(int argc, char **argv)
     printf("单核均摊  : %.2f FPS/core\n", fps / NUM_CORES);
 
     /* 每 context 平均 rknn_run 阻塞延迟(含同核排队) */
-    double avg_lat_sum = 0; int avg_n = 0;
+    double avg_lat_sum = 0;
+    int avg_n = 0;
     for (int i = 0; i < contexts; ++i)
-        if (g_counts[i] > 0) { avg_lat_sum += g_busy_ns[i] / g_counts[i] / 1e6; ++avg_n; }
-    if (avg_n) printf("单次rknn_run: %.2f ms (单context阻塞延迟, 含同核排队)\n", avg_lat_sum / avg_n);
+        if (g_counts[i] > 0)
+        {
+            avg_lat_sum += g_busy_ns[i] / g_counts[i] / 1e6;
+            ++avg_n;
+        }
+    if (avg_n)
+        printf("单次rknn_run: %.2f ms (单context阻塞延迟, 含同核排队)\n", avg_lat_sum / avg_n);
 
     if (core_mode == 0)
     {
@@ -329,7 +371,9 @@ int main(int argc, char **argv)
         for (int c = 0; c < NUM_CORES; ++c)
         {
             long cc = 0;
-            for (int i = 0; i < contexts; ++i) if (ctxs[i].core == c) cc += g_counts[i];
+            for (int i = 0; i < contexts; ++i)
+                if (ctxs[i].core == c)
+                    cc += g_counts[i];
             printf("  Core%d: %-7ld (%.1f FPS)\n", c, cc, cc / elapsed);
         }
     }
@@ -337,9 +381,12 @@ int main(int argc, char **argv)
     /* 清理 */
     for (auto &bc : ctxs)
     {
-        for (auto *m : bc.out_mems) rknn_destroy_mem(bc.ctx, m);
-        if (bc.in_mem) rknn_destroy_mem(bc.ctx, bc.in_mem);
-        if (bc.ctx) rknn_destroy(bc.ctx);
+        for (auto *m : bc.out_mems)
+            rknn_destroy_mem(bc.ctx, m);
+        if (bc.in_mem)
+            rknn_destroy_mem(bc.ctx, bc.in_mem);
+        if (bc.ctx)
+            rknn_destroy(bc.ctx);
     }
     free(model_data);
     return 0;

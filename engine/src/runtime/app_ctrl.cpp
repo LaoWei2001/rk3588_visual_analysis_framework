@@ -4,12 +4,15 @@
  *
  * 所有同步使用 pthread 原语, 线程创建由 main 统一管理.
  */
-#include "app_ctrl.h"
 
+#include "app_ctrl.h"
+#include "inference/inference_engine.h"
+#include "logic/core/context_access.h"
+
+#include "config/config_registry.h"
+#include "pipeline/frame_transform.h"
 #include "pipeline/pipeline_runtime.h"
 #include "runtime/pause_ctrl.h"
-#include "pipeline/frame_transform.h"
-#include "config/config_registry.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -55,8 +58,7 @@ static bool model_runtime_changed(const ChannelConfig &old_channel, const Channe
     const bool new_bytetrack = config_utils::is_bytetrack_enabled(new_channel);
     return old_channel.infer_enable != new_channel.infer_enable || old_channel.models != new_channel.models ||
            old_channel.threads != new_channel.threads || old_bytetrack != new_bytetrack ||
-           (old_bytetrack && new_bytetrack &&
-            old_channel.bytetrack_low_thresh != new_channel.bytetrack_low_thresh);
+           (old_bytetrack && new_bytetrack && old_channel.bytetrack_low_thresh != new_channel.bytetrack_low_thresh);
 }
 
 static void restore_model_runtime(ChannelConfig &channel, const ChannelConfig &old_channel)
@@ -261,14 +263,12 @@ extern "C" void *config_monitor_thread_func(void *arg)
             new_cfg.disp_width != old_cfg.disp_width || new_cfg.disp_height != old_cfg.disp_height ||
             new_cfg.tile_cols != old_cfg.tile_cols || new_cfg.tile_rows != old_cfg.tile_rows ||
             new_cfg.enable_pause_key != old_cfg.enable_pause_key || new_cfg.rtsp_port != old_cfg.rtsp_port ||
-            new_cfg.rtsp_path != old_cfg.rtsp_path ||
-            new_cfg.rtsp_bitrate != old_cfg.rtsp_bitrate || new_cfg.rtsp_codec != old_cfg.rtsp_codec ||
-            new_cfg.rtsp_encoder != old_cfg.rtsp_encoder;
+            new_cfg.rtsp_path != old_cfg.rtsp_path || new_cfg.rtsp_bitrate != old_cfg.rtsp_bitrate ||
+            new_cfg.rtsp_codec != old_cfg.rtsp_codec || new_cfg.rtsp_encoder != old_cfg.rtsp_encoder;
         if (channel_topology_changed || output_topology_changed)
         {
-            fprintf(stderr,
-                    "[ConfigMonitor] Hot reload rejected: channel topology or display/RTSP layout/settings "
-                    "cannot change; restart required\n");
+            fprintf(stderr, "[ConfigMonitor] Hot reload rejected: channel topology or display/RTSP layout/settings "
+                            "cannot change; restart required\n");
             ctrl->configLastMtime = mtime;
             continue;
         }
@@ -302,10 +302,9 @@ extern "C" void *config_monitor_thread_func(void *arg)
         bool global_parameter_restart_required = false;
         for (const auto &next_global : new_cfg.global_logics)
         {
-            const auto previous = std::find_if(old_cfg.global_logics.begin(), old_cfg.global_logics.end(),
-                                               [&](const GlobalLogicConfig &item) {
-                                                   return item.instance_id == next_global.instance_id;
-                                               });
+            const auto previous = std::find_if(
+                old_cfg.global_logics.begin(), old_cfg.global_logics.end(),
+                [&](const GlobalLogicConfig &item) { return item.instance_id == next_global.instance_id; });
             if (previous == old_cfg.global_logics.end() || !previous->enable || !next_global.enable ||
                 previous->logic != next_global.logic)
                 continue;
@@ -369,10 +368,9 @@ extern "C" void *config_monitor_thread_func(void *arg)
         {
             for (const auto &next_global : new_cfg.global_logics)
             {
-                const auto previous = std::find_if(old_cfg.global_logics.begin(), old_cfg.global_logics.end(),
-                                                   [&](const GlobalLogicConfig &item) {
-                                                       return item.instance_id == next_global.instance_id;
-                                                   });
+                const auto previous = std::find_if(
+                    old_cfg.global_logics.begin(), old_cfg.global_logics.end(),
+                    [&](const GlobalLogicConfig &item) { return item.instance_id == next_global.instance_id; });
                 if (previous == old_cfg.global_logics.end() || *previous != next_global)
                 {
                     global_logics_changed = true;
@@ -780,8 +778,8 @@ int app_ctrl_init(const char *cfgPath)
     }
 
     /* 业务尺寸无需等待模型初始化；首代 ROI 快照就使用固定 640×640 坐标。 */
-    app_ctrl_store_runtime_snapshot(app_ctrl_build_runtime_snapshot(
-        g_pCtrl->config, g_pCtrl->inputW, g_pCtrl->inputH, g_pCtrl->config_generation));
+    app_ctrl_store_runtime_snapshot(
+        app_ctrl_build_runtime_snapshot(g_pCtrl->config, g_pCtrl->inputW, g_pCtrl->inputH, g_pCtrl->config_generation));
 
     g_pCtrl->b_init = 1;
     g_pCtrl->isRunning.store(true);
@@ -1002,9 +1000,8 @@ static void fill_channel_logic_snapshot_locked(int chnId, const ChannelState &st
     if (state.published_steady_ms != 0)
     {
         const uint64_t now = steady_now_ms();
-        out->publication_age_ms = now >= state.published_steady_ms
-                                      ? static_cast<int64_t>(now - state.published_steady_ms)
-                                      : 0;
+        out->publication_age_ms =
+            now >= state.published_steady_ms ? static_cast<int64_t>(now - state.published_steady_ms) : 0;
     }
     out->logic_frame_id = state.published_logic_frame_id;
     out->frame_seq = state.published_frame_seq;
@@ -1013,11 +1010,10 @@ static void fill_channel_logic_snapshot_locked(int chnId, const ChannelState &st
     out->infer_enabled = state.published_infer_enabled != 0;
     out->disp_fps = state.preview_rate.value();
     out->online_state = state.online_state;
-    out->online_state_changed_steady_ms =
-        state.online_state == CH_ONLINE ? state.online_ts_ms : state.offline_ts_ms;
+    out->online_state_changed_steady_ms = state.online_state == CH_ONLINE ? state.online_ts_ms : state.offline_ts_ms;
     out->outputs = state.logic_outputs;
-    out->media = state.published_media;
-    out->global_draw_commands_by_owner = state.global_draw_cmds_by_owner;
+    VisionContextAccess::media(*out) = state.published_media;
+    VisionContextAccess::layers(*out) = state.global_draw_cmds_by_owner;
     if (published_runtime)
         *published_runtime = state.published_runtime;
 }
@@ -1059,8 +1055,7 @@ int app_ctrl_get_channel_frame_snapshot(int chnId, ChannelFrameSnapshot *out)
     return app_ctrl_materialize_channel_frame_snapshot(snapshot, out);
 }
 
-void app_ctrl_set_global_draw_commands(int chnId, const std::string &owner,
-                                       const std::vector<DrawCommand> &commands)
+void app_ctrl_set_global_draw_commands(int chnId, const std::string &owner, const std::vector<DrawCommand> &commands)
 {
     if (!g_pCtrl || owner.empty() || !app_ctrl_has_channel(chnId))
         return;

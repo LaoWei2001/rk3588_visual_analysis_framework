@@ -44,7 +44,10 @@ class YoloV8Det : public ModelBase
     {
         return obj_thresh_;
     }
-    virtual float get_nms_thresh() const override { return nms_thresh_; }
+    virtual float get_nms_thresh() const override
+    {
+        return nms_thresh_;
+    }
 
     virtual bool nms_done() const override
     {

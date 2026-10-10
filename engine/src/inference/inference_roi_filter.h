@@ -1,7 +1,7 @@
 #pragma once
 
 #include "config/config.h"
-#include "inference_types.h"
+#include <types.h>
 
 #include <vector>
 

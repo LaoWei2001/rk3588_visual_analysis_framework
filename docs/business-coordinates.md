@@ -1,7 +1,7 @@
 # 固定业务坐标与模型输入尺寸
 
 框架把业务坐标固定为完整画面的 **640×640**，定义位于
-`engine/src/common/business_coordinates.h`。该坐标与视频原图、NPU 输入独立，
+`engine/include/coordinates.h`。该坐标与视频原图、NPU 输入独立，
 不由首个模型、通道顺序、模型热切换或重启决定。
 
 | 数据 | 坐标 / 尺寸 |

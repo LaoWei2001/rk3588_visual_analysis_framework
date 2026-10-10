@@ -1,10 +1,10 @@
 #include "model_inspection.h"
 
+#include "rknn_api.h"
 #include <cstdio>
+#include <json.h>
 #include <stdexcept>
 #include <vector>
-#include "rknn_api.h"
-#include "third_party/json/cJSON.h"
 
 namespace
 {
@@ -12,9 +12,12 @@ const char *format_name(rknn_tensor_format format)
 {
     switch (format)
     {
-    case RKNN_TENSOR_NHWC: return "NHWC";
-    case RKNN_TENSOR_NCHW: return "NCHW";
-    default: return "UNDEFINED";
+    case RKNN_TENSOR_NHWC:
+        return "NHWC";
+    case RKNN_TENSOR_NCHW:
+        return "NCHW";
+    default:
+        return "UNDEFINED";
     }
 }
 
@@ -35,9 +38,13 @@ cJSON *tensor_json(const rknn_tensor_attr &attr)
 struct Context
 {
     rknn_context value = 0;
-    ~Context() { if (value) rknn_destroy(value); }
+    ~Context()
+    {
+        if (value)
+            rknn_destroy(value);
+    }
 };
-}
+} // namespace
 
 int inspect_model_cli(const std::string &path)
 {
@@ -57,8 +64,7 @@ int inspect_model_cli(const std::string &path)
         rknn_tensor_attr input{};
         if (rknn_query(context.value, RKNN_QUERY_INPUT_ATTR, &input, sizeof(input)) < 0)
             throw std::runtime_error("无法读取 RKNN 输入张量");
-        if (input.n_dims != 4 || input.dims[0] != 1 ||
-            (input.fmt != RKNN_TENSOR_NHWC && input.fmt != RKNN_TENSOR_NCHW))
+        if (input.n_dims != 4 || input.dims[0] != 1 || (input.fmt != RKNN_TENSOR_NHWC && input.fmt != RKNN_TENSOR_NCHW))
             throw std::runtime_error("输入必须为 batch=1 的四维 NHWC/NCHW 图像张量");
         const bool nhwc = input.fmt == RKNN_TENSOR_NHWC;
         const int height = input.dims[nhwc ? 1 : 2];

@@ -1,0 +1,38 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/userdata/rk3588_visual_analysis_framework/service/gpio_state/gpio_control_daemon.c
+dirent.h
+-
+errno.h
+-
+fcntl.h
+-
+gpiod.h
+-
+limits.h
+-
+signal.h
+-
+stdio.h
+-
+stdlib.h
+-
+string.h
+-
+sys/socket.h
+-
+sys/stat.h
+-
+sys/types.h
+-
+sys/un.h
+-
+unistd.h
+-
+

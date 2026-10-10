@@ -1,0 +1,1 @@
+/usr/bin/cc -O3 -DNDEBUG CMakeFiles/rk3588-gpioctl.dir/main.c.o -o rk3588-gpioctl  /usr/lib/aarch64-linux-gnu/libgpiod.so 

@@ -154,9 +154,19 @@ pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
 set(custom_inc
     ${OpenCV_INCLUDE_DIRS}
     ${GTK3_INCLUDE_DIRS}
+    ${PROJECT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/src
-    ${PROJECT_SOURCE_DIR}/src/third_party/json
 )
+
+# Business code receives public headers and OpenCV only.
+# No engine/src, RKNN, GStreamer or GTK include path is exported.
+add_library(vision_sdk INTERFACE)
+add_library(Vision::SDK ALIAS vision_sdk)
+target_include_directories(vision_sdk INTERFACE
+    ${PROJECT_SOURCE_DIR}/include
+)
+target_include_directories(vision_sdk SYSTEM INTERFACE ${OpenCV_INCLUDE_DIRS})
+target_compile_features(vision_sdk INTERFACE cxx_std_11)
 
 set(custom_libs
     rga
@@ -192,7 +202,14 @@ file(GLOB_RECURSE project_logic_srcs
     "${VISION_PROJECTS_ROOT}/global_modules/*.cc"
     "${VISION_PROJECTS_ROOT}/global_modules/*.cxx"
 )
-list(APPEND dir_srcs ${logic_core_srcs} ${project_logic_srcs})
+list(APPEND dir_srcs ${logic_core_srcs})
+
+# OBJECT keeps static registration constructors in the final executable.
+# Business sources directly include the public SDK definitions.
+if(project_logic_srcs)
+    add_library(vision_business OBJECT ${project_logic_srcs})
+    target_link_libraries(vision_business PRIVATE Vision::SDK)
+endif()
 
 # 模块 logic.json 是参数 Schema 的唯一真源。构建时将聚合后的能力清单嵌入二进制，
 # 因此 --debug 直接运行也能完成参数默认值、类型和热重载策略校验，不依赖外部 logics.json。
@@ -246,8 +263,66 @@ set(cjson_src ${PROJECT_SOURCE_DIR}/src/third_party/json/cJSON.c)
 # ========================== custom ============================
 
 add_executable(vision_analysis ${dir_srcs} ${api_srcs} ${cjson_src})
+if(TARGET vision_business)
+    target_sources(vision_analysis PRIVATE $<TARGET_OBJECTS:vision_business>)
+endif()
 target_include_directories(vision_analysis PRIVATE ${custom_inc} ${api_inc})
 target_link_libraries(vision_analysis ${custom_libs} ${sysLib_list})
+
+option(BUILD_SDK_TESTS "Validate public SDK without engine include paths" OFF)
+if(BUILD_SDK_TESTS)
+    enable_testing()
+    set(sdk_test_args
+        --compiler "${CMAKE_CXX_COMPILER}"
+        --include "${PROJECT_SOURCE_DIR}/include"
+        --projects "${VISION_PROJECTS_ROOT}"
+    )
+    foreach(directory IN LISTS OpenCV_INCLUDE_DIRS)
+        list(APPEND sdk_test_args --opencv "${directory}")
+    endforeach()
+    add_test(NAME sdk_public_headers_regression
+        COMMAND "${PYTHON3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/sdk/test_public_headers.py" ${sdk_test_args})
+    set_tests_properties(sdk_public_headers_regression PROPERTIES TIMEOUT 180)
+
+    add_library(sdk_target_query_consumer OBJECT tests/sdk/test_target_query.cpp)
+    target_link_libraries(sdk_target_query_consumer PRIVATE Vision::SDK)
+    target_compile_options(sdk_target_query_consumer PRIVATE -UNDEBUG)
+    add_executable(sdk_target_query_tests
+        $<TARGET_OBJECTS:sdk_target_query_consumer>
+        src/logic/core/channel_logic.cpp
+    )
+    target_include_directories(sdk_target_query_tests PRIVATE ${custom_inc} ${api_inc})
+    target_compile_options(sdk_target_query_tests PRIVATE -ffunction-sections -fdata-sections)
+    set_target_properties(sdk_target_query_tests PROPERTIES LINK_FLAGS "-Wl,--gc-sections")
+    target_link_libraries(sdk_target_query_tests PRIVATE ${OpenCV_LIBS} Threads::Threads)
+    add_test(NAME sdk_target_query_regression COMMAND sdk_target_query_tests)
+    set_tests_properties(sdk_target_query_regression PROPERTIES TIMEOUT 15)
+
+    # The example is optional in externally supplied business workspaces.
+    set(sdk_example "${VISION_PROJECTS_ROOT}/modules/logic_roi_dwell_demo/logic.cpp")
+    if(EXISTS "${sdk_example}")
+        add_library(sdk_example_consumer OBJECT "${sdk_example}")
+        target_link_libraries(sdk_example_consumer PRIVATE Vision::SDK)
+        add_executable(sdk_business_tests
+            tests/sdk/test_business_workflow.cpp
+            $<TARGET_OBJECTS:sdk_example_consumer>
+            src/logic/core/channel_logic.cpp
+            src/logic/core/logic_parameters.cpp
+            src/display/display.cpp
+            src/display/text_overlay.cpp
+            "${logic_catalog_cpp}"
+            ${cjson_src}
+        )
+        target_include_directories(sdk_business_tests PRIVATE ${custom_inc} ${api_inc})
+        target_compile_options(sdk_business_tests PRIVATE -UNDEBUG -ffunction-sections -fdata-sections)
+        set_target_properties(sdk_business_tests PROPERTIES LINK_FLAGS "-Wl,--gc-sections")
+        target_link_libraries(sdk_business_tests PRIVATE ${OpenCV_LIBS} ${GTK3_LIBRARIES} Threads::Threads)
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sdk-acceptance")
+        add_test(NAME sdk_business_workflow_regression
+            COMMAND sdk_business_tests "${CMAKE_CURRENT_BINARY_DIR}/sdk-acceptance")
+        set_tests_properties(sdk_business_workflow_regression PROPERTIES TIMEOUT 30)
+    endif()
+endif()
 
 # 发布包即使不经过 run.sh 启动，也优先从可执行文件旁的 libs/ 加载依赖。
 # BUILD_WITH_INSTALL_RPATH 避免把构建机上的 vendor 绝对路径写入最终 ELF。
@@ -277,6 +352,7 @@ if(BUILD_TRACKER_TESTS)
         src/tracking/tracker.cpp
     )
     target_include_directories(tracker_tests PRIVATE
+        ${PROJECT_SOURCE_DIR}/include
         ${OpenCV_INCLUDE_DIRS}
         ${PROJECT_SOURCE_DIR}/src
     )
@@ -288,6 +364,7 @@ if(BUILD_TRACKER_TESTS)
         src/tracking/bytetrack.cpp
     )
     target_include_directories(bytetrack_tests PRIVATE
+        ${PROJECT_SOURCE_DIR}/include
         ${OpenCV_INCLUDE_DIRS}
         ${PROJECT_SOURCE_DIR}/src
     )
@@ -304,6 +381,7 @@ if(BUILD_INFERENCE_ROI_TESTS)
         src/inference/inference_roi_geometry.cpp
     )
     target_include_directories(inference_roi_filter_tests PRIVATE
+        ${PROJECT_SOURCE_DIR}/include
         ${OpenCV_INCLUDE_DIRS}
         ${PROJECT_SOURCE_DIR}/src
     )
@@ -344,7 +422,7 @@ option(BUILD_FRAME_SNAPSHOT_TESTS "Build frame evidence and buffer ownership reg
 if(BUILD_FRAME_SNAPSHOT_TESTS)
     enable_testing()
     add_executable(event_retention_tests tests/event/test_event_retention.cpp ${cjson_src})
-    target_include_directories(event_retention_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_include_directories(event_retention_tests PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
     target_compile_options(event_retention_tests PRIVATE -UNDEBUG)
     add_test(NAME event_retention_regression COMMAND event_retention_tests)
     add_executable(frame_snapshot_tests

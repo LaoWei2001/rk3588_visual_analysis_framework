@@ -16,14 +16,14 @@
  *   ④ RGA 段（rga_convert_resize 调用）不在 display_lock 内，避免把锁争用误报为 RGA 错误。
  */
 
-#include "runtime/app_ctrl.h"
-#include "runtime/pause_ctrl.h"
-#include "inference/inference_engine.h"
-#include "pipeline/image_convert.h"
 #include "display.h"
 #include "display_pipeline.h"
+#include "inference/inference_engine.h"
 #include "pipeline/frame_transform.h"
-#include "logic/core/channel_logic.h" /* DrawCommand, RenderParams */
+#include "pipeline/image_convert.h"
+#include "runtime/app_ctrl.h"
+#include "runtime/pause_ctrl.h"
+#include <channel.h> /* DrawCommand, RenderParams */
 
 #include <algorithm>
 #include <atomic>
@@ -98,8 +98,7 @@ static void write_channel_view(int chnId, cv::Mat &view)
         cv::cvtColor(view, view, cv::COLOR_BGR2RGB);
     constexpr int screen_bpp = 3;
     char *front = *g_pCtrl->pDispBuffer;
-    cv::Mat front_roi(view.rows, view.cols, CV_8UC3,
-                      front + display_buffer_offset(chnId, screen_bpp),
+    cv::Mat front_roi(view.rows, view.cols, CV_8UC3, front + display_buffer_offset(chnId, screen_bpp),
                       app_ctrl_get_disp_width() * screen_bpp);
     display_lock();
     view.copyTo(front_roi);
@@ -119,7 +118,7 @@ static void write_channel_view(int chnId, cv::Mat &view)
  * 零尺寸帧保护：RTSP 重连期间上游可能推入无效帧，在入口早退避免 RGA 崩溃。
  */
 void display_commit_frame(int chnId, const void *pSrcData, int srcFmt, int srcWidth, int srcHeight, int srcHStride,
-                           int srcVStride)
+                          int srcVStride)
 {
     char *pFront = *g_pCtrl->pDispBuffer;
     if (!pFront)

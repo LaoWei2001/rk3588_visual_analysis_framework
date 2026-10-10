@@ -51,7 +51,10 @@ class Yolo26Pose final : public ModelBase
     {
         return obj_thresh_;
     }
-    float get_nms_thresh() const override { return nms_thresh_; }
+    float get_nms_thresh() const override
+    {
+        return nms_thresh_;
+    }
     bool nms_done() const override
     {
         return true;

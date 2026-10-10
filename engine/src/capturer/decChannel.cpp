@@ -1,9 +1,9 @@
 #include "decChannel.h"
+#include "common/logging.h"
+#include "gst_opt.h"
 #include "pipeline/pipeline_runtime.h"
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
-#include "gst_opt.h"
-#include "common/logging.h"
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -158,8 +158,7 @@ static void file_pad_added(GstElement *src, GstPad *new_pad, GstChannel_t *data)
  * 并把最终创建的视频解码器写入日志，便于发现插件缺失或意外软解。 */
 static void prefer_mpp_video_decoder()
 {
-    GstPluginFeature *feature =
-        gst_registry_find_feature(gst_registry_get(), "mppvideodec", GST_TYPE_ELEMENT_FACTORY);
+    GstPluginFeature *feature = gst_registry_find_feature(gst_registry_get(), "mppvideodec", GST_TYPE_ELEMENT_FACTORY);
     if (!feature)
         return;
     gst_plugin_feature_set_rank(feature, GST_RANK_PRIMARY + 100);
@@ -191,9 +190,10 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
     if (!sample)
         return GST_FLOW_OK;
 
-    data->last_sample_seen_us.store(static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count()), std::memory_order_relaxed);
+    data->last_sample_seen_us.store(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                              std::chrono::steady_clock::now().time_since_epoch())
+                                                              .count()),
+                                    std::memory_order_relaxed);
 
     /* owner 随 GstChannel 生命周期稳定，避免逐帧查询 GObject qdata。 */
     DecChannel *pThis = data->owner;
@@ -555,9 +555,10 @@ DecChannel::DecChannel(int chnId, const SrcCfg_t &cfg)
 
     mGstChn.chnIds.push_back(chnId);
     mGstChn.is_file = mIsFileSrc;
-    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count()), std::memory_order_relaxed);
+    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                                std::chrono::steady_clock::now().time_since_epoch())
+                                                                .count()),
+                                      std::memory_order_relaxed);
 }
 
 DecChannel::~DecChannel()
@@ -749,8 +750,8 @@ int DecChannel::createVideoDecChannel(bool start_thread)
         release_failed_pipeline(mGstChn);
         return -1;
     }
-    g_object_set(decoded_queue, "max-size-buffers", 1, "max-size-bytes", 0, "max-size-time", (guint64)0,
-                 "leaky", 2, nullptr);
+    g_object_set(decoded_queue, "max-size-buffers", 1, "max-size-bytes", 0, "max-size-time", (guint64)0, "leaky", 2,
+                 nullptr);
     g_object_set(mGstChn.vSink, "sync", FALSE, NULL);
     g_object_set(mGstChn.vSink, "emit-signals", TRUE, NULL);
     g_object_set(mGstChn.vSink, "max-buffers", 2, "drop", TRUE, NULL);
@@ -759,7 +760,8 @@ int DecChannel::createVideoDecChannel(bool start_thread)
     gst_bin_add_many(GST_BIN(mGstChn.pipeline), mGstChn.source, mGstChn.h26xRTPDepay, mGstChn.h26xParse, mGstChn.vDec,
                      decoded_queue, mGstChn.vSink, NULL);
 
-    if (!gst_element_link_many(mGstChn.h26xRTPDepay, mGstChn.h26xParse, mGstChn.vDec, decoded_queue, mGstChn.vSink, NULL))
+    if (!gst_element_link_many(mGstChn.h26xRTPDepay, mGstChn.h26xParse, mGstChn.vDec, decoded_queue, mGstChn.vSink,
+                               NULL))
     {
         g_printerr("[DecChannel] Failed to link RTSP video elements\n");
         release_failed_pipeline(mGstChn);
@@ -767,14 +769,15 @@ int DecChannel::createVideoDecChannel(bool start_thread)
     }
 
     /* 80ms 在保留少量网络抖动余量的同时，比原来的 100ms 更贴近实时画面。 */
-    g_object_set(mGstChn.source, "location", mCfg.location.c_str(), "latency", 80, "protocols", 0x04,
-                 "drop-on-latency", TRUE, NULL);
+    g_object_set(mGstChn.source, "location", mCfg.location.c_str(), "latency", 80, "protocols", 0x04, "drop-on-latency",
+                 TRUE, NULL);
     g_signal_connect(mGstChn.source, "pad-added", G_CALLBACK(rtsp_pad_added), &mGstChn);
 
     g_object_set_data(G_OBJECT(mGstChn.pipeline), "dec_channel_ptr", this);
-    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count()), std::memory_order_relaxed);
+    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                                std::chrono::steady_clock::now().time_since_epoch())
+                                                                .count()),
+                                      std::memory_order_relaxed);
 
     GstStateChangeReturn ret = gst_element_set_state(mGstChn.pipeline, GST_STATE_PLAYING);
     if (ret == GST_STATE_CHANGE_FAILURE)
@@ -848,9 +851,10 @@ int DecChannel::createFileDecChannel(bool start_thread)
     }
 
     g_object_set_data(G_OBJECT(mGstChn.pipeline), "dec_channel_ptr", this);
-    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count()), std::memory_order_relaxed);
+    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                                std::chrono::steady_clock::now().time_since_epoch())
+                                                                .count()),
+                                      std::memory_order_relaxed);
 
     /* decodebin 需要先 PAUSED 完成 typefinding，再切 PLAYING */
     GstStateChangeReturn ret = gst_element_set_state(mGstChn.pipeline, GST_STATE_PAUSED);
@@ -981,9 +985,10 @@ int DecChannel::createUsbDecChannel(bool start_thread)
     }
 
     g_object_set_data(G_OBJECT(mGstChn.pipeline), "dec_channel_ptr", this);
-    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count()), std::memory_order_relaxed);
+    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                                std::chrono::steady_clock::now().time_since_epoch())
+                                                                .count()),
+                                      std::memory_order_relaxed);
 
     g_print("[DecChannel ch%d] USB preferred caps: NV12 %dx%d @ %dfps\n", channelId(), preferred_width,
             preferred_height, capture_fps);
@@ -1126,9 +1131,7 @@ bool DecChannel::seekFilePlayback(int64_t position_ms, int64_t &actual_position_
 
     gint64 duration = 0;
     const bool has_duration = gst_element_query_duration(pipeline, GST_FORMAT_TIME, &duration) && duration > 0;
-    const gint64 requested_ms = has_duration
-                                    ? std::min<gint64>(position_ms, duration / GST_MSECOND)
-                                    : position_ms;
+    const gint64 requested_ms = has_duration ? std::min<gint64>(position_ms, duration / GST_MSECOND) : position_ms;
     const gint64 requested = std::max<gint64>(0, requested_ms) * GST_MSECOND;
 
     const std::vector<int> channels = mGstChn.chnIds;
@@ -1136,17 +1139,17 @@ bool DecChannel::seekFilePlayback(int64_t position_ms, int64_t &actual_position_
         pipeline_channel_offline(channel_id);
 
     const gboolean ok = gst_element_seek_simple(
-        pipeline, GST_FORMAT_TIME,
-        static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE), requested);
+        pipeline, GST_FORMAT_TIME, static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE), requested);
     if (ok)
     {
         setFileEos(false);
         if (!pause_ctrl::is_paused())
             gst_element_set_state(pipeline, GST_STATE_PLAYING);
     }
-    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count()), std::memory_order_relaxed);
+    mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                                std::chrono::steady_clock::now().time_since_epoch())
+                                                                .count()),
+                                      std::memory_order_relaxed);
     for (int channel_id : channels)
         pipeline_channel_online(channel_id);
 

@@ -16,8 +16,8 @@
 #pragma once
 
 #include "config/config.h"
-#include "runtime/app_ctrl.h"
 #include "inference/inference_engine.h"
+#include "runtime/app_ctrl.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -43,8 +43,7 @@ static inline uint64_t steady_now_us(void)
 static inline uint64_t system_now_ms(void)
 {
     auto now = std::chrono::system_clock::now();
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
 }
 
 /*======================== 三槽显示帧池（DisplayFramePool）========================*/

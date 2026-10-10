@@ -9,9 +9,11 @@
 //
 // 接线说明: 继电器模块 IN 脚接 relay_pin 引脚(默认 GPIO6_A2), 与控制板共地。
 
-#include "logic/core/logic_common.h"
-#include "gpio/gpio.h"
-#include "cJSON.h"
+#include <channel.h>
+#include <drawing.h>
+#include <cstdio>
+#include <gpio.h>
+#include <json.h>
 
 struct RelayState
 {

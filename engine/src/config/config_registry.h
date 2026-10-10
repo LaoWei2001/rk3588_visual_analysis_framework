@@ -4,9 +4,9 @@
  */
 #pragma once
 
-#include "third_party/json/cJSON.h"
 #include <cstddef>
 #include <functional>
+#include <json.h>
 #include <string>
 #include <vector>
 

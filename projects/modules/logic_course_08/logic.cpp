@@ -2,30 +2,29 @@
 // 实现效果:每隔一段设定的时间就向服务器上传一张当前视频帧的截图
 // 难度:★★★☆☆
 
-#include "logic/core/logic_common.h"
+#include <channel.h>
+#include <events.h>
+#include <cstdio>
 
 namespace
 {
 
 struct UploadDemoState
 {
-    uint64_t upload_time = 0;
+    explicit UploadDemoState(uint64_t now) : upload_time(now) {}
+    uint64_t upload_time;
 };
 
 static void logic_course_08(ChannelContext *ctx)
 {
-    if (!ctx || !ctx->state)
+    if (!ctx)
     {
         return;
     }
-    if (!(*ctx->state))
-    {
-        std::shared_ptr<UploadDemoState> p = std::make_shared<UploadDemoState>();
-        // 设中间变量p将时间初始化之后再传给*(ctx->state)
-        p->upload_time = ctx->timestamp_ms;
-        *(ctx->state) = p;
-    }
-    std::shared_ptr<UploadDemoState> state = std::static_pointer_cast<UploadDemoState>(*ctx->state);
+    // 构造参数只在首次调用时用于初始化，不会每帧重置计时。
+    UploadDemoState *state = ctx->get_state<UploadDemoState>(ctx->timestamp_ms);
+    if (!state)
+        return;
     // 如果与上一次的报警间隔了5秒
     float time_interval = ctx->param_float("time_interval");
     if (ctx->timestamp_ms - state->upload_time >= time_interval * 1000)
@@ -39,8 +38,8 @@ static void logic_course_08(ChannelContext *ctx)
         request.fields = {
             event_field("server_event_type", ctx->param_string("server_event_type")),
             event_field("invade_flag", ctx->param_int("invade_flag")),
-            event_field("yuv_width", inference_get_input_w()),
-            event_field("yuv_height", inference_get_input_h()),
+            event_field("yuv_width", ctx->business_width()),
+            event_field("yuv_height", ctx->business_height()),
             event_field("yuv_flag", ctx->param_string("yuv_flag")),
         };
         const EventReportResult report = report_event(ctx, request);

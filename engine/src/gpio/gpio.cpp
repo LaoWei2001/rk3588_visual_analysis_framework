@@ -3,7 +3,8 @@
  * @brief 视觉主程序 GPIO 公共接口实现（libgpiod 1.x）
  */
 
-#include "gpio/gpio.h"
+#include "gpio/gpio_runtime.h"
+#include <gpio.h>
 
 #include <gpiod.h>
 
@@ -141,7 +142,9 @@ void log_bad_name_once(const char *pinName)
  */
 int controller_request(const char *operation, const char *pinName, int requestedValue, int *returnedValue)
 {
-    struct sockaddr_un address{};
+    struct sockaddr_un address
+    {
+    };
     char request[128] = {};
     char response[256] = {};
     int socketFd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
@@ -163,8 +166,7 @@ int controller_request(const char *operation, const char *pinName, int requested
     int requestSize = -1;
     if (strcmp(operation, "SET") == 0 || strcmp(operation, "SET_MANAGED") == 0)
     {
-        requestSize = snprintf(request, sizeof(request), "%s %s %d", operation, pinName,
-                               requestedValue ? 1 : 0);
+        requestSize = snprintf(request, sizeof(request), "%s %s %d", operation, pinName, requestedValue ? 1 : 0);
     }
     else if (strcmp(operation, "INPUT") == 0 || strcmp(operation, "INPUT_MANAGED") == 0)
     {
@@ -246,7 +248,9 @@ bool runtime_level_path(const char *pinName, char *path, size_t size)
 
 bool ensure_state_dir()
 {
-    struct stat info{};
+    struct stat info
+    {
+    };
     if (mkdir(GPIO_STATE_DIR, 0755) != 0 && errno != EEXIST)
         return false;
     if (lstat(GPIO_STATE_DIR, &info) != 0 || !S_ISDIR(info.st_mode) || info.st_uid != geteuid() ||
@@ -261,7 +265,9 @@ bool ensure_state_dir()
 bool read_value_file(const char *path, int *value)
 {
     char text[8] = {};
-    struct stat info{};
+    struct stat info
+    {
+    };
     int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0)
         return false;
@@ -517,9 +523,8 @@ int configure_output_locked(GpioPin *pin, int value)
     {
         pin->direction = DIR_OUTPUT;
         pin->defaultVal = value;
-        log_pin_error_once(pin,
-                           "【GPIO】%s 已输出 %d，但后台保存统一状态失败：%s\n",
-                           pin->name.c_str(), value, strerror(errno));
+        log_pin_error_once(pin, "【GPIO】%s 已输出 %d，但后台保存统一状态失败：%s\n", pin->name.c_str(), value,
+                           strerror(errno));
         return -3;
     }
     if (controllerResult < 0 && (errno == EINVAL || errno == EPROTO))
@@ -531,8 +536,8 @@ int configure_output_locked(GpioPin *pin, int value)
             if (readback != value)
             {
                 errno = EIO;
-                log_pin_error_once(pin, "【GPIO】%s 输出校验失败（期望%d，读取%d）\n",
-                                   pin->name.c_str(), value, readback);
+                log_pin_error_once(pin, "【GPIO】%s 输出校验失败（期望%d，读取%d）\n", pin->name.c_str(), value,
+                                   readback);
                 return -2;
             }
             pin->direction = DIR_OUTPUT;
@@ -584,9 +589,8 @@ int configure_input_locked(GpioPin *pin)
         else if (controllerResult == -2)
         {
             pin->direction = DIR_INPUT;
-            log_pin_error_once(pin,
-                               "【GPIO】%s 已切换为输入，但后台清除统一状态失败：%s\n",
-                               pin->name.c_str(), strerror(errno));
+            log_pin_error_once(pin, "【GPIO】%s 已切换为输入，但后台清除统一状态失败：%s\n", pin->name.c_str(),
+                               strerror(errno));
             return -3;
         }
         else if (controllerResult < 0 && (errno == EINVAL || errno == EPROTO))
@@ -1191,7 +1195,9 @@ bool find_device_tree_node_by_phandle(const char *directory, uint32_t wanted, ch
     struct dirent *entry = nullptr;
     while ((entry = readdir(stream)) != nullptr)
     {
-        struct stat info{};
+        struct stat info
+        {
+        };
         if (entry->d_name[0] == '.' ||
             snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name) >= static_cast<int>(sizeof(path)) ||
             lstat(path, &info) != 0 || !S_ISDIR(info.st_mode))
@@ -1302,7 +1308,9 @@ void describe_gpio_controller(unsigned int chipNumber, const char *chipLabel, bo
     uint32_t supplyPhandle = 0;
     uint32_t minimumUv = 0;
     uint32_t maximumUv = 0;
-    struct stat deviceInfo{};
+    struct stat deviceInfo
+    {
+    };
     unsigned int bank = 0;
 
     *controller = ControllerInfo{};

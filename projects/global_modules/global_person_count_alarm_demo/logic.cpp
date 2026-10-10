@@ -1,7 +1,6 @@
-#include "logic/core/global_logic.h"
+#include <global.h>
 
 #include <cstdio>
-#include <memory>
 
 static void global_person_count_alarm_demo(GlobalContext *gctx)
 {
@@ -10,13 +9,13 @@ static void global_person_count_alarm_demo(GlobalContext *gctx)
     int input_count;
     int i;
 
-    if (gctx == NULL || gctx->state == NULL)
+    if (gctx == NULL)
         return;
 
-    /* state 是框架提供的跨轮次存储，这个示例只在里面保存一个“是否已报警”标志。 */
-    if (gctx->state->get() == NULL)
-        *gctx->state = std::make_shared<bool>(false);
-    reported = (bool *)gctx->state->get();
+    /* 每个全局实例独立保存“是否已报警”；首次默认 false，后续复用。 */
+    reported = gctx->get_state<bool>();
+    if (reported == NULL)
+        return;
 
     /* 获取本次全局逻辑收到的有效通道数量。 */
     input_count = (int)gctx->input_count();

@@ -13,10 +13,10 @@ description: >-
 
 本 Skill 是单通道业务逻辑的工作入口，同时服务大模型编程和二次开发者。它以当前源码为准：
 
-- 公共接口：`engine/src/logic/core/channel_logic.h`、`logic_action.h`、`logic_outputs.h`；
+- 公共接口：`engine/include/channel.h`、`engine/include/actions.h`、`engine/include/outputs.h`；
 - 模块目录：`projects/modules/<logic_id>/`；
 - 注册与清单校验：`tools/build/generate_logics_catalog.py`；
-- 事件接口：`engine/src/event/event_report.h`。
+- 事件接口：`engine/include/events.h`。
 
 不要从旧文档推断接口。当前 `ChannelContext` 没有 `frame` 成员；需要像素时调用
 `model_frame()` 或 `source_frame()`。
@@ -52,11 +52,11 @@ API，也不请求扩大权限。机械执行规则见
 ## 新模块工作流
 
 1. 在 `projects/modules/logic_xxx/` 新建 `logic.cpp` 和 `logic.json`。
-2. 实现 `static void logic_xxx(ChannelContext *ctx)`，包含 `logic/core/logic_common.h`。
+2. 实现 `static void logic_xxx(ChannelContext *ctx)`，包含 `channel.h`。
 3. 文件末尾写 `REGISTER_LOGIC(logic_xxx);`。函数标识符就是配置、Web 和 API 使用的唯一 ID。
 4. 在 `logic.json` 声明参数、事件、上报字段、输出和 Action；不要手写 `name`。
 5. 只用 `ctx->param_*()` 读取模块参数，不为普通业务参数扩展中央 `ChannelConfig`。
-6. 用 `ctx->state` 保存每通道跨帧状态；不能用可变函数级 `static` 共享业务状态。
+6. 用 `ctx->get_state<T>()` 获取每通道跨帧状态；不能用可变函数级 `static` 共享业务状态。
 7. 若发布变量，C++ 的 `publish_*()` key/type 必须与 `logic.json.outputs[]` 一致。
 8. 若创建事件，事件 ID 和字段必须与 `event_types[]`、`report_fields[]` 一致。
 9. 运行只读生成器校验；在隔离环境可执行的构建和测试完成后，再给出部署与真实输入验收步骤。
@@ -64,7 +64,8 @@ API，也不请求扩大权限。机械执行规则见
 最小骨架：
 
 ```cpp
-#include "logic/core/logic_common.h"
+#include <channel.h>
+#include <drawing.h>
 
 struct XxxState
 {
@@ -73,13 +74,12 @@ struct XxxState
 
 static void logic_xxx(ChannelContext *ctx)
 {
-    if (!ctx || !ctx->state || !ctx->results)
+    if (!ctx || !ctx->results)
         return;
 
-    if (!*ctx->state)
-        *ctx->state = std::make_shared<XxxState>();
-    auto &state = *std::static_pointer_cast<XxxState>(*ctx->state);
-    ++state.seen_frames;
+    auto *state = ctx->get_state<XxxState>();
+    if (!state) return;
+    ++state->seen_frames;
 
     const int count = ctx->target_count("person");
     ctx->publish_int("person_count", count);

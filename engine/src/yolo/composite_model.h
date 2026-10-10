@@ -53,7 +53,10 @@ class CompositeModel : public ModelBase
     {
         return 0.0f;
     }
-    float get_nms_thresh() const override { return 1.0f; }
+    float get_nms_thresh() const override
+    {
+        return 1.0f;
+    }
     bool nms_done() const override
     {
         return true;

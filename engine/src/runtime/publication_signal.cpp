@@ -9,7 +9,7 @@ namespace
 pthread_mutex_t g_publication_mtx = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t g_publication_cv = PTHREAD_COND_INITIALIZER;
 uint64_t g_publication_sequence = 0;
-}
+} // namespace
 
 uint64_t publication_signal_sequence(void)
 {

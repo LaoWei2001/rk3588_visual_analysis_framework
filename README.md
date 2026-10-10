@@ -778,7 +778,8 @@ projects/modules/logic_people_count/
 最小 `logic.cpp`：
 
 ```cpp
-#include "logic/core/logic_common.h"
+#include <channel.h>
+#include <drawing.h>  // 公共接口：engine/include/
 
 static void logic_people_count(ChannelContext *ctx)
 {

@@ -1,0 +1,44 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/userdata/rk3588_visual_analysis_framework/gpio_test/main.c
+dirent.h
+-
+ctype.h
+-
+errno.h
+-
+fcntl.h
+-
+gpiod.h
+-
+limits.h
+-
+stdint.h
+-
+stdio.h
+-
+stdlib.h
+-
+string.h
+-
+sys/stat.h
+-
+sys/socket.h
+-
+sys/sysmacros.h
+-
+sys/types.h
+-
+sys/un.h
+-
+time.h
+-
+unistd.h
+-
+

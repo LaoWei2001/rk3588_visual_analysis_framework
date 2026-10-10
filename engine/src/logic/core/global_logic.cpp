@@ -7,19 +7,21 @@
  */
 
 #include "global_logic.h"
+#include "context_access.h"
 #include "control/logic_control.h"
+#include "logic/core/logic_registry.h"
+#include "logic_parameters.h"
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
 #include "runtime/publication_signal.h"
-#include "logic_parameters.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <pthread.h>
 #include <thread>
 #include <utility>
-#include <pthread.h>
 
 /*======================== 单个实例的线程上下文 ========================*/
 struct GlobalLogicThread
@@ -49,6 +51,8 @@ static pthread_mutex_t g_threads_mtx = PTHREAD_MUTEX_INITIALIZER;
 static constexpr int GLOBAL_LOGIC_MIN_DISPATCH_INTERVAL_MS = 5;
 
 /*======================== 全局逻辑分发表 ========================*/
+constexpr int MAX_GLOBAL_LOGIC_FUNCS = 64;
+
 struct GlobalLogicEntry
 {
     const char *name = nullptr;
@@ -165,8 +169,7 @@ std::string GlobalContext::param_json(const char *key) const
     return logic_parameters ? logic_parameters->get_json(key) : std::string();
 }
 
-void GlobalContext::set_channel_draw_commands(int channel_id,
-                                              const std::vector<DrawCommand> &commands) const
+void GlobalContext::set_channel_draw_commands(int channel_id, const std::vector<DrawCommand> &commands) const
 {
     if (config)
     {
@@ -203,8 +206,7 @@ static int64_t automatic_input_timeout_ms(int poll_ms)
     return std::max<int64_t>(minimum_timeout_ms, static_cast<int64_t>(poll_ms) * tolerated_poll_intervals);
 }
 
-static const ChannelLogicSnapshot *find_snapshot(const std::vector<ChannelLogicSnapshot> &snapshots,
-                                                 int channel_id)
+static const ChannelLogicSnapshot *find_snapshot(const std::vector<ChannelLogicSnapshot> &snapshots, int channel_id)
 {
     for (const auto &snapshot : snapshots)
         if (snapshot.channel_id == channel_id)
@@ -238,8 +240,8 @@ void *global_logic_thread_func(void *arg)
     if (!t)
         return nullptr;
 
-    printf("[GlobalLogic] Thread started: id=%s logic=%s poll=%dms connected=",
-           t->config.instance_id.c_str(), t->config.logic.c_str(), t->config.poll_interval_ms);
+    printf("[GlobalLogic] Thread started: id=%s logic=%s poll=%dms connected=", t->config.instance_id.c_str(),
+           t->config.logic.c_str(), t->config.poll_interval_ms);
     if (t->config.channels.empty())
         printf("NONE\n");
     else
@@ -279,14 +281,13 @@ void *global_logic_thread_func(void *arg)
         const uint64_t observed_publication = publication_signal_sequence();
         const uint64_t tick_begin_ms = steady_now_ms();
         const uint64_t tick_unix_ms = system_now_ms();
-        const float dt_ms = t->last_tick_steady_ms == 0
-                                ? 0.0f
-                                : static_cast<float>(tick_begin_ms - t->last_tick_steady_ms);
+        const float dt_ms =
+            t->last_tick_steady_ms == 0 ? 0.0f : static_cast<float>(tick_begin_ms - t->last_tick_steady_ms);
         t->last_tick_steady_ms = tick_begin_ms;
 
         t->channel_snapshots.clear();
         t->updated_channels.clear();
-        t->gctx.image_draw_commands.clear();
+        VisionContextAccess::overlays(t->gctx).clear();
 
         for (int i = 0; i < ch_count; ++i)
         {
@@ -322,7 +323,7 @@ void *global_logic_thread_func(void *arg)
         const auto runtime = app_ctrl_get_runtime_snapshot();
         t->gctx.config = &t->config;
         t->gctx.state = &t->state;
-        t->gctx.logic_parameters = &t->logic_parameters;
+        VisionContextAccess::bind_parameters(t->gctx, &t->logic_parameters);
         t->gctx.timestamp_ms = tick_begin_ms;
         t->gctx.unix_ms = tick_unix_ms;
         t->gctx.dt_ms = dt_ms;
@@ -331,10 +332,8 @@ void *global_logic_thread_func(void *arg)
         t->gctx.runtime_generation = runtime ? runtime->generation : 0;
         t->gctx.model_width = g_pCtrl ? g_pCtrl->inputW : 0;
         t->gctx.model_height = g_pCtrl ? g_pCtrl->inputH : 0;
-        t->gctx.channel_snapshots = &t->channel_snapshots;
-        t->gctx.connected_channel_ids = &t->config.channels;
-        t->gctx.updated_channels = &t->updated_channels;
-        t->gctx.ready_inputs = &t->ready_inputs;
+        VisionContextAccess::bind_global(t->gctx, &t->channel_snapshots, &t->config.channels, &t->updated_channels,
+                                         &t->ready_inputs);
 
         std::vector<LogicAction> pending_actions;
         logic_control_take_global(t->config.instance_id, pending_actions);
@@ -350,15 +349,14 @@ void *global_logic_thread_func(void *arg)
             }
             if (!action_fn)
             {
-                printf("[GlobalAction][%s][%s] no handler for action=%s request=%s\n",
-                       t->config.instance_id.c_str(), t->config.logic.c_str(), action.name.c_str(),
-                       action.request_id.c_str());
+                printf("[GlobalAction][%s][%s] no handler for action=%s request=%s\n", t->config.instance_id.c_str(),
+                       t->config.logic.c_str(), action.name.c_str(), action.request_id.c_str());
                 continue;
             }
             LogicActionResult result = action_fn(&t->gctx, &action);
-            printf("[GlobalAction][%s][%s] action=%s request=%s handled=%d msg=%s\n",
-                   t->config.instance_id.c_str(), t->config.logic.c_str(), action.name.c_str(),
-                   action.request_id.c_str(), result.handled ? 1 : 0, result.message.c_str());
+            printf("[GlobalAction][%s][%s] action=%s request=%s handled=%d msg=%s\n", t->config.instance_id.c_str(),
+                   t->config.logic.c_str(), action.name.c_str(), action.request_id.c_str(), result.handled ? 1 : 0,
+                   result.message.c_str());
         }
 
         if (t->func)
@@ -367,7 +365,7 @@ void *global_logic_thread_func(void *arg)
         /* 本 tick 已完成：释放证据帧引用，等待期间不占用旧解码缓冲区。 */
         t->ready_inputs.clear();
         t->channel_snapshots.clear();
-        t->gctx.image_draw_commands.clear();
+        VisionContextAccess::overlays(t->gctx).clear();
 
         if (t->stop_requested.load())
             break;
@@ -375,16 +373,14 @@ void *global_logic_thread_func(void *arg)
         uint64_t elapsed_ms = steady_now_ms() - tick_begin_ms;
         if (elapsed_ms < static_cast<uint64_t>(GLOBAL_LOGIC_MIN_DISPATCH_INTERVAL_MS))
         {
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(GLOBAL_LOGIC_MIN_DISPATCH_INTERVAL_MS - elapsed_ms));
+            std::this_thread::sleep_for(std::chrono::milliseconds(GLOBAL_LOGIC_MIN_DISPATCH_INTERVAL_MS - elapsed_ms));
             elapsed_ms = steady_now_ms() - tick_begin_ms;
         }
         if (elapsed_ms < (uint64_t)poll_ms)
             publication_signal_wait(observed_publication, poll_ms - static_cast<int>(elapsed_ms));
     }
 
-    printf("[GlobalLogic] Thread exited: id=%s logic=%s\n", t->config.instance_id.c_str(),
-           t->config.logic.c_str());
+    printf("[GlobalLogic] Thread exited: id=%s logic=%s\n", t->config.instance_id.c_str(), t->config.logic.c_str());
     return nullptr;
 }
 
@@ -441,8 +437,7 @@ static void stop_one(GlobalLogicThread *t)
     app_ctrl_clear_all_global_draw_commands(t->config.instance_id);
 }
 
-static const GlobalLogicConfig *find_config(const std::vector<GlobalLogicConfig> &cfgs,
-                                            const std::string &instance_id)
+static const GlobalLogicConfig *find_config(const std::vector<GlobalLogicConfig> &cfgs, const std::string &instance_id)
 {
     for (const auto &cfg : cfgs)
         if (cfg.instance_id == instance_id)
@@ -490,8 +485,7 @@ int global_logic_reload_all(const std::vector<GlobalLogicConfig> &cfgs)
         stop_one(current);
         std::shared_ptr<void> preserved_state;
         bool preserve_state = false;
-        if (next && next->enable && current->config.logic == next->logic &&
-            current->config.channels == next->channels)
+        if (next && next->enable && current->config.logic == next->logic && current->config.channels == next->channels)
         {
             const LogicReloadImpact impact = logic_parameters_reload_impact(
                 next->logic, current->config.logic_parameters_json, next->logic_parameters_json);

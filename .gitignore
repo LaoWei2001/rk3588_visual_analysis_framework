@@ -13,15 +13,29 @@ playwright-report/
 *.log
 *.log.*
 /engine/tests/performance/results/
-build
-dist
+# 构建和发布产物；不要忽略存放源码脚本的 tools/build/。
+/build/
+/dist/
+/web_console/frontend/dist/
+/engine/tests/**/build/
+/engine/bench/build/
 *.tsbuildinfo
-.rknn
-node_modules
+*.rknn
+node_modules/
 /tools/offline_dev_install/debian/output/
 /tools/offline_dev_install/ubuntu/output/
-.claude
-.vscode
+.claude/
+.vscode/
+
+# 本机环境变量和编辑器临时文件，示例配置可以提交。
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.tmp
+*.bak
+*~
+.DS_Store
 
 # RKNN Runtime 的一次性导入源；项目实际跟踪 vendor/rknn/ 下的锁定副本。
 /librknnrt.so

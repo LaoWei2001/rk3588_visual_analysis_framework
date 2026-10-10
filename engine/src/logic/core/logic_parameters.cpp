@@ -4,7 +4,7 @@
  */
 #include "logic_parameters.h"
 
-#include "third_party/json/cJSON.h"
+#include <json.h>
 
 #include <algorithm>
 #include <cmath>

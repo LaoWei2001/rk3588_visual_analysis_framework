@@ -9,8 +9,10 @@
 // 接线说明: 把继电器/指示灯模块的 IN 脚接到输出引脚(默认 GPIO6_A2),
 //           该引脚与控制板共地(GND)即可。
 
-#include "logic/core/logic_common.h"
-#include "gpio/gpio.h"
+#include <channel.h>
+#include <drawing.h>
+#include <cstdio>
+#include <gpio.h>
 
 struct GpioDemoState
 {

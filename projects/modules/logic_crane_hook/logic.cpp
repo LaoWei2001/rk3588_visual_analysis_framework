@@ -1,4 +1,5 @@
-#include "logic/core/logic_common.h"
+#include <channel.h>
+#include <drawing.h>
 
 #include <algorithm>
 #include <cmath>

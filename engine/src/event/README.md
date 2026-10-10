@@ -150,6 +150,6 @@ requested -> generating -> ready
 - `EVENT_STORE_MAX_BYTES`
 - `EVENT_STORE_MIN_FREE_BYTES`
 
-实现入口是 `event_report.h/.cpp`。当前仓库没有独立的 C++ 事件模块单元测试；
+实现入口是 `events.h`、`event_report.cpp`。当前仓库没有独立的 C++ 事件模块单元测试；
 上报队列、契约选择和重试行为由 `services/framework/upload/tests/test_functional.py` 覆盖，
 改动本目录代码时仍需在设备侧补做事件生成、媒体落盘和断网恢复验证。
