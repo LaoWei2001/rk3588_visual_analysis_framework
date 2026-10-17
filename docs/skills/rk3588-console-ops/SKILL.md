@@ -38,10 +38,24 @@ description: >-
 
 | 进程 | 当前管理方式 |
 |---|---|
-| `vision_analysis` | Web 通过 `systemd-run` 创建每 App 独立命名的 transient service；全系统只允许运行一个视觉 App |
+| `vision_analysis` | 平台共享运行库通过 `systemd-run` 创建每 App 的 transient service；全系统单实例 |
+| 设备运行管理 | `rk3588-runtime-manager.service`，独立恢复应用及后台服务，不依赖 Web |
 | Web 控制台 | `rk3588-console.service` |
 | 统一上传 | `unified_upload.service`，由 Web 绑定当前运行 App |
 | 模型 OTA | `ota_agent.service`，由 Web 绑定当前运行 App 和配置文件 |
+| 内核阻塞恢复 | `rk3588-recovery.timer/service`，需策略允许并确认应用恢复失败，默认不升级整机重启 |
+| 网络失联恢复 | `rk3588-network-recovery.service`，平台标准库实现，策略默认关闭，Web 设置管理网卡与用户 ping/TCP 检测目标 |
+
+无人值守恢复的默认阈值、开机自启条件和验收边界见[恢复说明](../../unattended-recovery.md)。
+网络失联分级、用户探测目标和与网络配置事务的互斥见[网络恢复](../../network-recovery.md)。
+视觉 transient service 默认不因退出重启，也不启用业务服务看门狗；用户可在“程序故障恢复”中
+按需开启，见[程序恢复说明](../../application-recovery.md)。保存不重启，立即应用需明确操作。
+日志由 journald 跟随，程序管理页仍单独选择开机自启。
+Web 管理入口为侧边栏“故障恢复”，内分系统、网络与程序故障恢复。平台代码位于
+`services/framework/runtime_manager/python/rk3588_runtime/`，只依赖标准库；Web 目录中的旧运行
+模块仅保留兼容导入。平台包与 Web 包分离，Web 生命周期不再编排开机恢复。
+系统分类提供硬件卡死保护和内核崩溃重启的独立开关：硬件保存为正常重启后生效，panic 保存后
+立即生效；安装/升级保留用户开关选择。保存开关不自动重启设备或当前视觉程序。
 
 ## 先判断任务落点
 

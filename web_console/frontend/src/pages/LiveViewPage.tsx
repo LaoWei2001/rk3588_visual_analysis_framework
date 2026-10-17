@@ -647,7 +647,7 @@ export default function LiveViewPage() {
       }
     }
     loadApps()
-    const timer = setInterval(loadApps, 3000)
+    const timer = setInterval(loadApps, 1000)
     return () => {
       disposed = true
       clearInterval(timer)
@@ -682,7 +682,7 @@ export default function LiveViewPage() {
     }
     checkRtsp()
     return () => { disposed = true }
-  }, [appName, runningConfig])
+  }, [appName, runningConfig, runningApp?.pid])
 
   // 通道/全局动作定义和控制 socket 状态会在程序刚启动后变化，因此持续刷新。
   useEffect(() => {
@@ -703,7 +703,7 @@ export default function LiveViewPage() {
     setControls(null)
     setActionBusy({})
     loadControls()
-    const timer = setInterval(loadControls, 3000)
+    const timer = setInterval(loadControls, 1000)
     return () => {
       disposed = true
       clearInterval(timer)

@@ -11,6 +11,7 @@ import LoginPage   from './pages/LoginPage'
 import TerminalPage from './pages/TerminalPage'
 import ServicesPage from './pages/ServicesPage'
 import SystemSettingsPage from './pages/SystemSettingsPage'
+import RecoveryPage from './pages/RecoveryPage'
 import CameraSettingsPage from './pages/CameraSettingsPage'
 import { destroyAllTerminals } from './pages/terminalSession'
 import ErrorBoundary from './components/ErrorBoundary'
@@ -101,6 +102,10 @@ function AppShell() {
           <span className="nav-icon">◉</span> 系统设置
         </NavLink>
 
+        <NavLink to="/recovery" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
+          <span className="nav-icon">↻</span> 故障恢复
+        </NavLink>
+
         <NavLink to="/camera-settings" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
           <span className="nav-icon">◈</span> 摄像头配置
         </NavLink>
@@ -129,6 +134,8 @@ function AppShell() {
             <Route path="/terminal"        element={<TerminalPage />} />
             <Route path="/services"        element={<ServicesPage />} />
             <Route path="/system-settings" element={<SystemSettingsPage />} />
+            <Route path="/recovery" element={<Navigate to="/recovery/system" replace />} />
+            <Route path="/recovery/:section" element={<RecoveryPage />} />
             <Route path="/camera-settings" element={<CameraSettingsPage />} />
           </Routes>
         </ErrorBoundary>

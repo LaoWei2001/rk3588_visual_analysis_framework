@@ -1,4 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { configSignature, useAutoSync } from '../hooks/useAutoSync'
+import ConfigSyncNotice from './ConfigSyncNotice'
 import {
   apiErrorMessage, deleteReportContract, fetchConnections, fetchDeliveryAdapters, fetchOtaConfig,
   fetchReportContracts, saveConnections, saveOtaConfig,
@@ -75,6 +77,9 @@ export default function AppIntegrationModal({ appName, onClose, onToast }: Props
   const [ota, setOta] = useState<OtaConfig>(EMPTY_OTA)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [conflict, setConflict] = useState(false)
+  const savedSignature = useRef('')
+  const latestServer = useRef<{ connections: DeliveryConnectionsConfig; ota: OtaConfig } | null>(null)
   const setConnections = useEditorStore(state => state.setDeliveryConnections)
   const dirty = useEditorStore(state => state.appIntegrationDirty)
   const setDirty = useEditorStore(state => state.setAppIntegrationDirty)
@@ -91,11 +96,36 @@ export default function AppIntegrationModal({ appName, onClose, onToast }: Props
       setAdapters(adapterCatalog)
       setContracts(contractCatalog)
       setOta({ ...EMPTY_OTA, ...otaConfig })
+      savedSignature.current = configSignature([connections.connections ?? {}, { ...EMPTY_OTA, ...otaConfig }])
+      latestServer.current = { connections, ota: { ...EMPTY_OTA, ...otaConfig } }
+      setConflict(false)
       setDirty(false)
     }).catch(error => onToast(`加载 ${appName} 应用集成失败: ${apiErrorMessage(error)}`, false))
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false; setDirty(false) }
   }, [appName, onToast, setDirty])
+
+  const syncError = useAutoSync(() => Promise.all([
+    fetchConnections(appName), fetchOtaConfig(appName), fetchReportContracts(appName), fetchDeliveryAdapters(appName),
+  ]), ([connections, otaConfig, contractCatalog, adapterCatalog]) => {
+    const nextOta = { ...EMPTY_OTA, ...otaConfig }
+    const signature = configSignature([connections.connections ?? {}, nextOta])
+    latestServer.current = { connections, ota: nextOta }
+    setContracts(current => configSignature(current) === configSignature(contractCatalog) ? current : contractCatalog)
+    setAdapters(current => configSignature(current) === configSignature(adapterCatalog) ? current : adapterCatalog)
+    if (!useEditorStore.getState().appIntegrationDirty) {
+      if (!savedSignature.current) onToast('应用集成配置已重新同步')
+      setConfig({ connections: connections.connections ?? {} }); setOta(nextOta)
+      setConnections(connections.connections ?? {}); savedSignature.current = signature; setConflict(false)
+    } else setConflict(signature !== savedSignature.current)
+  }, { enabled: !loading && !saving, scope: appName, immediate: false })
+  const reload = () => {
+    if (!latestServer.current) return
+    const { connections, ota } = latestServer.current
+    setConfig({ connections: connections.connections ?? {} }); setOta(ota)
+    setConnections(connections.connections ?? {})
+    savedSignature.current = configSignature([connections.connections ?? {}, ota]); setDirty(false); setConflict(false)
+  }
 
   const patchConnection = (id: string, patch: Partial<DeliveryConnection>) => {
     markDirty()
@@ -150,11 +180,19 @@ export default function AppIntegrationModal({ appName, onClose, onToast }: Props
     } }))
   }
   const save = async () => {
+    if (conflict || syncError) return
     setSaving(true)
     try {
+      const [latestConnections, latestOta] = await Promise.all([fetchConnections(appName), fetchOtaConfig(appName)])
+      const nextOta = { ...EMPTY_OTA, ...latestOta }
+      if (configSignature([latestConnections.connections ?? {}, nextOta]) !== savedSignature.current) {
+        latestServer.current = { connections: latestConnections, ota: nextOta }; setConflict(true)
+        throw new Error('底层应用集成配置已变化，请重新同步后再保存')
+      }
       await Promise.all([saveConnections(appName, config), saveOtaConfig(appName, ota)])
       setConnections(config.connections)
       setDirty(false)
+      savedSignature.current = configSignature([config.connections, ota]); setConflict(false)
       onToast(`已保存 ${appName} 的应用集成配置`)
     } catch (error) {
       onToast(`保存失败: ${apiErrorMessage(error)}`, false)
@@ -175,9 +213,11 @@ export default function AppIntegrationModal({ appName, onClose, onToast }: Props
         <div className="app-integration-app">当前程序：{appName}</div>
       </div>
       <button type="button" className="app-integration-close" onClick={close}
-        title="关闭应用集成" aria-label="关闭应用集成">×</button>
+        disabled={saving} title="关闭应用集成" aria-label="关闭应用集成">×</button>
     </div>
     <div className="app-integration-content">
+      <ConfigSyncNotice error={syncError} conflict={conflict} onReload={reload} />
+      <fieldset className="config-write-lock" disabled={saving}>
       {loading ? <div style={{ padding: 40, textAlign: 'center' }}>加载中…</div> : <>
         <div style={sectionTitle}>投递连接</div>
         <div style={{ fontSize: 12, color: '#9aa4b2', lineHeight: 1.6, marginBottom: 12 }}>
@@ -228,11 +268,12 @@ export default function AppIntegrationModal({ appName, onClose, onToast }: Props
         <Field label="平台 WebSocket 地址"><input style={inputStyle} value={ota.platform_ws_host}
           onChange={event => { markDirty(); setOta(current => ({ ...current, platform_ws_host: event.target.value })) }} /></Field>
       </>}
+      </fieldset>
     </div>
     <div className="app-integration-footer">
       {dirty && <span className="app-integration-dirty">● 有未保存修改</span>}
       <button type="button" className="app-integration-button app-integration-button-primary"
-        onClick={save} disabled={saving || loading}>{saving ? '保存中…' : `保存到 ${appName}`}</button>
+        onClick={save} disabled={saving || loading || conflict || !!syncError}>{saving ? '保存中…' : `保存到 ${appName}`}</button>
     </div>
   </div></div>
 }

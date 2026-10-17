@@ -29,6 +29,7 @@
 #include "display_pipeline.h"
 #include "pipeline/pipeline_internal.h"
 #include "rtsp/rtsp_streamer.h"
+#include "runtime/service_watchdog.h"
 #include <cerrno>
 #include <ctime>
 #include <pthread.h>
@@ -38,6 +39,7 @@ extern "C" void *display_worker_thread(void *arg)
     const int chnId = (int)(intptr_t)arg;
     DisplayQueue &dq = g_display_queues[chnId];
     bool had_performance_display = false;
+    service_watchdog::Progress watchdog_progress("display", chnId);
 
     while (g_pCtrl && g_pCtrl->isRunning)
     {
@@ -77,6 +79,7 @@ extern "C" void *display_worker_thread(void *arg)
             pthread_mutex_unlock(&dq.mtx);
         }
 
+        service_watchdog::Scope watchdog_scope(watchdog_progress);
         const bool show_perf = app_ctrl_get_performance_display();
         if (!has_frame)
         {

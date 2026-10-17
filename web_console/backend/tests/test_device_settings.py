@@ -17,7 +17,7 @@ def _event(store: Path, name: str, created: float, *, active: bool = False) -> P
         "media": {"image": {"status": "generating" if active else "ready"}},
     }))
     (path / "delivery_state.json").write_text(json.dumps({
-        "deliveries": [{"status": "pending"}],
+        "deliveries": [{"status": "pending" if active else "delivered"}],
     }))
     (path / "annotated.jpg").write_bytes(b"x" * 128)
     return path

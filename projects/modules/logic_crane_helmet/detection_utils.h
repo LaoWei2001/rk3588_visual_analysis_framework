@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -36,7 +37,12 @@ static inline std::vector<std::string> split_labels(const std::string &csv)
 static inline bool result_matches(const AlgoResult &result, const std::vector<std::string> &labels,
                                   float min_score)
 {
-    if (result.score < min_score)
+    // -ffast-math 会优化 std::isfinite，直接检查 IEEE-754 指数位。
+    uint32_t score_bits = 0;
+    static_assert(sizeof(score_bits) == sizeof(result.score), "32-bit score required");
+    std::memcpy(&score_bits, &result.score, sizeof(score_bits));
+    if ((score_bits & 0x7f800000U) == 0x7f800000U || result.score < min_score || result.score > 1.0f ||
+        result.box.width <= 0 || result.box.height <= 0)
         return false;
     return !labels.empty() && std::find(labels.begin(), labels.end(), result.label) != labels.end();
 }

@@ -1,34 +1,44 @@
 import {useEffect, useRef, useState} from 'react'
 import DatasetTaskEditor, {type DatasetDraft} from '../components/DatasetTaskEditor'
+import DatasetTaskLogic from '../components/DatasetTaskLogic'
 import {targetsFrom, validCondition, type Rule} from '../components/datasetRules'
 import {apiErrorMessage, fetchApps, type AppInfo} from '../api/client'
 import {fetchDataset, saveDataset, enableDataset, deleteDataset, downloadDatasetReceiver,
   type DatasetConfig, type DatasetStatus, type DatasetTask,
   type DatasetReceiverPlatform} from '../api/dataset'
 import './DatasetPage.css'
+import {useDatasetStore} from '../store/datasetStore'
+import {configSignature, useAutoSync} from '../hooks/useAutoSync'
+import ConfigSyncNotice from '../components/ConfigSyncNotice'
 
 const initial: DatasetConfig = {rules: [], interval_sec: 2, confirm_sec: 0, max_samples: 0, images_per_folder: 30,
-  duration_hours: 0, jpeg_quality: 95, roi_name: '', roi_anchor: 'center', trigger_mode: 'periodic'}
+  duration_hours: 0, roi_name: '', roi_anchor: 'center', trigger_mode: 'periodic'}
+const originalSignature = (text: string) => { try { return configSignature(JSON.parse(text)) } catch { return text } }
 
 export default function DatasetPage() {
   const [apps, setApps] = useState<AppInfo[]>([])
-  const [app, setApp] = useState('')
+  const app = useDatasetStore(state => state.app)
+  const setApp = useDatasetStore(state => state.setApp)
   const [status, setStatus] = useState<DatasetStatus | null>(null)
-  const [draft, setDraft] = useState<DatasetDraft | null>(null)
+  const draft = useDatasetStore(state => state.drafts[app] ?? null)
+  const updateDraft = useDatasetStore(state => state.setDraft)
+  const setDraft = (update: DatasetDraft | null | ((current: DatasetDraft | null) => DatasetDraft | null)) => updateDraft(app, update)
   const [busy, setBusy] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [error, setError] = useState('')
   const [loadError, setLoadError] = useState('')
   const [formError, setFormError] = useState('')
   const [notice, setNotice] = useState('')
-  const [receiverPlatform, setReceiverPlatform] = useState<DatasetReceiverPlatform>(
-    /Windows/i.test(navigator.userAgent) ? 'windows-amd64' : 'python')
+  const receiverPlatform = useDatasetStore(state => state.receiverPlatform)
+  const setReceiverPlatform = useDatasetStore(state => state.setReceiverPlatform)
   const actionPending = useRef(false)
   const statusRevision = useRef(0)
   const editorTrigger = useRef<HTMLButtonElement | null>(null)
   const editorPanel = useRef<HTMLElement>(null)
   const tasksPanel = useRef<HTMLElement>(null)
   const dirty = !!draft && JSON.stringify(draft.config) !== draft.original
+  const selectedTask = draft?.taskId ? status?.tasks.find(task => task.id === draft.taskId) : null
+  const draftConflict = !!draft?.taskId && !!status && (!selectedTask || configSignature(selectedTask.config) !== originalSignature(draft.original))
   const discardDraft = () => !dirty || window.confirm('配置尚未保存，放弃本次修改？')
   const availableChannels = status?.channels.filter(channel => channel.eligible && !status.tasks.some(task => task.channel_id === channel.id)) ?? []
   const createReason = !app ? '请选择视觉程序。' : !status ? loadError ? '采集状态加载失败。' : '正在加载采集状态…'
@@ -40,12 +50,21 @@ export default function DatasetPage() {
     fetchApps().then(items => {
       if (disposed) return
       setApps(items)
-      setApp(items.find(item => item.status === 'running')?.name ?? items[0]?.name ?? '')
-    }).catch(error => {if (!disposed) setError(apiErrorMessage(error))})
+      const selected = useDatasetStore.getState().app
+      if (!items.some(item => item.name === selected)) {
+        setApp(items.find(item => item.status === 'running')?.name ?? items[0]?.name ?? '')
+      }
+    }).catch(error => {if (!disposed) setError(`读取程序列表失败：${apiErrorMessage(error)}`)})
     return () => {disposed = true}
   }, [])
+  const appsSyncError = useAutoSync(fetchApps, items => {
+    setApps(items)
+    const selected = useDatasetStore.getState().app
+    if (!items.some(item => item.name === selected)) setApp(items.find(item => item.status === 'running')?.name ?? items[0]?.name ?? '')
+    setError(current => current.startsWith('读取程序列表失败：') ? '' : current)
+  }, { immediate: false })
   useEffect(() => {
-    setStatus(null); setDraft(null); setError(''); setLoadError(''); setFormError(''); setNotice('')
+    setStatus(null); setError(''); setLoadError(''); setFormError(''); setNotice('')
     if (!app) return
     let disposed = false, active = false
     const refresh = async () => {
@@ -60,16 +79,19 @@ export default function DatasetPage() {
       } finally {active = false}
     }
     void refresh()
-    const timer = window.setInterval(refresh, 2000)
+    const timer = window.setInterval(refresh, 1000)
     return () => {disposed = true; window.clearInterval(timer)}
   }, [app])
   useEffect(() => {
-    if (!dirty) return
-    const warn = (event: BeforeUnloadEvent) => {event.preventDefault(); event.returnValue = ''}
-    window.addEventListener('beforeunload', warn)
-    return () => window.removeEventListener('beforeunload', warn)
-  }, [dirty])
-
+    if (!status) return
+    setDraft(current => {
+      if (!current?.taskId || JSON.stringify(current.config) !== current.original) return current
+      const task = status.tasks.find(item => item.id === current.taskId)
+      if (!task) return null
+      if (configSignature(task.config) === configSignature(current.config)) return current
+      return {...current, config: task.config, original: JSON.stringify(task.config)}
+    })
+  }, [status])
   const configureDraft = (channelId: number, task?: DatasetTask) => {
     const source = status?.channels.find(channel => channel.id === channelId)
     const config = task?.config ?? {...initial, rules: [{id: 'rule_1', name: '采集条件', condition: {
@@ -111,6 +133,7 @@ export default function DatasetPage() {
   }
   const save = async () => {
     if (!draft) return
+    if (draftConflict || loadError) {setFormError('底层任务配置已变化或读取失败，请先重新同步。'); return}
     const rules = draft.config.rules
     if (!rules.length || !rules.every(rule => validCondition((rule as Rule)?.condition))) {
       setFormError('请填写完整的采集条件。'); return
@@ -121,9 +144,18 @@ export default function DatasetPage() {
     if (source?.labels.length && targets.some(target => !source.labels.includes(target.class))) {
       setFormError('类别名称必须与该通道的模型标签一致。'); return
     }
-    const next = await act(() => saveDataset(app, draft.channelId, draft.config),
-      draft.taskId ? '配置已保存。' : '任务已创建，点击“开始采集”开始。', setFormError)
-    if (next) closeEditor()
+    const next = await act(async () => {
+      if (draft.taskId) {
+        const latest = await fetchDataset(app)
+        setStatus(latest)
+        const task = latest.tasks.find(item => item.id === draft.taskId)
+        if (!task || configSignature(task.config) !== originalSignature(draft.original)) throw new Error('底层采集任务已变化，请重新同步后再保存。')
+      }
+      return saveDataset(app, draft.channelId, draft.config)
+    },
+      draft.taskId ? '配置已保存。' : '任务已创建。视觉程序运行后，点击“开始采集”。', setFormError)
+    // A save can finish after navigating away. Do not discard a newer draft.
+    if (next && useDatasetStore.getState().drafts[app] === draft) closeEditor()
   }
   const download = async () => {
     setDownloading(true); setError(''); setNotice('')
@@ -150,9 +182,7 @@ export default function DatasetPage() {
   }
   return <div className="dataset-page">
     <div className="dataset-page-heading"><h1>数据集采集</h1>
-      <label>视觉程序<select aria-label="采集程序" value={app} disabled={busy} onChange={event => {
-        if (discardDraft()) setApp(event.target.value)
-      }}>
+      <label>视觉程序<select aria-label="采集程序" value={app} disabled={busy} onChange={event => setApp(event.target.value)}>
         {!apps.length && <option value="">没有可用程序</option>}
         {apps.map(item => <option key={item.name} value={item.name}>{item.name} · {item.status === 'running' ? '运行中' : '未运行'}</option>)}
       </select></label>
@@ -173,11 +203,11 @@ export default function DatasetPage() {
           <option value="python">Linux / macOS（Python 3.9+）</option>
         </select></label>
         <button disabled={downloading} onClick={download}>{downloading ? '正在下载…' : receiverPlatform==='windows-amd64'?'下载通用 Windows EXE':'下载 Python 接收包'}</button>
-        <small>运行后填写设备地址并选择保存目录。采集时保持接收程序运行，新增任务无需重新下载。</small>
+        <small>填写设备地址和保存目录，采集时保持接收端运行。</small>
       </div>
       </div>
     </section>
-    {status?.engine_error && status.tasks.length > 0 && <div className="dataset-banner">{status.engine_error}</div>}
+    {status?.engine_error && <div className="dataset-banner">程序暂不可采集，可继续编辑任务；程序启动后需手动开始采集。<br />{status.engine_error}</div>}
     <div className="dataset-page-sections">
       <section className="dataset-tasks-panel" ref={tasksPanel}>
         <div className="dataset-section-heading"><h2 tabIndex={-1}>采集任务 <span>{status ? `${status.tasks.length} 个` : '—'}</span></h2>
@@ -204,6 +234,7 @@ export default function DatasetPage() {
                 : task.current_files == null ? <p>等待接收端统计所选目录。</p>
                 : !status.receiver.online && <p>接收端未连接，存图数量为上次统计。</p>}
               <p>累计保存 {task.saved} 张 · 间隔 {task.config.interval_sec} 秒 · 每文件夹 {task.config.images_per_folder} 张 · {task.config.max_samples ? `累计上限 ${task.config.max_samples} 张` : '不限张数'}</p>
+              <DatasetTaskLogic config={task.config} />
               {task.deadline > 0 && <p>结束时间：{new Date(task.deadline * 1000).toLocaleString()}</p>}
               <div className="dataset-task-actions">
                 <button disabled={busy || !!startReason} title={startReason || undefined} onClick={() => stopOrStart(task)}>{task.enabled ? '暂停采集' : '开始采集'}</button>
@@ -216,10 +247,14 @@ export default function DatasetPage() {
           })}
         </div>
       </section>
-      {draft && status && <DatasetTaskEditor key={`${app}:${draft.taskId ?? 'new'}`} draft={draft} status={status} busy={busy} error={formError} panelRef={editorPanel}
+      <ConfigSyncNotice error={appsSyncError} conflict={draftConflict} onReload={() => {
+        if (selectedTask) configureDraft(selectedTask.channel_id, selectedTask)
+        else closeEditor()
+      }} />
+      {draft && status && <DatasetTaskEditor key={`${app}:${draft.taskId ?? 'new'}`} draft={draft} status={status} busy={busy || draftConflict || !!loadError} error={formError} panelRef={editorPanel}
         onChange={values => {setDraft(current => current ? {...current, config: {...current.config, ...values}} : null); setFormError('')}}
         onChannelChange={channelId => {if (discardDraft()) configureDraft(channelId)}}
-        onCancel={() => {if (discardDraft()) closeEditor()}} onSave={() => void save()}
+        onCancel={() => {if (discardDraft()) closeEditor()}} onSave={() => void save()} onValidationError={setFormError}
         onPause={task => void act(() => enableDataset(app, task.id, false), '任务已暂停，可以修改配置。', setFormError)} />}
     </div>
   </div>

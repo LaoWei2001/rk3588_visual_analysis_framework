@@ -63,6 +63,8 @@ sudo bash install_source_update.sh
 依赖匹配的旧源码目录，将前端依赖复制到 `/var/lib/vision-analysis/frontend-dependencies/`
 的独立缓存供新版使用；成功建立缓存后，前端依赖不再依赖旧源码目录。
 
+当前和旧源码的 `node_modules` 都已删除时，恢复器会尝试按锁文件从本机 npm 下载缓存执行 `npm ci --offline`，不联网。恢复成功后仍保存独立依赖副本；缓存不完整时明确报错，需要配套完整离线包或联网准备依赖。联网执行根目录 `install.sh online` 也会保存独立缓存。准备 GitHub 上传时，`node_modules`、`dist` 已由 `.gitignore` 排除，无需为上传而删除本机依赖；清理源码目录前应确认独立缓存可用。
+
 快速模式会与最近一次 `full-bundle` 中的源码进行检查。下列内容变化时会拒绝生成快速包，并
 提示使用 `--full`：
 

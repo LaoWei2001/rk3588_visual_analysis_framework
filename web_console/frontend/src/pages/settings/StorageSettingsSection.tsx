@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { useAutoSync, useSyncedDraft } from '../../hooks/useAutoSync'
+import ConfigSyncNotice from '../../components/ConfigSyncNotice'
 import {
   cleanupRootStorageTargets,
   cleanupStorageNow,
@@ -18,7 +20,8 @@ const bytes = (value: number) => {
 
 export default function StorageSettingsSection() {
   const [data, setData] = useState<StorageSettings | null>(null)
-  const [draft, setDraft] = useState({ auto_cleanup: false, retention_days: 30, max_event_store_gb: 1, min_free_gb: 1 })
+  const policyOf = (value: StorageSettings) => ({ auto_cleanup: value.auto_cleanup, retention_days: value.retention_days, max_event_store_gb: value.max_event_store_gb, min_free_gb: value.min_free_gb })
+  const [draft, setDraft, draftSync] = useSyncedDraft(data ? policyOf(data) : null, { auto_cleanup: false, retention_days: 30, max_event_store_gb: 1, min_free_gb: 1 })
   const [selectedTargets, setSelectedTargets] = useState<string[]>([])
   const [busy, setBusy] = useState<'save' | 'cleanup' | 'root-cleanup' | 'refresh' | null>(null)
   const [message, setMessage] = useState<{ text: string; type: 'ok' | 'err' } | null>(null)
@@ -28,12 +31,6 @@ export default function StorageSettingsSection() {
     setSelectedTargets(current => current.filter(key => (
       value.root_cleanup_targets.some(target => target.key === key && target.exists)
     )))
-    setDraft({
-      auto_cleanup: value.auto_cleanup,
-      retention_days: value.retention_days,
-      max_event_store_gb: value.max_event_store_gb,
-      min_free_gb: value.min_free_gb,
-    })
   }
   const load = async () => {
     setBusy('refresh')
@@ -42,11 +39,19 @@ export default function StorageSettingsSection() {
     finally { setBusy(null) }
   }
   useEffect(() => { load() }, [])
+  const syncError = useAutoSync(() => fetchStorageSettings(data === null), value => {
+    setData(current => current ? { ...current, ...value } : value)
+    setMessage(current => current?.text.startsWith('读取存储信息失败：') ? null : current)
+  }, { enabled: busy === null, immediate: false })
 
   const save = async () => {
     setBusy('save'); setMessage(null)
     try {
-      apply(await saveStorageSettings(draft))
+      const latest = await fetchStorageSettings(false)
+      setData(current => current ? { ...current, ...latest } : current)
+      if (!draftSync.isCurrent(policyOf(latest))) throw new Error('底层存储策略已变化，请重新同步后再保存')
+      const value = await saveStorageSettings(draft)
+      apply(value); draftSync.accept(policyOf(value))
       setMessage({ text: '存储策略已保存', type: 'ok' })
     } catch (e) { setMessage({ text: err(e), type: 'err' }) }
     finally { setBusy(null) }
@@ -89,8 +94,9 @@ export default function StorageSettingsSection() {
   const level = (data?.used_percent || 0) >= 90 ? 'danger' : (data?.used_percent || 0) >= 80 ? 'warn' : 'good'
   return (
     <div className="settings-section">
-      <div className="settings-section-title"><h3>存储</h3><p>监控磁盘，并限制告警记录及其图片、录像的增长。</p></div>
+      <div className="settings-section-title"><h3>存储</h3></div>
       {message && <div className={`device-settings-message ${message.type}`}>{message.text}</div>}
+      <ConfigSyncNotice error={syncError} conflict={draftSync.conflict} onReload={draftSync.reset} />
       {!data ? <div className="device-settings-state">正在读取存储信息……</div> : <>
         <section className="device-settings-card">
           <div className="device-settings-card-head"><div><h4>磁盘空间</h4><p>{data.storage_path}</p></div><button className="settings-ghost-btn" disabled={busy !== null} onClick={load}>刷新</button></div>
@@ -103,7 +109,7 @@ export default function StorageSettingsSection() {
 
         <section className="device-settings-card root-cleanup-card">
           <div className="device-settings-card-head">
-            <div><h4>Root 开发工具与缓存清理</h4><p>重点释放 root 用户目录中远程开发工具、pip 和 npm 等缓存占用的空间。</p></div>
+            <div><h4>Root 开发工具与缓存清理</h4></div>
             <b className="root-cleanup-total">可清理 {bytes(availableTargets.reduce((total, target) => total + target.bytes, 0))}</b>
           </div>
           <div className="root-cleanup-list">
@@ -127,7 +133,7 @@ export default function StorageSettingsSection() {
               </label>
             ))}
           </div>
-          <div className="device-settings-note warning">清理会永久删除所选目录。VS Code Server、pip 或 npm 后续使用时可能重新下载内容；Node 环境 <code>/root/.nvm</code> 始终保留。</div>
+          <div className="device-settings-note warning">所选目录将永久删除，缓存可能重新下载；保留 Node 环境。</div>
           <div className="root-cleanup-footer">
             <div>
               <button className="settings-text-btn" disabled={busy !== null || availableTargets.length === 0} onClick={() => setSelectedTargets(availableTargets.map(target => target.key))}>全选现有项</button>
@@ -139,16 +145,16 @@ export default function StorageSettingsSection() {
         </section>
 
         <section className="device-settings-card">
-          <div className="device-settings-card-head"><div><h4>告警记录保留策略</h4><p>清理范围仅限各视觉程序的告警记录，不删除程序包、模型和配置。</p></div>
+          <div className="device-settings-card-head"><div><h4>告警记录保留策略</h4><p>仅清理告警记录，保留程序、模型和配置。</p></div>
             <label className="system-switch"><input type="checkbox" checked={draft.auto_cleanup} disabled={busy !== null} onChange={e => setDraft(v => ({ ...v, auto_cleanup: e.target.checked }))} /><span /><b>{draft.auto_cleanup ? '自动清理' : '已关闭'}</b></label>
           </div>
           <div className="storage-policy-grid">
-            <label><span>记录保留天数</span><input type="number" min="1" max="3650" value={draft.retention_days} onChange={e => setDraft(v => ({ ...v, retention_days: Number(e.target.value) }))} /><small>超过天数的非活动记录将被删除</small></label>
-            <label><span>单程序记录容量上限（GB）</span><input type="number" min="0.1" max="1000" step="0.1" value={draft.max_event_store_gb} onChange={e => setDraft(v => ({ ...v, max_event_store_gb: Number(e.target.value) }))} /><small>超过后从最旧记录开始回收</small></label>
-            <label><span>磁盘最小保留空间（GB）</span><input type="number" min="0" max="1000" step="0.1" value={draft.min_free_gb} onChange={e => setDraft(v => ({ ...v, min_free_gb: Number(e.target.value) }))} /><small>低于该空间时优先回收旧记录</small></label>
+            <label><span>记录保留天数</span><input type="number" min="1" max="3650" value={draft.retention_days} disabled={busy !== null} onChange={e => setDraft(v => ({ ...v, retention_days: Number(e.target.value) }))} /></label>
+            <label><span>单程序记录容量上限（GB）</span><input type="number" min="0.1" max="1000" step="0.1" value={draft.max_event_store_gb} disabled={busy !== null} onChange={e => setDraft(v => ({ ...v, max_event_store_gb: Number(e.target.value) }))} /></label>
+            <label><span>磁盘最小保留空间（GB）</span><input type="number" min="0" max="1000" step="0.1" value={draft.min_free_gb} disabled={busy !== null} onChange={e => setDraft(v => ({ ...v, min_free_gb: Number(e.target.value) }))} /></label>
           </div>
-          <div className="device-settings-note">正在生成图片/录像或正在上传的记录会被跳过。容量与剩余空间限制会在视觉程序下次启动时同步到主程序。</div>
-          <div className="settings-actions"><button className="settings-ghost-btn danger" disabled={busy !== null} onClick={cleanup}>{busy === 'cleanup' ? '清理中……' : '按记录策略清理'}</button><button className="settings-primary-btn" disabled={busy !== null} onClick={save}>{busy === 'save' ? '保存中……' : '保存存储策略'}</button></div>
+          <div className="device-settings-note">达到保留限制时优先回收旧记录，跳过正在写入或上传的记录；容量与空间限制下次启动程序生效。</div>
+          <div className="settings-actions"><button className="settings-ghost-btn danger" disabled={busy !== null} onClick={cleanup}>{busy === 'cleanup' ? '清理中……' : '按记录策略清理'}</button><button className="settings-primary-btn" disabled={busy !== null || draftSync.conflict || !!syncError} onClick={save}>{busy === 'save' ? '保存中……' : '保存存储策略'}</button></div>
         </section>
       </>}
     </div>

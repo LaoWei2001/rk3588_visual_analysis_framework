@@ -4,6 +4,7 @@
 #include "safety_controller.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <memory>
@@ -110,6 +111,8 @@ crane_safety::HardwareConfig read_hardware_config(GlobalContext *gctx)
     config.enabled = gctx->param_bool("hardware_enabled");
     config.horn_pin = gctx->param_string("horn_pin");
     config.horn_active_level = static_cast<int>(gctx->param_int("horn_active_level"));
+    config.horn_min_alarm_ms = static_cast<uint64_t>(std::ceil(
+        std::max(0.0, static_cast<double>(gctx->param_float("horn_min_alarm_sec"))) * 1000.0));
     config.lamp_pin = gctx->param_string("lamp_pin");
     config.lamp_active_level = static_cast<int>(gctx->param_int("lamp_active_level"));
     return config;
@@ -185,7 +188,7 @@ static LogicActionResult global_crane_safety_controller_action(GlobalContext *gc
         state.horn_test_on = false;
         const bool lamp_on = !state.outputs_forced_off &&
                              (state.crane_moving || state.lamp_test_on);
-        state.hardware.apply(hardware_config, lamp_on, false);
+        state.hardware.apply(hardware_config, lamp_on, false, gctx->timestamp_ms, true);
         return {true, "当前告警已消音；全部有效违规解除后将自动重新布防"};
     }
     if (action->name == "test_horn")
@@ -196,7 +199,8 @@ static LogicActionResult global_crane_safety_controller_action(GlobalContext *gc
             return {true, "现场硬件输出尚未启用，未执行喇叭测试"};
         state.horn_test_on = !state.horn_test_on;
         const bool lamp_on = state.crane_moving || state.lamp_test_on;
-        state.hardware.apply(hardware_config, lamp_on, state.automatic_horn_on || state.horn_test_on);
+        state.hardware.apply(hardware_config, lamp_on, state.automatic_horn_on || state.horn_test_on,
+                             gctx->timestamp_ms, !state.automatic_horn_on && !state.horn_test_on);
         return {true, state.horn_test_on ? "喇叭测试已开启并持续保持，再按一次关闭"
                                          : "喇叭测试已关闭，恢复自动告警控制"};
     }
@@ -210,7 +214,8 @@ static LogicActionResult global_crane_safety_controller_action(GlobalContext *gc
         state.scene_ready_at_ms = gctx->timestamp_ms +
                                   seconds_to_ms(gctx->param_float("lamp_settle_sec"));
         const bool lamp_on = state.crane_moving || state.lamp_test_on;
-        state.hardware.apply(hardware_config, lamp_on, state.automatic_horn_on || state.horn_test_on);
+        state.hardware.apply(hardware_config, lamp_on, state.automatic_horn_on || state.horn_test_on,
+                             gctx->timestamp_ms);
         return {true, state.lamp_test_on ? "投影灯测试已开启并持续保持，再按一次关闭"
                                          : "投影灯测试已关闭，恢复自动行车状态控制"};
     }
@@ -221,7 +226,7 @@ static LogicActionResult global_crane_safety_controller_action(GlobalContext *gc
         state.automatic_horn_on = false;
         state.horn_test_on = false;
         state.lamp_test_on = false;
-        state.hardware.apply(hardware_config, false, false);
+        state.hardware.apply(hardware_config, false, false, gctx->timestamp_ms, true);
         return {true, "喇叭和投影灯已紧急关闭，并保持锁定"};
     }
     if (action->name == "resume_automatic")
@@ -233,7 +238,7 @@ static LogicActionResult global_crane_safety_controller_action(GlobalContext *gc
         state.lamp_test_on = false;
         state.scene_ready_at_ms = gctx->timestamp_ms +
                                   seconds_to_ms(gctx->param_float("lamp_settle_sec"));
-        state.hardware.apply(hardware_config, state.crane_moving, false);
+        state.hardware.apply(hardware_config, state.crane_moving, false, gctx->timestamp_ms, true);
         return {true, "已解除人工锁定，恢复行车安全自动控制"};
     }
 
@@ -305,7 +310,8 @@ static void global_crane_safety_controller(GlobalContext *gctx)
     const crane_safety::HardwareConfig hardware_config = read_hardware_config(gctx);
 
     const crane_safety::HardwareStatus hardware =
-        state.hardware.apply(hardware_config, lamp_on, horn_on);
+        state.hardware.apply(hardware_config, lamp_on, horn_on, gctx->timestamp_ms,
+                             state.outputs_forced_off || (state.horn_silenced && !horn_test_active));
 
     /* 继电器实际发生切换后重新计时，避免开灯/关灯瞬间造成误检。 */
     if (hardware.lamp_changed)
@@ -317,7 +323,8 @@ static void global_crane_safety_controller(GlobalContext *gctx)
         intrusion_alarm = false;
         state.automatic_horn_on = !state.outputs_forced_off && !state.horn_silenced && hook_alarm;
         horn_on = state.automatic_horn_on || horn_test_active;
-        state.hardware.apply(hardware_config, lamp_on, horn_on);
+        state.hardware.apply(hardware_config, lamp_on, horn_on, gctx->timestamp_ms,
+                             state.outputs_forced_off || (state.horn_silenced && !horn_test_active));
     }
 
     /* 场景关闭不仅屏蔽最终告警，还暂停对应通道的 NPU 推理。非推理路径仍会调用

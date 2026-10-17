@@ -5,6 +5,12 @@
 `main.cpp` 支持三个只读命令：`--list-logics`、`--list-global-logics`、
 `--validate-config FILE`。正常启动参数是配置路径；未传参数时默认读取 `./assets/config.json`。
 
+`--watchdog-protocol` 输出服务心跳协议版本，不初始化设备。应用退出重启和业务服务心跳默认关闭，
+设备级保护关注操作系统、整机和网络；用户可在“程序故障恢复”中另行开启应用保护。启用应用服务看门狗时才增加独立的
+`service_watchdog` 线程：主循环（HDMI 模式由 GTK timer）更新进度，在途推理/业务处理用
+`Progress/Scope` 标注执行期限；空闲和暂停不标记为挂起工作。超时后停止服务心跳，由 systemd
+终止并重启应用。启动/热加载宽限 300 秒，普通在途操作 120 秒，详见[恢复说明](../../../unattended-recovery.md)。
+
 正常启动大致顺序：配置和 `APP_CTRL` → GStreamer → 显示缓冲 → pipeline/inference → logic control
 Unix socket → capturer → display/dispatch workers → RTSP → config/fd monitors → 主循环。全局 logic 在
 pipeline 初始化过程中启动；图片/录像 worker 按需创建。

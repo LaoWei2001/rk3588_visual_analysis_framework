@@ -35,7 +35,11 @@ struct Condition
     std::string label, op;
     double confidence = 0.3;
     int count = 1;
+    std::string object_op = ">";
+    int object_count = 1;
     Target subject, object;
+    // 关联类别按“任意一类”合并匹配；object 仍用于两类数量比较。
+    std::vector<Target> objects;
     std::string relation = "center_inside", state = "unmatched", quantifier = "any";
     double min_overlap = 0.5, max_distance = 1;
     bool one_to_one = true;

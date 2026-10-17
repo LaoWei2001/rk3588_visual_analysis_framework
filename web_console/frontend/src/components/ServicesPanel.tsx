@@ -5,6 +5,8 @@
  * systemd 是唯一进程管家；应用服务绑定当前视觉程序，板级服务独立管理。
  */
 import { useEffect, useRef, useState } from 'react'
+import { useAutoSync } from '../hooks/useAutoSync'
+import ConfigSyncNotice from './ConfigSyncNotice'
 import axios from 'axios'
 import {
   fetchServices, controlService, setServiceAutostart, fetchServiceLogs,
@@ -87,11 +89,9 @@ export default function ServicesPanel({ apps, onToast }: Props) {
     try { setServices(await fetchServices()) } catch { /* 板端无 systemctl 时忽略 */ }
     finally { setLoaded(true) }
   }
-  useEffect(() => {
-    load()
-    const t = setInterval(load, 5000)
-    return () => clearInterval(t)
-  }, [])
+  const syncError = useAutoSync(fetchServices, value => { setServices(value); setLoaded(true) }, {
+    enabled: !Object.values(busy).some(Boolean) && !Object.values(autostartBusy).some(Boolean),
+  })
 
   // 日志弹窗打开期间定时拉取新日志，模拟实时滚动
   useEffect(() => {
@@ -147,10 +147,11 @@ export default function ServicesPanel({ apps, onToast }: Props) {
     }
   }
 
-  if (!loaded) return null
+  if (!loaded && !syncError) return null
 
   return (
     <div style={panel}>
+      <ConfigSyncNotice error={syncError} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{ fontWeight: 600, fontSize: 15 }}>⚙ 后台服务</span>
         <span style={{ fontSize: 12, color: '#9aa4b2' }}>应用服务跟随视觉程序 · GPIO 保持服务完全独立</span>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   apiErrorMessage, deleteAllRecords, deleteRecord, deleteSelectedRecords, fetchRecordJson, fetchRecords,
@@ -42,6 +42,8 @@ export default function RecordsPage() {
   const [records, setRecords] = useState<EventRecord[]>([])
   const [stats, setStats] = useState({ count: 0, total: 0, cap: 0 })
   const [filter, setFilter] = useState<'all' | 'data' | 'image' | 'video'>('all')
+  const [eventType, setEventType] = useState('')
+  const [eventTypes, setEventTypes] = useState<string[]>([])
   const [timePreset, setTimePreset] = useState<TimePreset>('all')
   const [startTime, setStartTime] = useState('')
   const [endTime, setEndTime] = useState('')
@@ -58,6 +60,7 @@ export default function RecordsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [exporting, setExporting] = useState(false)
   const [notice, setNotice] = useState('')
+  const loadSequence = useRef(0)
 
   const startUnixMs = startTime ? new Date(startTime).getTime() : undefined
   const endUnixMs = endTime ? new Date(endTime).getTime() : undefined
@@ -65,27 +68,35 @@ export default function RecordsPage() {
 
   const load = useCallback(async () => {
     if (!appName || timeRangeInvalid) return
+    const sequence = ++loadSequence.current
     try {
-      const result = await fetchRecords(appName, 500, { startUnixMs, endUnixMs })
+      const result = await fetchRecords(appName, 500, { startUnixMs, endUnixMs, eventType })
+      if (sequence !== loadSequence.current) return
       setRecords(result.records)
+      setEventTypes(result.event_types)
+      if (eventType && !result.event_types.includes(eventType)) setEventType('')
       setSelectedIds(previous => new Set([...previous].filter(id => result.records.some(record => record.id === id))))
       setStats({ count: result.count, total: result.total_bytes, cap: result.cap_bytes })
       setFilteredCount(result.filtered_count ?? result.count)
       setError('')
     } catch {
+      if (sequence !== loadSequence.current) return
       setError('读取告警记录失败')
     } finally {
-      setLoading(false)
+      if (sequence === loadSequence.current) setLoading(false)
     }
-  }, [appName, endUnixMs, startUnixMs, timeRangeInvalid])
+  }, [appName, endUnixMs, eventType, startUnixMs, timeRangeInvalid])
+
+  useEffect(() => { setEventType(''); setEventTypes([]) }, [appName])
 
   useEffect(() => {
+    setLoading(true)
     load()
     const timer = setInterval(load, 4000)
-    return () => clearInterval(timer)
+    return () => { clearInterval(timer); ++loadSequence.current }
   }, [load])
 
-  useEffect(() => { setSelectedIds(new Set()); setNotice('') }, [appName, filter, startTime, endTime])
+  useEffect(() => { setSelectedIds(new Set()); setNotice('') }, [appName, eventType, filter, startTime, endTime])
 
   useEffect(() => {
     const closeModal = (event: KeyboardEvent) => {
@@ -232,6 +243,13 @@ export default function RecordsPage() {
             {{ all: '全部', data: '仅数据', image: '图片', video: '视频' }[item]}
           </button>)}
       </div>
+      <label className="records-type-filter">
+        <span className="records-time-label">事件类型</span>
+        <select aria-label="事件类型" value={eventType} onChange={event => setEventType(event.target.value)}>
+          <option value="">全部类型</option>
+          {eventTypes.map(type => <option key={type} value={type}>{type}</option>)}
+        </select>
+      </label>
       <div className="records-time-filter">
         <span className="records-time-label">时间</span>
         <div className="records-time-presets">

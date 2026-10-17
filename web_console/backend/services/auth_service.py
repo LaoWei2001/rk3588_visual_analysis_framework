@@ -72,7 +72,7 @@ def create_session(username: str) -> str:
     token = secrets.token_hex(32)
     _sessions[token] = {
         "username": username,
-        "expires_at": time.time() + SESSION_TTL,
+        "expires_at": time.monotonic() + SESSION_TTL,
     }
     logger.info("Session created for '%s'", username)
     return token
@@ -82,7 +82,8 @@ def get_session(token: str) -> Optional[dict]:
     session = _sessions.get(token)
     if not session:
         return None
-    if time.time() > session["expires_at"]:
+    # Manual clock changes must not expire sessions or extend their lifetime.
+    if time.monotonic() > session["expires_at"]:
         del _sessions[token]
         return None
     return session

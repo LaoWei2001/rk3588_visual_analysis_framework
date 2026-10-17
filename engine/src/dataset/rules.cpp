@@ -60,15 +60,15 @@ std::string parse_op(const cJSON *json)
         throw std::runtime_error("无效的数量比较符");
     return op;
 }
-void parse_count(const cJSON *count, Condition &result)
+void parse_count(const cJSON *count, std::string &op, int &number)
 {
     keys(count, {"op", "value"});
-    result.op = parse_op(field(count, "op"));
+    op = parse_op(field(count, "op"));
     auto value = field(count, "value");
     if (!cJSON_IsNumber(value) || !std::isfinite(value->valuedouble) || value->valuedouble < 0 ||
         value->valuedouble > 10000 || std::floor(value->valuedouble) != value->valuedouble)
         throw std::runtime_error("数量必须是 0 至 10000 的整数");
-    result.count = static_cast<int>(value->valuedouble);
+    number = static_cast<int>(value->valuedouble);
 }
 double range_value(const cJSON *json, const char *name, double fallback, double maximum)
 {
@@ -123,24 +123,50 @@ Condition parse_condition(const cJSON *json, int depth, int &nodes, const std::v
     {
         if (cJSON_GetArraySize(json) != 1)
             throw std::runtime_error("关联判断不能混入其他条件字段");
-        keys(association, {"subject", "object", "relation", "state", "quantifier", "count", "one_to_one", "min_overlap",
-                           "max_distance"});
+        keys(association, {"subject", "object", "objects", "relation", "state", "quantifier", "count", "one_to_one",
+                           "min_overlap", "max_distance", "object_count"});
         result.kind = Condition::Association;
         result.subject = parse_target(field(association, "subject"), labels, allowed, floor);
-        result.object = parse_target(field(association, "object"), labels, allowed, floor);
+        auto object = field(association, "object");
+        auto objects = field(association, "objects");
+        if (static_cast<bool>(object) == static_cast<bool>(objects))
+            throw std::runtime_error("关联判断必须填写 object 或 objects 中的一项");
+        if (object)
+            result.objects.push_back(parse_target(object, labels, allowed, floor));
+        else
+        {
+            if (!cJSON_IsArray(objects) || cJSON_GetArraySize(objects) < 1 || cJSON_GetArraySize(objects) > 32)
+                throw std::runtime_error("关联类别必须是包含 1 至 32 项的数组");
+            std::set<std::string> seen;
+            for (auto item = objects->child; item; item = item->next)
+            {
+                auto target = parse_target(item, labels, allowed, floor);
+                if (!seen.insert(target.label).second)
+                    throw std::runtime_error("关联类别不能重复：" + target.label);
+                result.objects.push_back(std::move(target));
+            }
+        }
         result.relation = string_value(field(association, "relation"), "relation");
-        if (!std::set<std::string>{"center_inside", "overlap", "near"}.count(result.relation))
+        if (!std::set<std::string>{"center_inside", "subject_center_inside", "overlap", "subject_overlap", "near"}.count(result.relation))
             throw std::runtime_error("无效的空间匹配方式");
         result.state = string_value(field(association, "state"), "state");
-        if (result.state != "matched" && result.state != "unmatched")
+        if (result.state != "matched" && result.state != "unmatched" && result.state != "count")
             throw std::runtime_error("无效的关联匹配状态");
+        if (result.state == "count")
+        {
+            parse_count(field(association, "object_count"), result.object_op, result.object_count);
+            if (field(association, "one_to_one"))
+                throw std::runtime_error("按关联目标数量判断时，不使用一对一分配");
+        }
+        else if (field(association, "object_count"))
+            throw std::runtime_error("只有按关联目标数量判断时可设置 object_count");
         if (field(association, "quantifier"))
             result.quantifier = string_value(field(association, "quantifier"), "quantifier");
         if (!std::set<std::string>{"any", "all", "count"}.count(result.quantifier))
             throw std::runtime_error("无效的关联目标数量要求");
         result.op = ">=";
         if (field(association, "count"))
-            parse_count(field(association, "count"), result);
+            parse_count(field(association, "count"), result.op, result.count);
         else if (result.quantifier == "count")
             throw std::runtime_error("按数量判断关联时必须填写 count");
         if (auto one = field(association, "one_to_one"))
@@ -156,7 +182,7 @@ Condition parse_condition(const cJSON *json, int depth, int &nodes, const std::v
     auto target = parse_target(json, labels, allowed, floor, false);
     result.label = target.label;
     result.confidence = target.confidence;
-    parse_count(field(json, "count"), result);
+    parse_count(field(json, "count"), result.op, result.count);
     return result;
 }
 bool compare_count(int left, const std::string &op, int right)
@@ -180,9 +206,15 @@ bool valid_box(const Detection &d)
 }
 bool related(const Detection &a, const Detection &b, const Condition &c)
 {
+    const bool inverse = c.relation == "subject_center_inside" || c.relation == "subject_overlap";
+    const auto &inner = inverse ? a : b;
+    const auto &outer = inverse ? b : a;
     const double bx = b.x + b.width / 2, by = b.y + b.height / 2;
-    if (c.relation == "center_inside")
-        return bx >= a.x && bx < a.x + a.width && by >= a.y && by < a.y + a.height;
+    if (c.relation == "center_inside" || c.relation == "subject_center_inside")
+    {
+        const double x = inner.x + inner.width / 2, y = inner.y + inner.height / 2;
+        return x >= outer.x && x < outer.x + outer.width && y >= outer.y && y < outer.y + outer.height;
+    }
     if (c.relation == "near")
     {
         const double dx = bx - a.x - a.width / 2, dy = by - a.y - a.height / 2;
@@ -190,7 +222,7 @@ bool related(const Detection &a, const Detection &b, const Condition &c)
     }
     const double w = std::max(0.0, std::min(a.x + a.width, b.x + b.width) - std::max(a.x, b.x));
     const double h = std::max(0.0, std::min(a.y + a.height, b.y + b.height) - std::max(a.y, b.y));
-    return w * h / (b.width * b.height) >= c.min_overlap;
+    return w * h / (inner.width * inner.height) >= c.min_overlap;
 }
 int matching_count(const std::vector<Detection> &detections, const Condition &c, int &subjects)
 {
@@ -203,7 +235,10 @@ int matching_count(const std::vector<Detection> &detections, const Condition &c,
         if (d.in_scope && d.label == c.subject.label && d.score >= c.subject.confidence)
             a.push_back(i);
         // ROI 只限制主体；关联目标允许来自同帧模型输出的其他位置。
-        if (d.label == c.object.label && d.score >= c.object.confidence)
+        // 多类目标构成同一个候选池，每个检测框只加入一次。
+        if (std::any_of(c.objects.begin(), c.objects.end(), [&](const Target &t) {
+                return d.label == t.label && d.score >= t.confidence;
+            }))
             b.push_back(i);
     }
     subjects = static_cast<int>(a.size());
@@ -212,6 +247,11 @@ int matching_count(const std::vector<Detection> &detections, const Condition &c,
         for (size_t j = 0; j < b.size(); ++j)
             if (a[i] != b[j] && related(detections[a[i]], detections[b[j]], c))
                 edges[i].push_back(j);
+    // 数量模式统计每个主体的全部空间候选，不能先用一对一分配把数量截成 1。
+    if (c.state == "count")
+        return std::count_if(edges.begin(), edges.end(), [&](const std::vector<size_t> &e) {
+            return compare_count(static_cast<int>(e.size()), c.object_op, c.object_count);
+        });
     if (!c.one_to_one)
         return std::count_if(edges.begin(), edges.end(), [](const std::vector<size_t> &e) { return !e.empty(); });
     // 增广匹配避免贪心分配把可配齐的两个主体误判为缺少关联目标。
@@ -276,7 +316,7 @@ bool Condition::matches(const std::vector<Detection> &detections) const
         const int matched = matching_count(detections, *this, subjects);
         if (!subjects)
             return false;
-        const int actual = state == "matched" ? matched : subjects - matched;
+        const int actual = state == "unmatched" ? subjects - matched : matched;
         if (quantifier == "all")
             return actual == subjects;
         if (quantifier == "any")

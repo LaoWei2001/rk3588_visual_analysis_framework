@@ -24,6 +24,7 @@
 #include "frame_transform.h"
 #include "inference/inference_engine.h"
 #include "pipeline_internal.h"
+#include "runtime/service_watchdog.h"
 
 /* 帧匹配诊断日志节流（每通道约 2 秒一次，由 performance_display 开关控制）*/
 static uint64_t g_sync_dbg_last_ms[MAX_CHANNEL_NUM] = {0};
@@ -32,9 +33,11 @@ static constexpr uint64_t SYNC_DBG_WINDOW_MS = 2000;
 extern "C" void *pipeline_dispatch_worker(void *arg)
 {
     const int chnId = (int)(intptr_t)arg;
+    service_watchdog::Progress watchdog_progress("result dispatch", chnId);
 
     while (g_dispatch_running.load())
     {
+        service_watchdog::Scope watchdog_scope(watchdog_progress);
         /* 阻塞等待 NPU 完成通知（100ms 超时，防止退出时卡住）*/
         const int ready = inference_wait_result(chnId, 100);
         if (!g_dispatch_running.load())

@@ -62,12 +62,14 @@ static uint64_t now()
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
         .count();
 }
-static std::string configure(int ch, bool enabled = true, int limit = 0, const std::string &label = "person")
+static std::string configure(int ch, bool enabled = true, int limit = 0, const std::string &label = "person",
+                             int legacy_quality = -1)
 {
     return "{\"op\":\"configure\",\"task_id\":\"task" + std::to_string(ch) +
            "\",\"revision\":\"v1\",\"channel_id\":" + std::to_string(ch) +
            ",\"enabled\":" + (enabled ? "true" : "false") +
-           ",\"interval_sec\":0.5,\"max_samples\":" + std::to_string(limit) +
+           ",\"interval_sec\":0.3,\"max_samples\":" + std::to_string(limit) +
+           (legacy_quality >= 0 ? ",\"jpeg_quality\":" + std::to_string(legacy_quality) : "") +
            ",\"rules\":[{\"id\":\"r1\",\"name\":\"test\",\"condition\":{\"class\":\"" + label +
            "\",\"min_confidence\":0.3,\"count\":{\"op\":\">=\",\"value\":1}}}]}";
 }
@@ -75,7 +77,8 @@ static const cv::Mat *get_frame(void *value)
 {
     return static_cast<cv::Mat *>(value);
 }
-static void observe(int channel, int64_t seq, bool valid = true, bool infer = true)
+static void observe(int channel, int64_t seq, bool valid = true, bool infer = true,
+                    const std::vector<AlgoResult> *detections = nullptr)
 {
     cv::Mat frame(240, 320, CV_8UC3, cv::Scalar(10, 90, 200));
     std::vector<AlgoResult> results(1);
@@ -85,6 +88,9 @@ static void observe(int channel, int64_t seq, bool valid = true, bool infer = tr
     results[0].model_id = "model_0";
     results[0].box = {10, 10, 20, 50};
     results[0].box_color = cv::Scalar(5, 6, 7);
+    if (detections)
+        results = *detections;
+    const auto original_color = results[0].box_color;
     ChannelContext context{};
     context.chnId = channel;
     context.frame_id = seq;
@@ -97,7 +103,7 @@ static void observe(int channel, int64_t seq, bool valid = true, bool infer = tr
     context.src_height = 240;
     VisionContextAccess::bind_frames(context, nullptr, get_frame, &frame);
     remote_dataset_observe(context, runtime);
-    assert(results[0].box_color == cv::Scalar(5, 6, 7)); // Independent observer never changes business results.
+    assert(results[0].box_color == original_color); // Independent observer never changes business results.
 }
 static Json wait_pending(int ch, int count)
 {
@@ -117,7 +123,7 @@ int main(int argc, char **argv)
 {
     char pattern[] = "/tmp/dataset-remote-test-XXXXXX";
     const std::string dir = mkdtemp(pattern), path = argc > 1 ? argv[1] : dir + "/run.dataset.sock";
-    std::ofstream(dir + "/labels.txt") << "person\nhelmet\n";
+    std::ofstream(dir + "/labels.txt") << "person\nhelmet\nbare_head\n";
     runtime = std::make_shared<AppRuntimeSnapshot>();
     for (int ch : {0, 3})
     {
@@ -149,7 +155,12 @@ int main(int argc, char **argv)
         rmdir(dir.c_str());
         return 0;
     }
-    auto result = command(configure(0, true, 2));
+    auto below_minimum = configure(0);
+    const std::string minimum_interval = "\"interval_sec\":0.3";
+    below_minimum.replace(below_minimum.find(minimum_interval), minimum_interval.size(), "\"interval_sec\":0.299");
+    auto result = command(below_minimum);
+    assert(cJSON_IsFalse(item(result.get(), "ok")));
+    result = command(configure(0, true, 2, "person", 60));
     assert(cJSON_IsTrue(item(result.get(), "ok")));
     result = command(configure(3));
     assert(cJSON_IsTrue(item(result.get(), "ok")));
@@ -172,6 +183,18 @@ int main(int argc, char **argv)
     assert(decoded.size() == cv::Size(320, 240));
     auto pixel = decoded.at<cv::Vec3b>(15, 15);
     assert(std::abs(pixel[0] - 10) < 4 && std::abs(pixel[2] - 200) < 4);
+    // Full-size, untouched source frame, with a fixed encoding independent of
+    // the retired setting in old task configurations.
+    cv::Mat original(240, 320, CV_8UC3, cv::Scalar(10, 90, 200));
+    std::vector<unsigned char> expected, low_quality;
+    assert(cv::imencode(".jpg", original, expected, {cv::IMWRITE_JPEG_QUALITY, 100}));
+    assert(cv::imencode(".jpg", original, low_quality, {cv::IMWRITE_JPEG_QUALITY, 60}));
+    assert(jpeg == expected && jpeg != low_quality);
+    result = command("{\"op\":\"status\"}");
+    const std::string other_id = item(item(task(result.get(), 3), "next"), "sample_id")->valuestring;
+    std::vector<unsigned char> other_jpeg;
+    command("{\"op\":\"image\",\"task_id\":\"task3\",\"sample_id\":\"" + other_id + "\"}", &other_jpeg);
+    assert(other_jpeg == jpeg);
     // Download is repeatable and does not release/count images.
     result = command("{\"op\":\"status\"}");
     assert(item(task(result.get(), 0), "saved")->valueint == 0);
@@ -181,7 +204,7 @@ int main(int argc, char **argv)
     result = wait_pending(0, 0);
     assert(item(task(result.get(), 0), "saved")->valueint == 1);
     assert(item(task(result.get(), 3), "pending")->valueint == 1);
-    std::this_thread::sleep_for(std::chrono::milliseconds(510));
+    std::this_thread::sleep_for(std::chrono::milliseconds(310));
     observe(0, 3);
     result = wait_pending(0, 1);
     std::this_thread::sleep_for(std::chrono::milliseconds(510));
@@ -222,6 +245,73 @@ int main(int argc, char **argv)
     invalid = configure(0, true, 0, "unknown");
     result = command(invalid);
     assert(cJSON_IsFalse(item(result.get(), "ok")));
+    // 与生产相同的观察/编码路径：逐个人匹配帽子或裸露头，而不是逐帧检查两个类别的有无。
+    result = command(R"({"op":"configure","task_id":"multi","revision":"multi-v1","channel_id":0,
+        "enabled":true,"interval_sec":0.5,"rules":[{"id":"r","name":"头部漏检",
+        "condition":{"association":{"subject":{"class":"person","min_confidence":0.3},
+        "objects":[{"class":"helmet","min_confidence":0.3},{"class":"bare_head","min_confidence":0.3}],
+        "relation":"center_inside","state":"unmatched","quantifier":"any","one_to_one":true}}}]})");
+    assert(cJSON_IsTrue(item(result.get(), "ok")));
+    auto detection = [](const std::string &label, int x, int y, int w, int h) {
+        AlgoResult value;
+        value.label = label;
+        value.score = .9;
+        value.frame_id = 1;
+        value.model_id = "model_0";
+        value.box = {x, y, w, h};
+        return value;
+    };
+    std::vector<AlgoResult> detections = {detection("person", 10, 10, 100, 200),
+        detection("person", 200, 10, 100, 200), detection("helmet", 30, 20, 20, 20),
+        detection("bare_head", 230, 20, 20, 20)};
+    observe(0, 1, true, true, &detections);
+    result = command("{\"op\":\"status\"}");
+    assert(item(task(result.get(), 0), "pending")->valueint == 0);
+    detections[3].box.x = 30; // 第二个人两类都缺失，尽管这一帧两个类别都出现。
+    for (auto &d : detections)
+        d.frame_id = 2;
+    observe(0, 2, true, true, &detections);
+    result = wait_pending(0, 1);
+    assert(item(item(task(result.get(), 0), "next"), "frame_id")->valueint == 2);
+    remote_dataset_deinit();
+    assert(remote_dataset_init(path) == 0);
+    result = command(R"({"op":"configure","task_id":"excess","revision":"count-v1","channel_id":0,
+        "enabled":true,"interval_sec":0.5,"rules":[{"id":"r","name":"关联数量异常",
+        "condition":{"association":{"subject":{"class":"person","min_confidence":0.3},
+        "object":{"class":"helmet","min_confidence":0.3},"relation":"center_inside","state":"count",
+        "object_count":{"op":">","value":1},"quantifier":"any"}}}]})");
+    assert(cJSON_IsTrue(item(result.get(), "ok")));
+    detections[3] = detection("helmet", 230, 20, 20, 20);
+    for (auto &d : detections)
+        d.frame_id = 1;
+    observe(0, 1, true, true, &detections); // 两个人各一个帽子，不应采集。
+    result = command("{\"op\":\"status\"}");
+    assert(item(task(result.get(), 0), "pending")->valueint == 0);
+    detections[3].box = {30, 160, 20, 20}; // 一个头部真帽，一个裤子误报，都在同一个人框内。
+    for (auto &d : detections)
+        d.frame_id = 2;
+    observe(0, 2, true, true, &detections);
+    result = wait_pending(0, 1);
+    assert(item(item(task(result.get(), 0), "next"), "frame_id")->valueint == 2);
+    remote_dataset_deinit();
+    assert(remote_dataset_init(path) == 0);
+    result = command(R"({"op":"configure","task_id":"orphan","revision":"orphan-v1","channel_id":0,
+        "enabled":true,"interval_sec":0.3,"rules":[{"id":"r","name":"对应人框漏检",
+        "condition":{"association":{"subject":{"class":"helmet","min_confidence":0.3},
+        "object":{"class":"person","min_confidence":0.3},"relation":"subject_overlap","min_overlap":0.5,
+        "state":"unmatched","quantifier":"any","one_to_one":false}}}]})");
+    assert(cJSON_IsTrue(item(result.get(), "ok")));
+    detections = {detection("person", 10, 10, 100, 200), detection("person", 200, 10, 100, 200),
+                  detection("helmet", 30, 20, 20, 20), detection("helmet", 230, 20, 20, 20)};
+    observe(0, 1, true, true, &detections);
+    result = command("{\"op\":\"status\"}");
+    assert(item(task(result.get(), 0), "pending")->valueint == 0);
+    detections.erase(detections.begin() + 1); // 第二顶帽子仍在，但第二个人框漏检。
+    for (auto &d : detections)
+        d.frame_id = 2;
+    observe(0, 2, true, true, &detections);
+    result = wait_pending(0, 1);
+    assert(item(item(task(result.get(), 0), "next"), "frame_id")->valueint == 2);
     remote_dataset_deinit();
     unlink((dir + "/labels.txt").c_str());
     rmdir(dir.c_str());

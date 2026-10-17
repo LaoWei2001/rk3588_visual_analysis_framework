@@ -1,0 +1,135 @@
+.recovery-settings .recovery-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+.recovery-facts > div { display: flex; flex-direction: column; gap: 6px; padding: 14px; border: 1px solid var(--border, #303744); border-radius: 10px; min-width: 0; }
+.recovery-facts span, .recovery-settings small { color: var(--text2, #929eaf); font-size: 12px; overflow-wrap: anywhere; }
+.recovery-facts strong { font-size: 15px; overflow-wrap: anywhere; }
+.recovery-settings .recovery-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.recovery-basic { padding: 16px; border-radius: 10px; background: var(--surface2, #171e29); }
+.recovery-section-heading { margin: 20px 0 12px; font-size: 14px; font-weight: 500; }
+.system-recovery-paths { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+.system-recovery-path { min-width: 0; margin: 0; border: 1px solid var(--border, #303744); }
+.system-recovery-path legend { padding: 0 6px; font-size: 13px; }
+.system-recovery-path .recovery-switch-row small { line-height: 1.7; }
+.system-recovery-path .system-recovery-timeout { grid-template-columns: minmax(0, 1fr); margin-top: 18px; }
+.system-recovery-path .recovery-fields small { line-height: 1.7; }
+.system-recovery-path .system-recovery-effect { margin: 12px 0 0; }
+.system-recovery-reboot { margin-top: 20px; }
+.system-recovery-reboot > p { margin: 0 0 14px; }
+.system-recovery-relationship p { margin: 8px 0 0; line-height: 1.7; }
+@media (max-width: 800px) { .system-recovery-paths { grid-template-columns: minmax(0, 1fr); } }
+.recovery-settings .recovery-help { color: var(--text2, #929eaf); font-size: 12px; line-height: 1.7; }
+.recovery-advanced { margin-top: 22px; border: 1px solid var(--border, #303744); border-radius: 10px; }
+.recovery-advanced > summary, .recovery-events > summary { cursor: pointer; padding: 14px 16px; font-size: 14px; }
+.recovery-advanced > summary small { margin-left: 12px; }
+.recovery-advanced[open] > summary { border-bottom: 1px solid var(--border, #303744); }
+.recovery-details-content { padding: 16px; }
+.recovery-guidance ul { margin: 8px 0 0; padding-left: 20px; }
+.recovery-guidance li + li { margin-top: 6px; }
+.recovery-diagnostics { display: grid; gap: 10px; margin-top: 16px; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.recovery-diagnostics ul { margin: 0; padding-left: 20px; }
+.recovery-diagnostics p { color: var(--text2, #929eaf); }
+.recovery-details-content > .recovery-switches:first-child { margin-top: 0; }
+.recovery-settings .network-recovery-primary { grid-template-columns: minmax(0, 1fr) 180px; }
+.recovery-settings .network-recovery-primary-tcp { grid-template-columns: minmax(0, 1fr) 180px 100px; }
+.recovery-agent-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+.recovery-read-feedback { align-self: center; }
+.operation-history-controls { align-items: center; }
+.operation-history-controls label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.operation-history-controls select { background: var(--surface2, #171e29); color: inherit; border: 1px solid var(--border, #303744); border-radius: 7px; padding: 8px 12px; }
+.device-information-fields { display: grid; gap: 14px; margin: 18px 0; }
+.device-information-fields > div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 12px; }
+.device-information-fields dt { color: var(--text2, #929eaf); font-size: 13px; }
+.device-information-fields dd { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.device-information-capabilities { border-top: 1px solid var(--border, #303744); padding-top: 16px; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+.device-information-capabilities h5 { margin: 0 0 8px; font-size: 14px; }
+.device-information-capabilities p { color: var(--text2, #929eaf); }
+.device-information-capabilities ul { margin: 6px 0; padding-left: 20px; }
+.device-information-capabilities { margin-top: 18px; }
+.device-information-capabilities > summary { cursor: pointer; font-weight: 600; }
+.device-information-section-title { margin: 26px 0 12px; padding-top: 18px; border-top: 1px solid var(--border, #303744); font-size: 14px; }
+.device-information-table { width: 100%; min-width: 0; overflow-x: auto; }
+.device-information-table table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.device-information-table th, .device-information-table td { padding: 10px; border-bottom: 1px solid var(--border, #303744); text-align: left; white-space: nowrap; }
+.device-information-table th { color: var(--text2, #929eaf); font-weight: 500; }
+.device-information-table td small { display: block; margin-top: 4px; }
+.device-information-table [data-service-state="failed"] { color: #f87171; }
+.device-information-temperatures { display: flex; flex-wrap: wrap; gap: 10px; }
+.device-information-temperatures > div { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 9px 12px; border: 1px solid var(--border, #303744); border-radius: 8px; font-size: 13px; }
+.device-information-temperatures [data-critical="true"] { color: #f87171; }
+.device-information-networks { display: grid; gap: 14px; }
+.device-information-networks > div { padding: 14px; border: 1px solid var(--border, #303744); border-radius: 8px; min-width: 0; }
+.device-information-networks .recovery-history-heading { font-size: 13px; }
+.device-information-networks .device-information-fields { margin-bottom: 0; }
+.recovery-switches { display: grid; gap: 14px; margin: 22px 0; }
+.recovery-switch-row { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; }
+.recovery-switch-row input { margin-top: 4px; width: 16px; height: 16px; flex-shrink: 0; }
+.recovery-switch-row span { display: flex; flex-direction: column; gap: 5px; }
+.recovery-switch-row b { font-size: 14px; font-weight: 500; }
+.recovery-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px; }
+.recovery-fields label { display: flex; flex-direction: column; gap: 7px; font-size: 13px; }
+.recovery-fields input { background: var(--surface2, #171e29); color: inherit; border: 1px solid var(--border, #303744); border-radius: 7px; padding: 9px 12px; min-width: 0; }
+.recovery-fields select, .network-recovery-target input, .network-recovery-target select { background: var(--surface2, #171e29); color: inherit; border: 1px solid var(--border, #303744); border-radius: 7px; padding: 9px 12px; min-width: 0; }
+.network-recovery-targets { display: grid; gap: 12px; margin-top: 20px; }
+.network-recovery-targets > b { font-size: 14px; }
+.network-recovery-targets p { color: var(--text2, #929eaf); font-size: 12px; margin: 0; }
+.network-recovery-target { display: grid; grid-template-columns: minmax(0, 1fr) 180px auto; gap: 10px; }
+.network-recovery-target-tcp { grid-template-columns: minmax(0, 1fr) 180px 90px auto; }
+.network-recovery-probes { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 800px) { .network-recovery-target { grid-template-columns: minmax(0, 1fr); } }
+.recovery-events { border-top: 1px solid var(--border, #303744); margin-top: 22px; padding-top: 16px; }
+.recovery-events > summary { padding: 0 0 12px; }
+.recovery-events p { font-size: 13px; color: var(--text2, #929eaf); }
+.recovery-events ul { list-style: none; padding: 0; margin: 0; max-height: 250px; overflow: auto; }
+.recovery-events li { display: grid; grid-template-columns: 160px 1fr; gap: 12px; padding: 8px 0; font-size: 12px; overflow-wrap: anywhere; }
+.recovery-events time { color: var(--text2, #929eaf); }
+.recovery-history .recovery-history-time, .recovery-history-body { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.recovery-history-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.recovery-history-heading [data-result="failed"] { color: #f87171; }
+.recovery-history-heading [data-result="recovered"] { color: #4ade80; }
+.recovery-history-heading [data-result="pending"], .recovery-history-heading [data-result="unknown"] { color: #fbbf24; }
+.recovery-history .recovery-history-evidence > summary { cursor: pointer; padding: 4px 0; }
+.recovery-history-stage { margin: 6px 0; padding-left: 10px; border-left: 2px solid var(--border, #303744); }
+.recovery-history pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; font-size: 11px; }
+.recovery-history.recovery-events ul { max-height: 480px; }
+@media (max-width: 800px) { .recovery-settings .recovery-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) {
+  .recovery-settings .device-information-overview { grid-template-columns: minmax(0, 1fr); }
+  .device-information .device-information-fields > div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .recovery-fields, .recovery-settings .recovery-overview, .recovery-settings .network-recovery-primary, .recovery-settings .network-recovery-primary-tcp { grid-template-columns: 1fr; }
+  .recovery-advanced > summary small { display: block; margin: 7px 0 0; line-height: 1.6; }
+  .recovery-events li { grid-template-columns: 1fr; gap: 4px; }
+}
+
+.performance-monitor { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; margin: 16px 0; }
+.performance-resource-list { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.performance-resource-list button { display: flex; align-items: center; gap: 10px; padding: 12px 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.performance-resource-list button[aria-selected="true"] { background: rgba(38,153,221,.12); border-color: rgba(38,153,221,.4); }
+.performance-resource-list svg { max-width: 100%; width: 64px; height: 40px; flex-shrink: 0; border: 1px solid #6e94a5; background: rgba(38,153,221,.05); }
+.performance-resource-list path, .performance-graph path { fill: none; stroke: #35aad0; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.performance-resource-list small { display: block; margin-top: 4px; color: var(--text-secondary, #8995a8); }
+.performance-detail { min-width: 0; }
+.performance-heading, .performance-graph-label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.performance-heading h3 { font-size: 28px; margin: 4px 0 12px; }
+.performance-heading span, .performance-graph-label { font-size: 12px; color: var(--text-secondary, #8995a8); }
+.performance-graph { box-sizing: border-box; width: 100%; height: 220px; border: 1px solid #47616d; margin: 6px 0; display: block; background: rgba(38,153,221,.03); }
+.performance-graph line { stroke: rgba(120,150,160,.2); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.performance-metrics { display: flex; gap: 18px; flex-wrap: wrap; margin: 15px 0; }
+.performance-metrics span, .performance-device-detail span, .performance-device-detail small { display: block; }
+.performance-metrics span { font-size: 12px; color: var(--text-secondary, #8995a8); }
+.performance-metrics strong { display: block; font-size: 20px; margin-top: 5px; font-weight: 500; overflow-wrap: anywhere; }
+.performance-device-detail { font-size: 13px; margin: 10px 0; line-height: 1.7; overflow-wrap: anywhere; }
+.performance-device-detail small { color: var(--text-secondary, #8995a8); }
+.performance-settings { border: 1px solid var(--border-color, #364152); border-radius: 8px; padding: 14px; margin: 18px 0; min-width: 0; }
+.performance-settings summary { cursor: pointer; font-weight: 600; }
+.performance-settings h5 { margin: 18px 0 8px; }
+.performance-controls { display: grid; gap: 10px; }
+.performance-controls label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, 160px); align-items: center; gap: 12px; font-size: 13px; overflow-wrap: anywhere; }
+.performance-controls small { display: block; margin-top: 5px; color: var(--text-secondary, #8995a8); }
+.performance-controls select, .performance-controls input { width: 100%; box-sizing: border-box; min-width: 0; border: 1px solid var(--border-color, #465162); border-radius: 5px; background: var(--bg-secondary, #1e293b); color: inherit; padding: 7px; }
+.performance-temperature-input { display: flex; align-items: center; gap: 6px; }
+@media (max-width: 960px) { .performance-monitor { grid-template-columns: minmax(0, 1fr); } .performance-resource-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); } .performance-resource-list button { flex-direction: column; gap: 5px; } }
+@media (max-width: 620px) { .performance-resource-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } .performance-controls label { grid-template-columns: minmax(0, 1fr); } .performance-settings { padding: 10px; } .performance-graph { height: 160px; } }
+
+.performance-core-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 10px 0; padding: 0; font-size: 13px; }
+.performance-core-legend li { display: flex; align-items: center; gap: 6px; }
+.performance-core-legend svg { width: 24px; height: 8px; flex-shrink: 0; }
+.performance-core-legend line { stroke: currentColor; stroke-width: 2; }

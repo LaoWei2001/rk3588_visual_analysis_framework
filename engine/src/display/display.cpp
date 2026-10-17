@@ -5,6 +5,7 @@
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
 #include "runtime/process_signals.h"
+#include "runtime/service_watchdog.h"
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -700,6 +701,7 @@ bool display_try_lock()
 
 static gboolean showWidget(GtkWidget *pImage)
 {
+    service_watchdog::main_heartbeat();
     if (g_pause_toggle_signal)
     {
         g_pause_toggle_signal = 0;

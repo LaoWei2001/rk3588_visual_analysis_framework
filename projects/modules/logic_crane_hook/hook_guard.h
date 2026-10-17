@@ -26,6 +26,8 @@ struct HookConfig
 struct HookResult
 {
     bool visible = false;
+    bool measurement_valid = false;
+    bool position_estimated = false;
     bool held_during_loss = false;
     bool outside = false;
     bool alarm = false;
@@ -40,23 +42,38 @@ struct HookResult
     uint64_t missing_elapsed_ms = 0;
 };
 
+struct HookObservation
+{
+    bool visible = false;
+    bool valid = false;
+    bool estimated = false;
+    cv::Point center{-1, -1};
+    float score = 0.0f;
+    int track_id = -1;
+};
+
 class HookGuard
 {
   public:
     HookResult update(const std::vector<AlgoResult> &results, const cv::Size &frame_size,
                       uint64_t now_ms, const HookConfig &config);
+    HookResult update(const HookObservation &observation, const cv::Size &frame_size,
+                      uint64_t now_ms, const HookConfig &config);
+    const AlgoResult *select_target(const std::vector<AlgoResult> &results, const HookConfig &config) const;
     void reset();
 
     static cv::Point safe_center(const cv::Size &frame_size, const HookConfig &config);
 
   private:
-    const AlgoResult *select_target(const std::vector<AlgoResult> &results, const HookConfig &config) const;
     void clear_detection_state(bool report_clear, HookResult *out);
 
     bool have_center_ = false;
     cv::Point last_center_{-1, -1};
     int last_track_id_ = -1;
     uint64_t missing_since_ms_ = 0;
+    bool missing_ = false;
+    bool confirming_ = false;
+    bool clearing_ = false;
     bool outside_state_ = false;
     bool alarm_ = false;
     uint64_t outside_since_ms_ = 0;

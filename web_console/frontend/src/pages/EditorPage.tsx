@@ -32,7 +32,7 @@ import { saveLastConfig }  from '../utils/lastConfig'
 import { validateModelId } from '../utils/modelId'
 import {
   apiErrorMessage, fetchConfig, saveConfig, saveConfigFile, deleteConfigFile,
-  fetchConfigFiles, loadConfigFile, fetchAppLogics,
+  fetchConfigFiles, loadConfigFile, fetchAppLogics, fetchAssets, fetchConnections,
 } from '../api/client'
 import GlobalSettingsPanel, { GlobalSettingsData, DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
 import NodeConfigPanel from '../components/NodeConfigPanel'
@@ -44,6 +44,8 @@ import {
   inferenceRoiRestrictsResults,
 } from '../components/InferenceROIEditor'
 import './EditorPage.css'
+import { configSignature, useAutoSync } from '../hooks/useAutoSync'
+import ConfigSyncNotice from '../components/ConfigSyncNotice'
 
 const RIGHT_PANEL_STORAGE_KEY = 'rk3588.editor.rightPanelWidth'
 const BOTTOM_PANEL_STORAGE_KEY = 'rk3588.editor.bottomPanelHeight'
@@ -323,6 +325,9 @@ export default function EditorPage() {
   // 当前正在编辑/将保存到的配置文件（相对 app 目录）。导入/另存为后会切到对应文件，
   // 之后「保存」写到这里 —— 这样可以在副本上改而不动 config.json。
   const [currentFile,    setCurrentFile]   = useState('assets/config.json')
+  const remoteConfig = useRef<{ signature: string; value: Record<string, unknown> } | null>(null)
+  const [configReady, setConfigReady] = useState(false)
+  const [configConflict, setConfigConflict] = useState(false)
   const [logicCatalog, setLogicCatalog] = useState<{
     status: 'idle' | 'loading' | 'ready' | 'error'
     channel: string[]
@@ -605,7 +610,9 @@ export default function EditorPage() {
 
   useEffect(() => {
     if (!appName) return
-    // 打开「启动配置」选中的那份文件（缺省 config.json）；不存在则下面创建一个空的同名文件
+    let active = true
+    setConfigReady(false); setConfigConflict(false); remoteConfig.current = null
+    // Reading must not create or replace a missing/unreadable configuration.
     const base = (configParam || 'config.json').replace(/\\/g, '/').split('/').pop() || 'config.json'
     const targetRel = `assets/${base}`
     const isDefault = targetRel === 'assets/config.json'
@@ -616,19 +623,20 @@ export default function EditorPage() {
         if (isDefault) {
           cfg = await fetchConfig(appName) as Record<string, unknown> | null
         } else {
-          cfg = await loadConfigFile(appName, targetRel).catch(() => null)
+          cfg = await loadConfigFile(appName, targetRel)
         }
 
-        // 文件不存在 → 落一个空配置，使其在磁盘上存在（之后保存写回这份文件）
+        if (!active) return
         if (cfg == null) {
-          try { await saveConfigFile(appName, targetRel, {}) }
-          catch { /* 创建失败不阻断：仍以空白画布进入 */ }
-          cfg = {}
+          applyConfig({})
+          remoteConfig.current = { signature: configSignature(null), value: {} }
+          return
         }
 
         applyConfig(cfg)
-      } catch { /* blank canvas */ }
+      } catch { if (active) setConfigReady(true) }
     })()
+    return () => { active = false }
   }, [appName, configParam]) // eslint-disable-line
 
   // applyConfig: load nodes/edges, then fit view.
@@ -651,6 +659,8 @@ export default function EditorPage() {
     // 节点走 React state、ROI 走 Zustand store，二者可能分属不同 commit；若在中途采样基线，
     // 余下状态到位时就会被误判成「有改动」——这正是"什么都没动却提示未保存"的根因。
     if (markAsSaved) {
+      remoteConfig.current = { signature: configSignature(cfg), value: cfg }
+      setConfigReady(true); setConfigConflict(false)
       savedSigRef.current = histSig({ nodes: n, edges: e, roi: roiMapping, gs })
       if (dirtyRef.current) { dirtyRef.current = false; setDirty(false) }
     } else {
@@ -662,6 +672,31 @@ export default function EditorPage() {
     // 标记「这次加载完要自动 fit view」；具体何时触发交给下方 effect(等节点测量 + 实例就绪)
     pendingFitRef.current = true
   }
+
+  const configSyncError = useAutoSync(async () => {
+    if (!appName) throw new Error('未选择程序')
+    const cfg = currentFile === 'assets/config.json' ? await fetchConfig(appName) : await loadConfigFile(appName, currentFile)
+    if (!cfg && remoteConfig.current?.signature !== configSignature(null)) throw new Error('当前配置文件已不存在，请重新选择文件或另存为')
+    return cfg as Record<string, unknown> | null
+  }, cfg => {
+    if (!cfg) return
+    const signature = configSignature(cfg)
+    if (signature === remoteConfig.current?.signature) { setConfigConflict(false); return }
+    if (dirtyRef.current) {
+      remoteConfig.current = { signature: remoteConfig.current?.signature ?? configSignature(null), value: cfg }
+      setConfigConflict(true)
+    } else applyConfig(cfg)
+  }, { enabled: !!appName && configReady && !saving, scope: `${appName}/${currentFile}`, immediate: false })
+  const resourceSyncError = useAutoSync(() => Promise.all([fetchAssets(appName!), fetchConnections(appName!), fetchConfigFiles(appName!), fetchAppLogics(appName!)]),
+    ([nextAssets, connections, files, logics]) => {
+      if (useEditorStore.getState().appName !== appName) return
+      useEditorStore.setState(state => ({
+        assets: configSignature(state.assets) === configSignature(nextAssets) ? state.assets : nextAssets,
+        assetsForApp: appName!, assetsStatus: 'ready', deliveryConnections: connections.connections ?? {},
+      }))
+      setImportFiles(current => configSignature(current) === configSignature(files) ? current : files)
+      setLogicCatalog({ status: logics.error ? 'error' : 'ready', channel: logics.channel_logics.map(item => item.name), global: logics.global_logics.map(item => item.name) })
+    }, { enabled: !!appName && configReady && !saving && !showIntegrations, scope: appName, immediate: false })
 
   // 自动 fit view：加载/导入配置后(pendingFitRef=true)，等节点进入状态且实例就绪再触发。
   // 用双 rAF 留一帧给 React Flow 测量节点尺寸，比固定 setTimeout(50) 可靠——每次打开/换配置都生效。
@@ -691,9 +726,10 @@ export default function EditorPage() {
   }, [])
 
   // 把当前画布标记为「已保存」（保存 / 另存成功后调用；此时画布未变，refs 即当前值）
-  const markClean = () => {
-    savedSigRef.current = histSig(makeHistorySnap())
-    if (dirtyRef.current) { dirtyRef.current = false; setDirty(false) }
+  const markClean = (writtenSignature: string) => {
+    savedSigRef.current = writtenSignature
+    const stillDirty = histSig(makeHistorySnap()) !== writtenSignature
+    dirtyRef.current = stillDirty; setDirty(stillDirty)
   }
 
   // ── Colored edges based on source handle ──
@@ -1409,16 +1445,25 @@ export default function EditorPage() {
 
   // ── 保存（写入当前文件 currentFile）──
   const handleSave = async (): Promise<boolean> => {
+    if (configConflict || configSyncError) { showToast('底层配置已变化或读取失败，请先同步，或另存为保留当前修改', false); return false }
     const result = buildConfig()
     if (!result || !appName) return false
+    const writtenSignature = histSig(makeHistorySnap())
     setSaving(true)
     try {
+      const latest = currentFile === 'assets/config.json' ? await fetchConfig(appName) : await loadConfigFile(appName, currentFile)
+      if (remoteConfig.current && configSignature(latest) !== remoteConfig.current.signature) {
+        if (latest) remoteConfig.current.value = latest as Record<string, unknown>
+        setConfigConflict(true)
+        throw new Error('底层配置已变化，已保留编辑内容，请先重新同步')
+      }
       if (currentFile === 'assets/config.json') {
         await saveConfig(appName, result.config)
       } else {
         await saveConfigFile(appName, currentFile, result.config)
       }
-      markClean()
+      remoteConfig.current = { signature: configSignature(result.config), value: result.config }
+      setConfigConflict(false); markClean(writtenSignature)
       saveLastConfig(appName, cfgBase(currentFile))   // 让「程序管理」返回后默认选中刚保存的这份配置
       showToast(`保存成功 ✓（${cfgBase(currentFile)}）`)
       return true
@@ -1432,6 +1477,7 @@ export default function EditorPage() {
   const handleSaveAs = async () => {
     const result = buildConfig()
     if (!result || !appName) return
+    const writtenSignature = histSig(makeHistorySnap())
     const input = window.prompt('另存为新配置文件名（保存到 assets/ 下，省略 .json 会自动补全）：', suggestCopyName(currentFile))
     if (input == null) return
     let fname = input.trim().replace(/\\/g, '/').split('/').pop() ?? ''
@@ -1444,8 +1490,10 @@ export default function EditorPage() {
     setSaving(true)
     try {
       const r = await saveConfigFile(appName, path, result.config)
+      remoteConfig.current = { signature: configSignature(result.config), value: result.config }
+      setConfigReady(true); setConfigConflict(false)
       setCurrentFile(r.path)                       // 切到新文件：后续「保存」写到它
-      markClean()                                  // 副本内容 = 当前画布 → 标记为已保存
+      markClean(writtenSignature)
       saveLastConfig(appName, cfgBase(r.path))     // 让「程序管理」返回后默认选中这份副本
       showToast(`已另存为 ${fname}，现在编辑的是这份副本`)
       try { setImportFiles(await fetchConfigFiles(appName)) } catch { /* 列表刷新失败不致命 */ }
@@ -1573,6 +1621,9 @@ export default function EditorPage() {
         </div>
       </div>
 
+      <ConfigSyncNotice error={configSyncError || resourceSyncError} conflict={configConflict} onReload={() => {
+        if (remoteConfig.current) applyConfig(remoteConfig.current.value)
+      }} />
       {/* Draggable node palette */}
       <div className="node-palette">
         <span className="palette-label">拖拽到画布：</span>

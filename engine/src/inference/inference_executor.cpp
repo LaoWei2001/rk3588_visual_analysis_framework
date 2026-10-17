@@ -41,6 +41,7 @@
 #include "pipeline/frame_transform.h"
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
+#include "runtime/service_watchdog.h"
 #include "yolo/composite_model.h"
 #include "yolo/yolo.h"
 #include "yolo/yolo26pose.h"
@@ -563,6 +564,7 @@ void *inference_worker_thread(void *arg)
     }
 
     cv::Mat input_cache;
+    service_watchdog::Progress watchdog_progress("inference", chnId);
     while (g_inference.running && !g_inference.chn_reload_stop[chnId])
     {
         InferenceTask task;
@@ -590,6 +592,7 @@ void *inference_worker_thread(void *arg)
             continue;
 
         auto work_begin = std::chrono::steady_clock::now();
+        service_watchdog::Scope watchdog_scope(watchdog_progress);
         float queue_wait_ms = std::chrono::duration<float, std::milli>(work_begin - task.enqueue_tp).count();
 
         std::vector<AlgoResult> results;

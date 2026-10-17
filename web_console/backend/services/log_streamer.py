@@ -7,14 +7,14 @@ log_streamer.py — WebSocket 日志推送
 import asyncio
 from fastapi import WebSocket, WebSocketDisconnect
 
-from services.log_buffer import get_log_buffer
+from services.log_buffer import get_log_buffer, MAX_SUBSCRIBER_LINES
 
 
 async def stream_log(websocket: WebSocket, app_name: str) -> None:
     await websocket.accept()
 
     buf = get_log_buffer(app_name)
-    q: asyncio.Queue = asyncio.Queue()
+    q: asyncio.Queue = asyncio.Queue(maxsize=MAX_SUBSCRIBER_LINES)
     buf.subscribe(q)
 
     try:

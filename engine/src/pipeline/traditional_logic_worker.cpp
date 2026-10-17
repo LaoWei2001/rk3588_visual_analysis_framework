@@ -11,6 +11,7 @@
 #include "pipeline_runtime.h"
 
 #include "runtime/pause_ctrl.h"
+#include "runtime/service_watchdog.h"
 
 #include <utility>
 
@@ -66,6 +67,7 @@ extern "C" void *pipeline_logic_worker(void *arg)
         return nullptr;
     TraditionalLogicQueue &queue = g_traditional_logic_queues[chn_id];
 
+    service_watchdog::Progress watchdog_progress("traditional logic", chn_id);
     while (g_dispatch_running.load())
     {
         TraditionalLogicTask task;
@@ -86,6 +88,7 @@ extern "C" void *pipeline_logic_worker(void *arg)
 
         /* 与热更新、在线状态切换和同通道 NPU 在途结果串行。
          * 获锁后重新检查推理开关，避免开关翻转后执行旧的传统任务。 */
+        service_watchdog::Scope watchdog_scope(watchdog_progress);
         pthread_mutex_lock(&g_process_mtx[chn_id]);
         if (channel_should_run_traditional_logic(chn_id, task.raw_frame.frame_steady_ms, task.runtime_generation))
             process_channel_results(chn_id, task.raw_frame, nullptr, task.frame_seq);

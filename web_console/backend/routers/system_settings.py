@@ -1,24 +1,27 @@
 """设备级系统设置。
 
-当前只提供每日定时重启。计划由 systemd timer 执行，因此不依赖浏览器保持打开，
-也不依赖 Web 控制台进程内的定时线程。控制台服务以 root 运行，能够安全地安装固定名称、
-固定内容的单元；请求参数只允许 ``HH:MM``，不会进入 shell。
+提供系统时间、时区和每日定时重启。计划由 systemd timer 执行，不依赖浏览器。
+系统命令使用独立参数，不经过 shell；手动设时与时区修改在同一进程锁内串行。
 """
 from __future__ import annotations
 
 import json
+import asyncio
 import os
 import re
 import shutil
 import subprocess
-from datetime import datetime
+import threading
+from datetime import datetime, timezone as datetime_timezone
 from pathlib import Path
-from typing import Any, Dict, List
-from zoneinfo import TZPATH, available_timezones
+from typing import Any, Dict, List, Optional
+from zoneinfo import TZPATH, ZoneInfo, available_timezones
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, StrictInt
 from services.data_dir import APPS_ROOT
+from routers.network_settings import require_network_admin
+from services.runtime_loader import load_runtime
 
 
 router = APIRouter()
@@ -31,6 +34,7 @@ SERVICE_UNIT = "rk3588-daily-reboot.service"
 TIMER_UNIT = "rk3588-daily-reboot.timer"
 DEFAULT_REBOOT_TIME = "04:00"
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+_clock_lock = threading.Lock()
 
 
 class DailyRebootRequest(BaseModel):
@@ -40,6 +44,13 @@ class DailyRebootRequest(BaseModel):
 
 class TimezoneRequest(BaseModel):
     timezone: str
+
+
+class SystemTimeRequest(BaseModel):
+    timezone: str
+    local_time: Optional[str] = None
+    epoch_ms: Optional[StrictInt] = None
+    disable_ntp: bool = False
 
 
 def _run(cmd: List[str], timeout: int = 15) -> subprocess.CompletedProcess:
@@ -100,13 +111,7 @@ def _write_settings(enabled: bool, reboot_time: str) -> None:
 
 def _service_content() -> str:
     systemctl = _command_path("systemctl", "SYSTEMCTL_PATH")
-    return (
-        "[Unit]\n"
-        "Description=RK3588 Daily Scheduled Reboot\n\n"
-        "[Service]\n"
-        "Type=oneshot\n"
-        f"ExecStart={systemctl} reboot\n"
-    )
+    return load_runtime('reboot_coordinator').daily_service_content(systemctl)
 
 
 def _timer_content(reboot_time: str) -> str:
@@ -176,7 +181,7 @@ def _timer_status() -> Dict[str, Any]:
     try:
         shown = _run(_systemctl_command(
             "show", TIMER_UNIT,
-            "--property=LoadState,ActiveState,UnitFileState,NextElapseUSecRealtime",
+            "--property=LoadState,ActiveState,UnitFileState,NextElapseUSecRealtime,TimersCalendar",
         ))
     except Exception as exc:
         result["error"] = str(exc)
@@ -197,26 +202,116 @@ def _timer_status() -> Dict[str, Any]:
         "unit_enabled": values.get("UnitFileState") in ("enabled", "enabled-runtime"),
         "next_run": values.get("NextElapseUSecRealtime") or None,
     })
+    calendar = values.get("TimersCalendar", "")
+    match = re.search(r"OnCalendar=\*-\*-\* (\d{2}:\d{2}):00(?:\s|;|\})", calendar)
+    if match:
+        result["time"] = match[1]
     return result
 
 
 def _response() -> Dict[str, Any]:
     settings = _read_settings()
+    timer = _timer_status()
     now = datetime.now().astimezone()
     utc_offset = now.utcoffset()
     return {
         **settings,
-        **_timer_status(),
+        **timer,
+        "configured_enabled": settings["enabled"],
+        "enabled": timer["active"] if not timer["error"] else settings["enabled"],
         "timezone": _timezone_name(),
         "current_time": now.isoformat(timespec="seconds"),
         "current_time_epoch_ms": int(now.timestamp() * 1000),
         "utc_offset_minutes": int(utc_offset.total_seconds() // 60) if utc_offset else 0,
+        **_clock_status(),
     }
+
+
+def _clock_status() -> Dict[str, Any]:
+    status = {"ntp_enabled": None, "ntp_synchronized": None, "can_ntp": None, "time_error": None}
+    try:
+        command = _command_path("timedatectl", "TIMEDATECTL_PATH")
+        # 板载旧版 timedatectl 不支持逗号分隔属性，使用重复选项兼容。
+        result = _run([command, "show", "--property=CanNTP", "--property=NTP", "--property=NTPSynchronized"], timeout=5)
+        if result.returncode:
+            raise RuntimeError((result.stderr or result.stdout or "无法读取自动校时状态").strip())
+        values = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        for field, key in (("ntp_enabled", "NTP"), ("ntp_synchronized", "NTPSynchronized"), ("can_ntp", "CanNTP")):
+            status[field] = {"yes": True, "no": False}.get(values.get(key))
+        if status["ntp_enabled"] is None:
+            raise RuntimeError("系统未返回自动校时状态，暂不能修改时间")
+    except Exception as exc:
+        status["time_error"] = str(exc)
+    return status
+
+
+def _time_target(req: SystemTimeRequest) -> str:
+    if (req.local_time is None) == (req.epoch_ms is None):
+        raise HTTPException(400, "请提供日期时间或电脑时间戳，不能同时提供")
+    try:
+        if req.epoch_ms is not None:
+            moment = datetime.fromtimestamp(req.epoch_ms / 1000, datetime_timezone.utc)
+        else:
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", req.local_time or ""):
+                raise ValueError("日期时间格式必须为 YYYY-MM-DDTHH:MM:SS")
+            local = datetime.strptime(req.local_time, "%Y-%m-%dT%H:%M:%S")
+            zone = ZoneInfo(req.timezone)
+            moment = local.replace(tzinfo=zone)
+            if moment.astimezone(datetime_timezone.utc).astimezone(zone).replace(tzinfo=None) != local:
+                raise ValueError("该日期时间处于夏令时跳过区间，请选择其他时间")
+            if moment.utcoffset() != local.replace(tzinfo=zone, fold=1).utcoffset():
+                raise ValueError("该日期时间处于夏令时重叠区间，请选择其他时间或与电脑同步")
+        if moment.year < 1970:
+            raise ValueError("系统时间不能早于 1970 年")
+        return "@" + str(int(moment.timestamp()))
+    except (ValueError, OverflowError, OSError, KeyError) as exc:
+        raise HTTPException(400, f"无效的系统时间：{exc}") from exc
+
+
+def _set_system_time(req: SystemTimeRequest) -> Dict[str, Any]:
+    if req.timezone not in available_timezones():
+        raise HTTPException(400, "无效的 IANA 时区")
+    target = _time_target(req)
+    with _clock_lock:
+        if _timezone_name() != req.timezone:
+            raise HTTPException(409, "设备时区已变化，请重新同步后再设置时间")
+        state = _clock_status()
+        if state["time_error"]:
+            raise HTTPException(503, state["time_error"])
+        if state["ntp_enabled"] and not req.disable_ntp:
+            raise HTTPException(409, "自动校时已开启，请确认关闭自动校时后再设置时间")
+        timedatectl = _command_path("timedatectl", "TIMEDATECTL_PATH")
+        stopped_ntp = False
+        try:
+            if state["ntp_enabled"]:
+                result = _run([timedatectl, "set-ntp", "false"])
+                if result.returncode:
+                    raise RuntimeError((result.stderr or result.stdout or "关闭自动校时失败").strip())
+                stopped_ntp = True
+            result = _run([timedatectl, "set-time", target])
+            if result.returncode:
+                raise RuntimeError((result.stderr or result.stdout or "设置系统时间失败").strip())
+        except Exception as exc:
+            rollback_error = ""
+            if stopped_ntp:
+                try:
+                    restored = _run([timedatectl, "set-ntp", "true"])
+                    if restored.returncode:
+                        raise RuntimeError((restored.stderr or restored.stdout or "恢复失败").strip())
+                except Exception as rollback:
+                    rollback_error = f"；恢复自动校时也失败：{rollback}"
+            raise HTTPException(500, f"设置系统时间失败：{exc}{rollback_error}") from exc
+        return {"ok": True, **_response()}
+
+
+@router.put("/system/time")
+async def set_system_time(req: SystemTimeRequest, _admin: None = Depends(require_network_admin)):
+    return await asyncio.to_thread(_set_system_time, req)
 
 
 @router.get("/system/daily-reboot")
 async def get_daily_reboot():
-    return _response()
+    return await asyncio.to_thread(_response)
 
 
 @router.get("/system/timezones")
@@ -230,12 +325,17 @@ async def get_timezones():
 
 @router.put("/system/timezone")
 async def set_timezone(req: TimezoneRequest):
+    return await asyncio.to_thread(_set_timezone, req)
+
+
+def _set_timezone(req: TimezoneRequest):
     timezone = req.timezone.strip()
     if timezone not in available_timezones() or timezone.startswith(("posix/", "right/")):
         raise HTTPException(400, "无效的 IANA 时区")
     try:
         timedatectl = _command_path("timedatectl", "TIMEDATECTL_PATH")
-        result = _run([timedatectl, "set-timezone", timezone])
+        with _clock_lock:
+            result = _run([timedatectl, "set-timezone", timezone])
     except Exception as exc:
         raise HTTPException(500, f"设置时区失败：{exc}")
     if result.returncode != 0:

@@ -3,6 +3,7 @@ import importlib.util
 import asyncio
 import io
 import json
+import os
 import signal
 import socket
 import subprocess
@@ -17,18 +18,20 @@ import pytest
 import uvicorn
 from fastapi import HTTPException
 from routers import dataset
+from services import process_manager as pm
 from services.dataset_manager import DatasetManager
 
 ROOT=Path(__file__).resolve().parents[3]
+ENGINE_BINARY=Path(os.environ.get('RK_DATASET_TEST_BINARY', ROOT/'build/engine/remote_dataset_tests'))
 spec=importlib.util.spec_from_file_location('pc_receiver',ROOT/'web_console/backend/resources/dataset_receiver.py')
 pc=importlib.util.module_from_spec(spec);spec.loader.exec_module(pc)
 
 @pytest.fixture
 def environment(tmp_path,monkeypatch):
-    binary=ROOT/'build/engine/remote_dataset_tests'
+    binary=ENGINE_BINARY
     if not binary.is_file(): pytest.skip('Build remote_dataset_tests first')
     board=tmp_path/'board';app=board/'demo';assets=app/'assets';assets.mkdir(parents=True)
-    (assets/'labels.txt').write_text('person\nhelmet\n')
+    (assets/'labels.txt').write_text('person\nhelmet\nbare_head\n')
     (assets/'config.json').write_text(json.dumps({'channels':[
         {'id':channel,'logic':'logic_crane_helmet','models':[{'enable':True,'model_type':'yolov8_det','label_path':'assets/labels.txt'}]}
         for channel in [0,3]]}))
@@ -41,13 +44,70 @@ def environment(tmp_path,monkeypatch):
         time.sleep(.02)
     assert (app/'run.dataset.sock').exists()
     manager.fixture_process=process
+    monkeypatch.setattr(pm, 'APPS_ROOT', board)
+    monkeypatch.setattr(pm, '_start_lock_path', board / '.app_start.lock')
+    monkeypatch.setattr(pm.runtime_state, 'STATE_FILE', board / '.console_runtime_state.json')
+    monkeypatch.setattr(pm.runtime_state, 'LOCK_FILE', board / '.console_runtime_state.json.lock')
+    monkeypatch.setattr(pm, '_processes', {'demo': pm.ManagedProcess(
+        app_name='demo', pid=process.pid, started_at=time.time(), proc=process)})
     yield manager,board,tmp_path/'computer'
     manager.fixture_process.terminate();manager.fixture_process.wait(timeout=5)
 
 def config(limit=3,batch=2):
     return dataset.TaskConfig(rules=[{'id':'r1','name':'有人时采集','condition':{
         'class':'person','min_confidence':.3,'count':{'op':'>=','value':1}}}],
-        max_samples=limit,images_per_folder=batch,interval_sec=.5).model_dump()
+        max_samples=limit,images_per_folder=batch,interval_sec=.3).model_dump()
+
+
+def test_offline_creation_syncs_on_start_and_collects_only_after_enabling(environment):
+    manager, board, _ = environment
+    manager.fixture_process.terminate(); manager.fixture_process.wait(timeout=5)
+    task = manager.save('demo', 0, config())['tasks'][0]
+    updated = config(); updated['interval_sec'] = 1
+    manager.save('demo', 0, updated)
+    restored = DatasetManager(board)
+    restart_engine(manager, board)
+    response, error = restored.sync('demo')
+    assert not error and len(response['tasks']) == 1
+    live = response['tasks'][0]
+    assert live['task_id'] == task['id'] and not live['enabled']
+    assert restored.list('demo')['tasks'][0]['config']['interval_sec'] == 1
+    assert restored.pending() == []
+    restored.set_enabled('demo', task['id'], True)
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and not restored.pending(): time.sleep(.02)
+    assert restored.pending()
+
+@pytest.mark.parametrize('count_mode', [False, True])
+def test_multiple_related_categories_sync_after_offline_save_and_capture(environment, count_mode):
+    manager, board, _ = environment
+    manager.fixture_process.terminate(); manager.fixture_process.wait(timeout=5)
+    collection = config(limit=1)
+    collection['rules'][0]['condition'] = {'association': {
+        'subject': {'class': 'person', 'min_confidence': .3},
+        'objects': [{'class': 'helmet', 'min_confidence': .4},
+                    {'class': 'bare_head', 'min_confidence': .5}],
+        'relation': 'center_inside', 'state': 'unmatched', 'quantifier': 'any', 'one_to_one': True}}
+    if count_mode:
+        value = collection['rules'][0]['condition']['association']
+        value.update(state='count', object_count={'op': '==', 'value': 0})
+        del value['one_to_one']
+    task = manager.save('demo', 0, collection)['tasks'][0]
+    assert task['config'] == collection and not task['enabled']
+    restart_engine(manager, board)
+    restored = DatasetManager(board)
+    live, error = restored.sync('demo')
+    assert not error and live['tasks'][0]['task_id'] == task['id']
+    assert not live['tasks'][0]['enabled']
+    restored.set_enabled('demo', task['id'], True)
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and not restored.pending(): time.sleep(.02)
+    samples = restored.pending()
+    assert len(samples) == 1
+    # 真实引擎的默认测试帧只有 person，没有帽子或裸露头，命中同主体多类别缺失。
+    jpeg = restored.image('demo', samples[0]['task_id'], samples[0]['sample_id'])
+    assert jpeg[:2] == b'\xff\xd8'
+
 
 def test_capture_http_receiver_two_channels_and_browser_independence(environment,monkeypatch):
     manager,board,computer=environment
@@ -139,7 +199,7 @@ def test_capture_http_receiver_two_channels_and_browser_independence(environment
         assert all(task['pending']==0 for task in manager.list('demo')['tasks'])
         # A fresh engine restores persisted progress and does not collect another quota.
         manager.fixture_process.terminate();manager.fixture_process.wait(timeout=5)
-        manager.fixture_process=subprocess.Popen([str(ROOT/'build/engine/remote_dataset_tests'),str(board/'demo/run.dataset.sock')],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        manager.fixture_process=subprocess.Popen([str(ENGINE_BINARY),str(board/'demo/run.dataset.sock')],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         for _ in range(100):
             if (board/'demo/run.dataset.sock').exists(): break
             time.sleep(.02)
@@ -237,13 +297,101 @@ def test_duration_stops_and_changing_duration_restarts_clock(environment):
 
 
 def restart_engine(manager, board):
-    manager.fixture_process=subprocess.Popen([str(ROOT/'build/engine/remote_dataset_tests'),str(board/'demo/run.dataset.sock')],
+    manager.fixture_process=subprocess.Popen([str(ENGINE_BINARY),str(board/'demo/run.dataset.sock')],
                                              stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+    pm._processes['demo'] = pm.ManagedProcess(app_name='demo', pid=manager.fixture_process.pid,
+        started_at=time.time(), proc=manager.fixture_process)
     for _ in range(100):
-        if (board/'demo/run.dataset.sock').exists(): return
         if manager.fixture_process.poll() is not None: pytest.fail(manager.fixture_process.stderr.read().decode())
+        # bind creates the pathname before listen starts accepting requests.
+        # Wait for the actual IPC response, including under compilation load.
+        try:
+            manager.rpc('demo', {'op': 'status'})
+            return
+        except HTTPException as exc:
+            if exc.status_code != 503: raise
         time.sleep(.02)
     pytest.fail('restarted capture socket did not become ready')
+
+
+@pytest.mark.parametrize('quick_restart', [False, True])
+def test_process_exit_durably_pauses_without_losing_progress(environment, quick_restart):
+    manager, board, _ = environment
+    collection = config(limit=10); collection['duration_hours'] = 1
+    task = manager.save('demo', 0, collection)['tasks'][0]
+    manager.set_enabled('demo', task['id'], True)
+    end = time.monotonic() + 3
+    while time.monotonic() < end and not manager.pending(): time.sleep(.02)
+    image = manager.pending()[0]
+    manager.acknowledge('demo', task['id'], image['revision'], image['sample_id'], image['proof'])
+    before = manager.rows()[0]
+    manager.fixture_process.kill(); manager.fixture_process.wait(timeout=5)
+    if quick_restart:
+        # No poll observes the stopped state; catch the replacement before
+        # sending any enabled configure to the new capture process.
+        restart_engine(manager, board)
+    stopped = manager.list('demo')['tasks'][0]
+    assert not stopped['enabled'] and '自动暂停' in stopped['status']
+    assert manager.rows()[0] == dict(before, enabled=0)
+    with manager.db() as db:
+        assert db.execute('SELECT 1 FROM acknowledgments WHERE id=?', (image['sample_id'],)).fetchone()
+    restored = DatasetManager(board)
+    if not quick_restart: restart_engine(manager, board)
+    response, error = restored.sync('demo')
+    assert not error and not response['tasks'][0]['enabled']
+    time.sleep(.6)
+    assert restored.pending() == []
+    resumed = restored.set_enabled('demo', task['id'], True)['tasks'][0]
+    assert resumed['enabled'] and '自动暂停' not in resumed['status']
+    assert resumed['saved'] == before['saved'] and resumed['deadline'] == before['deadline']
+    end = time.monotonic() + 3
+    while time.monotonic() < end and not restored.pending(): time.sleep(.02)
+    assert restored.pending()
+
+
+def test_transport_outage_and_console_restart_do_not_pause_live_process(environment, monkeypatch):
+    manager, board, _ = environment
+    task = manager.save('demo', 0, config(limit=0))['tasks'][0]
+    manager.set_enabled('demo', task['id'], True)
+    before = manager.rows()[0]
+    def unavailable(*args): raise HTTPException(503, 'temporary socket outage')
+    with monkeypatch.context() as patch:
+        patch.setattr(manager, 'rpc', unavailable)
+        assert manager.list('demo')['tasks'][0]['enabled']
+    restored = DatasetManager(board)
+    assert restored.list('demo')['tasks'][0]['enabled']
+    assert restored.rows()[0] == before
+
+
+def test_explicit_stop_pauses_before_next_poll(environment, monkeypatch):
+    manager, board, _ = environment
+    import services.dataset_manager as module
+    monkeypatch.setattr(module, 'dataset_manager', manager)
+    task = manager.save('demo', 0, config(limit=0))['tasks'][0]
+    manager.set_enabled('demo', task['id'], True)
+    assert pm.stop_app('demo')
+    assert manager.fixture_process.poll() is not None
+    assert not manager.rows()[0]['enabled']  # No dataset poll needed.
+    restart_engine(manager, board)
+    assert not manager.list('demo')['tasks'][0]['enabled']
+
+
+def test_background_maintenance_pauses_when_no_browser_or_receiver_is_open(environment):
+    manager, _, _ = environment
+    task = manager.save('demo', 0, config(limit=0))['tasks'][0]
+    manager.set_enabled('demo', task['id'], True)
+    manager.fixture_process.terminate(); manager.fixture_process.wait(timeout=5)
+    async def run():
+        maintenance = asyncio.create_task(manager.maintenance())
+        try:
+            end = time.monotonic() + 4
+            while time.monotonic() < end and manager.rows()[0]['enabled']:
+                await asyncio.sleep(.02)
+            assert not manager.rows()[0]['enabled']
+        finally:
+            maintenance.cancel()
+            with pytest.raises(asyncio.CancelledError): await maintenance
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize('enabled',[False,True])
@@ -401,6 +549,47 @@ def test_pc_disk_failure_preserves_image_and_never_acknowledges_early(environmen
     assert len(list(computer.rglob('*.jpg')))==1
     malicious=dict(sample,app='../outside')
     with pytest.raises(ValueError): receiver.receive(malicious)
+
+
+def test_deleted_photos_restart_folder_cursor_with_real_engine(environment):
+    from urllib.parse import parse_qs
+    manager, board, computer = environment
+    task = manager.save('demo', 0, config(limit=2, batch=2))['tasks'][0]
+    receiver = pc.Receiver('http://device', computer)
+
+    def relay(path, body=None, binary=False):
+        if path.startswith('image?'):
+            query = {key: value[0] for key, value in parse_qs(path.split('?', 1)[1]).items()}
+            return manager.image(query['app'], query['task_id'], query['sample_id'])
+        if path == 'ack': return {'saved': manager.acknowledge(**body)}
+        raise AssertionError(path)
+
+    receiver.request = relay
+
+    def collect(total):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and manager.rows()[0]['saved'] < total:
+            for metadata in manager.pending():
+                receiver.receive(metadata)
+                receiver.acknowledge_pending()
+            time.sleep(.02)
+        assert manager.rows()[0]['saved'] == total
+
+    try:
+        manager.set_enabled('demo', task['id'], True)
+        collect(2)
+        original = list(computer.rglob('*.jpg'))
+        assert len(original) == 2 and {path.parent.name for path in original} == {'0_1'}
+        for path in original: path.unlink()
+        manager.set_enabled('demo', task['id'], False)
+        manager.save('demo', 0, config(limit=4, batch=2))
+        manager.set_enabled('demo', task['id'], True)
+        collect(4)
+        fresh = list(computer.rglob('*.jpg'))
+        assert len(fresh) == 2 and {path.parent.name for path in fresh} == {'0_1'}
+        assert manager.list('demo')['tasks'][0]['saved'] == 4
+    finally:
+        receiver.db.close()
     receiver.db.close()
 
 

@@ -45,7 +45,6 @@ DEST="$PKG"
 while [ -e "$APPS_ROOT/$DEST" ]; do
     read -p "$APPS_ROOT/$DEST 已存在，覆盖它吗？(覆盖会先删除旧的) [y/N] " ans
     if [[ "$ans" =~ ^[Yy]$ ]]; then
-        rm -rf "$APPS_ROOT/$DEST" || { echo "[ERROR] 删除旧目录失败"; exit 1; }
         break
     fi
     read -p "不覆盖。请输入一个新的名字: " DEST
@@ -54,8 +53,14 @@ while [ -e "$APPS_ROOT/$DEST" ]; do
     done
 done
 
-# 复制整个程序包到控制台目录
-cp -r "$PKG_DIR" "$APPS_ROOT/$DEST" || { echo "[ERROR] 复制失败"; exit 1; }
+# Shared runtime code also works when the Web console is stopped or uninstalled.
+RUNTIME_LIBRARY="$REPO_ROOT/services/framework/runtime_manager/python"
+if [ ! -d "$RUNTIME_LIBRARY/rk3588_runtime" ]; then
+    RUNTIME_LIBRARY=/usr/lib/vision-analysis-platform/python
+fi
+APPS_ROOT="$APPS_ROOT" PYTHONPATH="$RUNTIME_LIBRARY" /usr/bin/python3 \
+    -m rk3588_runtime.package_install "$PKG_DIR" "$DEST" \
+    || { echo "[ERROR] 安装失败；旧包会尽量保留，请检查上面的错误。"; exit 1; }
 
 echo ""
 echo "✓ 已安装: $APPS_ROOT/$DEST"

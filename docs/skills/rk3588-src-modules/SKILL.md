@@ -19,6 +19,7 @@ description: >-
 - 生命周期：`engine/src/main.cpp`；
 - 配置：`src/config/config.h/.cpp`、`config_init.cpp`、`config_validator.cpp`；
 - 运行状态与热更：`src/runtime/app_ctrl.h/.cpp`；
+- 服务心跳与在途处理超时：`src/runtime/service_watchdog.h/.cpp`；
 - 帧管线：`src/pipeline/`；
 - 推理：`src/inference/` 和 `src/yolo/`；
 - Logic 公共框架：`src/logic/core/`；业务扩展：仓库根 `projects/modules/` 和 `projects/global_modules/`；
@@ -77,6 +78,8 @@ channel publication（frame/results/outputs/draw/state 元信息）
 - 不直接编辑打包输出中的 `logics.json` 或 `report_templates/` 代替源码修改。
 
 ## 验证
+
+涉及无人值守恢复时，同时按[故障恢复说明](../../unattended-recovery.md)验证主动停止、暂停和旧包兼容。
 
 无需二进制的静态检查：
 

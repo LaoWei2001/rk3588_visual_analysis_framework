@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from services import receiver_package as package_service
 from services.dataset_manager import dataset_manager as manager
@@ -26,15 +26,23 @@ def is_public_receiver_request(method: str, path: str) -> bool:
 class TaskConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
     rules: list[dict] = Field(min_length=1, max_length=32)
-    interval_sec: float = Field(default=2, ge=.5, le=86400, allow_inf_nan=False)
+    interval_sec: float = Field(default=2, ge=.3, le=86400, allow_inf_nan=False)
     confirm_sec: float = Field(default=0, ge=0, le=60, allow_inf_nan=False)
     max_samples: int = Field(default=0, ge=0, le=1000000000)
     images_per_folder: int = Field(default=30, ge=1, le=10000)
     duration_hours: float = Field(default=0, ge=0, le=8760, allow_inf_nan=False)
-    jpeg_quality: int = Field(default=95, ge=60, le=100)
     roi_name: str = Field(default='', max_length=100)
     roi_anchor: str = Field(default='center', pattern='^(center|foot)$')
     trigger_mode: str = Field(default='periodic', pattern='^(periodic|on_enter)$')
+
+    @model_validator(mode='before')
+    @classmethod
+    def ignore_legacy_image_quality(cls, value):
+        # Older pages/drafts may still send this retired setting.
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop('jpeg_quality', None)
+        return value
 
 
 class Enabled(BaseModel):

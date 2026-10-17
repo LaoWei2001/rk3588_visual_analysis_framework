@@ -3,8 +3,13 @@ import { api } from './http'
 
 export interface DatasetConfig {
   rules: unknown[]; interval_sec: number; confirm_sec: number; max_samples: number;
-  images_per_folder: number; duration_hours: number; jpeg_quality: number;
+  images_per_folder: number; duration_hours: number;
   roi_name: string; roi_anchor: string; trigger_mode: string;
+}
+export const removeLegacyImageQuality = (config: DatasetConfig): DatasetConfig => {
+  const current = {...config} as DatasetConfig & {jpeg_quality?: unknown}
+  delete current.jpeg_quality
+  return current
 }
 export interface DatasetTask {
   id: string; channel_id: number; config: DatasetConfig; enabled: boolean; saved: number;

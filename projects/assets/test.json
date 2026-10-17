@@ -239,6 +239,8 @@
         "helmet_labels": "helmet",
         "bare_head_labels": "bare_head",
         "person_min_score": 0.3,
+        "person_min_width": 40,
+        "person_min_height": 40,
         "helmet_min_score": 0.3,
         "bare_head_min_score": 0.3,
         "confirm_sec": 0.5,

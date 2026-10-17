@@ -77,6 +77,10 @@
 .system-clock-panel strong { color: #bfdbfe; font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size: 18px; font-variant-numeric: tabular-nums; }
 .system-clock-panel b { color: var(--text); font-size: 14px; }
 .timezone-row > label { flex-basis: 360px; }
+.system-datetime-row { flex-wrap: wrap; }
+.system-datetime-row > label { flex-basis: 360px; min-width: 0; }
+.system-datetime-row input { width: 100%; min-width: 0; box-sizing: border-box; }
+.system-time-help { margin: 10px 0; color: var(--text2); font-size: 12px; line-height: 1.6; }
 .system-time-picker { display: flex; align-items: center; gap: 8px; }
 .system-time-picker select { width: 92px; height: 38px; padding: 6px 9px; }
 .system-time-picker > b { color: var(--text); font-size: 18px; }
@@ -181,6 +185,9 @@
   .network-config-grid { grid-template-columns: 1fr; }
   .network-config-grid label.wide { grid-column: auto; }
   .settings-form-row > label { flex-basis: auto; }
+  .system-datetime-row { flex-wrap: nowrap; }
+  .system-datetime-row button { white-space: normal; }
+  .system-time-picker select { min-width: 0; width: 0; flex: 1; }
   .storage-metrics { grid-template-columns: 1fr 1fr; }
   .settings-actions { flex-direction: column-reverse; }
   .root-cleanup-footer { grid-template-columns: 1fr; }

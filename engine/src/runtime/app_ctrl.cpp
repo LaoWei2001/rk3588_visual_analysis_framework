@@ -13,6 +13,7 @@
 #include "pipeline/frame_transform.h"
 #include "pipeline/pipeline_runtime.h"
 #include "runtime/pause_ctrl.h"
+#include "runtime/service_watchdog.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -186,6 +187,7 @@ extern "C" void *config_monitor_thread_func(void *arg)
         return nullptr;
 
     uint64_t pendingMtime = 0;
+    service_watchdog::Progress watchdog_progress("config reload", -1, service_watchdog::startup_timeout_ms());
     printf("[ConfigMonitor] Thread started, monitoring: %s\n", ctrl->config.config_path.c_str());
 
     while (!ctrl->config_monitor_exit.load())
@@ -225,6 +227,7 @@ extern "C" void *config_monitor_thread_func(void *arg)
             continue;
         }
         printf("[ConfigMonitor] File stabilized, reloading config...\n");
+        service_watchdog::Scope watchdog_scope(watchdog_progress);
         pendingMtime = 0;
 
         AppConfig new_cfg;

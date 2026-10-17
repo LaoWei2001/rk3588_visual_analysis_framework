@@ -369,6 +369,9 @@ prepare_frontend() {
     )
     [ -f "$FRONTEND_DIR/dist/index.html" ] \
         || { echo "[错误] Web 前端构建未生成 dist/index.html" >&2; exit 1; }
+    # Preserve dependencies outside the source tree for subsequent offline
+    # installs, even after node_modules or old source versions are cleaned up.
+    as_root sh "$PROJ/tools/offline_dev_install/debian/restore_frontend_dependencies.sh" "$PROJ"
 }
 
 CHECK_ERRORS=0

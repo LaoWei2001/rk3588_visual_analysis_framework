@@ -3,6 +3,7 @@
 from __future__ import annotations
 import argparse
 import contextlib
+import errno
 import hashlib
 import json
 import os
@@ -137,6 +138,7 @@ class Receiver:
             complete INTEGER NOT NULL DEFAULT 0, acknowledged INTEGER NOT NULL DEFAULT 0);
           CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, next INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS receivers (device TEXT PRIMARY KEY, client TEXT NOT NULL);
+          CREATE INDEX IF NOT EXISTS pending_image_paths ON images(path) WHERE complete=0;
         ''')
         # Persist the local receiver identity: reopening the same directory must
         # not look like a second computer still blocked by the previous lease.
@@ -157,6 +159,67 @@ class Receiver:
                 raise ValueError('响应超过接收大小限制')
         return value if binary else json.loads(value)
 
+    @staticmethod
+    def _has_capture_file(directory: Path) -> bool:
+        pending = [directory]
+        while pending:
+            try:
+                with os.scandir(pending.pop()) as entries:
+                    for entry in entries:
+                        if entry.is_dir(follow_symlinks=False):
+                            pending.append(Path(entry.path))
+                        elif entry.name.lower().endswith(('.jpg', '.jpeg', '.jpg.part')) and entry.is_file(follow_symlinks=False):
+                            return True
+            except FileNotFoundError:
+                continue
+        return False
+
+    def _next_group(self, key: str, batch: int) -> tuple[int, int]:
+        counter = self.db.execute('SELECT next FROM groups WHERE id=?', (key,)).fetchone()
+        start = counter[0] if counter else 0
+        directory = self.directory / key
+        ranges, empty, candidates = [], [], []
+        if directory.exists():
+            for child in directory.iterdir():
+                match = re.fullmatch(r'(\d+)_(\d+)', child.name)
+                if match and child.is_dir() and not child.is_symlink():
+                    candidates.append((tuple(map(int, match.groups())), child))
+        # Usually only inspect the newest batch, rather than rescanning every
+        # saved image on each download. Empty trailing batches can be skipped.
+        for bounds, child in sorted(candidates, reverse=True):
+            if self._has_capture_file(child):
+                ranges.append(bounds)
+                break
+            empty.append(child)
+        # Failed downloads reserve paths before writing JPEGs. These reservations
+        # must survive a retry even if the directory has not been created yet.
+        prefix = str(Path(key)) + os.sep
+        reserved = self.db.execute('SELECT path FROM images WHERE complete=0 AND path>=? AND path<?',
+                                   (prefix, prefix + '\uffff')).fetchall()
+        for (path,) in reserved:
+            match = re.fullmatch(r'(\d+)_(\d+)', Path(path).parent.name)
+            if match:
+                ranges.append(tuple(map(int, match.groups())))
+        if not reserved and not ranges and not self._has_capture_file(directory):
+            # Only the folder cursor restarts. Keep all save/ACK history intact.
+            start = 0
+            for child in empty:
+                try:
+                    child.rmdir()
+                except OSError as exc:
+                    if exc.errno not in (errno.ENOENT, errno.ENOTEMPTY, errno.EEXIST):
+                        raise
+        if ranges:
+            low, high = max(ranges)
+            start = max(start, low)
+            # A batch size change starts a fresh range after existing directories.
+            if high-low+1 != batch or start > high:
+                start = max(start, high+1)
+            low = low if high-low+1 == batch and start <= high else start
+        else:
+            low = start
+        return start, low
+
     def receive(self, metadata: dict) -> Path:
         for key in ['sample_id','task_id','revision','app']:
             if not isinstance(metadata.get(key),str) or not re.fullmatch(r'[A-Za-z0-9_.+\-]{1,160}',metadata[key]) or metadata[key].startswith('.'):
@@ -175,21 +238,8 @@ class Receiver:
             if row[1] and path.is_file():
                 return path
         else:
-            counter = self.db.execute('SELECT next FROM groups WHERE id=?',(key,)).fetchone()
-            start = counter[0] if counter else 0
-            # A batch size change starts a fresh range after existing directories.
+            start, low = self._next_group(key, batch)
             directory = self.directory/key
-            ranges = []
-            if directory.exists():
-                for child in directory.iterdir():
-                    match = re.fullmatch(r'(\d+)_(\d+)',child.name)
-                    if match and child.is_dir(): ranges.append(tuple(map(int,match.groups())))
-            if ranges:
-                low,high = max(ranges)
-                start = max(start,low)
-                if high-low+1 != batch or start>high: start=max(start,high+1)
-                low = low if high-low+1==batch and start<=high else start
-            else: low = start
             path = directory/(str(low)+'_'+str(low+batch-1))/(sample_id+'.jpg')
             with self.db:
                 self.db.execute('INSERT INTO images (id,path,metadata) VALUES (?,?,?)',

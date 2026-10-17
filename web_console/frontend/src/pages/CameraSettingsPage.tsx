@@ -16,6 +16,8 @@ import {
   removeCameraConfiguration,
 } from '../api/client'
 import './CameraSettingsPage.css'
+import { useAutoSync, useSyncedDraft } from '../hooks/useAutoSync'
+import ConfigSyncNotice from '../components/ConfigSyncNotice'
 
 type Busy = 'load' | 'discover' | 'apply' | 'remove' | 'status' | 'web' | null
 type Notice = { type: 'ok' | 'err'; text: string } | null
@@ -28,35 +30,32 @@ const errorText = (error: unknown): string => {
 const statusLabel = (ready: boolean, positive = '正常', negative = '不可用') =>
   ready ? positive : negative
 
+const emptyForm = { device: '', cameraIp: '', prefixLength: '', cameraMac: '', model: '', serial: '', httpPort: '80', rtspPort: '554', httpInferred: false, rtspInferred: false }
+const formOf = (c: CameraConfiguration) => ({ device: c.interface, cameraIp: c.camera_ip, prefixLength: String(c.camera_prefix_length), cameraMac: c.camera_mac || '', model: c.model || '', serial: c.serial || '', httpPort: String(c.http_port), rtspPort: String(c.rtsp_port), httpInferred: c.http_port_inferred, rtspInferred: c.rtsp_port_inferred })
+
 export default function CameraSettingsPage() {
   const [snapshot, setSnapshot] = useState<CameraSettingsSnapshot | null>(null)
   const [status, setStatus] = useState<CameraStatusInfo | null>(null)
-  const [device, setDevice] = useState('')
   const [cameras, setCameras] = useState<DiscoveredCameraInfo[]>([])
-  const [cameraIp, setCameraIp] = useState('')
-  const [prefixLength, setPrefixLength] = useState('')
-  const [cameraMac, setCameraMac] = useState('')
-  const [model, setModel] = useState('')
-  const [serial, setSerial] = useState('')
-  const [httpPort, setHttpPort] = useState('80')
-  const [rtspPort, setRtspPort] = useState('554')
-  const [httpInferred, setHttpInferred] = useState(false)
-  const [rtspInferred, setRtspInferred] = useState(false)
+  const [form, setForm, formSync] = useSyncedDraft(snapshot?.configuration ? formOf(snapshot.configuration) : snapshot ? { ...emptyForm, device: snapshot.interfaces[0]?.device || '' } : null, emptyForm)
+  const { device, cameraIp, prefixLength, cameraMac, model, serial, httpPort, rtspPort, httpInferred, rtspInferred } = form
+  const setField = <K extends keyof typeof emptyForm>(key: K, value: typeof emptyForm[K]) => setForm(current => ({ ...current, [key]: value }))
+  const setDevice = (v: string) => setField('device', v)
+  const setCameraIp = (v: string) => setField('cameraIp', v)
+  const setPrefixLength = (v: string) => setField('prefixLength', v)
+  const setCameraMac = (v: string) => setField('cameraMac', v)
+  const setModel = (v: string) => setField('model', v)
+  const setSerial = (v: string) => setField('serial', v)
+  const setHttpPort = (v: string) => setField('httpPort', v)
+  const setRtspPort = (v: string) => setField('rtspPort', v)
+  const setHttpInferred = (v: boolean) => setField('httpInferred', v)
+  const setRtspInferred = (v: boolean) => setField('rtspInferred', v)
   const [plan, setPlan] = useState<CameraNetworkPlan | null>(null)
   const [busy, setBusy] = useState<Busy>('load')
   const [notice, setNotice] = useState<Notice>(null)
 
   const fillConfiguration = useCallback((configuration: CameraConfiguration) => {
-    setDevice(configuration.interface)
-    setCameraIp(configuration.camera_ip)
-    setPrefixLength(String(configuration.camera_prefix_length))
-    setCameraMac(configuration.camera_mac || '')
-    setModel(configuration.model || '')
-    setSerial(configuration.serial || '')
-    setHttpPort(String(configuration.http_port))
-    setRtspPort(String(configuration.rtsp_port))
-    setHttpInferred(configuration.http_port_inferred)
-    setRtspInferred(configuration.rtsp_port_inferred)
+    formSync.accept(formOf(configuration))
     setPlan(configuration)
   }, [])
 
@@ -67,9 +66,8 @@ export default function CameraSettingsPage() {
       setSnapshot(value)
       setStatus(value.status)
       if (resetForm && value.configuration) fillConfiguration(value.configuration)
-      if (!device) setDevice(value.configuration?.interface || value.interfaces[0]?.device || '')
     } catch (error) {
-      setNotice({ type: 'err', text: errorText(error) })
+      setNotice({ type: 'err', text: `读取摄像头配置失败：${errorText(error)}` })
     } finally {
       setBusy(null)
     }
@@ -77,16 +75,12 @@ export default function CameraSettingsPage() {
 
   useEffect(() => { void load(true) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    if (!snapshot?.configuration) return
-    const timer = window.setInterval(async () => {
-      try {
-        const value = await fetchCameraStatus()
-        setStatus(value.status)
-      } catch { /* 页面上的手动刷新会显示详细错误，轮询静默失败 */ }
-    }, 8000)
-    return () => window.clearInterval(timer)
-  }, [snapshot?.configuration])
+  const syncError = useAutoSync(() => fetchCameraSettings(true), value => {
+    if (value.error) throw new Error(value.error)
+    setSnapshot(value); setStatus(value.status)
+    setNotice(current => current?.text.startsWith('读取摄像头配置失败：') ? null : current)
+    if (!formSync.dirty) setPlan(value.configuration)
+  }, { enabled: busy === null, immediate: false })
 
   const selectedInterface = useMemo(
     () => snapshot?.interfaces.find(item => item.device === device) || null,
@@ -153,6 +147,7 @@ export default function CameraSettingsPage() {
   }
 
   const apply = async () => {
+    if (formSync.conflict || syncError) return
     setNotice(null)
     let input: CameraConfigurationInput
     try { input = formValue() } catch (error) {
@@ -160,6 +155,10 @@ export default function CameraSettingsPage() {
     }
     setBusy('apply')
     try {
+      const latest = await fetchCameraSettings(false)
+      setSnapshot(latest)
+      const latestForm = latest.configuration ? formOf(latest.configuration) : { ...emptyForm, device: latest.interfaces[0]?.device || '' }
+      if (latest.error || !formSync.isCurrent(latestForm)) throw new Error(latest.error || '底层摄像头配置已变化，请重新同步后再保存')
       const checked = await planCameraConfiguration(input)
       setPlan(checked)
       const conflictText = checked.conflicts.length
@@ -255,24 +254,26 @@ export default function CameraSettingsPage() {
   return (
     <div className="camera-settings-page">
       <header className="camera-settings-header">
-        <div><h2>摄像头配置</h2><p>管理通过独立有线网口直连 RK3588 的海康网络摄像头。</p></div>
+        <div><h2>摄像头配置</h2></div>
         <button className="camera-ghost-btn" disabled={busy !== null} onClick={() => void load(false)}>
           {busy === 'load' ? '刷新中…' : '刷新网口'}
         </button>
       </header>
 
       {notice && <div className={`camera-notice ${notice.type}`}>{notice.text}</div>}
+      <ConfigSyncNotice error={syncError} conflict={formSync.conflict} onReload={() => { formSync.reset(); setPlan(snapshot?.configuration || null) }} />
       {snapshot?.error && <div className="camera-notice err">{snapshot.error}</div>}
 
       <section className="camera-card">
         <div className="camera-card-head">
-          <div><h3>1. 选择摄像头网口</h3><p>自动枚举物理有线网口，不依赖 eth1 等固定名称。</p></div>
+          <div><h3>1. 选择摄像头网口</h3></div>
         </div>
         {!snapshot ? <div className="camera-empty">正在读取物理网口…</div> :
           snapshot.interfaces.length === 0 ? <div className="camera-empty">没有检测到可用的物理有线网口。</div> :
           <div className="camera-interface-grid">
             {snapshot.interfaces.map(item =>
               <InterfaceCard key={item.device} item={item} active={device === item.device} onClick={() => {
+                if (busy !== null) return
                 setDevice(item.device); setCameras([]); clearPlan()
               }} />)}
           </div>}
@@ -280,7 +281,7 @@ export default function CameraSettingsPage() {
 
       <section className="camera-card">
         <div className="camera-card-head">
-          <div><h3>2. 搜索或填写摄像头</h3><p>SADP/ONVIF 搜索绑定到所选网口，冲突网段中的摄像头也能被发现。</p></div>
+          <div><h3>2. 搜索或填写摄像头</h3></div>
           <button className="camera-primary-btn" disabled={!device || busy !== null} onClick={search}>
             {busy === 'discover' ? '搜索中…' : '搜索摄像头'}
           </button>
@@ -293,7 +294,7 @@ export default function CameraSettingsPage() {
             <em>{camera.hikvision ? '海康' : camera.source.toUpperCase()}</em>
           </button>)}
         </div>}
-        <div className="camera-form-grid">
+        <fieldset className="camera-form-grid config-write-lock" disabled={busy !== null}>
           <label><span>摄像头 IPv4</span><input value={cameraIp} placeholder="手动填写或搜索选择"
             onChange={event => { setCameraIp(event.target.value); setCameraMac(''); setModel(''); setSerial(''); clearPlan() }} /></label>
           <label><span>摄像头子网前缀</span><input type="number" min={1} max={30} value={prefixLength}
@@ -306,12 +307,12 @@ export default function CameraSettingsPage() {
             {rtspInferred && <small>发现报文未明确提供，当前为推断值</small>}</label>
           <label><span>型号</span><input value={model} readOnly placeholder="搜索后显示" /></label>
           <label><span>摄像头 MAC</span><input value={cameraMac} readOnly placeholder="搜索后显示；手动 IP 可为空" /></label>
-        </div>
+        </fieldset>
       </section>
 
       <section className="camera-card">
         <div className="camera-card-head">
-          <div><h3>3. 隔离规划与应用</h3><p>本地 IP 自动从摄像头真实网段选择；不配置摄像头网关，不修改 RK3588 默认路由。</p></div>
+          <div><h3>3. 隔离规划与应用</h3><p>自动分配同网段地址，保留设备原有默认路由。</p></div>
         </div>
         {plan ? <div className="camera-plan">
           <div><span>摄像头网段</span><b>{plan.camera_network}</b></div>
@@ -326,7 +327,7 @@ export default function CameraSettingsPage() {
           {snapshot?.configuration && <button className="camera-ghost-btn danger" disabled={busy !== null} onClick={remove}>
             {busy === 'remove' ? '移除中…' : '移除配置'}
           </button>}
-          <button className="camera-primary-btn" disabled={busy !== null || !selectedInterface || !cameraIp.trim()} onClick={apply}>
+          <button className="camera-primary-btn" disabled={busy !== null || formSync.conflict || !!syncError || !selectedInterface || !cameraIp.trim()} onClick={apply}>
             {busy === 'apply' ? '检查并应用中…' : '应用配置'}
           </button>
         </div>
@@ -334,7 +335,7 @@ export default function CameraSettingsPage() {
 
       <section className="camera-card">
         <div className="camera-card-head">
-          <div><h3>摄像头状态</h3><p>逐层区分网线、二层/IP、Web 和视频服务问题。</p></div>
+          <div><h3>摄像头状态</h3></div>
           <div className="camera-head-actions">
             <button className="camera-ghost-btn" disabled={!snapshot?.configuration || busy !== null} onClick={refreshStatus}>
               {busy === 'status' ? '检测中…' : '刷新状态'}

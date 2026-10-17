@@ -5,6 +5,12 @@
 - 大模型：按任务加载 `skills/<skill-name>/SKILL.md`，再按其中路由读取必要参考页；
 - 二次开发者：从本页选择任务，再阅读同一套 Skill 与 `references/`。
 
+现场部署与故障恢复见[无人值守恢复说明](unattended-recovery.md)。
+有线/Wi-Fi 管理网络自愈见[网络失联自动恢复](network-recovery.md)。
+视觉程序退出和卡住恢复的网页设置见[程序故障恢复](application-recovery.md)。
+Web 配置与系统底层状态的自动同步范围及排查结果见[配置同步排查](web-config-sync-audit.md)。
+故障恢复协同修复及上传前复核见[故障恢复协同排查](recovery-conflict-audit.md)。
+
 不熟悉框架时，直接从仓库根目录运行交互式开发向导：
 
 ```bash
@@ -48,6 +54,7 @@ Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` �
 | 配置与热重载 | `engine/src/config/`、`src/runtime/app_ctrl.cpp` |
 | 事件与媒体 | `engine/include/events.h`、`engine/src/event/event_report.cpp`、`src/recorder/` |
 | 网络投递 | `services/framework/upload/` |
+| 独立设备守护、恢复策略与运行协调 | `services/framework/runtime_manager/python/rk3588_runtime/`、`services/framework/system_watchdog/` |
 | Web 行为 | `web_console/backend/`、`web_console/frontend/src/` |
 | 打包产物 | 根目录 `build.sh`、`tools/build/` 下的两个生成器 |
 

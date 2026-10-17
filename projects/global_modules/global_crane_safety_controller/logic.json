@@ -88,6 +88,17 @@
         "maximum": 1,
         "x-hot-reload": "preserve_state"
       },
+      "horn_min_alarm_sec": {
+        "type": "number",
+        "title": "喇叭最短报警持续时间",
+        "description": "喇叭IO成功切到报警电平后至少保持这些秒数，让语音播放完整；时间到且违规已解除才恢复非报警电平。0表示不额外保持。修改对下一次实际开启生效。手动消音、关闭喇叭测试（无自动告警时）、紧急关闭、禁用硬件输出和停止程序可立即关断。",
+        "default": 0.0,
+        "minimum": 0.0,
+        "maximum": 3600.0,
+        "x-unit": "秒",
+        "x-step": 0.1,
+        "x-hot-reload": "preserve_state"
+      },
       "lamp_pin": {
         "type": "string",
         "title": "投影灯继电器GPIO",

@@ -6,8 +6,10 @@
 | --- | --- | --- |
 | 页面与规则编辑 | `web_console/frontend/src/pages/DatasetPage.tsx`、`components/DatasetTaskEditor.tsx`、`components/DatasetRuleBuilder.tsx` | 页面管理列表与请求状态，任务表单按新建/查看/编辑显示；规则编辑器供任务表单使用 |
 | 前端接口 | `web_console/frontend/src/api/dataset.ts` | 采集请求、响应类型与下载；通过 `api/http.ts` 复用登录处理 |
+| 配置草稿 | `web_console/frontend/src/store/datasetStore.ts` | 所选程序、按程序分开的未提交表单和接收端下载类型；保存到当前标签页的 sessionStorage，退出登录时清除 |
 | HTTP 入口 | `web_console/backend/routers/dataset.py` | 请求校验、响应及免登录传输/退出通知接口的边界 |
 | 任务管理 | `web_console/backend/services/dataset_manager.py` | SQLite 配置与保存计数、任务同步、接收端在线状态及保存确认 |
+| 离线规则校验 | `web_console/backend/services/dataset_validation.py` | 根据已安装程序的模型类别和过滤配置校验规则，语法与引擎规则解析一致；不依赖运行中的视觉程序 |
 | 引擎通信 | `web_console/backend/services/dataset_engine.py` | Unix Socket 的 JSON/JPEG 传输、超时及长度限制；不依赖 FastAPI、数据库或业务模块 |
 | 下载打包 | `web_console/backend/services/receiver_package.py` | 通用 EXE 校验与 Python ZIP 构建；不访问任务数据库，不改变接收状态 |
 | 框架采集观察器 | `engine/src/control/remote_dataset.{h,cpp}` | 同帧检测结果筛选、后台 JPEG 编码、有界缓存、独立采集 Socket |
@@ -37,6 +39,8 @@ flowchart LR
 - 框架观察器通过 `dataset/rules.h` 引用通用规则。规则与远程采集测试均在引擎内构建，无需业务模块目录。
 - `DatasetManager` 可通过构造参数 `engine` 注入通信客户端。任务管理负责将通信错误转换为 HTTP 错误；Socket 层只处理传输协议。
 
+创建/编辑优先由在线引擎校验；仅通信不可用（503）时使用已保存的程序配置和离线规则校验，再提交 SQLite。引擎明确拒绝（409）仍原样返回。任务创建后默认暂停，后台维护在引擎启动后同步并由引擎根据实际运行配置重新校验；首次开始采集才设置时长截止时间。离线校验不增加每帧开销。规则语法变更需同时更新离线校验及回归测试。
+
 ## 稳定协议与修改位置
 
 电脑只需要设备 URL、保存目录和三个 HTTP 传输接口。轮询取得样本元信息，下载原始 JPEG，成功刷新文件并原子改名后提交确认。`proof` 是程序自动携带的逐图片保存确认信息，用户无需配置凭据。新增任务和修改规则不需要重新下载 EXE。
@@ -48,6 +52,8 @@ flowchart LR
 板端通信继续使用 `run.dataset.sock`，兼容旧路径 `run.control.sock.dataset`；每个请求是一行 JSON，响应为一行 JSON 加指定长度的 JPEG。通信读取保持 4 秒超时、128 KiB 响应头和 12 MiB JPEG 上限。任务、保存计数和确认记录保存在原有 SQLite 文件中，本次整理不迁移数据。
 
 离线删除不依赖引擎确认。管理层在同一个 SQLite 事务中删除任务/确认记录，并将待清理指令写入 `task_removals`。现有后台维护同时检查活跃任务和待清理记录，即使最后一个任务已删除也继续重试。连接恢复后只按已删除任务编号清理：通过现有 `configure` 暂停，再用 `ack` 释放未传 JPEG（保持累计数不变），最后 `remove`；未完成编码或再次断线时保留记录重试。新任务即使使用同一通道也不会被旧记录清除。在线删除仍遵守暂停和待传缓存限制，引擎明确拒绝的错误不会被当成离线成功。整个变更仅在后台管理与页面，不改变帧管线、引擎协议或接收器。
+
+`task_runtime` 保存任务开始时的进程标识（启动周期、PID 和内核启动时刻）及自动暂停原因。正常停止、重新启动和覆盖程序包的入口先持久化暂停；后台维护和状态查询还检查进程是否消失或被替换，在向新进程同步配置前将任务设为暂停。采集接口超时但进程标识未变时保留采集状态；只重启控制台也不会误停仍在运行的视觉程序。既有任务首次升级时，仍运行的进程会登记标识，已停止的程序对应任务则自动暂停。任务配置、revision、累计数、首次开始的结束时间和图片确认记录保持不变，重启视觉程序后必须手动开始。
 
 修改页面或后台管理时，不改电脑接收代码。修改规则语义时，调整通用规则、Web 条件编辑器及对应测试。只有改变电脑协议、接收器或启动器时，才需要评估旧 EXE 兼容性和重新构建；不要在业务模块里调用接收器、打包服务或后台数据库。
 

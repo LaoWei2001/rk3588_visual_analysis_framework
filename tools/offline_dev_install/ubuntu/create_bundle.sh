@@ -729,11 +729,52 @@ if [ -d "$FRONTEND_DIR/logos" ]; then
     cp -a "$FRONTEND_DIR/logos" "$CONSOLE_DEST/frontend/"
 fi
 
+# The device platform is an independent package; removing the Web console does
+# not remove or stop application supervision and hardware protection.
+PLATFORM_PACKAGE="vision-analysis-platform"
+PLATFORM_ROOT="$WORK_DIR/$PLATFORM_PACKAGE"
+APPS_ROOT=/opt/ai_apps python3 "$PROJECT_ROOT/services/framework/runtime_manager/install_runtime.py" --stage "$PLATFORM_ROOT"
+mkdir -p "$PLATFORM_ROOT/DEBIAN"
+cat > "$PLATFORM_ROOT/DEBIAN/control" <<EOF
+Package: $PLATFORM_PACKAGE
+Version: $DEB_VERSION
+Architecture: $DEB_ARCH
+Depends: python3, systemd
+Maintainer: Vision Analysis Project
+Description: Independent RK3588 device runtime and recovery platform
+EOF
+cat > "$PLATFORM_ROOT/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+if [ -d /run/systemd/system ]; then
+    /usr/bin/python3 /usr/lib/vision-analysis-platform/install_runtime.py --activate-only
+fi
+EOF
+cat > "$PLATFORM_ROOT/DEBIAN/prerm" <<'EOF'
+#!/bin/sh
+set -e
+if [ "${1:-}" = remove ] && [ -d /run/systemd/system ]; then
+    systemctl disable --now rk3588-runtime-manager.service rk3588-recovery.timer rk3588-network-recovery.service >/dev/null 2>&1 || true
+    systemctl stop rk3588-recovery.service >/dev/null 2>&1 || true
+fi
+EOF
+cat > "$PLATFORM_ROOT/DEBIAN/postrm" <<'EOF'
+#!/bin/sh
+set -e
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+fi
+EOF
+chmod 0755 "$PLATFORM_ROOT/DEBIAN/postinst" "$PLATFORM_ROOT/DEBIAN/prerm" "$PLATFORM_ROOT/DEBIAN/postrm"
+dpkg-deb --build --root-owner-group "$PLATFORM_ROOT" \
+    "$APT_DIR/${PLATFORM_PACKAGE}_${DEB_VERSION}_${DEB_ARCH}.deb" >/dev/null
+
 cat > "$CONSOLE_ROOT/lib/systemd/system/rk3588-console.service" <<'EOF'
 [Unit]
 Description=RK3588 Web Config Console
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -746,6 +787,9 @@ ExecStartPre=-/usr/bin/nm-online -q --timeout=30
 ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --log-level info
 Restart=always
 RestartSec=5
+WatchdogSec=60
+WatchdogSignal=SIGKILL
+NotifyAccess=main
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=rk3588-console
@@ -761,7 +805,7 @@ cat > "$CONSOLE_ROOT/DEBIAN/control" <<EOF
 Package: $CONSOLE_PACKAGE
 Version: $DEB_VERSION
 Architecture: $DEB_ARCH
-Depends: $RUNTIME_META (= $DEB_VERSION)
+Depends: $RUNTIME_META (= $DEB_VERSION), $PLATFORM_PACKAGE (= $DEB_VERSION)
 Maintainer: Vision Analysis Project
 Description: RK3588 vision analysis Web console
 EOF
@@ -877,7 +921,9 @@ if [ "$WANT_BUILD" = true ]; then
     tar -C "$SOURCE_TREE" -czf "$SOURCE_SHARE/source.tar.gz" .
     # node_modules 以单个归档随源码 deb 携带，避免制包暂存区复制数千个文件
     # 耗尽 inode；目标机 postinst 会自动还原为普通 node_modules 目录。
-    tar -C "$FRONTEND_WORK" -czf "$SOURCE_SHARE/frontend-node-modules.tar.gz" \
+    # Archive the real directory, not a link to this machine's dependency cache.
+    frontend_modules_parent="$(dirname "$(readlink -f "$FRONTEND_WORK/node_modules")")"
+    tar -C "$frontend_modules_parent" -czf "$SOURCE_SHARE/frontend-node-modules.tar.gz" \
         node_modules
     cat > "$SOURCE_SHARE/README.txt" <<EOF
 项目源码由 $SOURCE_PACKAGE $DEB_VERSION 安装。

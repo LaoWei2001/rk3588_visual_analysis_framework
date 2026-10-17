@@ -36,12 +36,18 @@ def test_running_process_survives_atomic_executable_upgrade(tmp_path, monkeypatc
 
     process = subprocess.Popen([str(binary), "10"], cwd=app_dir)
     try:
+        monkeypatch.setattr(pm, '_processes', {'demo': pm.ManagedProcess(
+            app_name='demo', pid=process.pid, started_at=0, proc=process)})
+        identity = pm.get_process_identity('demo')
+        assert identity is not None and str(process.pid) in identity
         replacement = app_dir / ".vision_analysis.next"
         shutil.copy2("/bin/true", replacement)
         os.replace(replacement, binary)
 
         assert os.readlink(f"/proc/{process.pid}/exe").endswith(" (deleted)")
         assert pm._pid_belongs_to_app("demo", process.pid) is True
+        assert pm.get_process_identity('demo') == identity
     finally:
         process.terminate()
         process.wait(timeout=2)
+    assert pm.get_process_identity('demo') is None

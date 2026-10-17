@@ -55,9 +55,16 @@ sudo ./install.sh online
 Web“上传程序”与根目录 `install_app.sh` 写入同一 App 根，但 Web 接受归档并做路径安全检查。Web 上传时
 会停止全部托管视觉 App，避免替换正在执行的文件。
 
+根安装器先安装独立平台，再部署 Web。离线包中 `vision-analysis-platform` 拥有运行库、设备
+守护及恢复 timer；`vision-analysis` 控制台包依赖平台包，移除控制台不会停止平台服务。
+
 ## 程序启动
 
-Web 通过 `systemd-run --pipe` 启动二进制，工作目录是 App 根，参数是所选 `assets/<config>.json`。
+平台共享库通过 `systemd-run` 启动二进制，工作目录是 App 根，参数是所选 `assets/<config>.json`。
+Web 是管理客户端；开机恢复和失败重试由独立的 `rk3588-runtime-manager.service` 执行。
+服务默认 `Restart=no`，不启用应用服务看门狗；可在“程序故障恢复”中按需开启退出/卡住恢复。
+开机自启仍按用户意图执行，日志从 journald 跟随。保存程序恢复设置不重启，立即应用需用户明确操作。
+保持单实例约束，详见[无人值守恢复](../../../unattended-recovery.md)。
 它设置：
 
 - `RK_LOGIC_CONTROL_SOCKET=<App>/run.control.sock`；
@@ -82,7 +89,7 @@ Web 服务页只管理：
 启动/重启服务前必须先启动视觉 App。Web 会在运行锁内确认当前 App、初始化 `.data/<App>`、重写
 systemd unit 并重启。App 切换后，正在运行或设置了自启意图的服务会重新绑定新 App。
 
-服务 unit 本身被 `systemctl disable`；开机恢复由 `rk3588-console` 根据持久化意图先恢复视觉 App，
+服务 unit 本身被 `systemctl disable`；开机恢复由 `rk3588-runtime-manager` 根据持久化意图先恢复视觉 App，
 再恢复服务，避免 unit 脱离上下文启动到旧目录。
 
 常用只读命令：

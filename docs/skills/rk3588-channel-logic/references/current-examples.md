@@ -23,6 +23,12 @@
 | `logic_crane_intrusion`、`logic_crane_helmet` | 发布入侵与安全帽状态 | 行车全局控制器输入，涉及业务 ROI/状态机 |
 | `logic_relay` | Action 切换继电器 | 有真实 GPIO 副作用 |
 
+`logic_crane_helmet` 的默认 `missing_helmet` 模式采用裸头证据优先：匹配裸头的人员不受大小限制；
+没有匹配裸头或安全帽时，人员框宽度达到 `person_min_width` 且高度达到 `person_min_height`
+才参与违规确认。两个阈值默认均为固定640×640业务坐标下的40像素，不使用面积阈值，也不按原始
+视频或模型输入分辨率换算。任一边不足均过滤，等于阈值有效，0仅关闭对应方向的过滤。
+`bare_head` 模式只使用裸头证据。两者保留 ROI、确认/解除时间以及全局静止场景互锁。
+
 当前没有注册 `logic_path_sop`、`logic_periodic_snapshot_demo` 或 `logic_upload_teach`，Web 也不会为这些
 历史模块生成配置。文档不得把历史模块写成现成功能。
 

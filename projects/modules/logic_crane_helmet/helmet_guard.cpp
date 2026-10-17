@@ -49,7 +49,14 @@ HelmetResult HelmetGuard::update(std::vector<AlgoResult> &results, const RoiZone
                                  uint64_t now_ms, const HelmetConfig &config)
 {
     HelmetResult out;
-    if (mode_ != config.alarm_mode) { latch_.reset(); mode_ = config.alarm_mode; }
+    if (mode_ != config.alarm_mode || person_min_width_ != config.person_min_width ||
+        person_min_height_ != config.person_min_height)
+    {
+        latch_.reset();
+        mode_ = config.alarm_mode;
+        person_min_width_ = config.person_min_width;
+        person_min_height_ = config.person_min_height;
+    }
     out.roi_available = zone && zone->polygon.size() >= 3;
     if (!config.enabled || !out.roi_available)
     {
@@ -75,9 +82,7 @@ HelmetResult HelmetGuard::update(std::vector<AlgoResult> &results, const RoiZone
             persons.push_back(&result);
         else if (result_matches(result, config.helmet_labels, config.helmet_min_score))
             helmets.push_back(&result);
-        else if (config.alarm_mode == HelmetConfig::BareHead &&
-                 result_matches(result, config.bare_head_labels, config.bare_head_min_score) &&
-                 result.box.width > 0 && result.box.height > 0)
+        else if (result_matches(result, config.bare_head_labels, config.bare_head_min_score))
             bare_heads.push_back(&result);
     }
 
@@ -97,7 +102,8 @@ HelmetResult HelmetGuard::update(std::vector<AlgoResult> &results, const RoiZone
                 for (int gx = cells.x0; gx <= cells.x1; ++gx)
                     for (int index : grid[static_cast<size_t>(gy) * cols + gx])
                     {
-                        if (helmeted[index] || (persons[index]->box & helmet->box).area() == 0)
+                        if (helmeted[index] || persons[index]->frame_id != helmet->frame_id ||
+                            (persons[index]->box & helmet->box).area() == 0)
                             continue;
                         helmeted[index] = 1;
                     }
@@ -131,7 +137,16 @@ HelmetResult HelmetGuard::update(std::vector<AlgoResult> &results, const RoiZone
     for (size_t index = 0; index < persons.size(); ++index)
     {
         AlgoResult *person = persons[index];
-        const bool violation = config.alarm_mode == HelmetConfig::BareHead ? unhelmeted[index] != 0 : helmeted[index] == 0;
+        out.max_person_width = std::max(out.max_person_width, person->box.width);
+        out.max_person_height = std::max(out.max_person_height, person->box.height);
+        // 先逐人匹配，再按证据选择分支。不能预先丢弃小人员框，否则裸头也会被漏掉。
+        const bool small_without_evidence = !unhelmeted[index] && !helmeted[index] &&
+            config.alarm_mode == HelmetConfig::MissingHelmet &&
+            (person->box.width < config.person_min_width || person->box.height < config.person_min_height);
+        const bool violation = unhelmeted[index] ||
+            (config.alarm_mode == HelmetConfig::MissingHelmet && !helmeted[index] && !small_without_evidence);
+        if (small_without_evidence)
+            ++out.small_person_count;
         if (violation)
         {
             person->box_color = cv::Scalar(0, 0, 255);

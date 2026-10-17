@@ -378,3 +378,41 @@
   background: var(--surface2);
   color: var(--text2);
 }
+
+/* 业务 ROI：原图绘制与固定业务画布共享同一组顶点。 */
+.business-roi-dialog { max-height: none; flex-shrink: 0; }
+.business-roi-mapping-help { padding: 8px 12px; color: var(--text2); font-size: 12px; line-height: 1.6; border-bottom: 1px solid var(--border); }
+.business-roi-dialog .roi-body { display: grid; grid-template-columns: minmax(0, 1fr) 250px; overflow: clip; }
+.business-roi-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.business-roi-views { display: flex; flex: 0 0 auto; min-width: 0; padding-left: 12px; box-sizing: border-box; }
+.business-roi-main { min-width: 0; min-height: 0; flex: 1; align-self: flex-start; display: flex; flex-direction: column; }
+.business-roi-view-title { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; color: #a5f3fc; font-size: 12px; margin-bottom: 8px; }
+.business-roi-main > .business-roi-view-title { padding: 10px 12px 0; }
+.business-roi-main-scroll { flex: 0 0 auto; overflow: clip; }
+.business-roi-dialog .roi-sidebar { box-sizing: border-box; overflow: visible; }
+.business-roi-preview { flex-shrink: 0; }
+.business-roi-preview canvas { width: 100%; height: auto; display: block; border: 1px solid #334155; box-sizing: border-box; }
+.business-roi-preview p { font-size: 11px; color: var(--text2); line-height: 1.5; margin: 6px 0; }
+.business-roi-regions { display: flex; flex-direction: column; min-width: 0; padding: 10px; border-left: 1px solid var(--border); background: var(--surface); }
+.business-roi-regions .roi-sidebar-title { margin-bottom: 6px; }
+.business-roi-regions .roi-sidebar-list { flex: 0 0 auto; gap: 4px; }
+.business-roi-regions .roi-zone-item { padding: 1px 4px; }
+.business-roi-regions .roi-zone-input { font-size: 11px; line-height: 14px; padding: 2px 4px; }
+.business-roi-regions .roi-add-btn { flex-shrink: 0; margin-top: 8px; }
+.business-roi-dialog .roi-sidebar-list { min-height: 0; overflow: visible; }
+.business-roi-tools { display: flex; flex-direction: column; flex: 0 0 auto; gap: 6px; min-width: 0; padding-top: 8px; border-top: 1px solid var(--border); }
+.business-roi-tools .roi-edit-tip { margin: 0; }
+.business-roi-tools .roi-draw-hint { padding: 6px; line-height: 1.5; }
+.roi-draft-status { font-weight: 600; margin-bottom: 4px; }
+.business-roi-tools .roi-name-error { padding: 4px 6px; }
+.business-roi-tight .roi-sidebar-list { gap: 3px; }
+.business-roi-tight .roi-zone-item { padding-top: 0; padding-bottom: 0; }
+.business-roi-compact .roi-body { display: flex; flex-direction: column; }
+.business-roi-compact .business-roi-content { display: contents; }
+.business-roi-compact .business-roi-regions { order: 1; padding: 8px 12px; border-left: 0; border-top: 1px solid var(--border); }
+.business-roi-compact .roi-sidebar-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+.business-roi-compact .roi-zone-item { padding: 3px 4px; }
+.business-roi-compact .business-roi-view-title { font-size: 10px; }
+.business-roi-compact .business-roi-view-title b { display: none; }
+.business-roi-compact .business-roi-tools { padding: 8px 0 0; }
+.business-roi-compact .roi-hdr, .business-roi-compact .roi-hdr-actions { flex-wrap: wrap; gap: 8px; }

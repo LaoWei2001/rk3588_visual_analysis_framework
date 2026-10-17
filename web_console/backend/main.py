@@ -13,10 +13,10 @@ from fastapi.staticfiles import StaticFiles
 
 from routers import (apps, assets, auth, camera_settings, logic_control, file_playback, config_io, logs, network_settings,
                      ota_config, process, records, services, snapshot, storage_settings, stream,
-                     system_settings, terminal, delivery_config, video_capture, dataset)
+                     system_settings, terminal, delivery_config, video_capture, dataset, recovery)
 from services.auth_service import get_session
 from services import process_manager as process_manager
-from services import runtime_state
+from services import service_watchdog
 from services import network_manager
 from services import camera_manager
 from services.camera_web_proxy import camera_web_proxy
@@ -45,6 +45,8 @@ _PUBLIC_LOGIC_ACTION = re.compile(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    ready = asyncio.Event()
+    watchdog_task = asyncio.create_task(service_watchdog.heartbeat(ready))
     # 网络事务由独立 systemd 定时器保护。控制台异常重启时先确认保护仍存在，
     # 若原切换工作中途退出则立即恢复原连接并清理临时配置。
     try:
@@ -56,42 +58,17 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(camera_manager.restore_persisted_configuration)
     except Exception as exc:
         print(f"[CameraNetwork] 持久化配置恢复失败：{exc}")
-    process_manager.recover_processes()
-
-    def restore_runtime() -> None:
-        target = runtime_state.get_vision_boot_target()
-        if target is None:
-            print("[Autostart] 没有满足条件的视觉程序，跳过运行组合恢复")
-            return
-        try:
-            current = process_manager.get_running_app_context()
-            if current is not None and current["app"] != target["app"]:
-                print(
-                    f"[Autostart] 已有视觉程序 {current['app']} 运行，"
-                    f"跳过目标 {target['app']}"
-                )
-                return
-            if current is None:
-                process_manager.start_app(target["app"], target["config"])
-                print(
-                    f"[Autostart] 已恢复视觉程序 {target['app']} "
-                    f"({target['config']})"
-                )
-            result = services.sync_services_for_running_app()
-            for message in result["errors"]:
-                print(f"[Autostart] 后台服务恢复失败：{message}")
-            if result["updated"]:
-                print(f"[Autostart] 已恢复/重新绑定后台服务：{', '.join(result['updated'])}")
-        except Exception as exc:
-            print(f"[Autostart] 运行组合恢复失败：{exc}")
-
-    # systemctl/Popen 都是阻塞调用，放入工作线程，避免卡住事件循环。
-    await asyncio.to_thread(restore_runtime)
+    # Only reattach log followers. Boot restoration belongs to the system runtime manager.
+    await asyncio.to_thread(process_manager.recover_processes)
+    ready.set()
     storage_task = asyncio.create_task(storage_settings.maintenance_loop())
     dataset_task = asyncio.create_task(dataset_manager.maintenance())
     try:
         yield
     finally:
+        watchdog_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await watchdog_task
         # 摄像头 Web 代理仅按需启动；退出时关闭监听和所有透明转发连接。
         await asyncio.to_thread(camera_web_proxy.stop)
         # 独立素材采集器不依赖浏览器连接，但控制台正常退出时必须发送 EOS，
@@ -156,7 +133,10 @@ async def auth_middleware(request: Request, call_next):
         )
 
     request.state.session = session
-    return await call_next(request)
+    response = await call_next(request)
+    if request.method == "GET" and response.headers.get("content-type", "").startswith("application/json"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # ── API & WebSocket routes ─────────────────────────────────────────────────
@@ -177,6 +157,7 @@ app.include_router(storage_settings.router, prefix="/api")
 app.include_router(network_settings.router, prefix="/api")
 app.include_router(camera_settings.router, prefix="/api")
 app.include_router(system_settings.router, prefix="/api")
+app.include_router(recovery.router, prefix="/api")
 app.include_router(video_capture.router, prefix="/api")
 app.include_router(dataset.router, prefix="/api")
 app.include_router(logs.router)      # WebSocket has its own /ws prefix

@@ -1,5 +1,5 @@
 #!/bin/sh
-# 为源码更新复用本机前端依赖。只读取本地目录，不安装或下载 npm 包。
+# 为源码更新复用本机前端依赖；缺少目录时从 npm 本地缓存恢复，不联网下载。
 set -eu
 
 project_dir=${1:?用法：sh restore_frontend_dependencies.sh 新版源码目录}
@@ -30,21 +30,31 @@ if ! dependencies_match "$cache_dir"; then
             break
         fi
     done
-    if [ -z "$donor_dir" ]; then
-        echo "[错误] 未找到与新版 package-lock.json 匹配的本地前端依赖。" >&2
-        echo "       已检查当前源码、$source_parent 下各版本源码及缓存 $cache_root。" >&2
-        echo "       请保留首次完整离线安装生成的源码目录；若依赖已删除，需从配套完整离线包恢复。" >&2
-        exit 1
-    fi
-
     # 缓存使用独立副本，旧源码目录被清理后依赖仍可继续使用。
     mkdir -p "$cache_root"
     stage=$(mktemp -d "$cache_root/.restore.XXXXXX")
     trap 'rm -rf -- "$stage"' EXIT HUP INT TERM
-    mkdir "$stage/node_modules"
-    donor_modules=$(readlink -f "$donor_dir/node_modules")
-    cp -a "$donor_modules/." "$stage/node_modules/"
     cp "$lock_file" "$stage/package-lock.json"
+    if [ -n "$donor_dir" ]; then
+        mkdir "$stage/node_modules"
+        donor_modules=$(readlink -f "$donor_dir/node_modules")
+        cp -a "$donor_modules/." "$stage/node_modules/"
+    else
+        if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+            echo "[错误] 未找到匹配的前端依赖，且缺少 Node.js/npm，无法从本地缓存恢复。" >&2
+            exit 1
+        fi
+        [ -f "$frontend_dir/package.json" ] \
+            || { echo "[错误] 缺少前端 package.json。" >&2; exit 1; }
+        cp "$frontend_dir/package.json" "$stage/package.json"
+        echo "[准备] 没有匹配的 node_modules，尝试从 npm 本地缓存离线恢复..."
+        if ! (cd "$stage" && npm_config_offline=true npm ci --offline --no-audit --no-fund); then
+            echo "[错误] 本地 npm 缓存不足，无法恢复当前 package-lock.json 的前端依赖。" >&2
+            echo "       未联网下载。请从配套完整离线包恢复，或联网时执行 ./install.sh online 准备依赖。" >&2
+            exit 1
+        fi
+        donor_dir='npm 本地缓存（未联网）'
+    fi
     dependencies_match "$stage" \
         || { echo "[错误] 本地前端依赖复制不完整。" >&2; exit 1; }
     if [ -e "$cache_dir" ] || [ -L "$cache_dir" ]; then

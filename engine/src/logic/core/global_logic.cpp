@@ -14,6 +14,7 @@
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
 #include "runtime/publication_signal.h"
+#include "runtime/service_watchdog.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -270,6 +271,7 @@ void *global_logic_thread_func(void *arg)
     int poll_ms = std::max(10, t->config.poll_interval_ms);
     const int64_t input_timeout_ms = automatic_input_timeout_ms(poll_ms);
 
+    service_watchdog::Progress watchdog_progress("global logic");
     while (t->running.load())
     {
         pause_ctrl::wait_if_paused(&t->running);
@@ -278,6 +280,7 @@ void *global_logic_thread_func(void *arg)
 
         /* 先记住发布序号。取快照或执行 Logic 期间若又有新帧发布，下面的等待会
          * 立即返回，确保该更新不会因为错过条件变量通知而延迟到下一轮兜底周期。 */
+        watchdog_progress.begin();
         const uint64_t observed_publication = publication_signal_sequence();
         const uint64_t tick_begin_ms = steady_now_ms();
         const uint64_t tick_unix_ms = system_now_ms();
@@ -366,6 +369,7 @@ void *global_logic_thread_func(void *arg)
         t->ready_inputs.clear();
         t->channel_snapshots.clear();
         VisionContextAccess::overlays(t->gctx).clear();
+        watchdog_progress.end();
 
         if (t->stop_requested.load())
             break;

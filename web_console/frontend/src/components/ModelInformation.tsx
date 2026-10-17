@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { apiErrorMessage, fetchModelInfo, fetchModelRuntime, type ModelInfo, type ModelRuntime } from '../api/client'
+import { useAutoSync } from '../hooks/useAutoSync'
 
 interface Props {
   app: string | null
@@ -29,6 +30,9 @@ export default function ModelInformation({ app, path, modelType, modelId, channe
     }
     return () => { cancelled = true }
   }, [app, path, modelType, assetsRevision])
+  const metadataError = useAutoSync(() => fetchModelInfo(app!, path, modelType), value => { setInfo(value); setProbeError('') }, {
+    enabled: !!app && !!path, scope: `${app}/${path}/${modelType}`, immediate: false,
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -45,7 +49,7 @@ export default function ModelInformation({ app, path, modelType, modelId, channe
           if (!cancelled) { setRuntime(null); setRuntimeError(apiErrorMessage(error)) }
         }
       }
-      if (!cancelled) timer = setTimeout(poll, 2000)
+      if (!cancelled) timer = setTimeout(poll, 1000)
     }
     void poll()
     return () => { cancelled = true; clearTimeout(timer) }
@@ -57,7 +61,7 @@ export default function ModelInformation({ app, path, modelType, modelId, channe
     && active.model_type === modelType
   const fileReplaced = samePathAndType && info?.file_version && info.file_version !== active.file_version
   const sameSelection = samePathAndType && !fileReplaced
-  const error = probeError || (info?.ok === false ? info.error : '')
+  const error = probeError || metadataError || (info?.ok === false ? info.error : '')
 
   return <div className="model-information" aria-live="polite">
     <div><strong>业务坐标：</strong>640 × 640，中心 (320, 320)</div>

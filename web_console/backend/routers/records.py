@@ -206,6 +206,7 @@ async def list_records(
     limit: int = 500,
     start_unix_ms: Optional[int] = None,
     end_unix_ms: Optional[int] = None,
+    event_type: Optional[str] = None,
 ):
     if start_unix_ms is not None and start_unix_ms < 0:
         raise HTTPException(400, "开始时间无效")
@@ -217,10 +218,11 @@ async def list_records(
     store = _store_dir(name)
     if not store.exists():
         return {
-            "records": [], "count": 0, "filtered_count": 0,
+            "records": [], "count": 0, "filtered_count": 0, "event_types": [],
             "total_bytes": 0, "cap_bytes": CAP_BYTES,
         }
     records = []
+    event_types = set()
     record_count = 0
     total = 0
     try:
@@ -238,6 +240,11 @@ async def list_records(
         record_count += 1
         total += size
         event, source, media = meta["event"], meta["source"], meta["media"]
+        current_type = event.get("type", "")
+        if isinstance(current_type, str) and current_type:
+            event_types.add(current_type)
+        if event_type and current_type != event_type:
+            continue
         trigger_unix_ms = event.get("trigger_unix_ms")
         if not isinstance(trigger_unix_ms, (int, float)) or trigger_unix_ms <= 0:
             created_unix_sec = event.get("created_unix_sec", 0)
@@ -273,6 +280,7 @@ async def list_records(
         "records": records[:max(0, limit)],
         "count": record_count,
         "filtered_count": len(records),
+        "event_types": sorted(event_types),
         "total_bytes": total,
         "cap_bytes": CAP_BYTES,
     }

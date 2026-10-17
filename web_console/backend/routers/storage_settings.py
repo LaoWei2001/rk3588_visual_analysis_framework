@@ -22,8 +22,10 @@ class RootCleanupRequest(BaseModel):
 
 
 @router.get("/system/storage")
-async def get_storage_settings():
-    return await asyncio.to_thread(storage_manager.storage_snapshot)
+async def get_storage_settings(details: bool = True):
+    if details:
+        return await asyncio.to_thread(storage_manager.storage_snapshot)
+    return await asyncio.to_thread(storage_manager.storage_snapshot, include_details=False)
 
 
 @router.put("/system/storage")

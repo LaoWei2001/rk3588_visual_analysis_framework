@@ -270,6 +270,15 @@ target_include_directories(vision_analysis PRIVATE ${custom_inc} ${api_inc})
 target_link_libraries(vision_analysis ${custom_libs} ${sysLib_list})
 
 option(BUILD_SDK_TESTS "Validate public SDK without engine include paths" OFF)
+option(BUILD_RECOVERY_TESTS "Build service watchdog regression tests" OFF)
+if(BUILD_RECOVERY_TESTS)
+    enable_testing()
+    add_executable(service_watchdog_tests tests/runtime/test_service_watchdog.cpp src/runtime/service_watchdog.cpp)
+    target_include_directories(service_watchdog_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(service_watchdog_tests PRIVATE Threads::Threads)
+    target_compile_options(service_watchdog_tests PRIVATE -UNDEBUG)
+    add_test(NAME service_watchdog_regression COMMAND service_watchdog_tests)
+endif()
 if(BUILD_SDK_TESTS)
     enable_testing()
     set(sdk_test_args
@@ -463,6 +472,34 @@ if(BUILD_DATASET_TESTS)
     set_tests_properties(remote_dataset_regression PROPERTIES TIMEOUT 20)
 endif()
 
+option(BUILD_CRANE_SAFETY_TESTS "Build crane horn GPIO timing regression tests" OFF)
+if(BUILD_CRANE_SAFETY_TESTS)
+    enable_testing()
+    add_executable(crane_safety_tests
+        tests/crane/test_safety_controller.cpp
+        ${VISION_PROJECTS_ROOT}/global_modules/global_crane_safety_controller/safety_controller.cpp
+    )
+    target_include_directories(crane_safety_tests PRIVATE "${PROJECT_SOURCE_DIR}/include"
+        ${VISION_PROJECTS_ROOT}/global_modules/global_crane_safety_controller)
+    target_compile_options(crane_safety_tests PRIVATE -UNDEBUG)
+    add_test(NAME crane_safety_regression COMMAND crane_safety_tests)
+endif()
+
+option(BUILD_CRANE_HOOK_TESTS "Build hook clipping, calibration and alarm regression tests" OFF)
+if(BUILD_CRANE_HOOK_TESTS)
+    enable_testing()
+    add_executable(crane_hook_tests
+        tests/crane/test_hook_geometry.cpp
+        ${VISION_PROJECTS_ROOT}/modules/logic_crane_hook/hook_geometry.cpp
+        ${VISION_PROJECTS_ROOT}/modules/logic_crane_hook/hook_guard.cpp
+    )
+    target_include_directories(crane_hook_tests PRIVATE ${custom_inc}
+        ${VISION_PROJECTS_ROOT}/modules/logic_crane_hook)
+    target_link_libraries(crane_hook_tests PRIVATE ${OpenCV_LIBS})
+    target_compile_options(crane_hook_tests PRIVATE -UNDEBUG)
+    add_test(NAME crane_hook_regression COMMAND crane_hook_tests)
+endif()
+
 option(BUILD_HELMET_TESTS "Build helmet evidence and alarm mode regression tests" OFF)
 if(BUILD_HELMET_TESTS)
     enable_testing()
@@ -492,6 +529,7 @@ if(BUILD_PERFORMANCE_TESTS)
         src/display/display.cpp
         src/display/text_overlay.cpp
         src/runtime/pause_ctrl.cpp
+        src/runtime/service_watchdog.cpp
     )
     target_include_directories(display_metrics_tests PRIVATE ${custom_inc} ${api_inc})
     target_compile_options(display_metrics_tests PRIVATE -UNDEBUG -ffunction-sections -fdata-sections)
@@ -508,6 +546,7 @@ if(BUILD_PERFORMANCE_BENCHMARKS)
         src/display/display.cpp
         src/display/text_overlay.cpp
         src/runtime/pause_ctrl.cpp
+        src/runtime/service_watchdog.cpp
         src/pipeline/frame_transform.cpp
         src/pipeline/image_convert.cpp
     )

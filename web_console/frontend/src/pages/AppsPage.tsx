@@ -1,6 +1,8 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
+import { useAutoSync } from '../hooks/useAutoSync'
+import ConfigSyncNotice from '../components/ConfigSyncNotice'
 import { fetchApps, fetchLogTail, startApp, stopApp, setAppAutostart, uploadApp, deleteApp, AppInfo } from '../api/client'
 import { loadLastConfig } from '../utils/lastConfig'
 import './AppsPage.css'
@@ -47,9 +49,7 @@ export default function AppsPage() {
   // Keep busyRef in sync with busy state
   useEffect(() => { busyRef.current = busy }, [busy])
 
-  const load = async () => {
-    try {
-      const data = await fetchApps()
+  const applyApps = (data: AppInfo[]) => {
 
       // Detect unexpected process exits (skip on very first load)
       if (!isFirstLoadRef.current) {
@@ -74,16 +74,16 @@ export default function AppsPage() {
       )
 
       setApps(data)
-    } finally {
       setLoading(false)
-    }
   }
-
-  useEffect(() => {
-    load()
-    const interval = setInterval(load, 5000)
-    return () => clearInterval(interval)
-  }, []) // eslint-disable-line
+  const load = async () => {
+    try { applyApps(await fetchApps()) }
+    catch (error) { showToast(`读取程序状态失败：${errMsg(error)}`, 'err') }
+    finally { setLoading(false) }
+  }
+  const syncError = useAutoSync(fetchApps, applyApps, {
+    enabled: !uploading && !Object.values(busy).some(Boolean) && !Object.values(autostartBusy).some(Boolean),
+  })
 
   const dismissToast = () => {
     if (toastTimer.current) { clearTimeout(toastTimer.current); toastTimer.current = null }
@@ -270,7 +270,8 @@ export default function AppsPage() {
         </div>
       )}
 
-      {loading ? (
+      <ConfigSyncNotice error={syncError} />
+      {loading && !syncError ? (
         <div className="loading">正在加载……</div>
       ) : apps.length === 0 ? (
         <div className="empty">程序目录中暂无可用程序。</div>
@@ -292,15 +293,16 @@ export default function AppsPage() {
               <div className="card-top">
                 <div className="app-name">{app.name}</div>
                 <span className={`status-badge ${app.status}`}>
-                  {app.status === 'running' ? '运行中' : '已停止'}
+                  {app.recovery_state === 'restarting' ? '自动恢复中' : app.status === 'running' ? '运行中' : '已停止'}
                 </span>
               </div>
 
               <div className="card-meta">
                 {app.status === 'running' && (
                   <>
-                    <span>PID: {app.pid}</span>
+                    {app.pid != null && <span>PID: {app.pid}</span>}
                     <span>运行时间：{fmtUptime(app.uptime_seconds)}</span>
+                    {!!app.restart_count && <span>本次服务已自动重启 {app.restart_count} 次</span>}
                     {app.config && <span>配置：{app.config}</span>}
                   </>
                 )}

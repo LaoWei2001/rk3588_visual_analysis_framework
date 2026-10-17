@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { configSignature, useAutoSync } from '../hooks/useAutoSync'
+import ConfigSyncNotice from './ConfigSyncNotice'
 import type { Node } from '@xyflow/react'
 import {
   apiErrorMessage, fetchAppLogics, fetchRecords, fetchReportContracts, previewDelivery,
@@ -91,6 +93,13 @@ export default function ReportForm({
   }, [appName])
 
   useEffect(() => { loadCatalog() }, [loadCatalog])
+  const syncError = useAutoSync(() => Promise.all([fetchReportContracts(appName), fetchAppLogics(appName)]),
+    ([availableContracts, logics]) => {
+      if (logics.error) throw new Error(logics.error)
+      setContracts(current => configSignature(current) === configSignature(availableContracts) ? current : availableContracts)
+      const definitions = [...logics.channel_logics, ...logics.global_logics]
+      setLogicDefs(current => configSignature(current) === configSignature(definitions) ? current : definitions)
+    }, { enabled: !!appName && !busy, scope: appName, immediate: false })
 
   const refreshEvents = useCallback(() => {
     if (!appName) return
@@ -262,6 +271,7 @@ export default function ReportForm({
   }
 
   return <div className="ncp-form">
+    <ConfigSyncNotice error={syncError} />
     <label className="node-toggle ncp-top-toggle">
       <input type="checkbox" checked={reportEnabled}
         onChange={event => patchDelivery({ enabled: event.target.checked })} />

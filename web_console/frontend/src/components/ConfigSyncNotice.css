@@ -1,0 +1,4 @@
+.config-sync-notice { margin: 10px 0; padding: 10px 12px; border: 1px solid #a58032; border-radius: 7px; color: #fde68a; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.config-sync-notice > span { display: block; }
+.config-sync-notice button { margin-left: 10px; padding: 4px 8px; border: 1px solid currentColor; border-radius: 5px; color: inherit; background: transparent; cursor: pointer; }
+.config-write-lock { min-width: 0; margin: 0; padding: 0; border: 0; }

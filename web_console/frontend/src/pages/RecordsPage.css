@@ -75,6 +75,31 @@
   gap: 8px;
 }
 
+.records-type-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.records-type-filter select {
+  min-width: 0;
+  max-width: 300px;
+  padding: 5px 8px;
+  color: #e5e7eb;
+  color-scheme: dark;
+  background: #111827;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.records-type-filter select:focus {
+  outline: 2px solid rgba(96, 165, 250, .45);
+  border-color: #60a5fa;
+}
+
 .records-time-filter {
   min-width: 0;
   display: flex;

@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
-import { api } from './http'
+import { api, sharedRead } from './http'
 export { apiErrorMessage } from './http'
 
 // ── Auth ──────────────────────────────────────────────────────────────────
@@ -27,6 +27,8 @@ export interface AppInfo {
   status: 'running' | 'stopped' | 'unknown'
   pid: number | null
   uptime_seconds: number | null
+  recovery_state?: 'running' | 'restarting'
+  restart_count?: number
   config?: string | null        // 运行中时实际加载的配置文件名
 }
 
@@ -217,7 +219,7 @@ export interface AppLogics {
 }
 
 export const fetchAppLogics = (name: string) =>
-  api.get<AppLogics>(`/apps/${name}/logics`).then(r => r.data)
+  sharedRead(`logics:${name}`, () => api.get<AppLogics>(`/apps/${name}/logics`).then(r => r.data))
 
 export interface LogicActionDef {
   id: string
@@ -358,9 +360,9 @@ export const saveConnections = (name: string, cfg: DeliveryConnectionsConfig) =>
 export const fetchDeliveryAdapters = (name: string) =>
   api.get<{ adapters: DeliveryAdapterDef[] }>(`/apps/${name}/delivery-adapters`).then(r => r.data.adapters)
 export const fetchReportContracts = (name: string) =>
-  api.get<{ contracts: ReportContract[] }>(`/apps/${name}/report-contracts`, {
+  sharedRead(`contracts:${name}`, () => api.get<{ contracts: ReportContract[] }>(`/apps/${name}/report-contracts`, {
     params: { refresh: Date.now() },
-  }).then(r => r.data.contracts)
+  }).then(r => r.data.contracts))
 export const saveReportContract = (name: string, contract: ReportContract) =>
   api.put<{ ok: boolean; contract: ReportContract }>(
     `/apps/${name}/report-contracts/${encodeURIComponent(contract.id)}`,
@@ -388,6 +390,7 @@ export const streamUrl = (name: string): string =>
 // ── 设备系统设置 ────────────────────────────────────────────────────────────
 export interface DailyRebootSettings {
   enabled: boolean
+  configured_enabled?: boolean
   time: string
   installed: boolean
   active: boolean
@@ -397,6 +400,10 @@ export interface DailyRebootSettings {
   current_time: string
   current_time_epoch_ms: number
   utc_offset_minutes: number
+  ntp_enabled?: boolean | null
+  ntp_synchronized?: boolean | null
+  can_ntp?: boolean | null
+  time_error?: string | null
   error: string | null
 }
 
@@ -411,6 +418,189 @@ export const fetchSystemTimezones = () =>
 
 export const saveSystemTimezone = (timezone: string) =>
   api.put<DailyRebootSettings & { ok: boolean }>('/system/timezone', { timezone }).then(r => r.data)
+
+export const saveSystemTime = (value: { timezone: string; local_time?: string; epoch_ms?: number; disable_ntp: boolean }) =>
+  api.put<DailyRebootSettings & { ok: boolean }>('/system/time', value).then(r => r.data)
+
+export interface RecoveryPolicy {
+  manager_enabled: boolean
+  app_restart_enabled: boolean
+  app_stall_enabled: boolean
+  restart_delay_sec: number
+  task_timeout_sec: number
+  startup_timeout_sec: number
+  kernel_reboot_enabled: boolean
+  kernel_hang_sec: number
+  reboot_cooldown_sec: number
+  max_reboots_per_day: number
+}
+export interface SystemRecoveryPolicy {
+  hardware_enabled: boolean
+  panic_enabled: boolean
+  watchdog_timeout_sec: number
+  reboot_timeout_sec: number
+  panic_timeout_sec: number
+}
+export interface SystemRecoverySettings {
+  configured?: boolean
+  policy: SystemRecoveryPolicy | null; revision: string | null; error: string | null
+  can_enable_hardware: boolean; can_set_panic: boolean; hardware_unavailable_reason: string | null
+  hardware_pending: boolean; hardware_apply_error: string | null; panic_in_sync: boolean
+}
+export interface RecoveryStatus {
+  history?: RecoveryHistorySnapshot
+  system?: SystemRecoverySettings
+  policy: RecoveryPolicy
+  revision: string
+  policy_error: string | null
+  agent: { installed: boolean; active: boolean; enabled: boolean; state: string; heartbeat_fresh: boolean; error: string | null }
+  monitor: { installed: boolean; active: boolean; error: string | null }
+  hardware: {
+    enabled: boolean; device?: string | null; driver?: string | null
+    state?: string; label?: string; summary?: string; next_steps?: string[]
+    diagnostics?: {
+      devices: { device: string; driver: string; node_present: boolean; state: string | null; identity: string | null; manager_owned: boolean }[]
+      device_tree: { path: string; compatible: string[]; status: string; disabled_by: string | null }[]
+      kernel_config: Record<string, string>; registered_drivers: string[]; errors: string[]
+    }
+    configured_device?: string | null; reboot_required?: boolean
+    runtime_timeout: string; reboot_timeout: string; panic_timeout_sec?: number | null
+    verification_state?: 'unverified' | 'failed' | 'passed'; verification_message?: string
+    error: string | null
+  }
+  runtime: { phase: string; error: string | null; retry_in_sec: number; updated_at: number } | null
+  current: { app: string; pid: number | null; config: string; restart_count?: number; watchdog_active?: boolean; restart_enabled?: boolean | null; recovery_state?: string } | null
+  boot_target: { app: string; config: string } | null
+  application_pending: boolean
+  events: { time: number; kind: string; message: string }[]
+}
+export const fetchRecoveryStatus = () => sharedRead('recovery', () => api.get<RecoveryStatus>('/system/recovery').then(r => r.data))
+export const saveSystemRecovery = (policy: SystemRecoveryPolicy, revision: string) =>
+  api.put<RecoveryStatus>('/system/recovery/system', { policy, revision }).then(r => r.data)
+export const saveRecoveryPolicy = (policy: RecoveryPolicy, revision: string) =>
+  api.put<RecoveryStatus>('/system/recovery', { policy, revision }).then(r => r.data)
+export const controlRuntimeAgent = (action: 'start' | 'stop' | 'restart') =>
+  api.post<RecoveryStatus>(`/system/recovery/agent/${action}`).then(r => r.data)
+export const applyRecoveryPolicy = () => api.post<RecoveryStatus>('/system/recovery/apply').then(r => r.data)
+export type ApplicationRecoveryPolicy = Pick<RecoveryPolicy, 'app_restart_enabled' | 'app_stall_enabled' | 'restart_delay_sec' | 'task_timeout_sec' | 'startup_timeout_sec'>
+export const saveApplicationRecovery = (policy: ApplicationRecoveryPolicy, revision: string) =>
+  api.put<RecoveryStatus>('/system/recovery/application', { policy, revision }).then(r => r.data)
+export const applyApplicationRecovery = (revision: string, app: string) =>
+  api.post<RecoveryStatus>('/system/recovery/application/apply', { revision, app }).then(r => r.data)
+
+export type NetworkRecoveryTarget = { host: string; method: 'ping' } | { host: string; method?: 'tcp'; port: number }
+export interface NetworkRecoveryPolicy {
+  enabled: boolean
+  interface: string
+  targets: NetworkRecoveryTarget[]
+  failure_timeout_sec: number
+  recovery_wait_sec: number
+  action_cooldown_sec: number
+  allow_manager_restart: boolean
+  allow_reboot: boolean
+  reboot_after_sec: number
+  reboot_cooldown_sec: number
+  max_reboots_per_day: number
+}
+export interface NetworkRecoveryStatus {
+  history?: RecoveryHistorySnapshot
+  requirements?: { ready: boolean; missing_tools: string[]; message: string | null }
+  policy: NetworkRecoveryPolicy; revision: string; policy_error: string | null
+  service: { installed: boolean; active: boolean; enabled: boolean; heartbeat_fresh: boolean; error: string | null }
+  interfaces: { name: string; type: string; state: string }[]
+  interface_error: string | null; policy_pending: boolean
+  runtime: {
+    phase: string; message: string; error?: string; armed?: boolean; fault_age_sec?: number
+    observation?: {
+      interface: string; gateway: string; gateway_reachable: boolean | null; addresses: string[]
+      targets: (NetworkRecoveryTarget & { reachable: boolean })[]
+    }
+  } | null
+  events: { time: number; kind: string; message: string }[]
+}
+export interface RecoveryHistoryEvent {
+  id: string; time: number; updated_at: number
+  category: 'system' | 'network' | 'application'; kind: string
+  reason: string; action: string; result: 'pending' | 'performed' | 'recovered' | 'failed' | 'unknown'
+  detail: string; source: string; evidence: string; time_basis: string; boot_id: string
+  fault_recovery?: boolean
+  stages?: {
+    id: string; kind: string; time: number; time_basis: string; action: string
+    result: RecoveryHistoryEvent['result']; detail: string; source: string
+  }[]
+  diagnosis?: {
+    confidence: 'confirmed' | 'probable' | 'unknown'
+    findings: { code: string; summary: string }[]; limitations: string[]
+    recovery?: {
+      confidence: 'confirmed' | 'probable' | 'unknown'
+      method: string; basis: string[]; limitations: string[]
+    }
+  }
+}
+export interface RecoveryHistorySnapshot {
+  events: RecoveryHistoryEvent[]; keep_per_category: number; keep_operations?: number; error: string | null
+  observer?: { boot_id?: string; updated_at?: number; error?: string | null; diagnostic_error?: string | null }
+  diagnostics?: {
+    board?: {
+      model?: string; compatible?: string; kernel?: string; limitations: string[]
+      watchdogs?: { device: string; identity?: string; bootstatus?: string }[]
+      reset_sources?: { source: string; value: string }[]
+      pstore?: boolean; psi?: { cpu: boolean; memory: boolean; io: boolean }
+    } | null
+    sample_time?: number; errors?: string[]; error?: string | null
+  }
+}
+export const fetchRecoveryHistory = () => api.get<RecoveryHistorySnapshot>('/system/recovery/history').then(r => r.data)
+export interface DeviceInformation {
+  updated_at: number
+  performance?: PerformanceSnapshot | null
+  system: {
+    hostname?: string; os_name?: string; kernel?: string; soc?: string | null; serial?: string | null
+    uptime_sec?: number | null; boot_time?: number | null; current_time?: string; timezone?: string | null
+    application_directory?: string; ntp_enabled?: boolean | null; ntp_synchronized?: boolean | null
+  }
+  cpu: { architecture?: string; cores?: number | null; usage_percent?: number | null; usage_sampling?: boolean; max_mhz?: number | null; load_average?: number[] }
+  memory: {
+    total_bytes?: number; available_bytes?: number; used_bytes?: number; usage_percent?: number
+    available_estimated?: boolean; swap_total_bytes?: number; swap_used_bytes?: number
+  }
+  storage: { mount: string; source: string; filesystem: string; total_bytes: number; used_bytes: number
+    available_bytes: number; usage_percent: number; readonly: boolean; application_data: boolean }[]
+  network: { interfaces: { name: string; kind: string; link_up: boolean; mac: string; addresses: string[]
+    speed_mbps: number | null; gateways: string[] }[]; dns: string[] }
+  temperatures: { label: string; celsius: number; critical_celsius: number | null; critical_reached?: boolean }[]
+  accelerators: { kind: string; driver: string | null; registered: boolean; current_mhz: number | null }[]
+  services: { unit: string; label: string; load_state: string; active_state: string; sub_state: string; autostart: boolean | null }[]
+  application: { state: string; name?: string; config?: string }
+  diagnostics: RecoveryHistorySnapshot['diagnostics']
+  observer: RecoveryHistorySnapshot['observer']
+  errors: string[]
+}
+export interface PerformanceDevice {
+  id: string; kind: 'CPU' | 'GPU' | 'NPU'; label: string; cores: string
+  current_mhz: number | null; min_mhz: number | null; max_mhz: number | null
+  available_mhz: number[]; governor: string | null; usage_percent: number | null
+  usage_source: string | null; core_loads: { core: number; usage_percent: number }[]
+  temperature_celsius: number | null; driver: string | null; editable: boolean
+}
+export interface PerformanceTrip {
+  id: string; zone: string; kind: 'passive' | 'hot' | 'critical'; celsius: number
+  hysteresis_celsius: number; default_celsius: number | null; ceiling_celsius: number | null
+  editable: boolean; sensor_celsius: number | null
+}
+export interface PerformanceSnapshot {
+  sampled_at: number; devices: PerformanceDevice[]; thermal_trips: PerformanceTrip[]
+  revision: string; saved: boolean; applied: boolean; profile_matches: boolean
+  error: string | null; notice: string | null
+}
+export const fetchDeviceInformation = (signal?: AbortSignal) => api.get<DeviceInformation>('/system/device-info', { signal }).then(r => r.data)
+export const savePerformance = (limits: Record<string, number>, revision: string) =>
+  api.put<PerformanceSnapshot>('/system/device-info/performance', { limits, revision }).then(r => r.data)
+export const resetPerformance = (revision: string) =>
+  api.post<PerformanceSnapshot>('/system/device-info/performance/reset', { revision }).then(r => r.data)
+export const fetchNetworkRecovery = () => api.get<NetworkRecoveryStatus>('/system/recovery/network').then(r => r.data)
+export const saveNetworkRecovery = (policy: NetworkRecoveryPolicy, revision: string) =>
+  api.put<NetworkRecoveryStatus>('/system/recovery/network', { policy, revision }).then(r => r.data)
 
 export interface StorageCleanupResult {
   finished_unix_ms: number
@@ -452,8 +642,8 @@ export interface StorageSettings {
   last_cleanup: StorageCleanupResult | null
 }
 
-export const fetchStorageSettings = () =>
-  api.get<StorageSettings>('/system/storage').then(r => r.data)
+export const fetchStorageSettings = (details = true) =>
+  api.get<StorageSettings>('/system/storage', { params: { details } }).then(r => r.data)
 
 export const saveStorageSettings = (settings: Pick<StorageSettings,
   'auto_cleanup' | 'retention_days' | 'max_event_store_gb' | 'min_free_gb'>) =>
@@ -805,6 +995,7 @@ export interface EventRecord {
 }
 export interface RecordsResp {
   records: EventRecord[]
+  event_types: string[]
   count: number
   filtered_count: number
   total_bytes: number
@@ -814,12 +1005,13 @@ export interface RecordsResp {
 export const fetchRecords = (
   name: string,
   limit = 500,
-  timeRange?: { startUnixMs?: number; endUnixMs?: number },
+  filters?: { startUnixMs?: number; endUnixMs?: number; eventType?: string },
 ) => api.get<RecordsResp>(`/apps/${name}/records`, {
   params: {
     limit,
-    start_unix_ms: timeRange?.startUnixMs,
-    end_unix_ms: timeRange?.endUnixMs,
+    start_unix_ms: filters?.startUnixMs,
+    end_unix_ms: filters?.endUnixMs,
+    event_type: filters?.eventType || undefined,
   },
 }).then(r => r.data)
 

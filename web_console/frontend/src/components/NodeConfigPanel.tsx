@@ -20,6 +20,8 @@ import ReportForm          from './ReportForm'
 import InferenceROIEditor  from './InferenceROIEditor'
 import ModelInformation from './ModelInformation'
 import './NodeConfigPanel.css'
+import { configSignature, useAutoSync } from '../hooks/useAutoSync'
+import ConfigSyncNotice from './ConfigSyncNotice'
 
 // Stable empty-array constant — MUST NOT be an inline `[]` literal inside a Zustand selector,
 // because `useSyncExternalStore` compares snapshots with Object.is on every render.
@@ -114,6 +116,12 @@ function GlobalLogicForm({ node, onUpdate, inputs }: {
   const [definitions, setDefinitions] = useState<LogicDef[]>([])
   const [channelDefinitions, setChannelDefinitions] = useState<LogicDef[]>([])
   const [catalogError, setCatalogError] = useState('')
+  const syncError = useAutoSync(() => fetchAppLogics(appName), value => {
+    if (value.error) throw new Error(value.error)
+    setDefinitions(current => configSignature(current) === configSignature(value.global_logics) ? current : value.global_logics)
+    setChannelDefinitions(current => configSignature(current) === configSignature(value.channel_logics) ? current : value.channel_logics)
+    setCatalogError('')
+  }, { enabled: !!appName, scope: appName, immediate: false })
 
   useEffect(() => {
     let cancelled = false
@@ -163,7 +171,7 @@ function GlobalLogicForm({ node, onUpdate, inputs }: {
           <option value={logic}>{logic}（⚠ 不在当前应用清单）</option>}
       </select>
     </F>
-    {catalogError && <div className="ncp-hint">⚠ {catalogError}</div>}
+    <ConfigSyncNotice error={catalogError || syncError} />
     <F label="无更新兜底周期（毫秒）">
       <NumberField min={10} def={200} value={data.poll_interval_ms}
         onChange={value => onUpdate(node.id, { poll_interval_ms: value ?? 200 })} />
@@ -620,6 +628,11 @@ function LogicForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
   const [logicDefs, setLogicDefs] = useState<LogicDef[]>([])
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [catalogError, setCatalogError] = useState<string | null>(null)
+  const syncError = useAutoSync(() => fetchAppLogics(appName), value => {
+    if (value.error) throw new Error(value.error)
+    setLogicDefs(current => configSignature(current) === configSignature(value.channel_logics) ? current : value.channel_logics)
+    setCatalogError(null)
+  }, { enabled: !!appName && !catalogLoading, scope: appName, immediate: false })
 
   useEffect(() => {
     let cancelled = false
@@ -683,8 +696,8 @@ function LogicForm({ node, onUpdate }: { node: Node; onUpdate: Props['onUpdate']
       </F>
 
       {catalogLoading && <div className="ncp-hint">正在读取当前应用的逻辑清单…</div>}
-      {!catalogLoading && catalogError && (
-        <div className="ncp-hint">⚠ 逻辑清单不可用：{catalogError}</div>
+      {!catalogLoading && (catalogError || syncError) && (
+        <div className="ncp-hint">⚠ 逻辑清单不可用：{catalogError || syncError}</div>
       )}
       {!catalogLoading && !catalogError && logicDefs.length === 0 && (
         <div className="ncp-hint">⚠ 当前应用没有声明任何通道逻辑。</div>
@@ -713,12 +726,8 @@ function LogicParameterFields({ node, params, onUpdate }: {
     })
   }
 
-  const helmetMode = String(moduleParameters.alarm_mode ?? 'missing_helmet')
-  const visibleParams = data.logic === 'logic_crane_helmet'
-    ? params.filter(param => helmetMode === 'bare_head' || !['bare_head_labels', 'bare_head_min_score'].includes(param.key))
-    : params
   return <>
-    {visibleParams.map(param => (
+    {params.map(param => (
       <ParamField
         key={param.key}
         param={param}
@@ -759,7 +768,7 @@ function ParamField({ param, value, onChange }: {
         <select value={value !== undefined ? String(value) : String(param.default ?? '')}
           onChange={e => onChange(e.target.value)}>
           {(param.options ?? []).map(o => <option key={o} value={o}>{param.key === 'alarm_mode'
-            ? ({ bare_head: '检测到未戴帽头部才告警', missing_helmet: '人员未匹配安全帽就告警（旧模式）' } as Record<string, string>)[o] ?? o
+            ? ({ bare_head: '检测到未戴帽头部才告警', missing_helmet: '裸头优先 + 人员宽高过滤' } as Record<string, string>)[o] ?? o
             : o}</option>)}
         </select>
         {hint}

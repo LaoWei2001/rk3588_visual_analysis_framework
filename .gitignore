@@ -1,6 +1,7 @@
 *.mp4
 *.docx
 __pycache__
+*.csv
 *.py[cod]
 .pytest_cache/
 .coverage
@@ -21,7 +22,8 @@ playwright-report/
 /engine/bench/build/
 *.tsbuildinfo
 *.rknn
-node_modules/
+# 同时忽略依赖目录和指向项目外离线缓存的链接。
+node_modules
 /tools/offline_dev_install/debian/output/
 /tools/offline_dev_install/ubuntu/output/
 .claude/

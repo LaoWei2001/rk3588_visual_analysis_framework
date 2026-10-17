@@ -30,6 +30,11 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+if [ ! -f /usr/lib/vision-analysis-platform/python/rk3588_runtime/process_manager.py ]; then
+    echo "[错误] 独立设备运行平台未安装，请从项目根目录运行 sudo ./install.sh offline。" >&2
+    exit 1
+fi
+
 echo "=== RK3588 Web Console 部署 ==="
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
@@ -126,6 +131,7 @@ echo "[3/4] 安装 Web systemd 服务..."
     echo "Description=RK3588 Web Config Console"
     echo "After=network-online.target"
     echo "Wants=network-online.target"
+    echo "StartLimitIntervalSec=0"
     echo ""
     echo "[Service]"
     echo "Type=simple"
@@ -138,6 +144,9 @@ echo "[3/4] 安装 Web systemd 服务..."
     printf 'ExecStart="%s" -m uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --log-level info\n' "$PYTHON_BIN"
     echo "Restart=always"
     echo "RestartSec=5"
+    echo "WatchdogSec=60"
+    echo "WatchdogSignal=SIGKILL"
+    echo "NotifyAccess=main"
     echo "StandardOutput=journal"
     echo "StandardError=journal"
     echo "SyslogIdentifier=rk3588-console"

@@ -6,6 +6,7 @@ import { useEditorStore } from '../store/editorStore'
 import { captureSnapshot } from '../api/client'
 import { getSrcType } from '../utils/streamSource'
 import { normalizeRoiPolygon } from '../utils/roiPolygon'
+import { layoutRoiLabels, type RoiLabel } from '../utils/roiLabelLayout'
 import {
   inferenceRoiConfig,
   inferenceRoiContainsPoint,
@@ -19,8 +20,10 @@ import './nodeStyles.css'
 import './ROINode.css'
 
 const EMPTY_ZONES: Zone[] = []
-const CANVAS_MAX_W = 880
+const DIALOG_MAX_W = 1320
 const SNAP_PX = 10
+const BUSINESS_SIZE = 640
+
 
 // 每个区域一种颜色, 区域多于色板时循环复用 (与 C++ render/逻辑里的配色意图一致)
 const ZONE_COLORS = ['#fbbf24', '#34d399', '#60a5fa', '#f472b6', '#fb923c', '#a78bfa']
@@ -132,7 +135,7 @@ export default function ROINode({ id, selected }: NodeProps) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// ROI Draw Modal — 单张画面上画多个命名区域
+// ROI Draw Modal — 原图绘制与固定业务坐标预览共用归一化顶点
 // ───────────────────────────────────────────────────────────────────────────
 interface ModalProps {
   nodeId: string
@@ -166,6 +169,10 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
   const storedRes  = useROIStore(s => s.resolutions[nodeId])
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const previewRef = useRef<HTMLCanvasElement>(null)
+  // 一次编辑会话只在打开时取窗口尺寸，绘制期间不随内容或窗口变化重新缩放。
+  const [viewport] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }))
+  const [openingZoneCount] = useState(() => storeZones.length)
 
   const [srcW,    setSrcW   ] = useState(() => storedRes?.[0] ?? 1920)
   const [srcH,    setSrcH   ] = useState(() => storedRes?.[1] ?? 1080)
@@ -173,7 +180,7 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
   const [loading, setLoading] = useState(false)
   const [snapErr, setSnapErr] = useState('')
 
-  // 已完成的区域(归一化顶点) + 进行中的草稿(显示像素) + 选中高亮项
+  // 区域和草稿统一保存归一化顶点。
   const [wzones,  setWzones ] = useState<WZone[]>(() =>
     storeZones.map(z => ({ name: z.name ?? '', pts: stripClose(z.polygon) })))
   const [draft,   setDraft  ] = useState<[number, number][]>([])
@@ -182,6 +189,7 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
   const [sel,     setSel    ] = useState<number>(-1)
   const [drag,    setDrag   ] = useState<DragState>(null)              // 正在拖拽的顶点/区域
   const [hoverHit, setHoverHit] = useState<'vertex' | 'zone' | null>(null) // 悬停命中(驱动光标)
+  const [labelFocus, setLabelFocus] = useState<{ zi: number; vi: number } | null>(null)
 
   // ROI 名称在保存时会 trim，因此重复检查也按去除首尾空格后的名称进行。
   const duplicateNames = (() => {
@@ -203,9 +211,30 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
   const invalidZoneIndexes = new Set(wzones.flatMap((zone, index) =>
     !zoneAllowed(zone.pts) ? [index] : []))
 
-  // 画布显示尺寸(给右侧区域列表留出空间, 保持宽高比)
-  const dispW = Math.max(360, Math.min(CANVAS_MAX_W, window.innerWidth - 380))
-  const dispH = Math.round(dispW * srcH / srcW)
+  // 大图保持源画面比例；小图始终为 640×640 业务画布。
+  const compact = viewport.width <= 900
+  const dialogWidth = Math.min(DIALOG_MAX_W, viewport.width - 32)
+  const maxDialogHeight = Math.min(820, Math.floor(viewport.height * 0.94))
+  const extraHeight = (inferenceRegion ? 36 : 0) + (streamData && getSrcType(streamData) === 'usb' ? 30 : 0)
+  const headerAllowance = (compact ? 220 : 140) + extraHeight
+  const pictureWidth = Math.max(1, dialogWidth - (compact ? 0 : 250) - 2 - 12)
+  const aspect = srcW / srcH
+  // 打开时按已有区域及常用新增容量预留操作空间，绘制过程中不再改变窗口尺寸。
+  const controlHeight = compact ? Math.ceil(Math.max(openingZoneCount, 6) / 2) * 32 + 240
+    : Math.max(openingZoneCount, 6) * 28 + 242
+  const tightControls = !compact && controlHeight + headerAllowance > maxDialogHeight
+  const availableHeight = Math.max(60, maxDialogHeight - headerAllowance - 46 - (compact ? controlHeight : 0))
+  const sharedHeight = Math.max(1, Math.min((pictureWidth - 22) / (aspect + 1), availableHeight))
+  const previewSize = Math.max(1, Math.floor(Math.min(380, sharedHeight)))
+  const sidebarWidth = previewSize + 22
+  const fitScale = Math.min(Math.max(1, pictureWidth - sidebarWidth) / srcW, availableHeight / srcH)
+  const dispW = Math.max(1, Math.floor(srcW * fitScale))
+  const dispH = Math.max(1, Math.floor(srcH * fitScale))
+  const pictureHeight = Math.max(dispH + 36, previewSize + 46)
+  const bodyHeight = compact ? pictureHeight + controlHeight : Math.max(pictureHeight, controlHeight)
+  const dialogHeight = Math.min(maxDialogHeight, Math.ceil(headerAllowance + bodyHeight))
+  // 同时放大窗口、图片、文字和控件，始终留在打开时的屏幕范围内。
+  const dialogScale = Math.min(1.12, (viewport.width - 8) / dialogWidth, (viewport.height - 8) / dialogHeight)
 
   // ── Grab frame from backend ──
   const grabFrame = async () => {
@@ -233,7 +262,7 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
       if (getSrcType(streamData) === 'usb') {
         setSnapErr(
           'USB 摄像头打开失败：该设备同一时刻只能被一个进程占用，通常是「正在运行的程序」占着它。' +
-          '请先到「程序管理」停止该程序，再抓取 ROI（ROI 改完本来也要停止→启动才生效，顺路即可）。' +
+          '请先到「程序管理」停止占用该设备的程序，再抓取 ROI。' +
           `原始错误：${raw}`
         )
       } else {
@@ -246,84 +275,133 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
 
   // ── Canvas render ──
   const render = useCallback(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')!
-    ctx.clearRect(0, 0, dispW, dispH)
+    const drawCanvas = (canvas: HTMLCanvasElement | null, business: boolean) => {
+      if (!canvas) return
+      const dispW = canvas.width, dispH = canvas.height
+      const coordinateW = business ? BUSINESS_SIZE : srcW
+      const coordinateH = business ? BUSINESS_SIZE : srcH
+      const scale = business ? BUSINESS_SIZE / 280 : 1
+      const ctx = canvas.getContext('2d')!
+      const labels: RoiLabel[] = []
+      const vertices: { x: number; y: number }[] = []
+      const focused = drag?.kind === 'vertex' ? drag : labelFocus
+      const addLabel = (x: number, y: number, zi: number, vi: number,
+        nx: number, ny: number, color: string) => {
+        vertices.push({ x, y })
+        labels.push({ id: `${zi}:${vi}`, x, y, color,
+          text: `${vi + 1} (${Math.round(nx * coordinateW)}, ${Math.round(ny * coordinateH)})`,
+          priority: focused?.zi === zi && focused.vi === vi ? 3
+            : drawing && zi === wzones.length && vi === draft.length - 1 ? 2 : zi === sel ? 1 : 0 })
+      }
+      ctx.clearRect(0, 0, dispW, dispH)
 
-    if (bgImage) ctx.drawImage(bgImage, 0, 0, dispW, dispH)
-    else {
-      ctx.fillStyle = '#1a1f2e'; ctx.fillRect(0, 0, dispW, dispH)
-      ctx.fillStyle = '#334155'; ctx.font = '14px sans-serif'; ctx.textAlign = 'center'
-      ctx.fillText('正在抓取当前帧…', dispW / 2, dispH / 2)
-    }
-    if (!bgImage) return
+      if (bgImage) ctx.drawImage(bgImage, 0, 0, dispW, dispH)
+      else {
+        ctx.fillStyle = '#1a1f2e'; ctx.fillRect(0, 0, dispW, dispH)
+        ctx.fillStyle = '#334155'; ctx.font = '14px sans-serif'; ctx.textAlign = 'center'
+        ctx.fillText('正在抓取当前帧…', dispW / 2, dispH / 2)
+      }
+      if (!bgImage) return
 
-    if (inferenceRegion) {
-      const regionPoints = inferenceRegion.polygon
-      ctx.save(); ctx.fillStyle = 'rgba(2, 6, 23, 0.62)'; ctx.fillRect(0, 0, dispW, dispH)
-      ctx.beginPath(); regionPoints.forEach(([x, y], index) => index === 0
-        ? ctx.moveTo(x * dispW, y * dispH) : ctx.lineTo(x * dispW, y * dispH)); ctx.closePath()
-      ctx.globalCompositeOperation = 'destination-out'; ctx.fill(); ctx.restore()
-      ctx.beginPath(); regionPoints.forEach(([x, y], index) => index === 0
-        ? ctx.moveTo(x * dispW, y * dispH) : ctx.lineTo(x * dispW, y * dispH)); ctx.closePath()
-      ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 3; ctx.stroke()
-      ctx.fillStyle = '#67e8f9'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left'
-      ctx.fillText('可绘制业务 ROI 的范围', inferenceRegion.rect.x * dispW + 6,
-        Math.max(14, inferenceRegion.rect.y * dispH - 6))
-    }
+      if (inferenceRegion) {
+        const regionPoints = inferenceRegion.polygon
+        ctx.save(); ctx.fillStyle = 'rgba(2, 6, 23, 0.62)'
+        ctx.beginPath(); ctx.rect(0, 0, dispW, dispH)
+        regionPoints.forEach(([x, y], index) => index === 0
+          ? ctx.moveTo(x * dispW, y * dispH) : ctx.lineTo(x * dispW, y * dispH)); ctx.closePath()
+        ctx.fill('evenodd'); ctx.restore()
+        ctx.beginPath(); regionPoints.forEach(([x, y], index) => index === 0
+          ? ctx.moveTo(x * dispW, y * dispH) : ctx.lineTo(x * dispW, y * dispH)); ctx.closePath()
+        ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 3 * scale; ctx.stroke()
+        ctx.fillStyle = '#67e8f9'; ctx.font = `bold ${12 * scale}px sans-serif`; ctx.textAlign = 'left'
+        ctx.fillText('可绘制业务 ROI 的范围', inferenceRegion.rect.x * dispW + 6,
+          Math.max(14, inferenceRegion.rect.y * dispH - 6))
+      }
 
-    // 已完成的各区域: 闭合多边形 + 半透明填充 + 顶点 + 标号/名字
-    wzones.forEach((z, i) => {
-      if (z.pts.length < 2) return
-      const col = invalidZoneIndexes.has(i) ? '#ef4444' : ZONE_COLORS[i % ZONE_COLORS.length]
-      const px  = z.pts.map(([x, y]) => [x * dispW, y * dispH] as [number, number])
-      ctx.beginPath()
-      ctx.moveTo(px[0][0], px[0][1])
-      for (let k = 1; k < px.length; k++) ctx.lineTo(px[k][0], px[k][1])
-      ctx.closePath()
-      ctx.fillStyle   = hexToRgba(col, i === sel ? 0.32 : 0.18)
-      ctx.fill()
-      ctx.strokeStyle = col
-      ctx.lineWidth   = i === sel ? 3 : 2
-      ctx.stroke()
-      // 顶点手柄: 选中的区域放大并描白边, 方便拖拽
-      const vr = i === sel ? 6 : 3
-      px.forEach(([x, y]) => {
-        ctx.beginPath(); ctx.arc(x, y, vr, 0, Math.PI * 2)
-        ctx.fillStyle = col; ctx.fill()
-        if (i === sel) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke() }
+      // 已完成的各区域: 闭合多边形 + 半透明填充 + 顶点坐标；名称由右侧区域列表展示。
+      wzones.forEach((z, i) => {
+        if (z.pts.length < 2) return
+        const col = invalidZoneIndexes.has(i) ? '#ef4444' : ZONE_COLORS[i % ZONE_COLORS.length]
+        const px  = z.pts.map(([x, y]) => [x * dispW, y * dispH] as [number, number])
+        ctx.beginPath()
+        ctx.moveTo(px[0][0], px[0][1])
+        for (let k = 1; k < px.length; k++) ctx.lineTo(px[k][0], px[k][1])
+        ctx.closePath()
+        ctx.fillStyle   = hexToRgba(col, i === sel ? 0.32 : 0.18)
+        ctx.fill()
+        ctx.strokeStyle = col
+        ctx.lineWidth   = (i === sel ? 3 : 2) * scale
+        ctx.stroke()
+        // 顶点手柄: 选中的区域放大并描白边, 方便拖拽
+        const vr = (i === sel ? 6 : 3) * scale
+        px.forEach(([x, y], k) => {
+          ctx.beginPath(); ctx.arc(x, y, vr, 0, Math.PI * 2)
+          ctx.fillStyle = col; ctx.fill()
+          if (i === sel) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke() }
+          addLabel(x, y, i, k, z.pts[k][0], z.pts[k][1], col)
+        })
       })
-      // 标签
-      ctx.fillStyle = col
-      ctx.font = 'bold 13px sans-serif'
-      ctx.textAlign = 'left'
-      ctx.fillText(`${i + 1}. ${z.name?.trim() || '区域' + (i + 1)}`, px[0][0] + 6, Math.max(14, px[0][1] - 6))
-    })
 
-    // 进行中的草稿
-    if (drawing && draft.length > 0) {
-      ctx.beginPath()
-      ctx.moveTo(draft[0][0], draft[0][1])
-      for (let k = 1; k < draft.length; k++) ctx.lineTo(draft[k][0], draft[k][1])
-      if (hover) ctx.lineTo(hover[0], hover[1])
-      // 绘制过程中用红色(白色在白底画面上看不见)；完成后的各区域仍按 ZONE_COLORS 五颜六色上色
-      ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 2; ctx.stroke()
-      draft.forEach(([x, y], k) => {
-        ctx.beginPath(); ctx.arc(x, y, k === 0 ? 7 : 4, 0, Math.PI * 2)
-        ctx.fillStyle = '#ef4444'; ctx.fill()
-        if (k === 0) { ctx.strokeStyle = '#7f1d1d'; ctx.lineWidth = 1.5; ctx.stroke() }  // 首点深红描边, 标出闭合点
-      })
-      // 靠近首点的闭合提示
-      if (draft.length >= 3 && hover) {
-        const d = Math.hypot(hover[0] - draft[0][0], hover[1] - draft[0][1])
-        if (d < SNAP_PX) {
-          ctx.beginPath(); ctx.arc(draft[0][0], draft[0][1], SNAP_PX + 4, 0, Math.PI * 2)
-          ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 1.5; ctx.stroke()
+      // 进行中的草稿
+      if (drawing && draft.length > 0) {
+        const points = draft.map(([x, y]) => [x * dispW, y * dispH])
+        ctx.beginPath()
+        ctx.moveTo(points[0][0], points[0][1])
+        for (let k = 1; k < points.length; k++) ctx.lineTo(points[k][0], points[k][1])
+        if (hover) ctx.lineTo(hover[0] * dispW, hover[1] * dispH)
+        // 绘制过程中用红色(白色在白底画面上看不见)；完成后的各区域仍按 ZONE_COLORS 五颜六色上色
+        ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 2 * scale; ctx.stroke()
+        points.forEach(([x, y], k) => {
+          ctx.beginPath(); ctx.arc(x, y, (k === 0 ? 7 : 4) * scale, 0, Math.PI * 2)
+          ctx.fillStyle = '#ef4444'; ctx.fill()
+          if (k === 0) { ctx.strokeStyle = '#7f1d1d'; ctx.lineWidth = 1.5; ctx.stroke() }  // 首点深红描边, 标出闭合点
+          addLabel(x, y, wzones.length, k, draft[k][0], draft[k][1], '#fca5a5')
+        })
+        // 靠近首点的闭合提示
+        if (draft.length >= 3 && hover) {
+          const d = Math.hypot((hover[0] - draft[0][0]) * dispW, (hover[1] - draft[0][1]) * dispH)
+          if (d < SNAP_PX) {
+            ctx.beginPath(); ctx.arc(points[0][0], points[0][1], SNAP_PX + 4, 0, Math.PI * 2)
+            ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 1.5; ctx.stroke()
+          }
         }
       }
+      // 先完成所有区域和顶点，再统一布局标签，防止后绘区域盖住之前的坐标。
+      ctx.font = `${12 * scale}px ui-monospace, monospace`
+      ctx.textAlign = 'left'
+      const placed = layoutRoiLabels(labels, dispW, dispH, scale,
+        text => ctx.measureText(text).width, vertices)
+      // 所有引线先画深色外沿，再画白色内芯，兼顾亮、暗及复杂背景。
+      ctx.save()
+      ctx.lineCap = 'round'
+      for (const outline of [true, false]) {
+        ctx.strokeStyle = outline ? '#020617' : '#ffffff'
+        for (const label of placed) {
+          const { rect } = label
+          const x = Math.max(rect.x, Math.min(rect.x + rect.width, label.x))
+          const y = Math.max(rect.y, Math.min(rect.y + rect.height, label.y))
+          ctx.beginPath(); ctx.moveTo(label.x, label.y); ctx.lineTo(x, y)
+          const focused = label.priority === 3
+          ctx.lineWidth = (outline ? (focused ? 6 : 4) : (focused ? 3 : 1.5)) * scale
+          ctx.stroke()
+        }
+      }
+      ctx.restore()
+      for (const label of placed) {
+        const { rect } = label
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.92)'
+        ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
+        if (label.priority === 3) {
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = scale
+          ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
+        }
+        ctx.fillStyle = label.color
+        ctx.fillText(label.text, rect.x + 3 * scale, rect.y + 14 * scale)
+      }
     }
-  }, [wzones, draft, drawing, hover, sel, bgImage, dispW, dispH, inferenceRegion, invalidZoneIndexes])
+    drawCanvas(canvasRef.current, false)
+    drawCanvas(previewRef.current, true)
+  }, [wzones, draft, drawing, hover, sel, drag, labelFocus, bgImage, srcW, srcH, dispW, dispH, inferenceRegion, invalidZoneIndexes])
 
   useEffect(() => { render() }, [render])
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -332,18 +410,22 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
   // ── Mouse handlers ──
   const getPos = (e: React.MouseEvent<HTMLCanvasElement>): [number, number] => {
     const r = canvasRef.current!.getBoundingClientRect()
-    return [e.clientX - r.left, e.clientY - r.top]
+    return [(e.clientX - r.left) * dispW / r.width, (e.clientY - r.top) * dispH / r.height]
   }
 
   // 命中测试(显示像素): 找鼠标附近的顶点 / 落在哪个区域内(后画的在上, 优先命中)
   const HIT_R = 9
   const hitVertex = (mx: number, my: number): { zi: number; vi: number } | null => {
+    let nearest: { zi: number; vi: number } | null = null
+    let distance = HIT_R
     for (let zi = wzones.length - 1; zi >= 0; zi--) {
       const z = wzones[zi]
-      for (let vi = 0; vi < z.pts.length; vi++)
-        if (Math.hypot(mx - z.pts[vi][0] * dispW, my - z.pts[vi][1] * dispH) <= HIT_R) return { zi, vi }
+      for (let vi = 0; vi < z.pts.length; vi++) {
+        const d = Math.hypot(mx - z.pts[vi][0] * dispW, my - z.pts[vi][1] * dispH)
+        if (d < distance) { distance = d; nearest = { zi, vi } }
+      }
     }
-    return null
+    return nearest
   }
   const hitZone = (mx: number, my: number): number => {
     for (let zi = wzones.length - 1; zi >= 0; zi--)
@@ -353,7 +435,7 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
 
   const commitDraft = (pts: [number, number][]) => {
     if (pts.length < 3) return
-    const norm = pts.map(([x, y]) => [+(x / dispW).toFixed(5), +(y / dispH).toFixed(5)] as [number, number])
+    const norm = pts.map(([x, y]) => [+x.toFixed(5), +y.toFixed(5)] as [number, number])
     if (!zoneAllowed(norm)) return
     setWzones(prev => [...prev, { name: nextDefaultZoneName(prev), pts: norm }])
     setSel(wzones.length)   // 新区域的下标 = 添加前的长度
@@ -365,14 +447,15 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
   ]
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (e.button !== 0 || !bgImage || loading) return
     const [x, y] = getPos(e)
     if (drawing) {                                   // 绘制态: 左键加顶点 / 靠近首点闭合
       if (!pointAllowed(x / dispW, y / dispH)) return
       if (draft.length >= 3) {
-        const d = Math.hypot(x - draft[0][0], y - draft[0][1])
+        const d = Math.hypot(x - draft[0][0] * dispW, y - draft[0][1] * dispH)
         if (d < SNAP_PX) { commitDraft(draft); return }
       }
-      if (draft.length < 64) setDraft(prev => [...prev, [x, y]])
+      if (draft.length < 64) setDraft(prev => [...prev, [clamp01(x / dispW), clamp01(y / dispH)]])
       return
     }
     // 编辑态: 优先抓顶点(拖拽改形状/大小), 否则抓整块区域(整体移动)
@@ -387,7 +470,13 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
     const [x, y] = getPos(e)
     if (drawing) {
       const [cx, cy] = clampToAllowed(x, y)
-      setHover([cx, cy]); return
+      let nearest = -1, distance = HIT_R
+      draft.forEach(([px, py], i) => {
+        const d = Math.hypot(cx - px * dispW, cy - py * dispH)
+        if (d < distance) { nearest = i; distance = d }
+      })
+      setLabelFocus(nearest >= 0 ? { zi: wzones.length, vi: nearest } : null)
+      setHover([cx / dispW, cy / dispH]); return
     }
 
     if (drag) {
@@ -433,7 +522,9 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
       return
     }
     // 未拖拽: 命中反馈(驱动光标)
-    setHoverHit(hitVertex(x, y) ? 'vertex' : (hitZone(x, y) >= 0 ? 'zone' : null))
+    const vertex = hitVertex(x, y)
+    setLabelFocus(vertex)
+    setHoverHit(vertex ? 'vertex' : (hitZone(x, y) >= 0 ? 'zone' : null))
   }
 
   const endDrag = () => setDrag(null)
@@ -472,7 +563,7 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
   }
 
   const isUsb = streamData ? getSrcType(streamData) === 'usb' : false
-  const normalizedDraft = draft.map(([x, y]) => [x / dispW, y / dispH] as [number, number])
+  const normalizedDraft = draft
   const draftCanClose = normalizedDraft.length >= 3 && zoneAllowed(normalizedDraft)
 
   // 画布光标: 绘制态十字; 编辑态按"悬停/拖拽顶点=抓手, 区域=移动"
@@ -485,12 +576,13 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
   return (
     // 点击空白遮罩不关闭——避免画/编辑到一半误触外侧丢失未保存的区域；只能用 ✕ / 保存 关闭。
     <div className="roi-overlay">
-      <div className="roi-dialog">
+      <div className={`roi-dialog business-roi-dialog${compact ? ' business-roi-compact' : ''}${tightControls ? ' business-roi-tight' : ''}`}
+        style={{ width: dialogWidth, height: dialogHeight, transform: `scale(${dialogScale})` }} role="dialog" aria-label="业务 ROI 绘制">
         {/* Header */}
         <div className="roi-hdr">
           <span>业务 ROI 绘制（可画多个区域，各自命名）</span>
           <div className="roi-hdr-actions">
-            <button className="roi-grab-btn" onClick={grabFrame} disabled={loading}>
+            <button className="roi-grab-btn" onClick={grabFrame} disabled={loading || drawing || drag !== null}>
               {loading ? '抓取中…' : '📷 抓取当前帧'}
             </button>
             {snapErr && <span className="roi-err">{snapErr}</span>}
@@ -516,26 +608,47 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
             业务 ROI 必须完全位于青色推理区域内。
           </div>
         )}
+        <div className="business-roi-mapping-help" title="保存为 0～1 归一化坐标，与模型输入尺寸无关；悬停顶点可查看坐标。">
+          原图像素坐标 → 640×640 业务坐标
+        </div>
 
-        {/* Body: canvas + sidebar */}
+        {/* 左侧只放两张图，区域列表、提示和全部绘制操作统一放在右侧。 */}
         <div className="roi-body">
-          <div className="roi-canvas-wrap">
+          <div className="business-roi-content">
+          <div className="business-roi-views">
+          <div className="business-roi-main">
+            <div className="business-roi-view-title">
+              <span>原图绘制 · {srcW}×{srcH}</span>
+            </div>
+            <div className="roi-canvas-wrap business-roi-main-scroll" style={{ width: dispW, height: dispH }}>
             <canvas
               ref={canvasRef}
               width={dispW}
               height={dispH}
               style={{ width: dispW, height: dispH, cursor: canvasCursor }}
               className="roi-canvas"
+              aria-label="原图 ROI 绘制画布"
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={endDrag}
-              onMouseLeave={() => { endDrag(); setHover(null); setHoverHit(null) }}
+              onMouseLeave={() => { endDrag(); setHover(null); setHoverHit(null); setLabelFocus(null) }}
               onContextMenu={handleContextMenu}
             />
+            </div>
           </div>
 
-          <div className="roi-sidebar">
-            <div className="roi-sidebar-title">区域列表（{wzones.length}）</div>
+          <div className="roi-sidebar" style={{ width: sidebarWidth }}>
+            <div className="business-roi-preview">
+              <div className="business-roi-view-title"><span>业务画布预览</span><b>640×640</b></div>
+              <canvas ref={previewRef} width={BUSINESS_SIZE} height={BUSINESS_SIZE}
+                style={{ width: previewSize, height: previewSize }}
+                aria-label="640×640 业务 ROI 预览" />
+            </div>
+          </div>
+          </div>
+          </div>
+          <aside className="business-roi-regions" aria-label="ROI 区域列表">
+            <div className="roi-sidebar-title">已绘制区域（{wzones.length}）</div>
             <div className="roi-sidebar-list">
               {wzones.length === 0 && !drawing && (
                 <div className="roi-sidebar-empty">还没有区域，点下方「新增区域」开始绘制</div>
@@ -560,7 +673,10 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
                 </div>
                 ))}
             </div>
-
+            {!drawing && (
+              <button className="roi-btn primary roi-add-btn" disabled={!bgImage || loading} onClick={startNewZone}>＋ 新增区域</button>
+            )}
+          <div className="business-roi-tools">
             {duplicateNames.size > 0 && (
               <div className="roi-name-error">
                 ROI 区域名称不能重复：{[...duplicateNames].join('、')}。请修改后再保存。
@@ -574,7 +690,9 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
 
             {drawing ? (
               <div className="roi-draw-hint">
-                绘制中：左键加顶点（{draft.length}）· 靠近首点或点「完成」闭合 · 右键撤销
+                <div className="roi-draft-status">正在新增区域：已选 {draft.length} 个顶点</div>
+                <div>左键加点 · 右键撤销</div>
+                <div>靠近首点或点“完成此区域”闭合</div>
                 {draft.length >= 3 && !draftCanClose && <div className="roi-name-error">
                   当前边界自相交、面积无效或穿出了推理 ROI，请继续调整顶点。
                 </div>}
@@ -588,10 +706,10 @@ function ROIDrawModal({ nodeId, appName, streamData, usbRes, inferenceRegion, on
                 {wzones.length > 0 && (
                   <div className="roi-edit-tip">拖顶点改形状 · 拖区域内部移动 · 右键顶点删点</div>
                 )}
-                <button className="roi-btn primary roi-add-btn" onClick={startNewZone}>＋ 新增区域</button>
               </>
             )}
           </div>
+          </aside>
         </div>
 
         {/* Footer */}

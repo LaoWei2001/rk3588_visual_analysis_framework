@@ -3,7 +3,8 @@ export type Count = { op: string; value: number }
 export type Leaf = Target & { count: Count }
 export type Comparison = { compare_counts: { left: Target; right: Target; op: string } }
 export type Association = { association: {
-  subject: Target; object: Target; relation: 'center_inside' | 'overlap' | 'near'; state: 'matched' | 'unmatched'
+  subject: Target; object?: Target; objects?: Target[]; relation: 'center_inside' | 'subject_center_inside' | 'overlap' | 'subject_overlap' | 'near'; state: 'matched' | 'unmatched' | 'count'
+  object_count?: Count
   quantifier?: 'any' | 'all' | 'count'; count?: Count; one_to_one?: boolean; min_overlap?: number; max_distance?: number
 } }
 export type Condition = Leaf | Comparison | Association | { all: Condition[] } | { any: Condition[] } | { not: Condition }
@@ -15,33 +16,73 @@ export const comparison = (left: Target = target(), right: Target = target()): C
 export const association = (subject: Target = target(), object: Target = target()): Association => ({ association: {
   subject, object, relation: 'center_inside', state: 'unmatched', quantifier: 'any', one_to_one: true, min_overlap: 0.5, max_distance: 1,
 } })
+// 兼容已保存的单类别规则；多类别共用一个匹配池，任意一类匹配成功即可。
+export const associationTargets = (v: Association['association']): Target[] => v.objects ?? (v.object ? [v.object] : [])
 export function targetsFrom(c: Condition): Target[] {
   if ('class' in c) return [{ class: c.class, min_confidence: c.min_confidence }]
   if ('compare_counts' in c) return [c.compare_counts.left, c.compare_counts.right]
-  if ('association' in c) return [c.association.subject, c.association.object]
+  if ('association' in c) return [c.association.subject, ...associationTargets(c.association)]
   if ('not' in c) return targetsFrom(c.not)
   return ('all' in c ? c.all : c.any).flatMap(targetsFrom)
 }
-export const relationNames = { center_inside: '关联目标中心位于主体框内', overlap: '关联目标与主体重叠', near: '关联目标位于主体附近' }
+export const relationNames = {
+  center_inside: '关联目标的中心在主体框内',
+  subject_center_inside: '主体的中心在关联目标框内',
+  overlap: '按关联目标面积判断：关联目标在主体框内',
+  subject_overlap: '按主体面积判断：主体在关联目标框内',
+  near: '按主体框对角线判断中心距离',
+}
 const operators = ['==', '!=', '>=', '>', '<=', '<']
 const countWords: Record<string, string> = { '>=': '至少', '==': '刚好', '<=': '最多', '>': '超过', '<': '少于', '!=': '不是' }
-export function summary(c: Condition): string {
-  if ('all' in c) return `（${c.all.map(summary).join('，并且 ')}）`
-  if ('any' in c) return `（${c.any.map(summary).join('，或者 ')}）`
-  if ('not' in c) return `不满足 ${summary(c.not)}`
+const percent = (value: number) => Number((value * 100).toFixed(10))
+const targetName = (value: Target, fallback: string, detailed: boolean) =>
+  `${value.class || fallback}${detailed ? `（置信度 ≥ ${percent(value.min_confidence ?? .3)}%）` : ''}`
+export function relationDescription(v: Association['association']): string {
+  const subject = v.subject.class || '主体', objects = associationTargets(v).map(t => t.class || '关联目标').join(' 或 ')
+  if (v.relation === 'center_inside') return `${objects} 的中心在 ${subject} 框内`
+  if (v.relation === 'subject_center_inside') return `${subject} 的中心在 ${objects} 框内`
+  if (v.relation === 'overlap') return `${objects} 至少 ${percent(v.min_overlap ?? .5)}% 的面积在 ${subject} 框内`
+  if (v.relation === 'subject_overlap') return `${subject} 至少 ${percent(v.min_overlap ?? .5)}% 的面积在 ${objects} 框内`
+  return `${subject} 与 ${objects} 的中心距离不超过 ${subject} 框对角线的 ${v.max_distance ?? 1} 倍`
+}
+export function summary(c: Condition, detailed = false): string {
+  if ('all' in c) return `（${c.all.map(child => summary(child, detailed)).join('，并且 ')}）`
+  if ('any' in c) return `（${c.any.map(child => summary(child, detailed)).join('，或者 ')}）`
+  if ('not' in c) {
+    const child = c.not
+    if ('not' in child) return summary(child.not, detailed)
+    if ('class' in child) {
+      if (child.count.op === '>=' && child.count.value === 1) return `没检测到 ${targetName(child, '未填写的类别', detailed)}`
+      if (child.count.op === '==' && child.count.value === 0) return `检测到 ${targetName(child, '未填写的类别', detailed)}`
+      const opposite: Record<string, string> = {'==': '!=', '!=': '==', '>': '<=', '>=': '<', '<': '>=', '<=': '>'}
+      return summary({...child, count: {...child.count, op: opposite[child.count.op]}}, detailed)
+    }
+    return detailed ? `（以下情况不成立：${summary(child, true)}）` : `没有出现以下情况：${summary(child)}`
+  }
   if ('compare_counts' in c) {
     const v = c.compare_counts
     const words: Record<string, string> = { '>': '大于', '>=': '不少于', '<': '小于', '<=': '不多于', '==': '等于', '!=': '不等于' }
-    return `${v.left.class || '类别 A'} 的数量${words[v.op]} ${v.right.class || '类别 B'} 的数量`
+    return `${targetName(v.left, '类别 A', detailed)} 的数量${words[v.op]} ${targetName(v.right, '类别 B', detailed)} 的数量`
   }
   if ('association' in c) {
     const v = c.association, count = v.count ?? { op: '>=', value: 1 }
     const quantity = v.quantifier === 'all' ? '全部' : v.quantifier === 'count' ? `${countWords[count.op]} ${count.value} 个` : '至少一个'
-    return `${quantity} ${v.subject.class || '主体类别'} ${v.state === 'unmatched' ? '没有匹配到' : '匹配到'} ${v.object.class || '关联类别'}（${relationNames[v.relation]}${v.one_to_one === false ? '，允许复用关联目标' : '，一对一匹配'}）`
+    const objects = associationTargets(v), names = objects.map(t => targetName(t, '关联类别', detailed)).join('、')
+    const subject = targetName(v.subject, '主体类别', detailed)
+    const relation = relationDescription(v)
+    const subjectRequired = detailed ? '；没有主体时不满足此条件' : ''
+    if (v.state === 'count') {
+      const requirement = v.object_count ?? { op: '>', value: 1 }
+      return `${quantity} ${subject} 的 ${names} 关联目标${objects.length > 1 ? '总' : ''}数量${countWords[requirement.op]} ${requirement.value} 个（${relation}，逐主体统计${subjectRequired}）`
+    }
+    const state = objects.length > 1 ? (v.state === 'unmatched' ? '没有匹配到以下任何一类：' : '匹配到以下至少一类：') : (v.state === 'unmatched' ? '没有匹配到 ' : '匹配到 ')
+    const allocation = v.one_to_one === false ? '允许复用关联目标' : `一对一匹配${detailed ? `：每个 ${objects.map(t => t.class || '关联目标').join('、')} 最多匹配一个 ${v.subject.class || '主体'}` : ''}`
+    return `${quantity} ${subject} ${state}${names}（${relation}，${allocation}${subjectRequired}）`
   }
-  if (c.count.op === '==' && c.count.value === 0) return `没检测到 ${c.class || '未填写的类别'}`
-  if (c.count.op === '>=' && c.count.value === 1) return `检测到 ${c.class || '未填写的类别'}`
-  return `${c.class || '未填写的类别'} 的数量${countWords[c.count.op]} ${c.count.value} 个`
+  const name = targetName(c, '未填写的类别', detailed)
+  if (c.count.op === '==' && c.count.value === 0) return `没检测到 ${name}`
+  if (c.count.op === '>=' && c.count.value === 1) return `检测到 ${name}`
+  return `${name} 的数量${countWords[c.count.op]} ${c.count.value} 个`
 }
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 const validTarget = (v: unknown): v is Target => record(v) && typeof v.class === 'string' && typeof v.min_confidence === 'number' && Number.isFinite(v.min_confidence) && v.min_confidence >= 0 && v.min_confidence <= 1
@@ -62,8 +103,11 @@ export function validCondition(c: unknown, depth = 0): c is Condition {
   }
   if ('association' in value) {
     const v = value.association
-    return record(v) && validTarget(v.subject) && validTarget(v.object) &&
-      ['center_inside', 'overlap', 'near'].includes(String(v.relation)) && ['matched', 'unmatched'].includes(String(v.state)) &&
+    if (!record(v) || !validTarget(v.subject) || ('object' in v) === ('objects' in v)) return false
+    const objects = 'objects' in v ? v.objects : [v.object]
+    return Array.isArray(objects) && objects.length >= 1 && objects.length <= 32 && objects.every(validTarget) &&
+      ['center_inside', 'subject_center_inside', 'overlap', 'subject_overlap', 'near'].includes(String(v.relation)) && ['matched', 'unmatched', 'count'].includes(String(v.state)) &&
+      (v.state === 'count' ? validCount(v.object_count) && v.one_to_one === undefined : v.object_count === undefined) &&
       (v.quantifier === undefined || ['any', 'all', 'count'].includes(String(v.quantifier))) &&
       (v.count === undefined ? v.quantifier !== 'count' : validCount(v.count)) &&
       (v.one_to_one === undefined || typeof v.one_to_one === 'boolean') &&

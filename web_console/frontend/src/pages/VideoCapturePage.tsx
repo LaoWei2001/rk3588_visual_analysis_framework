@@ -17,6 +17,8 @@ import {
 } from '../api/videoCapture'
 import { chooseLocalFile, downloadToComputer, isSaveCancelled, localDownloadHint, writeResponseToFile } from '../utils/localFiles'
 import './VideoCapturePage.css'
+import { useAutoSync } from '../hooks/useAutoSync'
+import ConfigSyncNotice from '../components/ConfigSyncNotice'
 
 
 const MIB = 1024 * 1024
@@ -125,28 +127,8 @@ export default function VideoCapturePage() {
     return () => { disposed = true }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    let disposed = false
-    let pending = false
-    const load = async () => {
-      if (pending) return
-      pending = true
-      try {
-        const result = await fetchCaptureStatus()
-        if (!disposed) setStatus(result)
-      } catch (error) {
-        if (!disposed) setActionError(videoCaptureErrorMessage(error))
-      } finally {
-        pending = false
-      }
-    }
-    load()
-    const timer = window.setInterval(load, 1000)
-    return () => {
-      disposed = true
-      window.clearInterval(timer)
-    }
-  }, [])
+  const syncError = useAutoSync(fetchCaptureStatus, setStatus, { enabled: busy === '' })
+  const deviceSyncError = useAutoSync(fetchCaptureDevices, setUsbDevices, { enabled: busy === '', immediate: false })
 
   useEffect(() => () => {
     // 本地文件写入依赖此页面；离开页面时停止录制并完成已传输的 MP4。
@@ -286,6 +268,7 @@ export default function VideoCapturePage() {
         </div>
       )}
 
+      <ConfigSyncNotice error={syncError || deviceSyncError} />
       {saveMessage && <div className="capture-message">{saveMessage}</div>}
       <div className="video-capture-workspace">
         <section className="capture-preview-panel">

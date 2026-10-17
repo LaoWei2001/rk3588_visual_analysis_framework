@@ -43,7 +43,7 @@ struct Image
 struct Task
 {
     std::string id, revision, rules_json, model_id, roi, status = "等待有效推理结果";
-    int channel = -1, quality = 95;
+    int channel = -1;
     bool enabled = false, on_enter = false, foot = false, invalid = false;
     uint64_t saved = 0, limit = 0, deadline = 0, matched = 0, skipped = 0, last_frame_at = 0;
     uint64_t interval = 2000, confirm = 0, gap = 2000;
@@ -186,7 +186,7 @@ void encode_loop()
         bool ok = false;
         try
         {
-            ok = cv::imencode(".jpg", job.frame, job.image->jpeg, {cv::IMWRITE_JPEG_QUALITY, job.task->quality});
+            ok = cv::imencode(".jpg", job.frame, job.image->jpeg, {cv::IMWRITE_JPEG_QUALITY, 100});
         }
         catch (...)
         {
@@ -381,9 +381,8 @@ std::string remote_dataset_command(const std::string &request, std::vector<unsig
                 task->saved = number(root.get(), "saved", 0, 0, 1e12, true);
                 task->limit = number(root.get(), "max_samples", 0, 0, 1e9, true);
                 task->deadline = number(root.get(), "deadline_ms", 0, 0, 1e15, true);
-                task->interval = number(root.get(), "interval_sec", 2, .5, 86400) * 1000;
+                task->interval = number(root.get(), "interval_sec", 2, .3, 86400) * 1000;
                 task->confirm = number(root.get(), "confirm_sec", 0, 0, 60) * 1000;
-                task->quality = number(root.get(), "jpeg_quality", 95, 60, 100, true);
                 task->roi = text(root.get(), "roi_name");
                 const auto anchor = text(root.get(), "roi_anchor", "center"),
                            trigger = text(root.get(), "trigger_mode", "periodic");

@@ -60,6 +60,15 @@
 .dataset-task-counters { display:flex; gap:35px; margin:22px 0 16px }
 .dataset-task-counters>div { display:flex; flex-direction:column; gap:5px }.dataset-task-counters strong { font-size:25px; font-weight:600 }.dataset-task-counters span { font-size:12px; color:#9eaec3 }
 .dataset-task-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:16px }
+.dataset-task-logic { margin-top:16px; padding-top:14px; border-top:1px solid #3b4960; overflow-wrap:anywhere }
+.dataset-task-logic h4 { margin:0; font-size:14px; color:#d8e7fb }
+.dataset-task-rules { list-style:none; margin:10px 0 14px; padding:0; display:grid; gap:12px }
+.dataset-task-rules li { padding:10px 12px; border-left:3px solid #548cf6; border-radius:4px; background:#192334 }
+.dataset-task-rules strong { font-size:12px; color:#b1cefa }
+.dataset-task-rules p { margin:5px 0 0; color:#d3deee }
+.dataset-task-policy { margin:0; display:grid; gap:9px; font-size:12px; line-height:1.7 }
+.dataset-task-policy>div { display:grid; grid-template-columns:5em minmax(0,1fr); gap:10px }
+.dataset-task-policy dt { color:#91a6c0 }.dataset-task-policy dd { margin:0; color:#bac8db; min-width:0 }
 .dataset-empty { padding:22px 0 6px; color:#91a1b8; line-height:1.8; font-size:14px }
 @media(max-width:1050px) {
   .dataset-receiver-actions { grid-template-columns:minmax(0,1fr) minmax(0,1fr) }

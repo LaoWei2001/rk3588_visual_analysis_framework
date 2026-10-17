@@ -122,6 +122,28 @@ def _values(scope: str, field: str, identifier: str) -> List[str]:
     return [unescape_terse(line.strip()) for line in result.stdout.splitlines() if line.strip()]
 
 
+def _read_fields(scope: str, fields: Iterable[str], identifier: str) -> Dict[str, List[str]]:
+    """One read-only nmcli call per device/profile, with vendor compatibility."""
+    names = tuple(fields)
+    suffix = ("device", "show", identifier) if scope == "device" else ("connection", "show", "uuid", identifier)
+    result = nmcli("-t", "-m", "multiline", "-f", ",".join(names), *suffix)
+    if result.returncode != 0:
+        return {name: _values(scope, name, identifier) for name in names}
+    values: Dict[str, List[str]] = {name: [] for name in names}
+    for line in result.stdout.splitlines():
+        key, separator, raw = line.partition(":")
+        key = re.sub(r"\[\d+\]$", "", key.strip())
+        if not separator or key not in values:
+            # Older vendor builds may ignore multiline output mode.
+            if line.strip():
+                return {name: _values(scope, name, identifier) for name in names}
+            continue
+        value = unescape_terse(raw.strip())
+        if value:
+            values[key].append(value)
+    return values
+
+
 def _validate_uuid(value: str) -> str:
     clean = value.strip()
     if not _UUID_RE.fullmatch(clean):
@@ -208,6 +230,39 @@ def _write_transaction(state: Dict[str, Any]) -> None:
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+    _prune_completed_transactions(path)
+    status = state.get('status')
+    if status in ('confirmed', 'rolled_back', 'rollback_failed'):
+        from .runtime_loader import load_runtime
+        audit = load_runtime('recovery_history')
+        rollback = status != 'confirmed'
+        result = 'failed' if status == 'rollback_failed' else 'performed'
+        reason = (state.get('failure_reason') or '网络切换未确认、被取消或执行异常，恢复原网络配置') if rollback else '用户应用并确认网络配置'
+        detail = str(state.get('error') or '配置操作已完成；网络连通情况以实际检测为准。')
+        event_id = audit.safe_record('network', 'network_rollback' if rollback else 'manual_network_config',
+            reason, f"网卡 {state.get('device', '')}：" + ('恢复原连接配置' if rollback else '应用新的网络连接配置'),
+            result, detail, event_id='network-transaction:' + state['id'], source='Web 网络设置')
+        if event_id:
+            try:
+                audit.update(event_id, result, detail)
+            except (OSError, ValueError) as exc:
+                print(f'[RecoveryHistory] 网络配置结果保存失败：{exc}', flush=True)
+
+
+def _prune_completed_transactions(current_path=None) -> None:
+    """Keep recent completed diagnostics; active rollback data remains intact."""
+    completed = []
+    for path in TRANSACTION_DIR.glob('*.json'):
+        if path.is_symlink() or not re.fullmatch(r'[0-9a-f]{32}\.json', path.name):
+            continue
+        try:
+            value = json.loads(path.read_text(encoding='utf-8'))
+            if isinstance(value, dict) and value.get('status') in ('confirmed', 'committed', 'rolled_back', 'rollback_failed', 'failed', 'cancelled'):
+                completed.append(path)
+        except (OSError, ValueError):
+            continue
+    for path in sorted(completed, key=lambda item: (item == current_path, item.stat().st_mtime_ns, item.name), reverse=True)[20:]:
+        path.unlink(missing_ok=True)
 
 
 def _read_transaction(transaction_id: str) -> Dict[str, Any]:
@@ -269,40 +324,44 @@ def network_snapshot() -> Dict[str, Any]:
         }
 
     by_uuid = {row["uuid"]: row for row in connections}
+    for connection in connections:
+        fields = ["ipv4.method", "ipv4.addresses", "ipv4.gateway", "ipv4.dns"]
+        if connection["type"] == "wifi":
+            fields += ["802-11-wireless.ssid", "802-11-wireless-security.key-mgmt"]
+        values = _read_fields("connection", fields, connection["uuid"])
+        connection.update({
+            "ipv4_method": (values["ipv4.method"] or [""])[0],
+            "addresses": values["ipv4.addresses"], "gateway": (values["ipv4.gateway"] or [""])[0],
+            "dns": values["ipv4.dns"], "ssid": (values.get("802-11-wireless.ssid") or [""])[0],
+            "security": (values.get("802-11-wireless-security.key-mgmt") or ["open"])[0] if connection["type"] == "wifi" else "",
+        })
     interfaces: List[Dict[str, Any]] = []
     for row in devices:
         device = row["device"]
-        uuid_values = _values("device", "GENERAL.CON-UUID", device)
+        live = _read_fields("device", ("GENERAL.CON-UUID", "GENERAL.HWADDR", "IP4.ADDRESS", "IP4.GATEWAY", "IP4.DNS"), device)
+        uuid_values = live["GENERAL.CON-UUID"]
         connection_uuid = uuid_values[0] if uuid_values and _UUID_RE.fullmatch(uuid_values[0]) else ""
-        method_values = _values("connection", "ipv4.method", connection_uuid) if connection_uuid else []
-        ssid_values = _values("connection", "802-11-wireless.ssid", connection_uuid) if connection_uuid and row["type"] == "wifi" else []
+        profile = by_uuid.get(connection_uuid)
+        if profile:
+            method_values, ssid_values = [profile["ipv4_method"]], [profile["ssid"]]
+        elif connection_uuid:
+            fields = ["ipv4.method"] + (["802-11-wireless.ssid"] if row["type"] == "wifi" else [])
+            values = _read_fields("connection", fields, connection_uuid)
+            method_values, ssid_values = values["ipv4.method"], values.get("802-11-wireless.ssid", [])
+        else:
+            method_values, ssid_values = [], []
         interfaces.append({
             **row,
             "connection_uuid": connection_uuid or None,
-            "mac": (_values("device", "GENERAL.HWADDR", device) or [""])[0],
-            "addresses": _values("device", "IP4.ADDRESS", device),
-            "gateway": (_values("device", "IP4.GATEWAY", device) or [""])[0],
-            "dns": _values("device", "IP4.DNS", device),
+            "mac": (live["GENERAL.HWADDR"] or [""])[0],
+            "addresses": live["IP4.ADDRESS"],
+            "gateway": (live["IP4.GATEWAY"] or [""])[0],
+            "dns": live["IP4.DNS"],
             "ipv4_method": (method_values or [""])[0],
             "ssid": (ssid_values or [""])[0],
             "configurable": row["state"] != "unmanaged",
             "active_profile": by_uuid.get(connection_uuid),
         })
-
-    for connection in connections:
-        connection_uuid = connection["uuid"]
-        connection["ipv4_method"] = (_values("connection", "ipv4.method", connection_uuid) or [""])[0]
-        connection["addresses"] = _values("connection", "ipv4.addresses", connection_uuid)
-        connection["gateway"] = (_values("connection", "ipv4.gateway", connection_uuid) or [""])[0]
-        connection["dns"] = _values("connection", "ipv4.dns", connection_uuid)
-        connection["ssid"] = (
-            (_values("connection", "802-11-wireless.ssid", connection_uuid) or [""])[0]
-            if connection["type"] == "wifi" else ""
-        )
-        connection["security"] = (
-            (_values("connection", "802-11-wireless-security.key-mgmt", connection_uuid) or ["open"])[0]
-            if connection["type"] == "wifi" else ""
-        )
 
     rollback_supported = bool(shutil.which("systemd-run") and shutil.which("systemctl"))
     pending = _active_transaction()

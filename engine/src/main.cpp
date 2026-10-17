@@ -71,6 +71,7 @@
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
 #include "runtime/process_signals.h"
+#include "runtime/service_watchdog.h"
 #include "yolo/model_inspection.h"
 #include <channel.h>
 #include <gpio.h>
@@ -212,6 +213,18 @@ int main(int argc, char **argv)
 
     if (argc == 3 && strcmp(argv[1], "--inspect-model") == 0)
         return inspect_model_cli(argv[2]);
+
+    if (argc == 2 && strcmp(argv[1], "--watchdog-protocol") == 0)
+    {
+        printf("rk3588-service-watchdog-v1\n");
+        return 0;
+    }
+
+    struct WatchdogLifetime
+    {
+        WatchdogLifetime() { service_watchdog::start(); }
+        ~WatchdogLifetime() { service_watchdog::stop(); }
+    } watchdog_lifetime;
 
     const char *cfgPath = (argc > 1) ? argv[1] : "./assets/config.json";
     int exit_code = 0;
@@ -417,12 +430,14 @@ int main(int argc, char **argv)
     }
 
     printf("\n[Main] === All threads started. Entering main loop. ===\n\n");
+    service_watchdog::main_heartbeat();
     if (app_ctrl_get_enable_disp())
         display(&g_pCtrl->dispDesc);
     else
     {
         while (g_pCtrl->isRunning.load() && !g_shutdown_signal)
         {
+            service_watchdog::main_heartbeat();
             if (g_pause_toggle_signal)
             {
                 g_pause_toggle_signal = 0;

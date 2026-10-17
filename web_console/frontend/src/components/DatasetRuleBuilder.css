@@ -20,7 +20,6 @@
 .dataset-complex-note, .dataset-rule-error { font-size: 11px; line-height: 1.6; padding-bottom: 8px; }.dataset-complex-note { color: #a7b7cd; }.dataset-rule-error { color: #ffaaaa; }
 .dataset-details > summary { cursor: pointer; font-size: 12px; color: #99adc9; padding: 7px 0; }
 .dataset-details-body { display: flex; flex-direction: column; gap: 10px; padding-top: 5px; }
-.dataset-rule-name { font-size: 12px; color: #adb8c8; }.dataset-rule-name > input { display: block; width: 100%; box-sizing: border-box; margin-top: 5px; }
 .dataset-condition { min-width: 0; }
 .dataset-rule-mode { display: block; color: #b9c7d9; font-size: 12px; margin-bottom: 12px; }
 .dataset-rule-mode > select { display: block; width: 100%; margin-top: 5px; box-sizing: border-box; }
@@ -31,6 +30,9 @@
 .dataset-condition label input, .dataset-condition label select { display: block; width: 100%; min-width: 0; box-sizing: border-box; margin-top: 5px; }
 .dataset-detection { padding: 0 10px 10px; border: 1px solid #36455d; background: #182437; border-radius: 6px; }
 .dataset-count-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.dataset-association-target { display: flex; gap: 6px; align-items: flex-end; margin-bottom: 8px; }
+.dataset-association-target > label { flex: 1; min-width: 0; }
+.dataset-association-target > button { flex: 0 0 28px; margin-bottom: 2px; }
 .dataset-field-help { margin: 5px 0 8px; color: #9ba9bd; font-size: 11px; line-height: 1.6; }
 .dataset-condition-reading { color: #bcdcff; font-size: 12px; padding-top: 6px; overflow-wrap: anywhere; line-height: 1.6; }
 .dataset-condition-child { margin-top: 12px; }
@@ -41,4 +43,4 @@
 .dataset-group-action { margin-top: 10px; }
 .dataset-nesting-tools { margin-top: 10px; border-top: 1px solid #36455d; padding-top: 6px; }
 .dataset-nesting-tools > summary { cursor: pointer; font-size: 11px; color: #99adc9; padding: 4px 0; }
-.dataset-nesting-tools > button { display: block; margin-top: 6px; }
+.dataset-nesting-tools > button { display: block; max-width: 100%; margin-top: 6px; white-space: normal; text-align: left; line-height: 1.5; }

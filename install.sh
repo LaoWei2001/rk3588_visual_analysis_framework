@@ -9,6 +9,8 @@ GPIO_CONTROL_UNIT="rk3588-gpio-control.service"
 GPIO_RESTORE_UNIT="rk3588-gpio-restore.service"
 GPIO_SERVICE_INSTALLER="$PROJECT_ROOT/services/framework/gpio_state/install.sh"
 WEB_CONSOLE_DEPLOYER="$PROJECT_ROOT/web_console/deploy.sh"
+WATCHDOG_INSTALLER="$PROJECT_ROOT/services/framework/system_watchdog/install_watchdog.py"
+RUNTIME_INSTALLER="$PROJECT_ROOT/services/framework/runtime_manager/install_runtime.py"
 
 usage() {
     cat <<'EOF'
@@ -22,6 +24,7 @@ usage() {
   online 适合仍可访问 APT、PyPI 和 npm 镜像的新设备。
   offline 适合已经准备好依赖的设备；缺少前端产物时使用本地依赖构建。
   完整离线 bundle 首次部署仍直接运行 bundle 根目录的 install_offline.sh。
+  安装同时接入硬件看门狗和独立故障恢复监测；未识别硬件时会明确报告。
 EOF
 }
 
@@ -55,6 +58,14 @@ show_status() {
     unit_summary "$CONSOLE_UNIT"
     unit_summary "$GPIO_CONTROL_UNIT"
     unit_summary "$GPIO_RESTORE_UNIT"
+    unit_summary "rk3588-recovery.timer"
+    unit_summary "rk3588-runtime-manager.service"
+    unit_summary "rk3588-network-recovery.service"
+    if [ -f "$WATCHDOG_INSTALLER" ]; then
+        echo
+        echo "  系统硬件看门狗："
+        python3 "$WATCHDOG_INSTALLER" status || true
+    fi
     echo
     if [ -x /usr/local/bin/rk3588-gpioctl ]; then
         echo "  GPIO控制工具：/usr/local/bin/rk3588-gpioctl"
@@ -151,6 +162,10 @@ install_platform() {
         echo "[错误] 缺少可执行的 Web 控制台部署器：$WEB_CONSOLE_DEPLOYER" >&2
         exit 1
     fi
+    if [ ! -f "$RUNTIME_INSTALLER" ]; then
+        echo "[错误] 缺少独立设备运行平台安装器：$RUNTIME_INSTALLER" >&2
+        exit 1
+    fi
 
     if [ "$mode" = online ]; then
         echo ">>> [1/3] 准备项目全部依赖和预构建前端..."
@@ -162,6 +177,9 @@ install_platform() {
 
     echo ">>> [2/3] 安装 GPIO 控制与电平保持服务..."
     bash "$GPIO_SERVICE_INSTALLER"
+
+    echo ">>> 安装独立设备运行管理与硬件看门狗..."
+    python3 "$RUNTIME_INSTALLER"
 
     echo ">>> [3/3] 部署 Web 控制台..."
     bash "$WEB_CONSOLE_DEPLOYER"
@@ -192,10 +210,16 @@ uninstall_platform() {
     confirm_uninstall "$assume_yes"
 
     systemctl disable --now "$CONSOLE_UNIT" >/dev/null 2>&1 || true
+    systemctl disable --now rk3588-runtime-manager.service >/dev/null 2>&1 || true
+    systemctl disable --now rk3588-network-recovery.service >/dev/null 2>&1 || true
+    systemctl disable --now rk3588-recovery.timer >/dev/null 2>&1 || true
+    systemctl stop rk3588-recovery.service >/dev/null 2>&1 || true
     systemctl disable --now "$GPIO_RESTORE_UNIT" >/dev/null 2>&1 || true
     systemctl disable --now "$GPIO_CONTROL_UNIT" >/dev/null 2>&1 || true
 
     rm -f \
+        /etc/systemd/system/rk3588-recovery.timer \
+        /etc/systemd/system/rk3588-recovery.service \
         "/etc/systemd/system/$CONSOLE_UNIT" \
         "/etc/systemd/system/$GPIO_CONTROL_UNIT" \
         "/etc/systemd/system/$GPIO_RESTORE_UNIT" \

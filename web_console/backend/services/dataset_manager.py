@@ -12,21 +12,29 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import HTTPException
 from services.data_dir import APPS_ROOT
 from services.dataset_engine import DatasetEngineClient, DatasetEngineRejected, DatasetEngineUnavailable
+from services.dataset_validation import validate_rules
 
 
 class DatasetManager:
     def __init__(self, root: Path = APPS_ROOT, database: Path | None = None,
-                 engine: DatasetEngineClient | None = None):
+                 engine: DatasetEngineClient | None = None,
+                 process_identity: Callable[[str], str | None] | None = None):
         self.root = root
         self.database = database or root / '.console_dataset.sqlite'
         self.lock = threading.RLock()
         self._ack_secret: str | None = None
         self.engine = engine if engine is not None else DatasetEngineClient()
+        self.process_identity = process_identity or self._process_identity
+
+    @staticmethod
+    def _process_identity(app: str) -> str | None:
+        from services import process_manager
+        return process_manager.get_process_identity(app)
 
     @contextmanager
     def db(self):
@@ -44,6 +52,9 @@ class DatasetManager:
           CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS task_removals (
             id TEXT PRIMARY KEY, app TEXT NOT NULL, command TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS task_runtime (
+            task TEXT PRIMARY KEY, process_identity TEXT,
+            pause_reason TEXT NOT NULL DEFAULT '');
         ''')
         try:
             with connection:
@@ -74,8 +85,16 @@ class DatasetManager:
             return [dict(row) for row in db.execute(query, (app,) if app else ())]
 
     @staticmethod
-    def command(row: dict) -> dict:
+    def task_config(row: dict) -> dict:
         result = json.loads(row['config'])
+        # Preserve revisions and pending ACKs of existing tasks while retiring
+        # the setting from responses and engine commands.
+        result.pop('jpeg_quality', None)
+        return result
+
+    @staticmethod
+    def command(row: dict) -> dict:
+        result = DatasetManager.task_config(row)
         result.update(op='configure', task_id=row['id'], channel_id=row['channel'],
                       revision=row['revision'], saved=row['saved'], enabled=bool(row['enabled']),
                       deadline_ms=int(row['deadline'] * 1000))
@@ -85,8 +104,48 @@ class DatasetManager:
         with self.lock:
             return self._sync(app)
 
+    def pause_app(self, app: str, reason: str = '视觉程序已停止，采集任务已自动暂停；重新启动后请点击“开始采集”') -> None:
+        # Durable before stopping/replacing the process, including quick restarts.
+        # Never change configs, revisions, deadlines, counters or pending ACKs.
+        with self.lock, self.db() as db:
+            for row in db.execute('SELECT id FROM tasks WHERE app=? AND enabled=1', (app,)).fetchall():
+                db.execute('''INSERT INTO task_runtime(task,pause_reason) VALUES (?,?)
+                  ON CONFLICT(task) DO UPDATE SET pause_reason=excluded.pause_reason''', (row['id'], reason))
+            db.execute('UPDATE tasks SET enabled=0 WHERE app=? AND enabled=1', (app,))
+
+    def _reconcile_process(self, app: str) -> str | None:
+        try:
+            self.app_dir(app)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            # Deleted app directories may still have durable task records from
+            # an older console. They must not retain an enabled state either.
+            identity = None
+        else:
+            identity = self.process_identity(app)
+        with self.db() as db:
+            rows = db.execute('''SELECT tasks.id,task_runtime.process_identity FROM tasks
+              LEFT JOIN task_runtime ON task_runtime.task=tasks.id
+              WHERE tasks.app=? AND tasks.enabled=1''', (app,)).fetchall()
+            for row in rows:
+                previous = row['process_identity']
+                if identity is None or (previous is not None and previous != identity):
+                    reason = ('视觉程序已停止，采集任务已自动暂停；重新启动后请点击“开始采集”'
+                              if identity is None else '视觉程序已重新启动，采集任务已自动暂停；请点击“开始采集”')
+                    db.execute('UPDATE tasks SET enabled=0 WHERE id=?', (row['id'],))
+                    db.execute('''INSERT INTO task_runtime(task,pause_reason) VALUES (?,?)
+                      ON CONFLICT(task) DO UPDATE SET pause_reason=excluded.pause_reason''', (row['id'], reason))
+                elif previous is None:
+                    # Existing enabled tasks survive a console upgrade/restart
+                    # while their vision process is still running.
+                    db.execute('''INSERT INTO task_runtime(task,process_identity) VALUES (?,?)
+                      ON CONFLICT(task) DO UPDATE SET process_identity=excluded.process_identity''', (row['id'], identity))
+        return identity
+
     def _sync(self, app: str) -> tuple[dict, str]:
         try:
+            self._reconcile_process(app)
             response, _ = self.rpc(app, {'op': 'status'})
             response = self._sync_removals(app, response)
             existing = {item['task_id']: item for item in response['tasks']}
@@ -111,7 +170,7 @@ class DatasetManager:
                 response, _ = self.rpc(app,{'op':'ack','task_id':task_id,'sample_id':sample_id,'saved':saved})
             return response, ''
         except HTTPException as exc:
-            return {'tasks': []}, str(exc.detail)
+            return {'tasks': [], 'unavailable': exc.status_code == 503}, str(exc.detail)
 
     def _sync_removals(self, app: str, response: dict) -> dict:
         with self.db() as db:
@@ -170,6 +229,7 @@ class DatasetManager:
                     labels = [s for s in label_path.read_text(errors='replace').splitlines() if s]
             result.append({'id': channel.get('id', index), 'logic': channel.get('logic', ''),
                            'labels': labels, 'threshold': models[0].get('obj_thresh', .3) if len(models)==1 else .3,
+                           'detect_classes': models[0].get('detect_classes', []) if len(models)==1 else [],
                            'eligible': len(models)==1 and models[0].get('model_type') in ['yolov8_det','yolov5','yolov5_seg'],
                            'rois': [r.get('name','') for r in channel.get('roi_zones', [])]})
         return result
@@ -181,40 +241,71 @@ class DatasetManager:
         inventory = receiver.get('inventory') or {}
         counts = inventory.get('counts')
         files = {(item['app'], item['channel_id']): item['count'] for item in counts or []}
+        with self.lock, self.db() as db:
+            pauses = {row['task']: row['pause_reason'] for row in db.execute('SELECT task,pause_reason FROM task_runtime')}
         items = []
         for row in self.rows(app):
             item = live.get(row['id'], {})
-            items.append({'id': row['id'], 'channel_id': row['channel'], 'config': json.loads(row['config']),
+            items.append({'id': row['id'], 'channel_id': row['channel'], 'config': self.task_config(row),
                           'enabled': bool(row['enabled']), 'saved': row['saved'], 'deadline': row['deadline'],
                           'current_files': files.get((app, row['channel']), 0) if counts is not None else None,
                           'files_updated_at': receiver.get('inventory_seen', 0), 'files_error': inventory.get('error', ''),
                           'pending': item.get('pending', 0), 'matched': item.get('matched', 0), 'skipped': item.get('skipped', 0),
-                          'status': item.get('status', error or '等待视觉程序启动')})
+                          'status': (pauses.get(row['id']) if not row['enabled'] else '') or item.get('status', '配置已保存，等待视觉程序启动' if response.get('unavailable') else error or '等待同步到视觉程序')})
         return {'tasks': items, 'channels': self.channels(app), 'receiver': self.receiver_status(receiver), 'engine_error': error}
 
     def save(self, app: str, channel: int, config: dict) -> dict:
+        config = dict(config)
+        config.pop('jpeg_quality', None)
         self.app_dir(app)
-        with self.lock, self.db() as db:
+        with self.lock:
+            self._reconcile_process(app)
+            return self._save(app, channel, config)
+
+    def _save(self, app: str, channel: int, config: dict) -> dict:
+        with self.db() as db:
             old = db.execute('SELECT * FROM tasks WHERE app=? AND channel=?', (app, channel)).fetchone()
             if old and old['enabled']:
                 raise HTTPException(409, '请先暂停任务再修改配置')
             row = dict(old) if old else {'id': secrets.token_hex(12), 'app': app, 'channel': channel, 'saved': 0, 'enabled': False, 'deadline': 0}
-            row['config'] = json.dumps(config, ensure_ascii=False, sort_keys=True, allow_nan=False)
+            try:
+                row['config'] = json.dumps(config, ensure_ascii=False, sort_keys=True, allow_nan=False)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(409, '采集配置必须使用有限数值和有效的 JSON 字段') from exc
             row['revision'] = hashlib.sha256(row['config'].encode()).hexdigest()[:24]
             if old and json.loads(old['config']).get('duration_hours') != config.get('duration_hours'):
                 row['deadline'] = 0
-            # Validate against the running model, including labels/filters/confidence floor.
-            self.rpc(app, self.command(row))
+            # Use the live model when available, otherwise validate the saved app
+            # configuration. Creation/editing does not depend on engine uptime.
+            try:
+                self.rpc(app, self.command(row))
+            except HTTPException as exc:
+                if exc.status_code != 503:
+                    raise
+                source = next((item for item in self.channels(app) if item['id'] == channel), None)
+                if channel < 0 or channel >= 32 or not source or not source['eligible']:
+                    raise HTTPException(409, '采集通道不存在、已关闭或未配置单个检测模型') from exc
+                labels = source['labels']
+                if not labels or len(set(labels)) != len(labels):
+                    raise HTTPException(409, '模型类别表无法读取、为空或包含重复名称') from exc
+                validate_rules(config.get('rules'), labels, source['detect_classes'], source['threshold'])
             db.execute('''INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?)
               ON CONFLICT(id) DO UPDATE SET config=excluded.config,revision=excluded.revision,deadline=excluded.deadline''',
                        (row['id'], app, channel, row['config'], row['revision'], 0, row['saved'], row['deadline']))
         return self.list(app)
 
     def set_enabled(self, app: str, task_id: str, enabled: bool) -> dict:
+        with self.lock:
+            identity = self._reconcile_process(app)
+            return self._set_enabled(app, task_id, enabled, identity)
+
+    def _set_enabled(self, app: str, task_id: str, enabled: bool, identity: str | None) -> dict:
         with self.lock, self.db() as db:
             old = db.execute('SELECT * FROM tasks WHERE app=? AND id=?', (app, task_id)).fetchone()
             if not old:
                 raise HTTPException(404, '采集任务不存在')
+            if enabled and identity is None:
+                raise HTTPException(503, '视觉程序已停止，请先启动视觉程序，再点击“开始采集”')
             row = dict(old)
             if enabled and not row['enabled']:
                 config = json.loads(row['config'])
@@ -235,6 +326,9 @@ class DatasetManager:
                 # A stopped/disconnected engine must not prevent cancelling auto-resume.
                 # The reconciler applies this pause as soon as its socket returns.
             db.execute('UPDATE tasks SET enabled=?,deadline=? WHERE id=?', (int(enabled), row['deadline'], task_id))
+            db.execute('''INSERT INTO task_runtime(task,process_identity,pause_reason) VALUES (?,?,'')
+              ON CONFLICT(task) DO UPDATE SET process_identity=excluded.process_identity,pause_reason='' ''',
+                       (task_id, identity))
         return self.list(app)
 
     def remove(self, app: str, task_id: str) -> dict:
@@ -266,6 +360,7 @@ class DatasetManager:
                            (task_id, app, json.dumps(command, ensure_ascii=False)))
             db.execute('DELETE FROM tasks WHERE id=?', (task_id,))
             db.execute('DELETE FROM acknowledgments WHERE task=?', (task_id,))
+            db.execute('DELETE FROM task_runtime WHERE task=?', (task_id,))
         return self.list(app)
 
     def settings(self, key: str, value: Any = None):

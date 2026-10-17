@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  apiErrorMessage, fetchDeliveryAdapters, saveReportContract,
+  apiErrorMessage, fetchDeliveryAdapters, fetchReportContracts, saveReportContract,
   type DeliveryAdapterDef, type DeliveryConnection, type ReportContract, type ReportField,
 } from '../api/client'
 import { copyText } from '../utils/clipboard'
+import { configSignature, useAutoSync } from '../hooks/useAutoSync'
+import ConfigSyncNotice from './ConfigSyncNotice'
 
 type MediaKind = 'annotated_image' | 'raw_image' | 'video'
 type Mapping = ReportContract['mapping'][number]
@@ -320,6 +322,11 @@ export default function ReportContractEditor({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [dirty, setDirty] = useState(false)
+  const [conflict, setConflict] = useState(false)
+  const baseline = useRef(configSignature(contract))
+  const latestContract = useRef(contract)
+  const contractScope = `${appName}/${adapter}/${logicName}/${contract?.id || ''}`
+  const previousScope = useRef(contractScope)
   const [previewWidth, setPreviewWidth] = useState(storedPreviewWidth)
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
   const layoutRef = useRef<HTMLDivElement>(null)
@@ -354,10 +361,27 @@ export default function ReportContractEditor({
   }, [])
 
   useEffect(() => {
+    latestContract.current = contract
+    if (previousScope.current === contractScope && dirty) {
+      setConflict(configSignature(contract) !== baseline.current)
+      return
+    }
+    previousScope.current = contractScope
     setDraft(clone(contract ?? emptyContract(adapter, logicName, eventTypes)))
+    baseline.current = configSignature(contract); setConflict(false)
     setError('')
     clearDirty()
-  }, [adapter, contract, logicName, eventTypes.join('|')])
+  }, [contractScope, configSignature(contract), eventTypes.join('|')])
+
+  const syncError = useAutoSync(() => fetchReportContracts(appName), catalog => {
+    if (!contract) return
+    const value = catalog.find(item => item.id === contract.id) || null
+    latestContract.current = value
+    const signature = configSignature(value)
+    if (dirty || !value) { setConflict(signature !== baseline.current); return }
+    if (signature !== baseline.current) setDraft(clone(value))
+    baseline.current = signature; setConflict(false)
+  }, { enabled: !!contract && !saving, scope: contractScope, immediate: false })
 
   useEffect(() => {
     fetchDeliveryAdapters(appName).then(setAdapters).catch(() => setAdapters([]))
@@ -520,12 +544,21 @@ export default function ReportContractEditor({
   }
 
   const save = async () => {
+    if (conflict || syncError) return
     setError('')
     setSaving(true)
     try {
+      if (contract) {
+        const latest = (await fetchReportContracts(appName)).find(item => item.id === contract.id) || null
+        if (configSignature(latest) !== baseline.current) {
+          latestContract.current = latest; setConflict(true)
+          throw new Error('底层接口模板已变化，请重新同步后再保存')
+        }
+      }
       const normalized = normalizedDraft(true)
       const saved = await saveReportContract(appName, normalized)
       setDraft(clone(saved))
+      baseline.current = configSignature(saved); latestContract.current = saved; setConflict(false)
       clearDirty()
       onSaved(saved)
     } catch (reason) {
@@ -629,7 +662,7 @@ export default function ReportContractEditor({
     window.setTimeout(() => setCopyStatus('idle'), 1800)
   }
 
-  return <div className="report-contract-editor">
+  return <fieldset className="report-contract-editor config-write-lock" disabled={saving}>
     <div className="report-contract-pipeline" aria-label="上报数据处理流程">
       <span>1　算法产生的数据</span>
       <b>→</b>
@@ -879,12 +912,18 @@ export default function ReportContractEditor({
       </aside>
     </div>
 
+    <ConfigSyncNotice error={syncError} conflict={conflict} onReload={() => {
+      if (latestContract.current) {
+        setDraft(clone(latestContract.current)); baseline.current = configSignature(latestContract.current)
+        setConflict(false); clearDirty()
+      }
+    }} />
     {error && <div className="report-contract-error">{error}</div>}
     <div className="report-contract-actions">
       <button type="button" disabled={saving} onClick={exportJson}>导出 JSON</button>
-      <button type="button" disabled={saving} onClick={save}>
+      <button type="button" disabled={saving || conflict || !!syncError} onClick={save}>
         {saving ? '保存中…' : '保存接口模板'}
       </button>
     </div>
-  </div>
+  </fieldset>
 }

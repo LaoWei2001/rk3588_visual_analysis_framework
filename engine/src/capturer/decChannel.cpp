@@ -4,6 +4,7 @@
 #include "pipeline/pipeline_runtime.h"
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
+#include "runtime/service_watchdog.h"
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -427,6 +428,8 @@ static void *busListen(void *para)
             gst_message_unref(msg);
         } while (!terminate);
 
+        service_watchdog::Progress cleanup_progress("capture cleanup");
+        cleanup_progress.begin();
         /* 管道清理：始终由 busListen 线程独占处理，析构函数不触碰 */
         gst_object_unref(bus);
 
@@ -446,6 +449,7 @@ static void *busListen(void *para)
         if (pThis)
             pThis->detachPipeline(pPipeLine);
         gst_object_unref(pPipeLine);
+        cleanup_progress.end();
 
         /* 仅在运行中才重连 */
         if (need_reconnect && pThis && g_pCtrl && g_pCtrl->isRunning)
@@ -1176,6 +1180,8 @@ bool DecChannel::seekFilePlayback(int64_t position_ms, int64_t &actual_position_
 
 void DecChannel::reconnect()
 {
+    thread_local service_watchdog::Progress watchdog_progress("capture reconnect");
+    service_watchdog::Scope watchdog_scope(watchdog_progress);
     /* 退出中不再重连，防止 use-after-free */
     if (!g_pCtrl || !g_pCtrl->isRunning)
         return;
