@@ -66,6 +66,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await stream._stream_pool.shutdown()
         watchdog_task.cancel()
         with suppress(asyncio.CancelledError):
             await watchdog_task
@@ -227,8 +228,8 @@ if FRONTEND_DIST.exists():
     async def spa_fallback(full_path: str):
         target = FRONTEND_DIST / full_path
         if target.is_file():
-            return FileResponse(str(target))
-        return FileResponse(str(FRONTEND_DIST / "index.html"))
+            return FileResponse(str(target), headers={"Cache-Control": "no-store"} if target.suffix == ".html" else None)
+        return FileResponse(str(FRONTEND_DIST / "index.html"), headers={"Cache-Control": "no-store"})
 else:
     @app.get("/")
     async def root():

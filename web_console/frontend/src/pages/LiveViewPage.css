@@ -301,6 +301,17 @@
   object-fit: contain;
 }
 
+.live-view-video-snapshot:not([hidden]) {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  pointer-events: none;
+}
+
 /* 普通窗口与全屏都把控制栏固定到实际画面的各个 tile 底部。 */
 .live-view-file-timelines {
   position: absolute;
@@ -379,6 +390,7 @@
 
 .live-view-loading {
   position: absolute;
+  z-index: 2;
   inset: 0;
   display: flex;
   flex-direction: column;
@@ -388,6 +400,19 @@
   color: var(--text2);
   font-size: 12px;
   pointer-events: none;
+}
+
+.live-view-loading.reconnecting {
+  inset: auto 0 0;
+  padding: 18px;
+  gap: 6px;
+  color: #e2e8f0;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+}
+
+.live-view-loading.reconnecting .live-view-spinner,
+.live-view-loading.reconnecting .live-view-progress {
+  display: none;
 }
 
 .live-view-spinner {
@@ -616,10 +641,17 @@
   color: #86efac;
 }
 
+.live-view-log-status.paused {
+  color: #fcd34d;
+}
+
 .live-view-console {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  contain: layout paint;
   padding: 10px 11px;
   color: #cbd5e1;
   font-family: 'Consolas', 'Menlo', monospace;

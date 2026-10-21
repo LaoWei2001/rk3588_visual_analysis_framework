@@ -1,4 +1,5 @@
 #include "rtsp/live_source.h"
+#include "rtsp/media_source.h"
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
@@ -126,10 +127,51 @@ static void latest_decoded_frame_test()
     gst_object_unref(pipeline);
     std::puts("Decoded queue resumes at latest frame with original timestamp");
 }
+static void retired_media_cannot_clear_current_source_test()
+{
+    auto *old_media = gst_rtsp_media_new(gst_pipeline_new(nullptr));
+    auto *new_media = gst_rtsp_media_new(gst_pipeline_new(nullptr));
+    auto *old_source = gst_element_factory_make("appsrc", nullptr);
+    auto *new_source = gst_element_factory_make("appsrc", nullptr);
+    assert(old_media && new_media && old_source && new_source);
+    bool old_source_destroyed = false;
+    g_object_weak_ref(G_OBJECT(old_source), [](gpointer data, GObject *) {
+        *static_cast<bool *>(data) = true;
+    }, &old_source_destroyed);
+    RtspMediaSource source;
+    source.replace(old_media, old_source);
+    GstElement *reader = source.acquire();
+    assert(reader == old_source);
+    gst_object_unref(old_source); // Only the registry and feeder now own it.
+    source.replace(new_media, new_source);
+    // Simulate an unprepared callback arriving after the successor was published.
+    assert(!source.release(old_media));
+    assert(source.active());
+    GstElement *current = source.acquire();
+    assert(current == new_source);
+    gst_object_unref(current);
+    assert(source.release(new_media));
+    assert(!source.active() && source.acquire() == nullptr);
+    // A feeder that acquired the old source may finish safely after replacement.
+    assert(GST_IS_ELEMENT(reader));
+    assert(!old_source_destroyed);
+    gst_object_unref(reader);
+    assert(old_source_destroyed);
+    source.replace(old_media, new_source);
+    source.clear();
+    assert(!source.release(old_media));
+    assert(!source.active() && source.acquire() == nullptr);
+    gst_object_unref(new_source);
+    g_object_unref(old_media);
+    g_object_unref(new_media);
+    std::puts("Retired media cannot clear a successor or reactivate a stopped source");
+}
+
 int main(int argc, char **argv)
 {
     gst_init(&argc, &argv);
     pressure_test(false);
     pressure_test(true);
     latest_decoded_frame_test();
+    retired_media_cannot_clear_current_source_test();
 }

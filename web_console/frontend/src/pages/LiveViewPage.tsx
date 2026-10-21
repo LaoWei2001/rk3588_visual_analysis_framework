@@ -5,7 +5,6 @@ import {
   fetchFilePlayback,
   fetchLogicControls,
   fetchConfig,
-  fetchLogTail,
   loadConfigFile,
   sendChannelAction,
   seekFilePlayback,
@@ -19,9 +18,12 @@ import {
 import { useAuthStore } from '../store/authStore'
 import { videoTimelineLayout, type VideoLayout } from './videoTimelineLayout'
 import './LiveViewPage.css'
-import { livePlaybackTarget } from './livePlayback'
+import { LivePlaybackBuffer, livePlaybackRate, livePlaybackTarget } from './livePlayback'
+import LiveLogConsole from '../components/LiveLogConsole'
+import { PlaybackProgress, StreamOperationTimeout, readStreamChunk, sourceBufferOperation, streamRetryDelay, waitForSourceOpen } from './liveStreamRecovery'
 
 type RtspState = 'idle' | 'checking' | 'enabled' | 'disabled' | 'error'
+type StreamRetryCause = 'transport-error' | 'read-timeout' | 'decoder-error' | 'startup-timeout' | 'playback-stall' | 'buffer-timeout' | 'initialization-timeout'
 
 const STREAM_MAX_RETRY = 25
 const STREAM_STALL_MS = 15000
@@ -84,56 +86,6 @@ function findAvcCodec(data: Uint8Array): string | null {
   return null
 }
 
-function waitForSourceOpen(mediaSource: MediaSource): Promise<void> {
-  if (mediaSource.readyState === 'open') return Promise.resolve()
-  return new Promise((resolve, reject) => {
-    const onOpen = () => { cleanup(); resolve() }
-    const onClose = () => { cleanup(); reject(new Error('MediaSource 在初始化前关闭')) }
-    const cleanup = () => {
-      mediaSource.removeEventListener('sourceopen', onOpen)
-      mediaSource.removeEventListener('sourceclose', onClose)
-    }
-    mediaSource.addEventListener('sourceopen', onOpen)
-    mediaSource.addEventListener('sourceclose', onClose)
-  })
-}
-
-function sourceBufferOperation(sourceBuffer: SourceBuffer, operation: () => void): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const onDone = () => { cleanup(); resolve() }
-    const onError = () => { cleanup(); reject(new Error('浏览器视频缓冲区写入失败')) }
-    const cleanup = () => {
-      sourceBuffer.removeEventListener('updateend', onDone)
-      sourceBuffer.removeEventListener('error', onError)
-    }
-    sourceBuffer.addEventListener('updateend', onDone)
-    sourceBuffer.addEventListener('error', onError)
-    try {
-      operation()
-    } catch (error) {
-      cleanup()
-      reject(error)
-    }
-  })
-}
-
-async function readStreamChunk(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  timeoutMs: number,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  let timer: ReturnType<typeof setTimeout> | null = null
-  try {
-    return await Promise.race([
-      reader.read(),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('视频数据接收超时')), timeoutMs)
-      }),
-    ])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
-}
-
 function errMsg(error: unknown): string {
   if (axios.isAxiosError(error)) {
     return error.response?.data?.detail ?? error.response?.data?.message ?? error.message
@@ -182,9 +134,11 @@ export default function LiveViewPage() {
   const [streamErrorDetail, setStreamErrorDetail] = useState('')
   const [streamLoading, setStreamLoading] = useState(true)
   const [streamNonce, setStreamNonce] = useState(0)
+  const [streamRetryWaitMs, setStreamRetryWaitMs] = useState(0)
+  const [streamClientId] = useState(() => Array.from(crypto.getRandomValues(new Uint8Array(16)),
+    byte => byte.toString(16).padStart(2, '0')).join(''))
+  const [snapshotReady, setSnapshotReady] = useState(false)
   const [videoFullscreen, setVideoFullscreen] = useState(false)
-  const [streamLogs, setStreamLogs] = useState<string[]>([])
-  const [logConnected, setLogConnected] = useState(false)
   const [controls, setControls] = useState<LogicControlsResponse | null>(null)
   const [fileSources, setFileSources] = useState<FilePlaybackSource[]>([])
   const [seekDrafts, setSeekDrafts] = useState<Record<number, number>>({})
@@ -201,12 +155,10 @@ export default function LiveViewPage() {
   const streamRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const streamRetryPendingRef = useRef(false)
   const streamLastErrorRef = useRef('')
+  const streamRetryDiagnosticsRef = useRef<Record<string, string>>({})
   const videoRef = useRef<HTMLVideoElement>(null)
+  const videoSnapshotRef = useRef<HTMLCanvasElement>(null)
   const videoFrameRef = useRef<HTMLDivElement>(null)
-  const logWsRef = useRef<WebSocket | null>(null)
-  const logBoxRef = useRef<HTMLDivElement>(null)
-  const logAutoScrollRef = useRef(true)
-  const pendingLogsRef = useRef<string[]>([])
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const seekDraftsRef = useRef<Record<number, number>>({})
   const seekBusyRef = useRef(new Set<number>())
@@ -486,37 +438,13 @@ export default function LiveViewPage() {
     }
   }
 
-  const resumeLogScroll = () => {
-    logAutoScrollRef.current = true
-    const pending = pendingLogsRef.current
-    pendingLogsRef.current = []
-    if (pending.length > 0) {
-      setStreamLogs(previous => [...previous, ...pending].slice(-1000))
-    }
-    setTimeout(() => {
-      const element = logBoxRef.current
-      if (element && logAutoScrollRef.current) element.scrollTop = element.scrollHeight
-    }, 0)
-  }
-
-  const handleLogScroll = () => {
-    const element = logBoxRef.current
-    if (!element) return
-    const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 40
-    if (nearBottom) {
-      if (!logAutoScrollRef.current || pendingLogsRef.current.length > 0) resumeLogScroll()
-    } else {
-      logAutoScrollRef.current = false
-    }
-  }
-
   const clearStreamRetry = () => {
     if (streamRetryTimer.current) clearTimeout(streamRetryTimer.current)
     streamRetryTimer.current = null
     streamRetryPendingRef.current = false
   }
 
-  const scheduleStreamRetry = (delay: number, reason = '') => {
+  const scheduleStreamRetry = (reason: string, cause: StreamRetryCause = 'transport-error') => {
     if (reason) streamLastErrorRef.current = reason
     if (streamRetryPendingRef.current) return
     clearStreamRetry()
@@ -529,19 +457,51 @@ export default function LiveViewPage() {
       return
     }
     streamRetryRef.current += 1
+    const delay = streamRetryDelay(streamRetryRef.current)
     streamRetryPendingRef.current = true
+    setStreamRetryWaitMs(delay)
+    if (reason) {
+      setStreamErrorDetail(reason)
+      console.warn('[LiveStream] 正在重连:', reason)
+    }
+    const video = videoRef.current
+    const end = video?.buffered.length ? video.buffered.end(video.buffered.length - 1) : 0
+    streamRetryDiagnosticsRef.current = {
+      retry_cause: cause,
+      retry_attempt: String(streamRetryRef.current),
+      retry_delay_ms: String(delay),
+      retry_position_ms: String(Math.round((video?.currentTime ?? 0) * 1000)),
+      retry_ahead_ms: String(Math.round(Math.max(0, end - (video?.currentTime ?? 0)) * 1000)),
+      retry_ready_state: String(video?.readyState ?? 0),
+      retry_paused: String(video?.paused ?? true),
+      retry_seeking: String(video?.seeking ?? false),
+    }
+    const snapshot = videoSnapshotRef.current
+    if (video && snapshot && video.readyState >= 2 && video.videoWidth > 0) {
+      const scale = Math.min(1, 1280 / video.videoWidth)
+      snapshot.width = Math.round(video.videoWidth * scale)
+      snapshot.height = Math.round(video.videoHeight * scale)
+      try {
+        snapshot.getContext('2d')?.drawImage(video, 0, 0, snapshot.width, snapshot.height)
+        setSnapshotReady(true)
+      } catch { /* 解码器已释放帧时继续正常重连。 */ }
+    }
     setStreamLoading(true)
     streamRetryTimer.current = setTimeout(() => {
       streamRetryPendingRef.current = false
       streamRetryTimer.current = null
-      setStreamNonce(Date.now())
+      setStreamRetryWaitMs(0)
+      setStreamNonce(value => value + 1)
     }, delay)
   }
 
   const handleStreamLoad = () => {
+    // 旧连接残留的 playing 事件不能取消已安排的传输恢复。
+    if (streamRetryPendingRef.current) return
     clearStreamRetry()
-    streamRetryRef.current = 0
+    setStreamRetryWaitMs(0)
     streamLastErrorRef.current = ''
+    streamRetryDiagnosticsRef.current = {}
     setStreamErrorDetail('')
     // video 已经真正进入 playing，立即撤掉遮罩；进度动画绝不延后画面显示。
     setStreamLoading(false)
@@ -550,11 +510,14 @@ export default function LiveViewPage() {
   const retryStream = () => {
     clearStreamRetry()
     streamRetryRef.current = 0
+    setStreamRetryWaitMs(0)
     streamLastErrorRef.current = ''
+    streamRetryDiagnosticsRef.current = {}
     setStreamErr(false)
     setStreamErrorDetail('')
     setStreamLoading(true)
-    setStreamNonce(Date.now())
+    setSnapshotReady(false)
+    setStreamNonce(value => value + 1)
   }
 
   const toggleVideoFullscreen = async () => {
@@ -740,79 +703,17 @@ export default function LiveViewPage() {
     }
   }, [appName, fileTimelineEnabled])
 
-  // 复用原实时画面弹窗的日志尾部读取和 WebSocket 输出，并在断线后自动重连。
-  useEffect(() => {
-    if (!appName) {
-      setStreamLogs([])
-      setLogConnected(false)
-      return
-    }
-    let disposed = false
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-    logAutoScrollRef.current = true
-    pendingLogsRef.current = []
-    setStreamLogs([])
-
-    const stickToBottom = () => {
-      const element = logBoxRef.current
-      if (element && logAutoScrollRef.current) element.scrollTop = element.scrollHeight
-    }
-
-    fetchLogTail(appName, 200)
-      .then(data => {
-        if (disposed) return
-        setStreamLogs(Array.isArray(data.lines) ? data.lines : [])
-        setTimeout(stickToBottom, 50)
-      })
-      .catch(() => {})
-
-    const connect = () => {
-      if (disposed) return
-      const token = useAuthStore.getState().token ?? ''
-      const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
-      const wsUrl = `${protocol}://${location.host}/ws/logs/${encodeURIComponent(appName)}?token=${encodeURIComponent(token)}`
-      const ws = new WebSocket(wsUrl)
-      logWsRef.current = ws
-      ws.onopen = () => { if (!disposed) setLogConnected(true) }
-      ws.onclose = () => {
-        if (disposed) return
-        setLogConnected(false)
-        reconnectTimer = setTimeout(connect, 1500)
-      }
-      ws.onerror = () => { if (!disposed) setLogConnected(false) }
-      ws.onmessage = event => {
-        const text = String(event.data)
-        if (!text) return
-        const added = text.split('\n').filter(line => line !== '')
-        if (added.length === 0) return
-        if (logAutoScrollRef.current) {
-          setStreamLogs(previous => [...previous, ...added].slice(-1000))
-          setTimeout(stickToBottom, 10)
-        } else {
-          pendingLogsRef.current = [...pendingLogsRef.current, ...added].slice(-5000)
-        }
-      }
-    }
-    connect()
-
-    return () => {
-      disposed = true
-      if (reconnectTimer) clearTimeout(reconnectTimer)
-      logWsRef.current?.close()
-      logWsRef.current = null
-      pendingLogsRef.current = []
-      setLogConnected(false)
-    }
-  }, [appName])
-
   // 只有运行配置明确开启 RTSP 时才开始拉流；程序停止或关闭 RTSP 会立即清理重试。
   useEffect(() => {
     clearStreamRetry()
     streamRetryRef.current = 0
+    setStreamRetryWaitMs(0)
     streamLastErrorRef.current = ''
+    streamRetryDiagnosticsRef.current = {}
     setStreamErr(false)
     setStreamErrorDetail('')
     setStreamLoading(true)
+    setSnapshotReady(false)
     return clearStreamRetry
   }, [appName, rtspEnabled])
 
@@ -847,39 +748,58 @@ export default function LiveViewPage() {
     video.src = objectUrl
     video.muted = true
     let playbackStarted = false
+    const playbackBuffer = new LivePlaybackBuffer()
+    let lastTrimAt = 0
     video.playbackRate = 1
     const syncLivePosition = () => {
-      if (!sourceBuffer || disposed || sourceBuffer.updating || !sourceBuffer.buffered.length) return
+      if (!sourceBuffer || disposed || video.seeking || sourceBuffer.updating || !sourceBuffer.buffered.length) return
       const last = sourceBuffer.buffered.length - 1
-      const target = livePlaybackTarget(video.currentTime, sourceBuffer.buffered.start(last), sourceBuffer.buffered.end(last), playbackStarted)
+      const end = sourceBuffer.buffered.end(last)
+      if (playbackBuffer.rebuffering) {
+        if (playbackBuffer.resume(end - video.currentTime)) void video.play().catch(() => {})
+        return
+      }
+      const target = livePlaybackTarget(video.currentTime, sourceBuffer.buffered.start(last), end, playbackStarted, playbackBuffer.targetSeconds)
       if (target !== null) {
         video.currentTime = target
         if (!playbackStarted) void video.play().catch(() => {})
       }
+      video.playbackRate = playbackStarted ? livePlaybackRate(video.currentTime, end, playbackBuffer.targetSeconds) : 1
     }
 
     const append = async (bytes: Uint8Array) => {
       if (!sourceBuffer || mediaSource.readyState !== 'open' || disposed) return
 
-      // 只保留实时点附近的数据，避免长时间打开页面后触发 MSE QuotaExceededError。
+      syncLivePosition()
+      // 留足完整 GOP 和短暂抖动余量；清理不跟随每个网络包重复执行。
       if (sourceBuffer.buffered.length > 0) {
         const bufferedStart = sourceBuffer.buffered.start(0)
-        const keepFrom = video.currentTime - 5
-        if (video.currentTime - bufferedStart > 8 && keepFrom > bufferedStart) {
-          await sourceBufferOperation(sourceBuffer, () => sourceBuffer!.remove(bufferedStart, keepFrom))
+        const keepFrom = video.currentTime - 8
+        if (performance.now() - lastTrimAt > 2000 && video.currentTime - bufferedStart > 12 && keepFrom > bufferedStart) {
+          await sourceBufferOperation(sourceBuffer, () => sourceBuffer!.remove(bufferedStart, keepFrom), abortController.signal)
+          lastTrimAt = performance.now()
         }
       }
-      await sourceBufferOperation(sourceBuffer, () => sourceBuffer!.appendBuffer(sourceBufferBytes(bytes)))
+      try {
+        await sourceBufferOperation(sourceBuffer, () => sourceBuffer!.appendBuffer(sourceBufferBytes(bytes)), abortController.signal)
+      } catch (error) {
+        if (!(error instanceof DOMException) || error.name !== 'QuotaExceededError' || disposed ||
+            !sourceBuffer.buffered.length || video.currentTime - sourceBuffer.buffered.start(0) <= 2) throw error
+        // 配额不足先释放已播放的数据，重试同一包，避免把可恢复的内存压力变成黑屏重连。
+        await sourceBufferOperation(sourceBuffer, () => sourceBuffer!.remove(sourceBuffer!.buffered.start(0), video.currentTime - 2), abortController.signal)
+        await sourceBufferOperation(sourceBuffer, () => sourceBuffer!.appendBuffer(sourceBufferBytes(bytes)), abortController.signal)
+      }
 
-      // 正常播放保持原速；积压超过一秒直接舍弃过期画面。
+      // 正常播放保持原速；仅在严重积压或时间线断层时跳到实时点。
       syncLivePosition()
-      if (playbackStarted && video.paused) void video.play().catch(() => {})
+      if (playbackStarted && video.paused && !playbackBuffer.rebuffering) void video.play().catch(() => {})
     }
 
     const start = async () => {
-      await waitForSourceOpen(mediaSource)
+      await waitForSourceOpen(mediaSource, abortController.signal)
       const token = useAuthStore.getState().token ?? ''
-      const response = await fetch(`${streamUrl(appName)}?t=${streamNonce}`, {
+      const query = new URLSearchParams({ t: String(streamNonce), client_id: streamClientId, ...streamRetryDiagnosticsRef.current })
+      const response = await fetch(`${streamUrl(appName)}?${query}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         cache: 'no-store',
         signal: abortController.signal,
@@ -903,7 +823,7 @@ export default function LiveViewPage() {
       let codec: string | null = null
       let initialBytes: Uint8Array | null = null
       while (!codec) {
-        const result = await readStreamChunk(reader, STREAM_STALL_MS)
+        const result = await readStreamChunk(reader, STREAM_STALL_MS, abortController.signal)
         if (result.done || !result.value) throw new Error('视频流在初始化完成前中断')
         initialParts.push(result.value)
         initialSize += result.value.byteLength
@@ -921,7 +841,7 @@ export default function LiveViewPage() {
       await append(initialBytes!)
 
       while (!disposed) {
-        const result = await readStreamChunk(reader, STREAM_STALL_MS)
+        const result = await readStreamChunk(reader, STREAM_STALL_MS, abortController.signal)
         if (result.done) throw new Error('视频流已中断')
         if (result.value?.byteLength) await append(result.value)
       }
@@ -935,54 +855,76 @@ export default function LiveViewPage() {
         setStreamErrorDetail(error.message)
         showToast(error.message, 'err')
       } else {
-        scheduleStreamRetry(500, errMsg(error))
+        const reason = errMsg(error)
+        const cause: StreamRetryCause = error instanceof StreamOperationTimeout
+          ? error.phase === 'read' ? 'read-timeout' : error.phase === 'buffer' ? 'buffer-timeout' : 'initialization-timeout'
+          : 'transport-error'
+        scheduleStreamRetry(reason, cause)
+        abortController.abort()
       }
     })
 
     const onVideoError = () => {
       if (!disposed) {
-        scheduleStreamRetry(500, mediaErrorMessage(video.error))
+        scheduleStreamRetry(mediaErrorMessage(video.error), 'decoder-error')
         abortController.abort()
       }
     }
     const onVideoPlaying = () => { playbackStarted = true }
+    const onVideoWaiting = () => {
+      if (disposed || !playbackStarted || video.seeking || document.hidden || !video.buffered.length) return
+      const ahead = video.buffered.end(video.buffered.length - 1) - video.currentTime
+      if (playbackBuffer.starved(ahead)) {
+        video.playbackRate = 1
+        video.pause()
+      }
+    }
     video.addEventListener('error', onVideoError)
     video.addEventListener('playing', onVideoPlaying)
+    video.addEventListener('waiting', onVideoWaiting)
     const startupTimer = setTimeout(() => {
       if (!disposed && !playbackStarted) {
-        scheduleStreamRetry(500, '视频数据已连接，但浏览器在 15 秒内未能开始播放')
+        scheduleStreamRetry('视频数据已连接，但浏览器在 15 秒内未能开始播放', 'startup-timeout')
         abortController.abort()
       }
     }, STREAM_STALL_MS)
-    let lastPlaybackTime = 0
-    let lastPlaybackAdvanceAt = Date.now()
+    let frameRequest: number | null = null
+    let presentedFrameCount = 0
+    const hasFrameCallback = typeof video.requestVideoFrameCallback === 'function'
+    const onPresentedFrame = () => {
+      if (disposed) return
+      presentedFrameCount += 1
+      frameRequest = video.requestVideoFrameCallback(onPresentedFrame)
+    }
+    if (hasFrameCallback) frameRequest = video.requestVideoFrameCallback(onPresentedFrame)
+    const presentedFrames = (): number | null => {
+      if (hasFrameCallback) return presentedFrameCount
+      if (typeof video.getVideoPlaybackQuality !== 'function') return null
+      const quality = video.getVideoPlaybackQuality()
+      return quality.totalVideoFrames - quality.droppedVideoFrames
+    }
+    const progress = new PlaybackProgress(performance.now(), video.currentTime, presentedFrames(), STREAM_STALL_MS)
     const playbackWatchdog = setInterval(() => {
       if (disposed || document.hidden || !playbackStarted) {
-        lastPlaybackAdvanceAt = Date.now()
-        lastPlaybackTime = video.currentTime
+        progress.reset(performance.now(), video.currentTime, presentedFrames())
         return
       }
       syncLivePosition()
-      if (video.currentTime > lastPlaybackTime + 0.05) {
-        lastPlaybackTime = video.currentTime
-        lastPlaybackAdvanceAt = Date.now()
-      } else if (Date.now() - lastPlaybackAdvanceAt > STREAM_STALL_MS) {
-        scheduleStreamRetry(500, '实时画面已停滞超过 15 秒')
+      const health = progress.sample(performance.now(), video.currentTime, presentedFrames(), video.seeking, video.paused)
+      // A single playing event is insufficient: only sustained frame presentation
+      // resets backoff, so flapping sources cannot create a rapid retry loop.
+      if (health.stable) streamRetryRef.current = 0
+      if (health.stalled) {
+        scheduleStreamRetry('实时画面已停滞超过 15 秒', 'playback-stall')
         abortController.abort()
       }
     }, 250)
-    let hiddenAt = document.hidden ? Date.now() : 0
     const onVisibilityChange = () => {
-      if (document.hidden) hiddenAt = Date.now()
-      else if (hiddenAt && Date.now() - hiddenAt > 1000) {
-        // 后台页的网络、解码和定时器可能暂停，重新连接清掉上游积压。
-        hiddenAt = 0
-        scheduleStreamRetry(0, '')
-        abortController.abort()
-      } else {
-        hiddenAt = 0
-        syncLivePosition()
-      }
+      progress.reset(performance.now(), video.currentTime, presentedFrames())
+      if (document.hidden) return
+      // 回到前台优先复用解码器和连接；积压由缓冲同步处理，避免切换窗口必然黑屏。
+      syncLivePosition()
+      if (playbackStarted && video.paused && !playbackBuffer.rebuffering) void video.play().catch(() => {})
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
 
@@ -990,11 +932,13 @@ export default function LiveViewPage() {
       disposed = true
       clearTimeout(startupTimer)
       clearInterval(playbackWatchdog)
+      if (frameRequest !== null && typeof video.cancelVideoFrameCallback === 'function') video.cancelVideoFrameCallback(frameRequest)
       document.removeEventListener('visibilitychange', onVisibilityChange)
       abortController.abort()
       reader?.cancel().catch(() => {})
       video.removeEventListener('error', onVideoError)
       video.removeEventListener('playing', onVideoPlaying)
+      video.removeEventListener('waiting', onVideoWaiting)
       try {
         if (mediaSource.readyState === 'open') mediaSource.endOfStream()
       } catch { /* 流已关闭 */ }
@@ -1088,16 +1032,17 @@ export default function LiveViewPage() {
                         ref={videoRef}
                         key={`${appName}-${streamNonce}`}
                         className="live-view-video"
-                        style={streamLoading ? { visibility: 'hidden' } : undefined}
+                        style={streamLoading && !snapshotReady ? { visibility: 'hidden' } : undefined}
                         muted
                         autoPlay
                         playsInline
                         onPlaying={handleStreamLoad}
                       />
+                      <canvas ref={videoSnapshotRef} className="live-view-video-snapshot" hidden={!streamLoading || !snapshotReady} />
                       {streamLoading && (
-                        <div className="live-view-loading">
+                        <div className={`live-view-loading${snapshotReady ? ' reconnecting' : ''}`}>
                           <div className="live-view-spinner" />
-                          <span>正在准备实时画面……</span>
+                          <span>{snapshotReady ? '连接恢复中，暂时显示上一帧……' : '正在准备实时画面……'}</span>
                           <div
                             className="live-view-progress"
                             role="progressbar"
@@ -1107,7 +1052,8 @@ export default function LiveViewPage() {
                             <div className="live-view-progress-fill" />
                           </div>
                           <span className="live-view-progress-text">
-                            正在连接视频流，通常约 3 秒
+                            {streamRetryWaitMs > 0 ? `${streamErrorDetail}；约 ${Math.ceil(streamRetryWaitMs / 1000)} 秒后重试`
+                              : streamErrorDetail || '正在连接视频流，通常约 3 秒'}
                           </span>
                         </div>
                       )}
@@ -1222,29 +1168,7 @@ export default function LiveViewPage() {
               onLostPointerCapture={endSideResize}
               onKeyDown={resizeSideByKeyboard}
             />
-            <section className="live-view-console-panel">
-              <div className="live-view-panel-head">
-                <span>终端输出</span>
-                <div className="live-view-console-tools">
-                  <span className={`live-view-log-status ${logConnected ? 'online' : ''}`}>
-                    {logConnected ? '● 实时' : '○ 重连中'}
-                  </span>
-                  <button onClick={resumeLogScroll}>跳到底部</button>
-                </div>
-              </div>
-              <div className="live-view-console" ref={logBoxRef} onScroll={handleLogScroll}>
-                {streamLogs.length === 0 ? (
-                  <div className="live-view-console-empty">暂无终端输出。</div>
-                ) : streamLogs.map((line, index) => (
-                  <div
-                    key={index}
-                    className={`live-view-log-line${/ERROR|error|\[进程已停止\]/.test(line) ? ' error' : /WARN/.test(line) ? ' warning' : ''}`}
-                  >
-                    {line}
-                  </div>
-                ))}
-              </div>
-            </section>
+            <LiveLogConsole key={appName} appName={appName} />
 
             <section className="live-view-controls-panel">
               <div className="live-view-panel-head">

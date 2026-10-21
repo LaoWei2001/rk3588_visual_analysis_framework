@@ -1,0 +1,10 @@
+{
+    "label": "1019",
+    "event_types": [],
+    "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+    },
+    "report_fields": []
+}

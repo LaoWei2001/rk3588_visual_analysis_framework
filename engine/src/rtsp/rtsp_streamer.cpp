@@ -17,6 +17,7 @@
  */
 #include "rtsp_streamer.h"
 #include "live_source.h"
+#include "media_source.h"
 
 #include <algorithm>
 #include <atomic>
@@ -309,8 +310,7 @@ struct RtspStreamer
     guint attach_id = 0;
 
     /* 当前活跃的 appsrc (有客户端连接时由 media-configure 写入) */
-    pthread_mutex_t appsrc_mtx = PTHREAD_MUTEX_INITIALIZER;
-    GstElement *appsrc = nullptr;
+    RtspMediaSource media_source;
 
     /* 线程句柄与标志 */
     pthread_t loop_tid = 0;
@@ -318,7 +318,6 @@ struct RtspStreamer
     bool loop_running = false;
     bool feeder_running = false;
     std::atomic<bool> feeder_exit{false};
-    std::atomic<bool> client_active{false};
 
     /* 硬编只接收 DMA-BUF NV12；池初始化失败时 auto 模式回退软编。 */
     std::shared_ptr<DmaFramePool> dma_pool;
@@ -358,17 +357,11 @@ static void set_encoder_int_if_supported(GstElement *encoder, const char *proper
 /* 最后一个客户端断开 → 共享 media 反配置: 清掉 appsrc, feeder 随之空转。 */
 static void on_media_unprepared(GstRTSPMedia *media, gpointer user_data)
 {
-    (void)media;
     (void)user_data;
-    pthread_mutex_lock(&g_st.appsrc_mtx);
-    if (g_st.appsrc)
-    {
-        gst_object_unref(g_st.appsrc);
-        g_st.appsrc = nullptr;
-    }
-    pthread_mutex_unlock(&g_st.appsrc_mtx);
-    g_st.client_active.store(false, std::memory_order_release);
-    printf("[RTSP] media unprepared (no clients)\n");
+    if (g_st.media_source.release(media))
+        printf("[RTSP] media unprepared (no clients)\n");
+    else
+        printf("[RTSP] retired media unprepared; current source preserved\n");
 }
 
 /* 客户端连接、media 创建时调用: 取出 appsrc, 设 caps/属性, 存给 feeder。 */
@@ -414,14 +407,9 @@ static void on_media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media
     g_object_set(G_OBJECT(appsrc), "caps", caps, nullptr);
     gst_caps_unref(caps);
 
-    pthread_mutex_lock(&g_st.appsrc_mtx);
-    if (g_st.appsrc)
-        gst_object_unref(g_st.appsrc);
-    g_st.appsrc = appsrc; /* 持有 gst_bin_get_by_name_recurse_up 返回的引用 */
-    pthread_mutex_unlock(&g_st.appsrc_mtx);
-    g_st.client_active.store(true, std::memory_order_release);
-
     g_signal_connect(media, "unprepared", G_CALLBACK(on_media_unprepared), nullptr);
+    g_st.media_source.replace(media, appsrc);
+    gst_object_unref(appsrc);
     printf("[RTSP] client connected, media configured (%dx%d @%dfps)\n", g_st.enc_w, g_st.enc_h, g_st.fps);
 }
 
@@ -458,11 +446,7 @@ static void *rtsp_feeder_thread(void *arg)
 
     while (g_pCtrl && g_pCtrl->isRunning.load() && !g_st.feeder_exit.load())
     {
-        GstElement *src = nullptr;
-        pthread_mutex_lock(&g_st.appsrc_mtx);
-        if (g_st.appsrc)
-            src = (GstElement *)gst_object_ref(g_st.appsrc);
-        pthread_mutex_unlock(&g_st.appsrc_mtx);
+        GstElement *src = g_st.media_source.acquire();
 
         const guint64 frame_bytes = g_st.use_hw ? (guint64)dst_w * dst_h * 3 / 2 : (guint64)rgb_frame_bytes;
         if (src && rtsp_source_has_room(src, frame_bytes))
@@ -746,7 +730,7 @@ int rtsp_streamer_init(void)
 
 int rtsp_streamer_has_active_client(void)
 {
-    return g_st.client_active.load(std::memory_order_acquire) ? 1 : 0;
+    return g_st.media_source.active() ? 1 : 0;
 }
 
 void rtsp_streamer_deinit(void)
@@ -756,7 +740,7 @@ void rtsp_streamer_deinit(void)
 
     /* 先停 feeder, 再退服务循环 */
     g_st.feeder_exit.store(true);
-    g_st.client_active.store(false, std::memory_order_release);
+    g_st.media_source.clear();
     if (g_st.feeder_running)
     {
         pthread_join(g_st.feeder_tid, nullptr);
@@ -771,13 +755,7 @@ void rtsp_streamer_deinit(void)
         g_st.loop_running = false;
     }
 
-    pthread_mutex_lock(&g_st.appsrc_mtx);
-    if (g_st.appsrc)
-    {
-        gst_object_unref(g_st.appsrc);
-        g_st.appsrc = nullptr;
-    }
-    pthread_mutex_unlock(&g_st.appsrc_mtx);
+    g_st.media_source.clear();
 
     if (g_st.server)
     {

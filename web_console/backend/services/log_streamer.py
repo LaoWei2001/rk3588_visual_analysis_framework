@@ -9,6 +9,9 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from services.log_buffer import get_log_buffer, MAX_SUBSCRIBER_LINES
 
+LOG_BATCH_LINES = 64
+LOG_BATCH_SECONDS = 0.025
+
 
 async def stream_log(websocket: WebSocket, app_name: str) -> None:
     await websocket.accept()
@@ -27,8 +30,17 @@ async def stream_log(websocket: WebSocket, app_name: str) -> None:
         while True:
             try:
                 line = await asyncio.wait_for(q.get(), timeout=20.0)
-                await websocket.send_text(line + "\n")
-                if line == "[进程已停止]":
+                batch = [line]
+                if line != "[进程已停止]":
+                    # 合并短时间内的输出，避免高频日志产生大量独立 WebSocket 帧。
+                    await asyncio.sleep(LOG_BATCH_SECONDS)
+                    while len(batch) < LOG_BATCH_LINES and batch[-1] != "[进程已停止]":
+                        try:
+                            batch.append(q.get_nowait())
+                        except asyncio.QueueEmpty:
+                            break
+                await websocket.send_text("\n".join(batch) + "\n")
+                if batch[-1] == "[进程已停止]":
                     break
             except asyncio.TimeoutError:
                 # 发送空帧作为心跳，检测断线
