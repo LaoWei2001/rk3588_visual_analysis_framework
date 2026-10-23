@@ -45,6 +45,7 @@
 #include "yolo/composite_model.h"
 #include "yolo/yolo.h"
 #include "yolo/yolo26pose.h"
+#include "yolo/yolo26depth.h"
 #include "yolo/yolopose.h"
 #include "yolo/yoloseg.h"
 #include "yolo/yolov8det.h"
@@ -75,7 +76,7 @@ static void nms_inplace(std::vector<AlgoResult> &dets, float nms_thresh)
         {
             if (removed[j])
                 continue;
-            if (dets[i].class_id != dets[j].class_id)
+            if (dets[i].is_depth() || dets[j].is_depth() || dets[i].class_id != dets[j].class_id)
                 continue;
             if (compute_iou(dets[i].box, dets[j].box) > nms_thresh)
                 removed[j] = 1;
@@ -101,7 +102,7 @@ static void nms_per_model_inplace(std::vector<AlgoResult> &dets, const std::vect
                                     : 1.0f;
         for (size_t j = i + 1; j < dets.size(); ++j)
         {
-            if (!removed[j] && dets[j].model_index == model_index && dets[j].class_id == dets[i].class_id &&
+            if (!dets[i].is_depth() && !dets[j].is_depth() && !removed[j] && dets[j].model_index == model_index && dets[j].class_id == dets[i].class_id &&
                 compute_iou(dets[i].box, dets[j].box) > threshold)
                 removed[j] = 1;
         }
@@ -164,6 +165,8 @@ std::shared_ptr<ModelBase> create_inference_model(const std::string &type, const
                                                   const std::string &label_path, int core_mask, float obj_thresh,
                                                   float nms_thresh)
 {
+    if (type == "yolo26_depth")
+        return std::make_shared<Yolo26Depth>(model_path, core_mask);
     if (type == "yolo26_pose")
         return std::make_shared<Yolo26Pose>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
     if (type == "yolov8_pose")
@@ -337,6 +340,7 @@ static bool run_model_task(int chnId, const InferenceTask &task, const std::shar
             results.reserve(full_results.size() + roi_results.size());
             std::move(full_results.begin(), full_results.end(), std::back_inserter(results));
             std::move(roi_results.begin(), roi_results.end(), std::back_inserter(results));
+            merge_depth_results(results);
             if (task.roi_mode == InferenceRoiMode::FullPlusRoi)
             {
                 if (const auto composite = std::dynamic_pointer_cast<CompositeModel>(model))
@@ -616,7 +620,7 @@ void *inference_worker_thread(void *arg)
             {
                 filtered.reserve(results.size());
                 for (const auto &d : results)
-                    if (d.score >= obj_thresh_v)
+                    if (d.is_depth() || d.score >= obj_thresh_v)
                         filtered.push_back(d);
             }
             else
@@ -633,7 +637,7 @@ void *inference_worker_thread(void *arg)
                 std::vector<AlgoResult> class_filtered;
                 class_filtered.reserve(filtered.size());
                 for (const auto &d : filtered)
-                    if (allowed_classes->count(d.class_id))
+                    if (d.is_depth() || allowed_classes->count(d.class_id))
                         class_filtered.push_back(d);
                 filtered.swap(class_filtered);
             }

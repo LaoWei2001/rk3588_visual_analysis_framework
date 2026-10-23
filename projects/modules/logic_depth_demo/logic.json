@@ -1,0 +1,20 @@
+{
+  "label": "深度估计与目标距离示例",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "depth_model_id": {"type": "string", "title": "深度模型 ID", "default": "", "description": "留空使用本帧首个深度模型。", "x-hot-reload": "reset_state"},
+      "near_distance_m": {"type": "number", "title": "近距离参考阈值", "default": 2.0, "minimum": 0.01, "maximum": 1000, "x-unit": "m", "x-hot-reload": "reset_state"},
+      "log_interval_ms": {"type": "integer", "title": "距离日志间隔", "default": 5000, "minimum": 0, "maximum": 600000, "description": "0 关闭日志。", "x-hot-reload": "reset_state"}
+    }
+  },
+  "outputs": [
+    {"key": "depth_valid", "type": "boolean", "label": "中心深度有效"},
+    {"key": "center_depth_m", "type": "number", "label": "中心估计距离（米）"},
+    {"key": "nearest_target_m", "type": "number", "label": "最近目标估计距离（米）"},
+    {"key": "near", "type": "boolean", "label": "中心距离低于参考阈值"}
+  ],
+  "report_fields": []
+}

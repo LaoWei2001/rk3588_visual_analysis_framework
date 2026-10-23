@@ -21,6 +21,35 @@ void map_results_to_business_frame(int source_width, int source_height, const In
     const cv::Rect bounds(0, 0, width, height);
     const bool identity = model_width == width && model_height == height &&
                           visible_source == cv::Rect(0, 0, source_width, source_height) && content == bounds;
+    // Dense depth uses bilinear interpolation and 0 outside the analyzed region.
+    // Common 640x640 full-frame path transfers only the refcounted Mat header.
+    for (auto &result : results)
+    {
+        if (!result.is_depth() || (identity && result.depth_map.size() == business_coordinates::size())) continue;
+        const cv::Mat &depth = result.depth_map;
+        const float sx = static_cast<float>(depth.cols) / model_width;
+        const float sy = static_cast<float>(depth.rows) / model_height;
+        cv::Rect crop(cvRound(content.x * sx), cvRound(content.y * sy),
+                      cvRound(content.width * sx), cvRound(content.height * sy));
+        crop &= cv::Rect(0, 0, depth.cols, depth.rows);
+        const int x0 = cvRound(static_cast<double>(visible_source.x) * width / source_width);
+        const int y0 = cvRound(static_cast<double>(visible_source.y) * height / source_height);
+        const int x1 = cvRound(static_cast<double>(visible_source.x + visible_source.width) * width / source_width);
+        const int y1 = cvRound(static_cast<double>(visible_source.y + visible_source.height) * height / source_height);
+        const cv::Rect area = cv::Rect(x0, y0, x1 - x0, y1 - y0) & bounds;
+        cv::Mat mapped;
+        if (!crop.empty() && !area.empty())
+        {
+            if (area == bounds) cv::resize(depth(crop), mapped, bounds.size(), 0, 0, cv::INTER_LINEAR);
+            else
+            {
+                mapped = cv::Mat::zeros(bounds.size(), CV_32FC1);
+                cv::Mat destination = mapped(area);
+                cv::resize(depth(crop), destination, area.size(), 0, 0, cv::INTER_LINEAR);
+            }
+        }
+        result.depth_map = std::move(mapped);
+    }
     if (identity && std::all_of(results.begin(), results.end(), [](const AlgoResult &result) {
             return result.boxMask.empty() || result.boxMask.size() == business_coordinates::size();
         }))
@@ -139,5 +168,27 @@ void map_results_to_business_frame(int source_width, int source_height, const In
         }
         result.boxMask = mapped;
         last_mapped_mask = std::move(mapped);
+    }
+}
+
+void merge_depth_results(std::vector<AlgoResult> &results)
+{
+    for (size_t i = 0; i < results.size(); ++i)
+    {
+        if (!results[i].is_depth()) continue;
+        for (size_t j = i + 1; j < results.size();)
+        {
+            auto &base = results[i];
+            const auto &extra = results[j];
+            if (!extra.is_depth() || base.model_id != extra.model_id || base.model_index != extra.model_index ||
+                base.model_type != extra.model_type || base.depth_map.size() != extra.depth_map.size())
+            { ++j; continue; }
+            cv::Mat merged = base.depth_map.clone(), valid;
+            cv::compare(extra.depth_map, 0, valid, cv::CMP_GT);
+            extra.depth_map.copyTo(merged, valid);
+            base.depth_map = std::move(merged);
+            base.box |= extra.box;
+            results.erase(results.begin() + j);
+        }
     }
 }

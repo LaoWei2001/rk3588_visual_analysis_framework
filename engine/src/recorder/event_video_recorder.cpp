@@ -45,6 +45,7 @@ struct RawFrame
     float disp_fps = 0.0f;
     int64_t result_frame_id = 0;
     bool swap_rb = false;
+    bool depth_background = false;
     InferenceRoiConfig inference_roi;
     std::vector<RoiZone> rois;
     std::vector<AlgoResult> results;
@@ -193,6 +194,7 @@ static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
         params.show_fps = 0;
         params.show_system_overlays = true;
         params.show_custom_overlays = true;
+        params.depth_background = raw.depth_background;
         params.inference_roi = raw.inference_roi.has_roi() ? &raw.inference_roi : nullptr;
         params.roi_zones = &raw.rois;
         params.results = &raw.results;
@@ -217,6 +219,7 @@ static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
     params.target_mask = DrawCommand::VIDEO;
     params.show_system_overlays = raw.overlay_mode == EVENT_VIDEO_OVERLAY_ALL;
     params.show_custom_overlays = true;
+    params.depth_background = raw.depth_background;
     params.inference_roi = raw.inference_roi.has_roi() ? &raw.inference_roi : nullptr;
     params.roi_zones = &raw.rois;
     params.results = &raw.results;
@@ -686,6 +689,7 @@ void event_video_recorder_push_source_frame(int channel_id, const void *data, in
     raw.disp_fps = 0.0f;
     raw.result_frame_id = 0;
     raw.swap_rb = false;
+    raw.depth_background = false;
     raw.inference_roi = InferenceRoiConfig{};
 
     if (overlay_mode != EVENT_VIDEO_OVERLAY_NONE && g_pCtrl)
@@ -693,6 +697,7 @@ void event_video_recorder_push_source_frame(int channel_id, const void *data, in
         auto runtime = app_ctrl_get_runtime_snapshot();
         const std::vector<RoiZone> *runtime_rois = app_ctrl_runtime_channel_rois(runtime, channel_id);
         const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, channel_id);
+        raw.depth_background = channel_uses_depth_background(channel);
         if (runtime_rois)
             raw.rois = *runtime_rois;
         if (channel && channel->inference_roi.has_roi())

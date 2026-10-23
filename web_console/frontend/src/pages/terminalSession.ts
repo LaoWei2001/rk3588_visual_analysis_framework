@@ -1,6 +1,7 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { useAuthStore } from '../store/authStore'
+import { loadTerminalAppearance, terminalAppearanceOptions, TERMINAL_FONTS } from './terminalAppearance'
 import '@xterm/xterm/css/xterm.css'
 
 // 终端会话注册表：可同时存在多个终端，每个对应一条独立 WebSocket → 板端一个独立 shell。
@@ -48,32 +49,9 @@ let seq = 0
 
 function createSession(id: string, fontSize: number): TermSession {
   const term = new Terminal({
-    cursorBlink: true,
-    cursorStyle: 'bar',
     fontSize,
-    fontFamily: 'Consolas,monospace',
-    theme: {
-      background: '#080b14',
-      foreground: '#cbd5e1',
-      cursor: '#cbd5e1',
-      selectionBackground: '#2e3352',
-      black:   '#1a1d29',
-      red:     '#f87171',
-      green:   '#4ade80',
-      yellow:  '#fbbf24',
-      blue:    '#60a5fa',
-      magenta: '#c084fc',
-      cyan:    '#22d3ee',
-      white:   '#e6e9ef',
-      brightBlack:   '#4b5563',
-      brightRed:     '#fca5a5',
-      brightGreen:   '#86efac',
-      brightYellow:  '#fde68a',
-      brightBlue:    '#93c5fd',
-      brightMagenta: '#d8b4fe',
-      brightCyan:    '#67e8f9',
-      brightWhite:   '#f9fafb',
-    },
+    fontFamily: TERMINAL_FONTS.modern.family,
+    ...terminalAppearanceOptions(loadTerminalAppearance()),
   })
 
   // @xterm/xterm@6.0.0 的压缩产物在处理 DECRQM「请求模式」查询时会抛

@@ -509,7 +509,7 @@ function ModelForm({ node, onUpdate, duplicateIdError, channelId }: {
   const assetsReady = useEditorStore(s => s.assetsStatus === 'ready'
     && s.assetsForApp === s.appName)
   const info       = useConsoleStore(s => s.info)
-  const modelTypes = info?.known_model_types ?? ['yolov8_det', 'yolov5', 'yolov8_pose', 'yolo26_pose', 'yolov5_seg']
+  const modelTypes = info?.known_model_types ?? ['yolov8_det', 'yolov5', 'yolov8_pose', 'yolo26_pose', 'yolo26_depth', 'yolov5_seg']
   const { busy, progress, upload } = useAssetUpload()
 
   const d   = node.data as Record<string, unknown>
@@ -518,6 +518,7 @@ function ModelForm({ node, onUpdate, duplicateIdError, channelId }: {
   const modelIdError = validateModelId(modelId) ?? duplicateIdError
   const deleteModel = useAssetDelete(String(d.model_path ?? ''), v => set('model_path', v))
   const deleteLabel = useAssetDelete(String(d.label_path ?? ''), v => set('label_path', v))
+  const isDepth = d.model_type === 'yolo26_depth'
 
   return (
     <div className="ncp-form">
@@ -551,7 +552,10 @@ function ModelForm({ node, onUpdate, duplicateIdError, channelId }: {
           </select>
         </F>
         <F label="模型类型">
-          <select value={String(d.model_type ?? 'yolov8_det')} onChange={e => set('model_type', e.target.value)}>
+          <select value={String(d.model_type ?? 'yolov8_det')} onChange={e => {
+            const model_type = e.target.value
+            onUpdate(node.id, { model_type, ...(model_type === 'yolo26_depth' ? { label_path: '', detect_classes: [] } : {}) })
+          }}>
             {modelTypes.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
         </F>
@@ -577,6 +581,7 @@ function ModelForm({ node, onUpdate, duplicateIdError, channelId }: {
         modelType={String(d.model_type ?? 'yolov8_det')} modelId={modelId}
         channelId={channelId} assetsRevision={assets} />
 
+      {isDepth ? <div className="ncp-hint">输出每个像素的估计深度（米），无需标签文件。可在业务逻辑中读取像素或区域距离。</div> : <>
       <F label="标签文件 (.txt)">
         <AssetPicker
           value={String(d.label_path ?? '')}
@@ -612,6 +617,7 @@ function ModelForm({ node, onUpdate, duplicateIdError, channelId }: {
         />
       </F>
 
+      </>}
       <F label="线程数（空 = 使用全局）">
         <NumberField allowEmpty placeholder="全局"
           value={d.threads} onChange={v => set('threads', v)} />

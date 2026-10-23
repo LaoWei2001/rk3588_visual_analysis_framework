@@ -6,6 +6,7 @@
 #include "runtime/pause_ctrl.h"
 #include "runtime/process_signals.h"
 #include "runtime/service_watchdog.h"
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -21,6 +22,14 @@
 #include <utility>
 #include <vector>
 
+bool channel_uses_depth_background(const ChannelConfig *channel)
+{
+    if (!channel || !channel->enable || !channel->infer_enable) return false;
+    return std::any_of(channel->models.begin(), channel->models.end(), [](const ChannelModelConfig &model) {
+        return model.enable && model.model_type == "yolo26_depth" && !model.model_path.empty();
+    });
+}
+
 RenderParams channel_render_params(const ChannelContext &ctx)
 {
     RenderParams p;
@@ -31,6 +40,7 @@ RenderParams channel_render_params(const ChannelContext &ctx)
     p.disp_fps = ctx.disp_fps;
     p.infer_fps = ctx.infer_fps;
     p.result_frame_id = ctx.frame_id;
+    p.depth_background = channel_uses_depth_background(ctx.config);
     p.inference_roi = ctx.config && ctx.config->inference_roi.has_roi() ? &ctx.config->inference_roi : nullptr;
     p.roi_zones = ctx.rois;
     p.results = ctx.results;
@@ -236,6 +246,69 @@ static void draw_segmentation_overlay(cv::Mat &screen_roi, const std::vector<Alg
     cache.blend_scratch.copyTo(dst, cache.active_mask);
 }
 
+// Per-render-thread cache: colorization is paid once per new inference result,
+// rather than once per display tick. Holding the source Mat pins its pool slot.
+static bool draw_depth_background(cv::Mat &screen, const std::vector<AlgoResult> &results, int channel, int64_t frame_id)
+{
+    const AlgoResult *depth = nullptr;
+    for (const auto &result : results)
+        if (result.is_depth()) { depth = &result; break; }
+    if (!depth || depth->depth_map.type() != CV_32FC1) return false;
+    struct Cache
+    {
+        cv::Mat source, color;
+        cv::Size size;
+        int64_t frame = -1;
+    };
+    static thread_local std::array<Cache, MAX_CHANNEL_NUM + 1> caches;
+    Cache &cache = caches[channel >= 0 && channel < MAX_CHANNEL_NUM ? channel : MAX_CHANNEL_NUM];
+    if (cache.source.data != depth->depth_map.data || cache.source.size() != depth->depth_map.size() ||
+        cache.size != screen.size() || cache.frame != frame_id)
+    {
+        cache.source = depth->depth_map;
+        cache.frame = frame_id;
+        cache.size = screen.size();
+        std::vector<float> samples;
+        samples.reserve((cache.source.rows / 4 + 1) * (cache.source.cols / 4 + 1));
+        for (int y = 0; y < cache.source.rows; y += 4)
+            for (int x = 0; x < cache.source.cols; x += 4)
+            {
+                const float d = cache.source.at<float>(y, x);
+                if (AlgoResult::valid_depth(d)) samples.push_back(1.0f / std::max(d, 1e-6f));
+            }
+        float lo = 0.0f, hi = 1.0f;
+        if (!samples.empty())
+        {
+            std::sort(samples.begin(), samples.end());
+            lo = samples[static_cast<size_t>((samples.size() - 1) * 0.02)];
+            hi = samples[static_cast<size_t>((samples.size() - 1) * 0.98)];
+        }
+        const float scale = 255.0f / std::max(hi - lo, 1e-6f);
+        cv::Mat gray = cv::Mat::zeros(cache.source.size(), CV_8UC1);
+        cv::Mat valid = cv::Mat::zeros(cache.source.size(), CV_8UC1);
+        for (int y = 0; y < cache.source.rows; ++y)
+        {
+            const float *input = cache.source.ptr<float>(y);
+            auto *output = gray.ptr<uint8_t>(y);
+            auto *mask = valid.ptr<uint8_t>(y);
+            for (int x = 0; x < cache.source.cols; ++x)
+                if (AlgoResult::valid_depth(input[x]))
+                {
+                    output[x] = cv::saturate_cast<uint8_t>((1.0f / std::max(input[x], 1e-6f) - lo) * scale);
+                    mask[x] = 255;
+                }
+        }
+        cv::Mat color;
+        cv::applyColorMap(gray, color, cv::COLORMAP_JET);
+        cv::resize(color, cache.color, screen.size(), 0, 0, cv::INTER_LINEAR);
+        cv::Mat resized_valid;
+        cv::resize(valid, resized_valid, screen.size(), 0, 0, cv::INTER_NEAREST);
+        cache.color.setTo(cv::Scalar(0, 0, 0), resized_valid == 0);
+    }
+    cache.color.copyTo(screen);
+    return true;
+}
+
 static cv::Rect clipped_draw_bounds(const cv::Mat &image, int64_t left, int64_t top, int64_t right, int64_t bottom)
 {
     left = std::max<int64_t>(0, std::min<int64_t>(image.cols, left));
@@ -304,6 +377,10 @@ static void draw_pose_overlay(cv::Mat &screen_roi, const std::vector<AlgoResult>
 
 void render_overlays(cv::Mat &screen_roi, const RenderParams &p, PerformanceOverlayCache *performance_cache)
 {
+    // Select the base before ROI/boxes/text, so no later fill erases annotations.
+    // A configured depth stream never exposes the source while waiting for data.
+    const bool has_depth = p.results && draw_depth_background(screen_roi, *p.results, p.chnId, p.result_frame_id);
+    if (p.depth_background && !has_depth) screen_roi.setTo(cv::Scalar(0, 0, 0));
     /* 推理 ROI 是纯输出叠加层：此函数只接收已经完成模型推理的显示画面，
      * 因而边界和文字不会进入模型，也不会污染业务逻辑读取的 source/model frame。 */
     if (p.show_system_overlays && p.inference_roi && p.inference_roi->has_roi())
@@ -362,6 +439,7 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p, PerformanceOver
     {
         for (const auto &res : *p.results)
         {
+            if (res.is_depth()) continue;
             cv::Rect box;
             box.x = static_cast<int>(res.box.x * scale_x);
             box.y = static_cast<int>(res.box.y * scale_y);
@@ -639,6 +717,7 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms,
     params.target_mask = DrawCommand::DISPLAY;
     params.show_system_overlays = true;
     params.show_custom_overlays = true;
+    params.depth_background = channel_uses_depth_background(channel);
     params.inference_roi = channel->inference_roi.has_roi() ? &channel->inference_roi : nullptr;
     params.roi_zones = rois;
     params.results = &results;

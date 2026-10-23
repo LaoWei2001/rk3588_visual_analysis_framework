@@ -17,6 +17,9 @@ struct RenderParams
     uint8_t target_mask = DrawCommand::DISPLAY;
     bool show_system_overlays = true; /* ROI、检测框、姿态、分割 */
     bool show_custom_overlays = true; /* logic 的 draw_* 指令 */
+    /* 深度通道使用纯热力图底图；首个深度结果到达前显示黑色。
+     * 底图选择独立于系统/业务绘图开关。 */
+    bool depth_background = false;
 
     /* 推理 ROI 使用完整视频归一化坐标，仅供最终显示层绘制；绝不参与模型输入构造。 */
     const InferenceRoiConfig *inference_roi = nullptr;
@@ -28,6 +31,7 @@ struct RenderParams
 
 struct ChannelContext;
 RenderParams channel_render_params(const ChannelContext &ctx);
+bool channel_uses_depth_background(const ChannelConfig *channel);
 
 /* 仅缓存 FPS 文字下方的一条背景，关闭性能显示时不保存图像。 */
 struct PerformanceOverlayCache

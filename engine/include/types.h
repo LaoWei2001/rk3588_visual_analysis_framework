@@ -5,6 +5,8 @@
 #pragma once
 
 #include <coordinates.h>
+#include <algorithm>
+#include <cstring>
 #include <cstdint>
 #include <opencv2/core.hpp>
 #include <string>
@@ -67,6 +69,51 @@ struct AlgoResult
 
     std::string text_result;
     cv::Mat boxMask;
+
+    /* 单目深度结果：CV_32FC1，单位米；坐标与 box/ROI 相同（业务层固定 640×640）。
+     * 无效/未推理区域为 0。每个深度模型每帧一条结果，不参与目标计数、跟踪或 NMS。
+     * Mat 引用可安全跨帧持有；如需修改像素，先 clone()。 */
+    cv::Mat depth_map;
+
+    bool is_depth() const { return !depth_map.empty(); }
+
+    // 位检查也适用于宿主工程启用 -ffast-math 的场合。
+    static bool valid_depth(float value)
+    {
+        uint32_t bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        return bits != 0 && bits < 0x7f800000U;
+    }
+
+    // 越界、无深度或无效像素返回 0，正常值为米。
+    float depth_at(int x, int y) const
+    {
+        if (depth_map.type() != CV_32FC1 || x < 0 || y < 0 || x >= depth_map.cols || y >= depth_map.rows)
+            return 0.0f;
+        const float value = depth_map.at<float>(y, x);
+        return valid_depth(value) ? value : 0.0f;
+    }
+
+    // 取区域内有效深度的中位数。默认每 4 像素采样；step=1 为精确中位数。
+    float depth_median(const cv::Rect &region, int step = 4) const
+    {
+        if (depth_map.type() != CV_32FC1 || step <= 0) return 0.0f;
+        const cv::Rect area = region & cv::Rect(0, 0, depth_map.cols, depth_map.rows);
+        if (area.empty()) return 0.0f;
+        std::vector<float> values;
+        values.reserve(static_cast<size_t>((area.width - 1) / step + 1) * ((area.height - 1) / step + 1));
+        for (int y = area.y; y < area.y + area.height; y += step)
+        {
+            const float *row = depth_map.ptr<float>(y);
+            for (int x = area.x; x < area.x + area.width; x += step)
+                if (valid_depth(row[x])) values.push_back(row[x]);
+        }
+        if (values.empty()) return 0.0f;
+        const auto middle = values.begin() + values.size() / 2;
+        std::nth_element(values.begin(), middle, values.end());
+        if (values.size() % 2) return *middle;
+        return (*middle + *std::max_element(values.begin(), middle)) * 0.5f;
+    }
 };
 
 /*======================== ROI 区域 (一个通道可配置多个) ========================*/

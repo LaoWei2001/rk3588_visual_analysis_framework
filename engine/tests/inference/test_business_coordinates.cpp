@@ -225,6 +225,88 @@ void test_software_color_formats_and_output_reuse()
         assert(output.at<cv::Vec3b>(0, 0) == cv::Vec3b(30, 20, 10));
     }
 }
+
+void test_depth_background_and_overlay_order()
+{
+    AlgoResult depth;
+    depth.box = cv::Rect(0,0,640,640);
+    depth.depth_map = cv::Mat(640,640,CV_32FC1,cv::Scalar(0));
+    depth.depth_map(cv::Rect(160,160,320,320)).setTo(2.0f);
+    std::vector<AlgoResult> results{depth};
+    RenderParams params;
+    params.inputW = params.inputH = 640;
+    params.results = &results;
+    params.show_fps = 0;
+    params.result_frame_id = 42;
+    for (auto target : {DrawCommand::DISPLAY, DrawCommand::IMAGE, DrawCommand::VIDEO})
+    {
+        params.target_mask = target;
+        cv::Mat image(720,1280,CV_8UC3,cv::Scalar(10,20,30));
+        render_overlays(image,params);
+        assert(image.at<cv::Vec3b>(0,0) == cv::Vec3b(0,0,0));
+        assert(image.at<cv::Vec3b>(360,640) != cv::Vec3b(10,20,30));
+        // Rendering must be independent of every source-image pixel, including
+        // cached reuse across display, screenshot and recorded-video targets.
+        cv::Mat alternate(image.size(),CV_8UC3,cv::Scalar(200,130,70));
+        render_overlays(alternate,params);
+        assert(cv::norm(image,alternate,cv::NORM_INF) == 0);
+    }
+
+    AlgoResult object;
+    object.box = cv::Rect(200,200,100,100);
+    results.push_back(object);
+    RoiZone zone;
+    zone.polygon = {{80,80},{140,80},{140,140},{80,140}};
+    std::vector<RoiZone> rois{zone};
+    params.roi_zones = &rois;
+    DrawCommand command{};
+    command.type = DrawCommand::RECT;
+    command.rect = cv::Rect(400,200,40,40);
+    command.color = cv::Scalar(255,0,255);
+    command.thickness = -1;
+    std::vector<DrawCommand> commands{command};
+    params.draw_cmds = &commands;
+    for (auto target : {DrawCommand::DISPLAY, DrawCommand::IMAGE, DrawCommand::VIDEO})
+    {
+        params.target_mask = target;
+        cv::Mat image(640,640,CV_8UC3,cv::Scalar(10,20,30));
+        render_overlays(image,params);
+        assert(image.at<cv::Vec3b>(250,200) == cv::Vec3b(0,255,0)); // detection above depth
+        assert(image.at<cv::Vec3b>(80,100) == cv::Vec3b(0,255,255)); // ROI above depth
+        assert(image.at<cv::Vec3b>(220,420) == cv::Vec3b(255,0,255)); // business commands above depth
+    }
+
+    params.show_system_overlays = false;
+    params.show_custom_overlays = false;
+    cv::Mat image(640,640,CV_8UC3,cv::Scalar(10,20,30));
+    render_overlays(image,params);
+    assert(image.at<cv::Vec3b>(0,0) == cv::Vec3b(0,0,0));
+    assert(image.at<cv::Vec3b>(320,320) != cv::Vec3b(10,20,30)); // base is independent of overlays
+
+    ChannelConfig channel;
+    ChannelModelConfig model;
+    model.model_type = "yolo26_depth";
+    model.model_path = "assets/depth.rknn";
+    channel.models = {model};
+    assert(channel_uses_depth_background(&channel));
+    channel.models[0].enable = false;
+    assert(!channel_uses_depth_background(&channel));
+    channel.models[0].enable = true;
+    channel.infer_enable = false;
+    assert(!channel_uses_depth_background(&channel));
+
+    // First result has not arrived, or depth inference failed for this batch.
+    results.clear();
+    params.depth_background = true;
+    image.setTo(cv::Scalar(10,20,30));
+    render_overlays(image,params);
+    assert(cv::countNonZero(image.reshape(1)) == 0);
+    params.depth_background = false;
+    image.setTo(cv::Scalar(10,20,30));
+    const cv::Mat original = image.clone();
+    render_overlays(image,params);
+    assert(cv::norm(image,original,cv::NORM_INF) == 0); // normal streams retain their source base
+}
 } // namespace
 
 int main()
@@ -237,5 +319,6 @@ int main()
     test_lazy_business_frame_and_direct_model_input();
     test_display_and_evidence_overlays_use_business_coordinates();
     test_software_color_formats_and_output_reuse();
+    test_depth_background_and_overlay_order();
     std::cout << "Business coordinates regression tests passed\n";
 }

@@ -120,7 +120,7 @@ int ChannelContext::has_target(const char *label) const
         return 0;
     std::string s(label);
     for (const auto &r : *results)
-        if (r.label == s)
+        if (!r.is_depth() && r.label == s)
             return 1;
     return 0;
 }
@@ -170,7 +170,7 @@ int roi_has_target(const ChannelContext *ctx, const char *label, int idx)
             return ctx->has_target(label); /* 无区域 → 整帧 */
         std::string s(label);
         for (const auto &r : *ctx->results)
-            if (r.label == s && ctx->roi_index_of(r.box) >= 0)
+            if (!r.is_depth() && r.label == s && ctx->roi_index_of(r.box) >= 0)
                 return 1;
         return 0;
     }
@@ -181,7 +181,7 @@ int roi_has_target(const ChannelContext *ctx, const char *label, int idx)
         return 0;
     std::string s(label);
     for (const auto &r : *ctx->results)
-        if (r.label == s && ChannelContext::point_box_in_poly(poly, r.box))
+        if (!r.is_depth() && r.label == s && ChannelContext::point_box_in_poly(poly, r.box))
             return 1;
     return 0;
 }
@@ -199,7 +199,7 @@ int roi_count_target(const ChannelContext *ctx, const char *label, int idx)
         std::string s(label);
         int n = 0;
         for (const auto &r : *ctx->results)
-            if (r.label == s && ctx->roi_index_of(r.box) >= 0)
+            if (!r.is_depth() && r.label == s && ctx->roi_index_of(r.box) >= 0)
                 ++n;
         return n;
     }
@@ -211,7 +211,7 @@ int roi_count_target(const ChannelContext *ctx, const char *label, int idx)
     std::string s(label);
     int n = 0;
     for (const auto &r : *ctx->results)
-        if (r.label == s && ChannelContext::point_box_in_poly(poly, r.box))
+        if (!r.is_depth() && r.label == s && ChannelContext::point_box_in_poly(poly, r.box))
             ++n;
     return n;
 }
@@ -223,7 +223,7 @@ int ChannelContext::target_count(const char *label) const
     std::string s(label);
     int n = 0;
     for (const auto &r : *results)
-        if (r.label == s)
+        if (!r.is_depth() && r.label == s)
             ++n;
     return n;
 }
@@ -302,7 +302,7 @@ TargetQueryResult ChannelContext::query_targets(const TargetQuery &query) const
     out.status = TargetQueryStatus::OK;
     for (const auto &target : *results)
     {
-        if (!finite_confidence(target.score) || target.score < query.min_score || target.score > 1.0f ||
+        if (target.is_depth() || !finite_confidence(target.score) || target.score < query.min_score || target.score > 1.0f ||
             target.box.width <= 0 || target.box.height <= 0)
             continue;
         if (!query.labels.empty() &&

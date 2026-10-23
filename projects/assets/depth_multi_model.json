@@ -1,0 +1,56 @@
+{
+  "global": {
+    "enable_display": false,
+    "disp_width": 1280,
+    "disp_height": 720,
+    "tile_rows": 1,
+    "tile_cols": 1,
+    "max_fps": 25,
+    "queue_size": 1,
+    "channel_threads": 1,
+    "tracker_enable": 1,
+    "performance_display": true,
+    "enable_rtsp": true,
+    "rtsp_port": 8554,
+    "rtsp_path": "/live"
+  },
+  "channels": [
+    {
+      "id": 0,
+      "enable": true,
+      "infer_enable": true,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/10_11_1.mp4",
+        "loop": true
+      },
+      "models": [
+        {
+          "id": "helmet",
+          "enable": true,
+          "model_type": "yolov8_det",
+          "model_path": "assets/helmet_n1088_1012.rknn",
+          "label_path": "assets/labels_helmet.txt",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "npu_core": 0
+        },
+        {
+          "id": "depth",
+          "enable": true,
+          "model_type": "yolo26_depth",
+          "model_path": "assets/yolo26n-depth-float.rknn",
+          "npu_core": 1
+        }
+      ],
+      "logic": "logic_depth_demo",
+      "logic_parameters": {},
+      "roi_zones": [],
+      "report_policy": {
+        "enabled": false,
+        "deliveries": [],
+        "parameters": []
+      }
+    }
+  ]
+}

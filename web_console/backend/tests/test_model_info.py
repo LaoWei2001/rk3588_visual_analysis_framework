@@ -119,6 +119,38 @@ def test_disabled_models_and_empty_draft_need_no_probe(app, monkeypatch):
     model_info.validate_model_config(app, disabled)
 
 
+@pytest.mark.parametrize("shape,fmt", [([1, 1, 640, 640], "NCHW"),
+                                       ([1, 352, 640, 1], "NHWC"),
+                                       ([1, 160, 160], "UNDEFINED"),
+                                       ([160, 160], "UNDEFINED")])
+def test_depth_output_contract(shape, fmt):
+    output = {"shape": shape, "format": fmt, "type": 0, "elements": 1}
+    for size in shape:
+        output["elements"] *= size
+    info = {"width": 640, "height": 352 if fmt == "NHWC" else 640, "format": "NCHW", "outputs": [output]}
+    assert model_info.compatibility_error(info, "yolo26_depth") == ""
+    output["elements"] += 1
+    assert "元素" in model_info.compatibility_error(info, "yolo26_depth")
+
+
+def test_depth_can_share_channel_with_different_detection_resolution(app, monkeypatch):
+    depth = {"ok": True, "width": 640, "height": 640, "format": "NCHW", "outputs": [
+        {"format": "NCHW", "shape": [1, 1, 640, 640], "elements": 409600, "type": 0}]}
+    monkeypatch.setattr(model_info, "_probe", lambda _, __, path: detector(960) if path.stem == "large" else depth)
+    both = config("small", "large")
+    both["channels"][0]["models"][0]["model_type"] = "yolo26_depth"
+    model_info.validate_model_config(app, both)
+    both["channels"][0]["models"].reverse()
+    model_info.validate_model_config(app, both)
+
+
+def test_detection_tensor_is_rejected_as_depth():
+    assert "单个" in model_info.compatibility_error(detector(), "yolo26_depth")
+    pose = {"width": 640, "height": 640, "format": "NCHW", "outputs": [
+        {"shape": [1, 56, 300], "elements": 56 * 300, "type": 0}]}
+    assert "宽高比" in model_info.compatibility_error(pose, "yolo26_depth")
+
+
 def test_valid_960_can_be_saved(app, monkeypatch):
     monkeypatch.setattr(model_info, "_probe", lambda *args: detector(960))
     assert asyncio.run(config_io.save_config("demo", config("large"))) == {"ok": True}

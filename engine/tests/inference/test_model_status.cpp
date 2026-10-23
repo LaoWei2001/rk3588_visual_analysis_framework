@@ -38,6 +38,21 @@ class FakeModel : public ModelBase
     }
 };
 
+class FakeDepth : public FakeModel
+{
+  public:
+    FakeDepth() : FakeModel(640) {}
+    bool infer(cv::Mat &, std::vector<AlgoResult> &out, YoloPerfStat *) override
+    {
+        AlgoResult depth;
+        depth.score = 1;
+        depth.depth_map = cv::Mat(640,640,CV_32FC1,cv::Scalar(2));
+        depth.box = cv::Rect(0,0,640,640);
+        out = {depth};
+        return true;
+    }
+};
+
 void check(const char *state, int width, int active_count = 1)
 {
     cJSON *root = cJSON_Parse(inference_model_status_json().c_str());
@@ -101,4 +116,20 @@ int main()
     model_status_reset(config);
     check("disabled", 0, 0);
     std::cout << "Model lifecycle snapshot regression passed\n";
+
+    first.type = "yolov8_det";
+    second.type = "yolo26_depth";
+    second.model = std::make_shared<FakeDepth>();
+    second.allowed_classes = {123}; // object class filters must not discard depth
+    for (bool depth_first : {false,true})
+    {
+        CompositeModel composite(depth_first ? std::vector<CompositeModel::Entry>{second,first}
+                                             : std::vector<CompositeModel::Entry>{first,second});
+        cv::Mat frame(composite.input_height(),composite.input_width(),CV_8UC3,cv::Scalar(0));
+        std::vector<AlgoResult> out;
+        assert(composite.infer(frame,out));
+        assert(out.size() == 1 && out[0].is_depth());
+        assert(out[0].depth_map.size() == frame.size() && out[0].depth_at(320,320) == 2);
+        assert(out[0].model_id == second.id && out[0].model_type == "yolo26_depth");
+    }
 }

@@ -1451,6 +1451,7 @@ EventReportResult report_event(GlobalContext *gctx, const EventRequest &request)
             pane.render_params.target_mask = static_cast<uint8_t>(DrawCommand::DISPLAY | DrawCommand::IMAGE);
             pane.render_params.show_system_overlays = true;
             pane.render_params.show_custom_overlays = true;
+            pane.render_params.depth_background = channel_uses_depth_background(channel);
             composite.panes.push_back(std::move(pane));
         }
 

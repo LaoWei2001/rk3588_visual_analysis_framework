@@ -82,6 +82,16 @@ static void update_tracking_results(int chnId, const ChannelConfig *config, std:
     }
 
     ChannelTrackerSlot &slot = g_trackers[chnId];
+    if (std::any_of(results.begin(), results.end(), [](const AlgoResult &r) { return r.is_depth(); }))
+    {
+        std::vector<AlgoResult> detections, depth;
+        for (auto &r : results)
+            (r.is_depth() ? depth : detections).push_back(std::move(r));
+        update_tracking_results(chnId, config, detections);
+        results = std::move(detections);
+        for (auto &r : depth) results.push_back(std::move(r));
+        return;
+    }
     if (config->tracker_type == "bytetrack")
     {
         if (slot.type != "bytetrack" || !slot.bytetrack)

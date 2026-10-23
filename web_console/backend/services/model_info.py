@@ -19,7 +19,7 @@ _cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
 _probe_lock = threading.Lock()
 _MAX_CACHE = 128
 _ERROR_TTL = 30
-MODEL_TYPES = {"yolov5", "yolov8_det", "yolov8_pose", "yolo26_pose", "yolov5_seg"}
+MODEL_TYPES = {"yolov5", "yolov8_det", "yolov8_pose", "yolo26_pose", "yolo26_depth", "yolov5_seg"}
 
 
 def app_directory(root: Path, name: str) -> Path:
@@ -89,6 +89,31 @@ def compatibility_error(info: dict, model_type: str) -> str:
         return f"{model_type} 当前要求 NHWC 输入布局"
     outputs = info.get("outputs", [])
     width, height = info.get("width", 0), info.get("height", 0)
+    if model_type == "yolo26_depth":
+        if width <= 0 or height <= 0 or info.get("format") not in {"NHWC", "NCHW"}:
+            return "yolo26_depth 要求有效的 RGB 图像输入"
+        if len(outputs) != 1:
+            return "yolo26_depth 要求单个米制深度输出"
+        output = outputs[0]
+        shape = output.get("shape", [])
+        fmt = output.get("format")
+        if len(shape) == 4 and shape[0] == 1 and fmt == "NCHW" and shape[1] == 1:
+            spatial = shape[2:]
+        elif len(shape) == 4 and shape[0] == 1 and fmt == "NHWC" and shape[3] == 1:
+            spatial = shape[1:3]
+        elif len(shape) == 3 and shape[0] == 1:
+            spatial = shape[1:]
+        elif len(shape) == 2:
+            spatial = shape
+        else:
+            return "yolo26_depth 输出必须为单通道 [1,1,H,W] / [1,H,W,1] / [1,H,W] / [H,W]"
+        if min(spatial) <= 0 or output.get("elements") != spatial[0] * spatial[1]:
+            return "yolo26_depth 输出元素数量与张量形状不匹配"
+        if spatial[0] > height or spatial[1] > width or spatial[0] * width != spatial[1] * height:
+            return "yolo26_depth 输出必须与输入画布宽高比一致，可为较低分辨率深度图"
+        if output.get("type") not in {0, 1, 2, 3}:
+            return "yolo26_depth 输出仅支持 FLOAT32/FLOAT16/INT8/UINT8"
+        return ""
     if model_type == "yolo26_pose":
         shape = [dim for dim in outputs[0].get("shape", []) if dim != 1] if len(outputs) == 1 else []
         if len(shape) != 2 or 56 not in shape or min(shape) <= 0:
@@ -209,6 +234,8 @@ def validate_model_config(app: Path, config: dict[str, Any]) -> None:
             if not info.get("ok"):
                 raise ValueError(f"{label}: {info.get('error', '模型检查失败')}")
             size = (info["width"], info["height"])
+            if model_type == "yolo26_depth":
+                continue  # each depth child is independently resized by the video executor
             if expected is not None and size != expected:
                 raise ValueError(f"{label}: 同通道多个模型输入尺寸必须一致，已选 {expected[0]}×{expected[1]}，该模型为 {size[0]}×{size[1]}")
             expected = size

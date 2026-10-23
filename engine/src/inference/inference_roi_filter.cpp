@@ -45,8 +45,21 @@ void filter_results_to_inference_roi(std::vector<AlgoResult> &results, const Inf
 
     cv::Mat merged_mask;
     merge_result_masks(results, merged_mask);
+    for (auto &result : results)
+    {
+        if (!result.is_depth()) continue;
+        std::vector<cv::Point> polygon;
+        for (const auto &point : roi.polygon)
+            polygon.emplace_back(cvRound(point.first * result.depth_map.cols), cvRound(point.second * result.depth_map.rows));
+        cv::Mat keep = cv::Mat::zeros(result.depth_map.size(), CV_8UC1);
+        cv::fillPoly(keep, std::vector<std::vector<cv::Point>>{polygon}, cv::Scalar(255));
+        cv::Mat clipped = cv::Mat::zeros(result.depth_map.size(), CV_32FC1);
+        result.depth_map.copyTo(clipped, keep);
+        result.depth_map = std::move(clipped);
+    }
     results.erase(std::remove_if(results.begin(), results.end(),
                                  [&](const AlgoResult &result) {
+                                     if (result.is_depth()) return false;
                                      return result.box.empty() ||
                                             cv::pointPolygonTest(canonical_polygon, result.box_center(), false) < 0.0;
                                  }),

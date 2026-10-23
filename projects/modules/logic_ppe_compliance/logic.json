@@ -1,0 +1,39 @@
+{
+  "label": "作业人员安全穿戴检测",
+  "event_types": [
+    {
+      "id": "logic_ppe_violation",
+      "label": "人员安全穿戴违规",
+      "help": "按人员跟踪 ID 对未戴安全帽、未穿工作服或未戴手套进行多帧确认；同一跟踪 ID 只创建一次事件。"
+    }
+  ],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "person_labels": { "type": "string", "title": "人员类别标签", "default": "person", "x-hot-reload": "reset_state" },
+      "person_min_score": { "type": "number", "title": "人员最低置信度", "default": 0.35, "minimum": 0.0, "maximum": 1.0, "x-step": 0.05, "x-hot-reload": "preserve_state" },
+      "check_helmet": { "type": "boolean", "title": "检测未戴安全帽", "default": true, "x-hot-reload": "reset_state" },
+      "no_helmet_labels": { "type": "string", "title": "未戴安全帽违规标签", "description": "填写模型明确输出的未戴帽/裸头类别；多个名称用英文逗号分隔。", "default": "no_helmet,bare_head", "x-hot-reload": "reset_state" },
+      "check_workwear": { "type": "boolean", "title": "检测未穿工作服", "default": true, "x-hot-reload": "reset_state" },
+      "no_workwear_labels": { "type": "string", "title": "未穿工作服违规标签", "description": "填写模型明确输出的未穿工作服类别；不能用“没有检测到工作服”代替。", "default": "no_workwear,no_uniform", "x-hot-reload": "reset_state" },
+      "check_gloves": { "type": "boolean", "title": "检测未戴手套", "default": true, "x-hot-reload": "reset_state" },
+      "no_gloves_labels": { "type": "string", "title": "未戴手套违规标签", "description": "填写模型明确输出的裸手/未戴手套类别；多个名称用英文逗号分隔。", "default": "bare_hand,no_glove", "x-hot-reload": "reset_state" },
+      "violation_min_score": { "type": "number", "title": "违规目标最低置信度", "default": 0.5, "minimum": 0.0, "maximum": 1.0, "x-step": 0.05, "x-hot-reload": "preserve_state" },
+      "evidence_window_sec": { "type": "integer", "title": "违规证据时间窗口", "default": 4, "minimum": 1, "maximum": 30, "x-unit": "秒", "x-hot-reload": "reset_state" },
+      "evidence_gap_ms": { "type": "integer", "title": "独立证据最小间隔", "description": "避免相邻重复帧被当成多次独立证据。", "default": 250, "minimum": 0, "maximum": 5000, "x-unit": "毫秒", "x-hot-reload": "reset_state" },
+      "required_observations": { "type": "integer", "title": "违规确认所需观测次数", "default": 3, "minimum": 2, "maximum": 20, "x-hot-reload": "reset_state" },
+      "required_span_ms": { "type": "integer", "title": "违规证据最小跨度", "default": 1000, "minimum": 0, "maximum": 30000, "x-unit": "毫秒", "x-hot-reload": "reset_state" }
+    }
+  },
+  "outputs": [
+    { "key": "ppe_alarm", "type": "boolean", "label": "存在已确认穿戴违规人员" },
+    { "key": "ppe_confirmed_people", "type": "integer", "label": "已确认违规人员数" },
+    { "key": "ppe_violation_observations", "type": "integer", "label": "当前帧违规候选数" }
+  ],
+  "report_fields": [
+    { "key": "track_id", "type": "number", "label": "人员跟踪 ID" },
+    { "key": "violation_types", "type": "string", "label": "违规类型" },
+    { "key": "person_score", "type": "number", "label": "人员检测置信度" }
+  ]
+}

@@ -10,6 +10,9 @@
 完整示例：[区域持续占用报警](modules/logic_roi_dwell_demo/README.md)，包含参数、ROI、
 计时状态、绘图、事件、变量发布及可重复验收说明。
 
+视频深度推理：[深度与目标距离示例](modules/logic_depth_demo/README.md)，包含原生
+`yolo26_depth` 模型、同帧检测框距离查询、RTSP 预览和性能测量。
+
 `projects/` 是二次开发内容的唯一迁移单元。升级底层框架时，可以把旧仓库的整个
 `projects/` 复制到新仓库中，再执行校验和构建。这里的模块不绑定某个配置或客户项目；
 Web 画布仍会加载并允许自由组合全部通道 Logic 和全局 Logic。

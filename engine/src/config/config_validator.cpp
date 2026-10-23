@@ -8,7 +8,7 @@ namespace
 {
 bool is_supported_model_type(const std::string &model_type)
 {
-    return model_type == "yolov5" || model_type == "yolov5_seg" || model_type == "yolov8_pose" ||
+    return model_type == "yolo26_depth" || model_type == "yolov5" || model_type == "yolov5_seg" || model_type == "yolov8_pose" ||
            model_type == "yolo26_pose" || model_type == "yolov8_det";
 }
 

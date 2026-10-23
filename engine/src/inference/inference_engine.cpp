@@ -64,6 +64,15 @@ const char *configured_npu_core_name(int configured_core)
     }
 }
 
+int worker_npu_core_mask(const ChannelModelConfig &model, int worker, int workers)
+{
+    // Independent depth contexts can run simultaneously on the three RK3588
+    // cores. Keep explicit user affinity and the scheduling of other YOLOs.
+    if (model.model_type == "yolo26_depth" && model.npu_core < 0 && workers > 1)
+        return 1 << (worker % 3);
+    return configured_npu_core_mask(model.npu_core);
+}
+
 InferenceRoiMode resolve_inference_source_roi(int channel_id, int source_width, int source_height, cv::Rect &out_roi,
                                               InferenceRoiConfig &out_config)
 {
@@ -234,7 +243,7 @@ int inference_init(const AppConfig &cfg)
                     for (size_t model_index = 0; model_index < active_models.size(); ++model_index)
                     {
                         const auto &spec = active_models[model_index];
-                        const int core_mask = configured_npu_core_mask(spec.npu_core);
+                        const int core_mask = worker_npu_core_mask(spec, t, threads_for_chn);
                         const float decode_thresh = config_utils::effective_model_obj_thresh(chn_cfg, spec);
                         auto child = create_inference_model(spec.model_type, spec.model_path, spec.label_path,
                                                             core_mask, decode_thresh, spec.nms_thresh);
@@ -259,7 +268,7 @@ int inference_init(const AppConfig &cfg)
                 else
                 {
                     const ChannelModelConfig &spec = active_models[0];
-                    const int mask = configured_npu_core_mask(spec.npu_core);
+                    const int mask = worker_npu_core_mask(spec, t, threads_for_chn);
                     const float decode_thresh = config_utils::effective_model_obj_thresh(chn_cfg, spec);
                     model = create_inference_model(spec.model_type, spec.model_path, spec.label_path, mask,
                                                    decode_thresh, spec.nms_thresh);
@@ -826,7 +835,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
                 for (size_t model_index = 0; model_index < active_models.size(); ++model_index)
                 {
                     const auto &spec = active_models[model_index];
-                    const int core_mask = configured_npu_core_mask(spec.npu_core);
+                    const int core_mask = worker_npu_core_mask(spec, t, worker_count);
                     const float decode_thresh = config_utils::effective_model_obj_thresh(new_cfg, spec);
                     auto child = create_inference_model(spec.model_type, spec.model_path, spec.label_path, core_mask,
                                                         decode_thresh, spec.nms_thresh);
@@ -848,7 +857,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
             else
             {
                 const ChannelModelConfig &spec = active_models[0];
-                const int core_mask = configured_npu_core_mask(spec.npu_core);
+                const int core_mask = worker_npu_core_mask(spec, t, worker_count);
                 const float decode_thresh = config_utils::effective_model_obj_thresh(new_cfg, spec);
                 model = create_inference_model(spec.model_type, spec.model_path, spec.label_path, core_mask,
                                                decode_thresh, spec.nms_thresh);

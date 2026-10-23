@@ -137,6 +137,16 @@ struct ChannelContext
     // 推理结果
     std::vector<AlgoResult> *results = nullptr;
 
+    /* 与 ctx->results 同帧，借用指针仅在当前回调有效。空 model_id 取首个深度模型。
+     * 示例：if (auto *d = ctx->depth_result()) d->depth_median(person.box); */
+    const AlgoResult *depth_result(const std::string &model_id = "") const
+    {
+        if (results)
+            for (const auto &result : *results)
+                if (result.is_depth() && (model_id.empty() || result.model_id == model_id)) return &result;
+        return nullptr;
+    }
+
     /* ---- 配置 (只读) ---- */
     const ChannelConfig *config;
 

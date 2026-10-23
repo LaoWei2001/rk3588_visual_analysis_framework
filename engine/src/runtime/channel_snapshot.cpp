@@ -21,8 +21,12 @@ int app_ctrl_materialize_channel_frame_snapshot(const ChannelLogicSnapshot &snap
     out->logic.has_frame = !out->frame.empty();
     out->results = media.results;
     for (auto &result : out->results)
+    {
         if (!result.boxMask.empty())
             result.boxMask = result.boxMask.clone();
+        if (!result.depth_map.empty())
+            result.depth_map = result.depth_map.clone();
+    }
     out->draw_cmds = media.commands;
     for (const auto &layer : VisionContextAccess::layers(snapshot))
         out->draw_cmds.insert(out->draw_cmds.end(), layer.second.begin(), layer.second.end());

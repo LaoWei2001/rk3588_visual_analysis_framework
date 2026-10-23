@@ -1,0 +1,3 @@
+/userdata/rk3588_visual_analysis_framework/tools/device/first_net_config/build/CMakeFiles/rebuild_cache.dir
+/userdata/rk3588_visual_analysis_framework/tools/device/first_net_config/build/CMakeFiles/edit_cache.dir
+/userdata/rk3588_visual_analysis_framework/tools/device/first_net_config/build/CMakeFiles/first_net_config.dir

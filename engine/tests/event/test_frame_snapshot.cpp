@@ -30,6 +30,7 @@ ChannelLogicSnapshot publication(int id, unsigned char marker)
     result.frame_id = id;
     result.box = cv::Rect(marker, 70, 30, 30);
     result.boxMask = cv::Mat(160, 160, CV_8UC1, cv::Scalar(marker));
+    result.depth_map = cv::Mat(160, 160, CV_32FC1, cv::Scalar(marker));
     media->results.push_back(result);
     DrawCommand command{};
     command.type = DrawCommand::RECT;
@@ -100,10 +101,12 @@ void test_tick_keeps_evidence_after_later_publications()
 
     captured.frame.setTo(cv::Scalar(99, 99, 99));
     captured.results[0].boxMask.setTo(cv::Scalar(99));
+    captured.results[0].depth_map.setTo(cv::Scalar(99));
     ChannelFrameSnapshot again;
     assert(context.get_channel_frame_snapshot(0, &again));
     assert(again.frame.at<cv::Vec3b>(0, 0)[0] == 10);
     assert(again.results[0].boxMask.at<unsigned char>(0, 0) == 10);
+    assert(again.results[0].depth_at(0, 0) == 10);
     VisionContextAccess::overlays(context)[0].clear();
     assert(context.get_channel_frame_snapshot(0, &again));
     assert(again.draw_cmds.size() == 2); // 清掉当前实例的层，不影响其它实例。

@@ -14,12 +14,17 @@ CompositeModel::CompositeModel(std::vector<Entry> entries) : entries_(std::move(
         throw std::invalid_argument("CompositeModel child model is null");
     input_width_ = entries_[0].model->input_width();
     input_height_ = entries_[0].model->input_height();
+    int object_width = 0, object_height = 0;
     for (const auto &entry : entries_)
     {
         if (!entry.model)
             throw std::invalid_argument("CompositeModel child model is null");
-        if (entry.model->input_width() != input_width_ || entry.model->input_height() != input_height_)
-            throw std::invalid_argument("models in one channel must use the same input resolution");
+        // The executor prepares each child's real input independently. Depth
+        // models may differ from the detection group (e.g. 640 depth + 1088 det).
+        if (entry.type == "yolo26_depth") continue;
+        if (!object_width) { object_width = entry.model->input_width(); object_height = entry.model->input_height(); }
+        else if (entry.model->input_width() != object_width || entry.model->input_height() != object_height)
+            throw std::invalid_argument("detection models in one channel must use the same input resolution");
     }
 }
 
@@ -36,7 +41,7 @@ void CompositeModel::nms_inplace(std::vector<AlgoResult> &results, float thresho
         kept.push_back(results[i]);
         for (size_t j = i + 1; j < results.size(); ++j)
         {
-            if (!removed[j] && results[i].class_id == results[j].class_id &&
+            if (!results[i].is_depth() && !results[j].is_depth() && !removed[j] && results[i].class_id == results[j].class_id &&
                 compute_iou(results[i].box, results[j].box) > threshold)
                 removed[j] = 1;
         }
@@ -56,6 +61,17 @@ bool CompositeModel::infer(cv::Mat &frame, std::vector<AlgoResult> &results, Yol
         pthread_mutex_lock(&entry.model->infer_mtx);
         const bool ok = entry.model->infer(frame, child_results[model_index], &child_perf[model_index]);
         pthread_mutex_unlock(&entry.model->infer_mtx);
+        // Serial CPU fallback receives the composite canvas; detection decoders
+        // already return frame coordinates. Depth returns its own model plane.
+        if (ok)
+            for (auto &result : child_results[model_index])
+                if (result.is_depth() && result.depth_map.size() != frame.size())
+                {
+                    cv::Mat mapped;
+                    cv::resize(result.depth_map, mapped, frame.size(), 0, 0, cv::INTER_LINEAR);
+                    result.depth_map = std::move(mapped);
+                    result.box = cv::Rect(0, 0, frame.cols, frame.rows);
+                }
         succeeded[model_index] = ok ? 1 : 0;
     }
 
@@ -88,6 +104,7 @@ bool CompositeModel::merge_child_results(std::vector<std::vector<AlgoResult>> &c
 
         one_model_results.erase(std::remove_if(one_model_results.begin(), one_model_results.end(),
                                                [&](const AlgoResult &result) {
+                                                   if (result.is_depth()) return false;
                                                    return result.score < entry.obj_thresh ||
                                                           (!entry.allowed_classes.empty() &&
                                                            entry.allowed_classes.count(result.class_id) == 0);
