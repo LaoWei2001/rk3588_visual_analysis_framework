@@ -51,12 +51,3 @@ async def cleanup_root_storage(req: RootCleanupRequest):
         "root_cleanup": result,
         **await asyncio.to_thread(storage_manager.storage_snapshot),
     }
-
-
-async def maintenance_loop() -> None:
-    """控制台存活期间定期执行策略；C++ 侧仍独立执行容量/剩余空间兜底。"""
-    while True:
-        await asyncio.sleep(300)
-        if storage_manager.read_settings()["auto_cleanup"]:
-            await asyncio.to_thread(storage_manager.cleanup_now)
-        await asyncio.sleep(3300)

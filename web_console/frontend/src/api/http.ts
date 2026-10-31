@@ -21,6 +21,11 @@ export function sharedRead<T>(key: string, read: () => Promise<T>): Promise<T> {
 export const apiErrorMessage = (error: unknown): string => {
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail ?? error.response?.data?.message
+    if (Array.isArray(detail)) {
+      const messages = detail.map(item => typeof item === 'string' ? item :
+        item && typeof item.msg === 'string' ? item.msg : '').filter(Boolean)
+      if (messages.length) return messages.join('；')
+    }
     return typeof detail === 'string' ? detail : error.message
   }
   return error instanceof Error ? error.message : String(error)
@@ -41,7 +46,10 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
   res => res,
   err => {
-    if (err.response?.status === 401) {
+    // A delayed response from a previous login must not clear a newer session.
+    const requestToken = err.config?.headers?.Authorization
+    const currentToken = useAuthStore.getState().token
+    if (err.response?.status === 401 && (!requestToken || requestToken === `Bearer ${currentToken}`)) {
       useAuthStore.getState().clearAuth()
       if (!window.location.pathname.startsWith('/login')) {
         window.location.href = '/login'

@@ -9,7 +9,7 @@
 - [`global`](#global)
 - [`channels[]`](#channels)
 - [`global.global_logics[]`](#globalglobal_logics)
-- [明确拒绝的旧格式](#明确拒绝的旧格式)
+- [严格字段校验](#严格字段校验)
 - [热重载事务](#热重载事务)
 
 ## 最小无推理示例
@@ -131,11 +131,20 @@ file path 可相对 App 工作目录或使用绝对路径。当前初始验证�
 `version`、`obj_thresh`、`nms_thresh`、`detect_classes`、`npu_core`。
 
 所有模型项的 `id` 都必须非空且在通道内唯一。以下运行字段检查只针对 `enable=true` 的模型：支持
-类型为 `yolov5`、`yolov5_seg`、`yolov8_pose`、`yolo26_pose`、`yolov8_det`；除 pose 外要求 label，配置了 label
+类型为 `yolov5`、`yolov5_seg`、`yolov8_pose`、`yolo26_pose`、`yolov8_det`、`yolo26_depth`、`zip_depth`；检测/分割要求 label，姿态和深度可留空，配置了 label
 时文件必须存在；阈值在 `[0,1]`；NPU core 为 `-1`/`"auto"` 或 0、1、2。
+
+`npu_core=-1` 由框架按全部启用通道统一规划，不直接交给 RKNN Runtime AUTO。
+显式核心优先；自动模型先使用未被显式指定的核心。自动通道数等于可用核心数时，各通道分配
+独立核心；两路全自动时保留三核均衡共享；单路可使用全部空闲核心。
+核心不足或三个核心都被显式指定时仍需共享，同核 SDK 周期串行执行。
+同帧子模型协同使用所属通道的核心池，具体分配与热更新边界见
+[NPU 调度](../../../../engine/src/inference/NPU_SCHEDULING.md)。
 
 同一帧可运行多个启用模型，结果通过 `model_id/model_type/model_index` 区分。模型 ID 也是 OTA 定位
 契约，不能随意变成数组下标。
+
+各子模型从源帧生成各自尺寸的输入，结果统一映射到 640×640 业务坐标；不要求不同模型输入尺寸相同，但每个模型必须满足对应适配器的张量契约。`yolo26_depth` 使用米制深度契约，`zip_depth` 产生相对逆深度，不能直接标为米。ZipDepth 在 `full_plus_roi` 中只做整帧推理，避免合并不同裁剪的不可比相对尺度；其他模型保留各自 ROI 行为。详见 [ZipDepth 适配](../../../../engine/src/zip-depth/README.md)。
 
 ### ROI、logic 与事件
 

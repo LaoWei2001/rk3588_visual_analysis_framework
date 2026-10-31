@@ -26,7 +26,7 @@ bool channel_uses_depth_background(const ChannelConfig *channel)
 {
     if (!channel || !channel->enable || !channel->infer_enable) return false;
     return std::any_of(channel->models.begin(), channel->models.end(), [](const ChannelModelConfig &model) {
-        return model.enable && model.model_type == "yolo26_depth" && !model.model_path.empty();
+        return model.enable && (model.model_type == "yolo26_depth" || model.model_type == "zip_depth") && !model.model_path.empty();
     });
 }
 
@@ -259,14 +259,19 @@ static bool draw_depth_background(cv::Mat &screen, const std::vector<AlgoResult>
         cv::Mat source, color;
         cv::Size size;
         int64_t frame = -1;
+        DepthKind kind = DepthKind::Metric;
     };
     static thread_local std::array<Cache, MAX_CHANNEL_NUM + 1> caches;
     Cache &cache = caches[channel >= 0 && channel < MAX_CHANNEL_NUM ? channel : MAX_CHANNEL_NUM];
     if (cache.source.data != depth->depth_map.data || cache.source.size() != depth->depth_map.size() ||
-        cache.size != screen.size() || cache.frame != frame_id)
+        cache.size != screen.size() || cache.frame != frame_id || cache.kind != depth->depth_kind)
     {
         cache.source = depth->depth_map;
         cache.frame = frame_id;
+        cache.kind = depth->depth_kind;
+        const auto proximity = [&](float value) {
+            return cache.kind == DepthKind::RelativeInverse ? value : 1.0f / std::max(value, 1e-6f);
+        };
         cache.size = screen.size();
         std::vector<float> samples;
         samples.reserve((cache.source.rows / 4 + 1) * (cache.source.cols / 4 + 1));
@@ -274,7 +279,7 @@ static bool draw_depth_background(cv::Mat &screen, const std::vector<AlgoResult>
             for (int x = 0; x < cache.source.cols; x += 4)
             {
                 const float d = cache.source.at<float>(y, x);
-                if (AlgoResult::valid_depth(d)) samples.push_back(1.0f / std::max(d, 1e-6f));
+                if (depth->valid_depth_value(d)) samples.push_back(proximity(d));
             }
         float lo = 0.0f, hi = 1.0f;
         if (!samples.empty())
@@ -292,9 +297,9 @@ static bool draw_depth_background(cv::Mat &screen, const std::vector<AlgoResult>
             auto *output = gray.ptr<uint8_t>(y);
             auto *mask = valid.ptr<uint8_t>(y);
             for (int x = 0; x < cache.source.cols; ++x)
-                if (AlgoResult::valid_depth(input[x]))
+                if (depth->valid_depth_value(input[x]))
                 {
-                    output[x] = cv::saturate_cast<uint8_t>((1.0f / std::max(input[x], 1e-6f) - lo) * scale);
+                    output[x] = cv::saturate_cast<uint8_t>((proximity(input[x]) - lo) * scale);
                     mask[x] = 255;
                 }
         }
@@ -458,7 +463,13 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p, PerformanceOver
             const cv::Scalar color = (res.box_color[0] >= 0) ? res.box_color : cv::Scalar(0, 255, 0);
             // 检测框至少保留 2 像素，较大的输出画面继续按窗口比例放大。
             const int detection_thickness = std::max(2, thk(2));
-            cv::rectangle(screen_roi, box, color, detection_thickness);
+            if (res.has_obb) {
+                for (int i = 0; i < 4; ++i) {
+                    const auto &a = res.obb_corners[i], &b = res.obb_corners[(i + 1) % 4];
+                    cv::line(screen_roi, cv::Point(cvRound(a.x * scale_x), cvRound(a.y * scale_y)),
+                             cv::Point(cvRound(b.x * scale_x), cvRound(b.y * scale_y)), color, detection_thickness);
+                }
+            } else cv::rectangle(screen_roi, box, color, detection_thickness);
             std::string txt = res.label;
             if (res.track_id >= 0)
                 txt = "ID " + std::to_string(res.track_id) + " " + txt;

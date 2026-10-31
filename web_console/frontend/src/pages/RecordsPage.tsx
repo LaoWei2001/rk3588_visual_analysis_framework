@@ -2,12 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   apiErrorMessage, deleteAllRecords, deleteRecord, deleteSelectedRecords, fetchRecordJson, fetchRecords,
-  prepareRawImageExport, rawImageDownloadUrl, rawImageExportUrl,
+  prepareRawImageExport, rawImageExportUrl,
   recordImageUrl, recordVideoUrl, retryRecord,
   type EventRecord, type RecordJsonResponse,
 } from '../api/client'
 import './RecordsPage.css'
-import { chooseLocalDirectory, downloadToComputer, isSaveCancelled, localDownloadHint, writeResponseToFile } from '../utils/localFiles'
+import { downloadToComputer, localDownloadHint } from '../utils/localFiles'
 
 function fmtBytes(value: number): string {
   if (value < 1024) return `${value} B`
@@ -148,28 +148,12 @@ export default function RecordsPage() {
     setExporting(true)
     setNotice('')
     try {
-      // 本地目录选择必须直接来自用户点击，不能等网络请求后才调用。
-      const directory = await chooseLocalDirectory()
       const result = await prepareRawImageExport(appName, ids)
       const skipped = result.skipped_count ? `，跳过 ${result.skipped_count} 条没有原图的记录` : ''
-      if (directory) {
-        let completed = 0
-        let failed = 0
-        for (const image of result.images) {
-          setNotice(`正在导出原图 ${completed + failed + 1} / ${result.image_count}…`)
-          try {
-            const file = await directory.getFileHandle(image.filename, { create: true })
-            await writeResponseToFile(await fetch(rawImageDownloadUrl(appName, image.id)), file)
-            completed += 1
-          } catch { failed += 1 }
-        }
-        setNotice(`已保存 ${completed} 张原图到电脑目录「${directory.name}」${skipped}${failed ? `，${failed} 张保存失败，请重试` : ''}。`)
-      } else {
-        downloadToComputer(rawImageExportUrl(appName, result.download_id), result.filename)
-        setNotice(`已开始下载 ${result.image_count} 张原图（ZIP）${skipped}。${localDownloadHint}`)
-      }
+      downloadToComputer(rawImageExportUrl(appName, result.download_id), result.filename)
+      setNotice(`已开始下载 ${result.image_count} 张原图（ZIP 内按文件夹归档）${skipped}。${localDownloadHint}`)
     } catch (error) {
-      if (!isSaveCancelled(error)) setNotice(apiErrorMessage(error))
+      setNotice(apiErrorMessage(error))
     } finally { setExporting(false) }
   }
 

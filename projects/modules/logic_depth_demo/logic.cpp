@@ -7,6 +7,7 @@ static void logic_depth_demo(ChannelContext *ctx)
 {
     if (!ctx) return;
     const AlgoResult *depth = ctx->depth_result(ctx->param_string("depth_model_id"));
+    if (depth && !depth->is_metric_depth()) depth = nullptr; // never label relative predictions as metres
     const cv::Point center = ctx->business_center();
     const float meters = depth ? depth->depth_at(center.x, center.y) : 0.0f;
     float nearest = 0.0f;

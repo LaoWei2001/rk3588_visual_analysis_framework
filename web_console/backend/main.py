@@ -2,6 +2,7 @@ import asyncio
 import os
 import random
 import re
+import secrets
 from contextlib import asynccontextmanager
 from contextlib import suppress
 from pathlib import Path
@@ -19,6 +20,7 @@ from services import process_manager as process_manager
 from services import service_watchdog
 from services import network_manager
 from services import camera_manager
+from services.storage_maintenance import maintenance_loop as storage_maintenance_loop
 from services.camera_web_proxy import camera_web_proxy
 from services.video_capture_manager import capture_manager
 from services.dataset_manager import dataset_manager
@@ -45,6 +47,8 @@ _PUBLIC_LOGIC_ACTION = re.compile(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not os.environ.get("LOGIC_ACTION_TOKEN"):
+        print("[Auth] Action 接口处于兼容免登录模式；设置 LOGIC_ACTION_TOKEN 可要求集成令牌或控制台登录")
     ready = asyncio.Event()
     watchdog_task = asyncio.create_task(service_watchdog.heartbeat(ready))
     # 网络事务由独立 systemd 定时器保护。控制台异常重启时先确认保护仍存在，
@@ -61,11 +65,12 @@ async def lifespan(app: FastAPI):
     # Only reattach log followers. Boot restoration belongs to the system runtime manager.
     await asyncio.to_thread(process_manager.recover_processes)
     ready.set()
-    storage_task = asyncio.create_task(storage_settings.maintenance_loop())
+    storage_task = asyncio.create_task(storage_maintenance_loop())
     dataset_task = asyncio.create_task(dataset_manager.maintenance())
     try:
         yield
     finally:
+        await terminal.terminal_sessions.shutdown()
         await stream._stream_pool.shutdown()
         watchdog_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -101,6 +106,10 @@ async def auth_middleware(request: Request, call_next):
         request.method == "POST"
         and _PUBLIC_LOGIC_ACTION.fullmatch(path) is not None
     )
+    action_token = os.environ.get("LOGIC_ACTION_TOKEN", "")
+    if public_logic_action and action_token:
+        supplied = request.headers.get("X-Logic-Token", "")
+        public_logic_action = secrets.compare_digest(supplied.encode(), action_token.encode())
 
     # Static files, SPA HTML, health check → always pass through
     if (

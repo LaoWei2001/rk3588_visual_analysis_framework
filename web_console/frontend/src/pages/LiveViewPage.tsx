@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import axios from 'axios'
+import { apiErrorMessage as errMsg } from '../api/http'
 import {
   fetchApps,
   fetchFilePlayback,
@@ -86,12 +86,6 @@ function findAvcCodec(data: Uint8Array): string | null {
   return null
 }
 
-function errMsg(error: unknown): string {
-  if (axios.isAxiosError(error)) {
-    return error.response?.data?.detail ?? error.response?.data?.message ?? error.message
-  }
-  return error instanceof Error ? error.message : String(error)
-}
 
 function mediaErrorMessage(error: MediaError | null): string {
   if (!error) return '浏览器视频解码器报错'
@@ -755,9 +749,10 @@ export default function LiveViewPage() {
       if (!sourceBuffer || disposed || video.seeking || sourceBuffer.updating || !sourceBuffer.buffered.length) return
       const last = sourceBuffer.buffered.length - 1
       const end = sourceBuffer.buffered.end(last)
+      let resumed = false
       if (playbackBuffer.rebuffering) {
-        if (playbackBuffer.resume(end - video.currentTime)) void video.play().catch(() => {})
-        return
+        if (!playbackBuffer.resume(end - video.currentTime)) return
+        resumed = true
       }
       const target = livePlaybackTarget(video.currentTime, sourceBuffer.buffered.start(last), end, playbackStarted, playbackBuffer.targetSeconds)
       if (target !== null) {
@@ -765,6 +760,7 @@ export default function LiveViewPage() {
         if (!playbackStarted) void video.play().catch(() => {})
       }
       video.playbackRate = playbackStarted ? livePlaybackRate(video.currentTime, end, playbackBuffer.targetSeconds) : 1
+      if (resumed) void video.play().catch(() => {})
     }
 
     const append = async (bytes: Uint8Array) => {
@@ -904,13 +900,22 @@ export default function LiveViewPage() {
       return quality.totalVideoFrames - quality.droppedVideoFrames
     }
     const progress = new PlaybackProgress(performance.now(), video.currentTime, presentedFrames(), STREAM_STALL_MS)
+    let lastBufferPosition = video.currentTime
+    let lastBufferFrames = presentedFrames()
     const playbackWatchdog = setInterval(() => {
+      const now = performance.now()
+      const frames = presentedFrames()
+      const advancing = frames !== null && lastBufferFrames !== null
+        ? frames > lastBufferFrames : video.currentTime > lastBufferPosition + 0.01
+      lastBufferPosition = video.currentTime
+      lastBufferFrames = frames
+      playbackBuffer.observePlayback(now, !disposed && !document.hidden && !video.paused && !video.seeking && advancing)
       if (disposed || document.hidden || !playbackStarted) {
-        progress.reset(performance.now(), video.currentTime, presentedFrames())
+        progress.reset(now, video.currentTime, frames)
         return
       }
       syncLivePosition()
-      const health = progress.sample(performance.now(), video.currentTime, presentedFrames(), video.seeking, video.paused)
+      const health = progress.sample(now, video.currentTime, frames, video.seeking, video.paused)
       // A single playing event is insufficient: only sustained frame presentation
       // resets backoff, so flapping sources cannot create a rapid retry loop.
       if (health.stable) streamRetryRef.current = 0

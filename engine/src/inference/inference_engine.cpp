@@ -26,6 +26,8 @@
 #include "inference_engine.h"
 #include "inference_internal.h"
 #include "model_status.h"
+#include "npu_core_assignment.h"
+#include "npu_core_gate.h"
 #include "pipeline/frame_transform.h"
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
@@ -34,21 +36,6 @@
 
 namespace
 {
-int configured_npu_core_mask(int configured_core)
-{
-    switch (configured_core)
-    {
-    case 0:
-        return RKNN_NPU_CORE_0;
-    case 1:
-        return RKNN_NPU_CORE_1;
-    case 2:
-        return RKNN_NPU_CORE_2;
-    default:
-        return RKNN_NPU_CORE_AUTO;
-    }
-}
-
 const char *configured_npu_core_name(int configured_core)
 {
     switch (configured_core)
@@ -62,15 +49,6 @@ const char *configured_npu_core_name(int configured_core)
     default:
         return "AUTO";
     }
-}
-
-int worker_npu_core_mask(const ChannelModelConfig &model, int worker, int workers)
-{
-    // Independent depth contexts can run simultaneously on the three RK3588
-    // cores. Keep explicit user affinity and the scheduling of other YOLOs.
-    if (model.model_type == "yolo26_depth" && model.npu_core < 0 && workers > 1)
-        return 1 << (worker % 3);
-    return configured_npu_core_mask(model.npu_core);
 }
 
 InferenceRoiMode resolve_inference_source_roi(int channel_id, int source_width, int source_height, cv::Rect &out_roi,
@@ -139,6 +117,11 @@ bool inference_take_results(int chnId, std::vector<AlgoResult> &out, std::shared
 
 int inference_init(const AppConfig &cfg)
 {
+    npu::CoreLease::resume();
+    const int auto_core_pool = npu::preferred_auto_core_pool(cfg.channels);
+    log_printf_threadsafe("[NPU] core plan: explicit=0x%x auto_pool=0x%x%s\n",
+                          npu::explicitly_assigned_cores(cfg.channels), auto_core_pool,
+                          npu::explicitly_assigned_cores(cfg.channels) == 7 ? " (all cores pinned; AUTO would share)" : "");
     model_status_reset(cfg);
     /* 业务坐标始终为 640×640；每个模型独立读取实际输入尺寸。
      * 载入顺序、无模型启动、热切换和反初始化后重启均不能改变业务坐标。 */
@@ -158,6 +141,7 @@ int inference_init(const AppConfig &cfg)
 
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
     {
+        g_inference.auto_core_plan[i].store(0);
         g_inference.obj_thresh[i].store(0.0f, std::memory_order_relaxed);
         g_inference.nms_thresh[i].store(1.0f, std::memory_order_relaxed);
     }
@@ -226,6 +210,8 @@ int inference_init(const AppConfig &cfg)
         try
         {
             model_status_begin(channel_id, chn_cfg);
+            const auto placement = npu::channel_auto_placement(cfg.channels, channel_id);
+            log_printf_threadsafe("[NPU] ch%d automatic pool=0x%x\n", channel_id, placement.pool);
             int threads_for_chn = chn_cfg.threads > 0 ? chn_cfg.threads : 1;
             g_inference.models_per_chn[channel_id].clear();
             std::vector<ChannelModelConfig> active_models;
@@ -243,7 +229,7 @@ int inference_init(const AppConfig &cfg)
                     for (size_t model_index = 0; model_index < active_models.size(); ++model_index)
                     {
                         const auto &spec = active_models[model_index];
-                        const int core_mask = worker_npu_core_mask(spec, t, threads_for_chn);
+                        const int core_mask = npu::assigned_core_mask(spec.npu_core, channel_id, t, static_cast<int>(model_index), placement.pool);
                         const float decode_thresh = config_utils::effective_model_obj_thresh(chn_cfg, spec);
                         auto child = create_inference_model(spec.model_type, spec.model_path, spec.label_path,
                                                             core_mask, decode_thresh, spec.nms_thresh);
@@ -259,16 +245,16 @@ int inference_init(const AppConfig &cfg)
                         entry.nms_thresh = spec.nms_thresh;
                         entry.allowed_classes = names_to_class_ids(spec.detect_classes, spec.label_path);
                         entries.push_back(std::move(entry));
-                        log_printf_threadsafe("[Inference] Created composite child %zu/%zu for ch%d: %s core=%s\n",
+                        log_printf_threadsafe("[Inference] Created composite child %zu/%zu for ch%d: %s core=%s requested_mask=0x%x\n",
                                               model_index + 1, active_models.size(), channel_id,
-                                              spec.model_type.c_str(), configured_npu_core_name(spec.npu_core));
+                                              spec.model_type.c_str(), configured_npu_core_name(spec.npu_core), core_mask);
                     }
                     model = std::make_shared<CompositeModel>(std::move(entries));
                 }
                 else
                 {
                     const ChannelModelConfig &spec = active_models[0];
-                    const int mask = worker_npu_core_mask(spec, t, threads_for_chn);
+                    const int mask = npu::assigned_core_mask(spec.npu_core, channel_id, t, 0, placement.pool);
                     const float decode_thresh = config_utils::effective_model_obj_thresh(chn_cfg, spec);
                     model = create_inference_model(spec.model_type, spec.model_path, spec.label_path, mask,
                                                    decode_thresh, spec.nms_thresh);
@@ -277,14 +263,15 @@ int inference_init(const AppConfig &cfg)
                         throw std::runtime_error("unsupported model_type: " + spec.model_type);
                     }
                     model->set_result_source(spec.id.empty() ? "model_0" : spec.id, spec.model_type, 0);
-                    log_printf_threadsafe("[Inference] Created %s instance for ch%d (Core %s, thread %d/%d)\n",
+                    log_printf_threadsafe("[Inference] Created %s instance for ch%d (Core %s, thread %d/%d, requested_mask=0x%x)\n",
                                           spec.model_type.c_str(), channel_id, configured_npu_core_name(spec.npu_core),
-                                          t, threads_for_chn);
+                                          t, threads_for_chn, mask);
                 }
 
                 g_inference.models_per_chn[channel_id].push_back(model);
                 loaded_models_count++;
             }
+            g_inference.auto_core_plan[channel_id].store(placement.key());
         }
         catch (const std::exception &e)
         {
@@ -369,6 +356,7 @@ int inference_init(const AppConfig &cfg)
 void inference_request_stop()
 {
     g_inference.running.store(false);
+    npu::CoreLease::stop();
     /* 必须和等待方使用同一把 mutex，避免“检查 running 后、进入 wait 前”
      * 丢失 broadcast，导致 shutdown 永久卡在 join。 */
     for (auto &tq : g_inference.task_queues)
@@ -657,7 +645,12 @@ void inference_update_detect_classes(int chnId, const ChannelConfig &config)
     pthread_mutex_unlock(&g_inference.detect_classes_mtx);
 }
 
-bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
+int inference_get_auto_core_plan(int chnId)
+{
+    return chnId >= 0 && chnId < MAX_CHANNEL_NUM ? g_inference.auto_core_plan[chnId].load() : 0;
+}
+
+bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, const npu::AutoCorePlacement &placement)
 {
     if (chnId < 0 || chnId >= MAX_CHANNEL_NUM || !g_inference.running)
         return false;
@@ -813,6 +806,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
             return false;
         }
         log_printf_threadsafe("[Inference] ch%d inference disabled after reload\n", chnId);
+        g_inference.auto_core_plan[chnId].store(placement.key());
         model_status_applied(chnId, new_cfg, {});
         status.applied = true;
         return true;
@@ -835,7 +829,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
                 for (size_t model_index = 0; model_index < active_models.size(); ++model_index)
                 {
                     const auto &spec = active_models[model_index];
-                    const int core_mask = worker_npu_core_mask(spec, t, worker_count);
+                    const int core_mask = npu::assigned_core_mask(spec.npu_core, chnId, t, static_cast<int>(model_index), placement.pool);
                     const float decode_thresh = config_utils::effective_model_obj_thresh(new_cfg, spec);
                     auto child = create_inference_model(spec.model_type, spec.model_path, spec.label_path, core_mask,
                                                         decode_thresh, spec.nms_thresh);
@@ -857,7 +851,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
             else
             {
                 const ChannelModelConfig &spec = active_models[0];
-                const int core_mask = worker_npu_core_mask(spec, t, worker_count);
+                const int core_mask = npu::assigned_core_mask(spec.npu_core, chnId, t, 0, placement.pool);
                 const float decode_thresh = config_utils::effective_model_obj_thresh(new_cfg, spec);
                 model = create_inference_model(spec.model_type, spec.model_path, spec.label_path, core_mask,
                                                decode_thresh, spec.nms_thresh);
@@ -911,6 +905,8 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg)
         log_printf_threadsafe("[Inference] ch%d model reload complete (%zu configured models)\n", chnId,
                               active_models.size());
     }
+    g_inference.auto_core_plan[chnId].store(placement.key());
+    log_printf_threadsafe("[NPU] ch%d active automatic pool=0x%x\n", chnId, placement.pool);
     model_status_applied(chnId, new_cfg, new_models);
     status.applied = true;
     return true;

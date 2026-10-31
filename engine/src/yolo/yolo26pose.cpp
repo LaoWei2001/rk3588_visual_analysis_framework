@@ -1,4 +1,5 @@
 #include "yolo26pose.h"
+#include "inference/npu_execution.h"
 
 #include "yolo_utils.h"
 
@@ -86,6 +87,7 @@ void Yolo26Pose::initialize(const std::string &model_path, int core_mask)
         throw std::runtime_error("Yolo26Pose rknn_init failed(" + std::to_string(ret) + "): " + model_path);
 
     const int core_ret = rknn_set_core_mask(context_, static_cast<rknn_core_mask>(core_mask));
+    npu_core_mask_ = core_ret < 0 ? 0 : core_mask;
     if (core_ret < 0)
         printf("[Yolo26Pose] warning: set core mask failed(%d), using runtime default\n", core_ret);
     else
@@ -413,10 +415,12 @@ void Yolo26Pose::decode(const Letterbox &letterbox, int image_width, int image_h
 }
 
 bool Yolo26Pose::run_and_decode(const Letterbox &letterbox, int image_width, int image_height,
-                                std::vector<AlgoResult> &results, YoloPerfStat *perf, float preprocess_ms)
+                                std::vector<AlgoResult> &results, YoloPerfStat *perf, float preprocess_ms, rknn_input *input)
 {
     const auto inference_begin = Clock::now();
-    if (rknn_run(context_, nullptr) < 0)
+    npu::Execution execution(npu_core_mask_);
+    if (input && execution.inputs_set(context_, 1, input) < 0) return false;
+    if (execution.run(context_) < 0)
         return false;
     const auto inference_end = Clock::now();
 
@@ -426,7 +430,8 @@ bool Yolo26Pose::run_and_decode(const Letterbox &letterbox, int image_width, int
     output.is_prealloc = 1;
     output.buf = native_output_.data();
     output.size = static_cast<uint32_t>(native_output_.size());
-    if (rknn_outputs_get(context_, 1, &output, nullptr) < 0)
+    npu::Outputs output_lease(execution, context_, 1, &output);
+    if (output_lease.get() < 0)
         return false;
 
     try
@@ -435,10 +440,10 @@ bool Yolo26Pose::run_and_decode(const Letterbox &letterbox, int image_width, int
     }
     catch (...)
     {
-        rknn_outputs_release(context_, 1, &output);
+        output_lease.release();
         throw;
     }
-    rknn_outputs_release(context_, 1, &output);
+    if (output_lease.release() < 0) return false;
     const auto postprocess_end = Clock::now();
     if (perf)
     {
@@ -451,6 +456,7 @@ bool Yolo26Pose::run_and_decode(const Letterbox &letterbox, int image_width, int
 
 bool Yolo26Pose::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat *perf)
 {
+    results.clear();
     if (frame.empty() || frame.type() != CV_8UC3)
         return false;
     const auto preprocess_begin = Clock::now();
@@ -465,15 +471,13 @@ bool Yolo26Pose::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPer
     request.pass_through = 0;
     request.type = RKNN_TENSOR_UINT8;
     request.fmt = RKNN_TENSOR_NHWC;
-    if (rknn_inputs_set(context_, 1, &request) < 0)
-        return false;
-
     return run_and_decode(letterbox, frame.cols, frame.rows, results, perf,
-                          elapsed_ms(preprocess_begin, preprocess_end));
+                          elapsed_ms(preprocess_begin, preprocess_end), &request);
 }
 
 bool Yolo26Pose::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *perf)
 {
+    results.clear();
     if (!zero_copy_enabled_ || !input_mem_ || input_mem_->fd < 0)
         return false;
     /* 上游 RGA 已 stretch 成模型尺寸 RGB888；结果坐标保持模型空间，由统一管线映射。 */

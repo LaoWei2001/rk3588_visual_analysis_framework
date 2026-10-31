@@ -1,0 +1,40 @@
+{
+  "global": {
+    "enable_display": false,
+    "enable_rtsp": true,
+    "rtsp_codec": "h264",
+    "rtsp_port": 8554,
+    "rtsp_path": "/live",
+    "disp_width": 1280,
+    "disp_height": 720,
+    "tile_rows": 1,
+    "tile_cols": 1,
+    "max_fps": 10,
+    "queue_size": 1,
+    "channel_threads": 1,
+    "tracker_enable": 0,
+    "performance_display": true,
+    "enable_pause_key": 0
+  },
+  "channels": [
+    {
+      "id": 0,
+      "enable": true,
+      "infer_enable": false,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/input.mp4",
+        "loop": true
+      },
+      "models": [],
+      "logic": "",
+      "logic_parameters": {},
+      "roi_zones": [],
+      "report_policy": {
+        "enabled": false,
+        "deliveries": []
+      },
+      "report_parameters": {}
+    }
+  ]
+}

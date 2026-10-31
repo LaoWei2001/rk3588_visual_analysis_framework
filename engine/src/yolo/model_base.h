@@ -103,6 +103,9 @@ class ModelBase
         }
     }
 
+    // Relative predictions from different crops have unrelated scales.
+    virtual bool supports_roi_refinement() const { return true; }
+
     /**
      * @brief Whether the model already performs NMS internally during post_process.
      *        If true, the pipeline will skip the redundant nms_inplace() call.
@@ -111,6 +114,10 @@ class ModelBase
     {
         return false;
     }
+
+  protected:
+    // Actual accepted affinity; 0 means runtime AUTO/unknown, reserving all cores.
+    int npu_core_mask_ = 0;
 
   private:
     std::string result_model_id_;

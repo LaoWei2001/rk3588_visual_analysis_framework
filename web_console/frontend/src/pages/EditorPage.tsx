@@ -30,6 +30,7 @@ import { graphToConfig }   from '../utils/graphToConfig'
 import { configToGraph }   from '../utils/configToGraph'
 import { saveLastConfig }  from '../utils/lastConfig'
 import { validateModelId } from '../utils/modelId'
+import { requiresModelLabels } from '../models/capabilities'
 import {
   apiErrorMessage, fetchConfig, saveConfig, saveConfigFile, deleteConfigFile,
   fetchConfigFiles, loadConfigFile, fetchAppLogics, fetchAssets, fetchConnections,
@@ -109,8 +110,7 @@ const DEFAULT_RTSP_URL = 'rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels
 
 // ── Default node data when dropped ──
 const NODE_DEFAULTS: Record<string, Record<string, unknown>> = {
-  stream: { src_type: 'rtsp', url: DEFAULT_RTSP_URL, video_enc: 'h264', channel_id: 0,
-            enable: true, infer_enable: true, swap_rb: false },
+  stream: { src_type: 'rtsp', url: DEFAULT_RTSP_URL, video_enc: 'h264', channel_id: 0 },
   model:  { id: 'model_0', enable: true, model_type: 'yolov8_det',
             model_path: '', label_path: '', obj_thresh: 0.3, nms_thresh: 0.45,
             detect_classes: [], npu_core: -1 },
@@ -1234,7 +1234,6 @@ export default function EditorPage() {
       }
     }
 
-    const labelRequiredTypes = new Set(['yolov5', 'yolov5_seg', 'yolov8_det'])
     for (const modelNode of modelNodes) {
       const data = modelNode.data as Record<string, unknown>
       const modelId = String(data.id ?? '').trim() || '未命名模型'
@@ -1250,7 +1249,7 @@ export default function EditorPage() {
         showToast(`模型 ${modelId} 的模型文件不存在：${modelPath}。请重新选择或导入后再保存`, false)
         return null
       }
-      if (enabled && labelRequiredTypes.has(modelType) && !labelPath) {
+      if (enabled && requiresModelLabels(modelType) && !labelPath) {
         showToast(`模型 ${modelId} 尚未选择标签文件，不能保存`, false)
         return null
       }

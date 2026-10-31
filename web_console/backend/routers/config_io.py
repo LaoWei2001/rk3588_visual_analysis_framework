@@ -9,20 +9,30 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.concurrency import run_in_threadpool
-from services.model_info import validate_model_config
+from services.model_info import validate_model_config, MODEL_TYPES
+from services.app_paths import application_directory, config_target
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 
 router = APIRouter()
 
-KNOWN_MODEL_TYPES = ["yolov5", "yolov8_det", "yolov8_pose", "yolo26_pose", "yolo26_depth", "yolov5_seg"]
+KNOWN_MODEL_TYPES = sorted(MODEL_TYPES)
 
 
 def _app_dir(name: str) -> Path:
-    p = APPS_ROOT / name
-    if not p.exists():
-        raise HTTPException(status_code=404, detail=f"App '{name}' not found")
-    return p
+    return application_directory(APPS_ROOT, name)
+
+
+def _canvas_config(config: Any) -> Any:
+    """Discard retired stream-node switches, preserving model/global enable flags."""
+    if not isinstance(config, dict) or not isinstance(config.get("channels"), list):
+        return config
+    return {**config, "channels": [
+        {key: value for key, value in channel.items()
+         if key not in {"enable", "infer_enable", "swap_rb"}}
+        if isinstance(channel, dict) else channel
+        for channel in config["channels"]
+    ]}
 
 
 def _atomic_write(path: Path, data: Any) -> None:
@@ -64,16 +74,7 @@ def _safe_config_target(app_dir: Path, path: str) -> Path:
     约束（防路径穿越/误写）：必须落在 assets/ 内且后缀为 .json。
     接受 'config.json' / 'assets/config.json' 两种写法。
     """
-    name = (path or "").strip().replace("\\", "/")
-    if name.startswith("assets/"):
-        name = name[len("assets/"):]
-    assets = (app_dir / "assets").resolve()
-    target = (assets / name).resolve()
-    if assets != target.parent:
-        raise HTTPException(status_code=400, detail="配置文件必须直接位于 assets/ 目录下")
-    if target.suffix != ".json":
-        raise HTTPException(status_code=400, detail="只允许保存 .json 配置文件")
-    return target
+    return config_target(app_dir, path)
 
 
 @router.get("/console/info")
@@ -153,25 +154,27 @@ async def list_config_files(name: str):
 async def load_config_file(name: str, path: str):
     """Load a specific JSON file from within the app directory."""
     app_dir = _app_dir(name)
-    target = (app_dir / path).resolve()
-    if not str(target).startswith(str(app_dir.resolve())):
-        raise HTTPException(status_code=400, detail="Path traversal not allowed")
-    if not target.exists():
+    target = _safe_config_target(app_dir, path)
+    if not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    return json.loads(target.read_text(encoding="utf-8"))
+    try:
+        return _canvas_config(json.loads(await run_in_threadpool(target.read_text, encoding="utf-8")))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(422, "配置文件不是有效的 JSON") from exc
 
 
 @router.get("/apps/{name}/config")
 async def get_config(name: str):
     app_dir     = _app_dir(name)
-    config_file = app_dir / "assets" / "config.json"
+    config_file = _safe_config_target(app_dir, "config.json")
     if not config_file.exists():
         return JSONResponse(content=None)
-    return json.loads(config_file.read_text(encoding="utf-8"))
+    return _canvas_config(json.loads(config_file.read_text(encoding="utf-8")))
 
 
 @router.post("/apps/{name}/config")
 async def save_config(name: str, body: Dict[str, Any]):
+    body = _canvas_config(body)
     app_dir    = _app_dir(name)
     try:
         await run_in_threadpool(validate_model_config, app_dir, body)
@@ -179,7 +182,7 @@ async def save_config(name: str, body: Dict[str, Any]):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     assets_dir = app_dir / "assets"
     assets_dir.mkdir(exist_ok=True)
-    _atomic_write(assets_dir / "config.json", body)
+    await run_in_threadpool(_atomic_write, _safe_config_target(app_dir, "config.json"), body)
     return {"ok": True}
 
 
@@ -190,6 +193,7 @@ async def save_config_file(name: str, path: str, body: Dict[str, Any]):
     path 可为 'config_test.json' 或 'assets/config_test.json'；目标不存在则新建。
     与 config.json 互不影响——这样可以在副本上改而不破坏原配置。
     """
+    body = _canvas_config(body)
     app_dir = _app_dir(name)
     target  = _safe_config_target(app_dir, path)
     try:
@@ -197,7 +201,7 @@ async def save_config_file(name: str, path: str, body: Dict[str, Any]):
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     target.parent.mkdir(exist_ok=True)
-    _atomic_write(target, body)
+    await run_in_threadpool(_atomic_write, target, body)
     return {"ok": True, "path": str(target.relative_to(app_dir)).replace("\\", "/")}
 
 

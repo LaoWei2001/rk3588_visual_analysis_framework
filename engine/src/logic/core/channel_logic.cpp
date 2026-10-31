@@ -302,6 +302,8 @@ TargetQueryResult ChannelContext::query_targets(const TargetQuery &query) const
     out.status = TargetQueryStatus::OK;
     for (const auto &target : *results)
     {
+        if ((!query.model_id.empty() && target.model_id != query.model_id) ||
+            (!query.model_type.empty() && target.model_type != query.model_type)) continue;
         if (target.is_depth() || !finite_confidence(target.score) || target.score < query.min_score || target.score > 1.0f ||
             target.box.width <= 0 || target.box.height <= 0)
             continue;

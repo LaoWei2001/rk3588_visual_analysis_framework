@@ -1,4 +1,5 @@
 #include "inference/inference_result_mapping.h"
+#include "zip-depth/depth_resize.h"
 #include <coordinates.h>
 #include <opencv2/imgproc.hpp>
 
@@ -21,7 +22,7 @@ void map_results_to_business_frame(int source_width, int source_height, const In
     const cv::Rect bounds(0, 0, width, height);
     const bool identity = model_width == width && model_height == height &&
                           visible_source == cv::Rect(0, 0, source_width, source_height) && content == bounds;
-    // Dense depth uses bilinear interpolation and 0 outside the analyzed region.
+    // Dense depth uses model-specific interpolation and invalid values outside the ROI.
     // Common 640x640 full-frame path transfers only the refcounted Mat header.
     for (auto &result : results)
     {
@@ -38,14 +39,18 @@ void map_results_to_business_frame(int source_width, int source_height, const In
         const int y1 = cvRound(static_cast<double>(visible_source.y + visible_source.height) * height / source_height);
         const cv::Rect area = cv::Rect(x0, y0, x1 - x0, y1 - y0) & bounds;
         cv::Mat mapped;
+        auto resize = [&](cv::Mat &destination, cv::Size size) {
+            if (result.is_relative_inverse_depth()) zip_depth::resize_depth(depth(crop), destination, size);
+            else cv::resize(depth(crop), destination, size, 0, 0, cv::INTER_LINEAR);
+        };
         if (!crop.empty() && !area.empty())
         {
-            if (area == bounds) cv::resize(depth(crop), mapped, bounds.size(), 0, 0, cv::INTER_LINEAR);
+            if (area == bounds) resize(mapped, bounds.size());
             else
             {
-                mapped = cv::Mat::zeros(bounds.size(), CV_32FC1);
+                mapped = cv::Mat(bounds.size(), CV_32FC1, cv::Scalar(result.invalid_depth_value()));
                 cv::Mat destination = mapped(area);
-                cv::resize(depth(crop), destination, area.size(), 0, 0, cv::INTER_LINEAR);
+                resize(destination, area.size());
             }
         }
         result.depth_map = std::move(mapped);
@@ -90,6 +95,11 @@ void map_results_to_business_frame(int source_width, int source_height, const In
 
     for (AlgoResult &result : results)
     {
+        if (result.has_obb && !identity)
+            for (auto &point : result.obb_corners) {
+                point.x = offset_x + point.x * scale_x;
+                point.y = offset_y + point.y * scale_y;
+            }
         const cv::Point model_center = result.box_center();
         const bool center_in_content = content.contains(model_center);
         if (identity)
@@ -180,7 +190,10 @@ void merge_depth_results(std::vector<AlgoResult> &results)
         {
             auto &base = results[i];
             const auto &extra = results[j];
-            if (!extra.is_depth() || base.model_id != extra.model_id || base.model_index != extra.model_index ||
+            // Relative maps from two separately inferred crops cannot be merged:
+            // their scales and offsets may differ, even with the same model.
+            if (base.is_relative_inverse_depth() || !extra.is_depth() || base.depth_kind != extra.depth_kind ||
+                base.model_id != extra.model_id || base.model_index != extra.model_index ||
                 base.model_type != extra.model_type || base.depth_map.size() != extra.depth_map.size())
             { ++j; continue; }
             cv::Mat merged = base.depth_map.clone(), valid;

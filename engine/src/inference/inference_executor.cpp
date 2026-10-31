@@ -12,6 +12,7 @@
  */
 
 #include <algorithm>
+#include "yolo/result_masks.h"
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -38,6 +39,7 @@
 #include "inference_result_mapping.h"
 #include "inference_roi_filter.h"
 #include "inference_roi_geometry.h"
+#include "npu_core_gate.h"
 #include "pipeline/frame_transform.h"
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
@@ -46,6 +48,7 @@
 #include "yolo/yolo.h"
 #include "yolo/yolo26pose.h"
 #include "yolo/yolo26depth.h"
+#include "zip-depth/zip_depth.h"
 #include "yolo/yolopose.h"
 #include "yolo/yoloseg.h"
 #include "yolo/yolov8det.h"
@@ -60,6 +63,17 @@ FpsTracker g_fps[MAX_CHANNEL_NUM];
 InferencePerfCounters g_perf[MAX_CHANNEL_NUM];
 
 /*======================== 私有辅助（仅本文件可见）========================*/
+
+// ROI merging must compare the transformed quadrilaterals, not their envelopes.
+static float result_iou(const AlgoResult &a, const AlgoResult &b)
+{
+    if (!a.has_obb || !b.has_obb) return compute_iou(a.box, b.box);
+    std::vector<cv::Point2f> pa(a.obb_corners.begin(), a.obb_corners.end());
+    std::vector<cv::Point2f> pb(b.obb_corners.begin(), b.obb_corners.end()), intersection;
+    const float area = cv::intersectConvexConvex(pa, pb, intersection);
+    const double total = std::abs(cv::contourArea(pa)) + std::abs(cv::contourArea(pb)) - area;
+    return total > 0 ? area / total : 0;
+}
 
 /** @brief 跳过已被 NMS 抑制的候选框，就地过滤。*/
 static void nms_inplace(std::vector<AlgoResult> &dets, float nms_thresh)
@@ -78,7 +92,7 @@ static void nms_inplace(std::vector<AlgoResult> &dets, float nms_thresh)
                 continue;
             if (dets[i].is_depth() || dets[j].is_depth() || dets[i].class_id != dets[j].class_id)
                 continue;
-            if (compute_iou(dets[i].box, dets[j].box) > nms_thresh)
+            if (result_iou(dets[i], dets[j]) > nms_thresh)
                 removed[j] = 1;
         }
     }
@@ -103,7 +117,7 @@ static void nms_per_model_inplace(std::vector<AlgoResult> &dets, const std::vect
         for (size_t j = i + 1; j < dets.size(); ++j)
         {
             if (!dets[i].is_depth() && !dets[j].is_depth() && !removed[j] && dets[j].model_index == model_index && dets[j].class_id == dets[i].class_id &&
-                compute_iou(dets[i].box, dets[j].box) > threshold)
+                result_iou(dets[i], dets[j]) > threshold)
                 removed[j] = 1;
         }
     }
@@ -165,6 +179,8 @@ std::shared_ptr<ModelBase> create_inference_model(const std::string &type, const
                                                   const std::string &label_path, int core_mask, float obj_thresh,
                                                   float nms_thresh)
 {
+    if (type == "zip_depth")
+        return std::make_shared<ZipDepth>(model_path, core_mask);
     if (type == "yolo26_depth")
         return std::make_shared<Yolo26Depth>(model_path, core_mask);
     if (type == "yolo26_pose")
@@ -175,6 +191,8 @@ std::shared_ptr<ModelBase> create_inference_model(const std::string &type, const
         return std::make_shared<YoloSeg>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
     if (type == "yolov5")
         return std::make_shared<YOLO>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
+    if (type == "yolov8_obb")
+        return std::make_shared<YoloV8Det>(model_path, label_path, core_mask, obj_thresh, nms_thresh, true);
     if (type == "yolov8_det")
         return std::make_shared<YoloV8Det>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
     return nullptr;
@@ -288,10 +306,12 @@ static bool run_model_task(int chnId, const InferenceTask &task, const std::shar
         YoloPerfStat roi_perf;
         const bool run_full = task.roi_mode != InferenceRoiMode::RoiOnly;
         const bool run_roi =
-            task.roi_mode == InferenceRoiMode::RoiOnly || task.roi_mode == InferenceRoiMode::FullPlusRoi;
+            task.roi_mode == InferenceRoiMode::RoiOnly ||
+            (task.roi_mode == InferenceRoiMode::FullPlusRoi && model->supports_roi_refinement());
         const bool full_ok = run_full && run_pass(false, full_results, full_perf);
         const bool roi_ok = run_roi && run_pass(true, roi_results, roi_perf);
 
+        const auto mapping_begin = std::chrono::steady_clock::now();
         if (full_ok)
         {
             map_results_to_business_frame(task.srcW, task.srcH, full_transform, model->input_width(),
@@ -313,7 +333,8 @@ static bool run_model_task(int chnId, const InferenceTask &task, const std::shar
 
         perf.preprocess_ms = full_perf.preprocess_ms + roi_perf.preprocess_ms;
         perf.infer_ms = full_perf.infer_ms + roi_perf.infer_ms;
-        perf.postprocess_ms = full_perf.postprocess_ms + roi_perf.postprocess_ms;
+        perf.postprocess_ms = full_perf.postprocess_ms + roi_perf.postprocess_ms +
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - mapping_begin).count();
         ret = full_ok || roi_ok;
         if (ret)
         {
@@ -364,6 +385,10 @@ static bool run_model_task(int chnId, const InferenceTask &task, const std::shar
                 results.front().boxMask = std::move(merged_mask);
             }
         }
+    }
+    catch (const npu::Cancelled &)
+    {
+        ret = false; // shutdown cancels queued work; it is not a driver failure
     }
     catch (const std::exception &e)
     {
@@ -433,15 +458,26 @@ class ParallelCompositeExecutor
 
     bool run(const InferenceTask &task, std::vector<AlgoResult> &results, YoloPerfStat &perf, float &lock_wait_ms)
     {
-        if (!started_)
-            return false;
-
         for (size_t i = 0; i < slots_.size(); ++i)
         {
             child_results_[i].clear(); // 保留上一帧容量，避免热路径重复分配
             child_perf_[i] = YoloPerfStat{};
             child_lock_wait_ms_[i] = 0.0f;
             child_succeeded_[i] = 0;
+        }
+        // Thread creation can fail under memory pressure. Still prepare each
+        // child from the original video with its own dimensions and ROI policy;
+        // resizing a composite canvas would lose ZipDepth input detail/semantics.
+        if (!started_)
+        {
+            lock_wait_ms = 0.0f;
+            for (size_t i = 0; i < slots_.size(); ++i)
+            {
+                child_succeeded_[i] = run_model_task(chnId_, task, composite_->entries()[i].model,
+                    child_results_[i], child_perf_[i], child_lock_wait_ms_[i], slots_[i]->input_cache);
+                lock_wait_ms += child_lock_wait_ms_[i];
+            }
+            return composite_->merge_child_results(child_results_, child_succeeded_, child_perf_, results, &perf);
         }
         {
             std::lock_guard<std::mutex> lock(done_mtx_);
@@ -470,6 +506,8 @@ class ParallelCompositeExecutor
         return composite_->merge_child_results(child_results_, child_succeeded_, child_perf_, results, &perf);
     }
 
+    bool is_parallel() const { return started_; }
+
   private:
     struct Slot
     {
@@ -479,12 +517,13 @@ class ParallelCompositeExecutor
         bool has_job = false;
         const InferenceTask *task = nullptr;
         std::thread thread;
+        cv::Mat input_cache;
     };
 
     void child_loop(size_t index)
     {
         Slot &slot = *slots_[index];
-        cv::Mat input_cache; // 每个模型线程独立复用；无需额外互斥或共享图像写入。
+        cv::Mat &input_cache = slot.input_cache; // 每个子模型独立复用，串行回退同样保留原始分辨率。
         while (true)
         {
             const InferenceTask *task = nullptr;
@@ -563,8 +602,6 @@ void *inference_worker_thread(void *arg)
         if (parallel_executor->start())
             log_printf_threadsafe("[Inference] ch%d parallel multi-model executor started (%zu models)\n", chnId,
                                   composite->entries().size());
-        else
-            parallel_executor.reset();
     }
 
     cv::Mat input_cache;
@@ -611,6 +648,7 @@ void *inference_worker_thread(void *arg)
 
         if (ret)
         {
+            ResultMasks masks(results);
             auto filter_begin = std::chrono::steady_clock::now();
             float obj_thresh_v = g_inference.obj_thresh[task.chnId].load(std::memory_order_relaxed);
             float nms_thresh_v = g_inference.nms_thresh[task.chnId].load(std::memory_order_relaxed);
@@ -647,9 +685,16 @@ void *inference_worker_thread(void *arg)
 
             /* 多模型通道的每个子模型最多保留20个结果；合并后不能仍截断为20，
              * 否则排在后面的姿态模型结果可能被第一个检测模型完全挤掉。 */
-            const size_t MAX_DET_PER_FRAME = 100;
+            size_t MAX_DET_PER_FRAME = 100;
+            if (const auto composite = dynamic_cast<CompositeModel *>(model)) {
+                MAX_DET_PER_FRAME = 0;
+                for (const auto &entry : composite->entries())
+                    MAX_DET_PER_FRAME += entry.type == "yolov8_obb" ? 128 : 20;
+                MAX_DET_PER_FRAME = std::max(size_t(100), MAX_DET_PER_FRAME);
+            } else if (!filtered.empty() && filtered.front().has_obb) MAX_DET_PER_FRAME = 128;
             if (filtered.size() > MAX_DET_PER_FRAME)
                 filtered.resize(MAX_DET_PER_FRAME);
+            masks.restore(filtered);
             auto filter_end = std::chrono::steady_clock::now();
 
             const uint64_t ts_ms = task.frame_steady_ms != 0 ? task.frame_steady_ms : inference_steady_now_ms();
@@ -724,7 +769,8 @@ void *inference_worker_thread(void *arg)
                 "worker=%.2f queue+worker=%.2f\n",
                 task.chnId, seconds, (unsigned long long)snap.samples, (unsigned long long)snap.published,
                 (unsigned long long)snap.failures, snap.samples / seconds, snap.published / seconds,
-                parallel_executor ? "parallel" : "single", model_group_size, snap.wait / div, snap.lock / div,
+                parallel_executor ? (parallel_executor->is_parallel() ? "parallel" : "serial") : "single",
+                model_group_size, snap.wait / div, snap.lock / div,
                 snap.pre / div, snap.npu / div, snap.post / div, snap.filter_nms / div, snap.total / div,
                 (static_cast<double>(snap.wait) + snap.total) / div);
         }

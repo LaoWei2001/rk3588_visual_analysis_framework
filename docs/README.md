@@ -5,6 +5,12 @@
 - 大模型：按任务加载 `skills/<skill-name>/SKILL.md`，再按其中路由读取必要参考页；
 - 二次开发者：从本页选择任务，再阅读同一套 Skill 与 `references/`。
 
+首次使用先看[首页快速开始](../README.md#快速开始)。原首页的架构、部署、离线交付、配置和业务扩展细节已整理为[项目指南](project-guide.md)；实测条件、基线记录与复现入口见 [Benchmark](benchmark.md)，可复制的无推理配置见[最小示例](examples/quickstart.json)。
+
+Web 画面在卡顿后持续落后于本地显示的修复、播放缓冲策略与实测范围见 [Web 实时延迟](web-live-latency.md)。
+
+自动核心拖慢其他模型的问题、全局分配规则、RTSP / USB 逐路对照与复现见 [NPU 核心实测](npu-core-placement.md)。
+
 现场部署与故障恢复见[无人值守恢复说明](unattended-recovery.md)。
 有线/Wi-Fi 管理网络自愈见[网络失联自动恢复](network-recovery.md)。
 视觉程序退出和卡住恢复的网页设置见[程序故障恢复](application-recovery.md)。

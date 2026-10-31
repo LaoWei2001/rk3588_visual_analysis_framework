@@ -1,5 +1,6 @@
 #pragma once
 #include "config/config.h"
+#include "npu_core_assignment.h"
 #include <memory>
 #include <types.h>
 #include <vector>
@@ -33,7 +34,9 @@ void inference_update_queue_size(int queue_size);
  * @return true 仅当新模型已经完整启用；false 表示旧模型仍保持运行，调用方不得
  *         把新模型字段发布到运行配置。线程拓扑变化目前明确要求重启。
  */
-bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg);
+bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, const npu::AutoCorePlacement &placement);
+/** Actual plan of active contexts; configuration proposals do not update it. */
+int inference_get_auto_core_plan(int chnId);
 
 /**
  * @brief 阻塞直到指定通道有新的推理结果就绪, 或超时。

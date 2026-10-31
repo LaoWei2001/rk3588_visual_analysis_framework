@@ -5,6 +5,8 @@
 #include <utility>
 
 #include "yolo_utils.h"
+#include "result_masks.h"
+#include "zip-depth/depth_resize.h"
 
 CompositeModel::CompositeModel(std::vector<Entry> entries) : entries_(std::move(entries))
 {
@@ -14,17 +16,13 @@ CompositeModel::CompositeModel(std::vector<Entry> entries) : entries_(std::move(
         throw std::invalid_argument("CompositeModel child model is null");
     input_width_ = entries_[0].model->input_width();
     input_height_ = entries_[0].model->input_height();
-    int object_width = 0, object_height = 0;
     for (const auto &entry : entries_)
     {
         if (!entry.model)
             throw std::invalid_argument("CompositeModel child model is null");
-        // The executor prepares each child's real input independently. Depth
-        // models may differ from the detection group (e.g. 640 depth + 1088 det).
-        if (entry.type == "yolo26_depth") continue;
-        if (!object_width) { object_width = entry.model->input_width(); object_height = entry.model->input_height(); }
-        else if (entry.model->input_width() != object_width || entry.model->input_height() != object_height)
-            throw std::invalid_argument("detection models in one channel must use the same input resolution");
+        // Each child is prepared and mapped independently by the executor.
+        if (entry.model->input_width() <= 0 || entry.model->input_height() <= 0)
+            throw std::invalid_argument("CompositeModel child has invalid input dimensions");
     }
 }
 
@@ -59,7 +57,18 @@ bool CompositeModel::infer(cv::Mat &frame, std::vector<AlgoResult> &results, Yol
     {
         Entry &entry = entries_[model_index];
         pthread_mutex_lock(&entry.model->infer_mtx);
-        const bool ok = entry.model->infer(frame, child_results[model_index], &child_perf[model_index]);
+        bool ok = false;
+        try
+        {
+            ok = entry.model->infer(frame, child_results[model_index], &child_perf[model_index]);
+        }
+        catch (...)
+        {
+            // A runtime failure (including the shared NPU gate) must not leave
+            // the child locked for future calls or model shutdown.
+            pthread_mutex_unlock(&entry.model->infer_mtx);
+            throw;
+        }
         pthread_mutex_unlock(&entry.model->infer_mtx);
         // Serial CPU fallback receives the composite canvas; detection decoders
         // already return frame coordinates. Depth returns its own model plane.
@@ -68,7 +77,10 @@ bool CompositeModel::infer(cv::Mat &frame, std::vector<AlgoResult> &results, Yol
                 if (result.is_depth() && result.depth_map.size() != frame.size())
                 {
                     cv::Mat mapped;
-                    cv::resize(result.depth_map, mapped, frame.size(), 0, 0, cv::INTER_LINEAR);
+                    if (result.is_relative_inverse_depth())
+                        zip_depth::resize_depth(result.depth_map, mapped, frame.size());
+                    else
+                        cv::resize(result.depth_map, mapped, frame.size(), 0, 0, cv::INTER_LINEAR);
                     result.depth_map = std::move(mapped);
                     result.box = cv::Rect(0, 0, frame.cols, frame.rows);
                 }
@@ -102,6 +114,7 @@ bool CompositeModel::merge_child_results(std::vector<std::vector<AlgoResult>> &c
         infer_ms += child_perf[model_index].infer_ms;
         postprocess_ms += child_perf[model_index].postprocess_ms;
 
+        ResultMasks masks(one_model_results);
         one_model_results.erase(std::remove_if(one_model_results.begin(), one_model_results.end(),
                                                [&](const AlgoResult &result) {
                                                    if (result.is_depth()) return false;
@@ -112,9 +125,11 @@ bool CompositeModel::merge_child_results(std::vector<std::vector<AlgoResult>> &c
                                 one_model_results.end());
         if (!entry.model->nms_done())
             nms_inplace(one_model_results, entry.nms_thresh);
-        if (one_model_results.size() > 20)
-            one_model_results.resize(20);
+        const size_t result_limit = entry.type == "yolov8_obb" ? 128 : 20;
+        if (one_model_results.size() > result_limit)
+            one_model_results.resize(result_limit);
 
+        masks.restore(one_model_results);
         for (auto &result : one_model_results)
         {
             result.model_id = entry.id;

@@ -216,8 +216,6 @@ class DatasetManager:
             return []
         result = []
         for index, channel in enumerate(config.get('channels', [])):
-            if not channel.get('enable', True):
-                continue
             models = [m for m in channel.get('models', []) if m.get('enable', True)]
             labels = []
             if len(models) == 1:

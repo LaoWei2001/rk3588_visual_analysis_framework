@@ -73,6 +73,8 @@
 #include "runtime/process_signals.h"
 #include "runtime/service_watchdog.h"
 #include "yolo/model_inspection.h"
+#include "inference/npu_device_owner.h"
+#include "inference/npu_core_gate.h"
 #include <channel.h>
 #include <gpio.h>
 
@@ -218,6 +220,14 @@ int main(int argc, char **argv)
     {
         printf("rk3588-service-watchdog-v1\n");
         return 0;
+    }
+
+    std::unique_ptr<npu::DeviceOwner> npu_owner;
+    try { npu_owner.reset(new npu::DeviceOwner()); }
+    catch (const std::exception &error)
+    {
+        fprintf(stderr, "[Main] %s\n", error.what());
+        return 1;
     }
 
     struct WatchdogLifetime
@@ -449,6 +459,7 @@ int main(int argc, char **argv)
 
 cleanup:
     printf("\n[Main] === Stopping and joining all threads... ===\n");
+    npu::CoreLease::stop(); // wake queued work before joining a concurrent model reload
     rtsp_streamer_deinit();
     if (ctrl_initialized)
         app_ctrl_request_stop();

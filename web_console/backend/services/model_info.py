@@ -19,7 +19,7 @@ _cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
 _probe_lock = threading.Lock()
 _MAX_CACHE = 128
 _ERROR_TTL = 30
-MODEL_TYPES = {"yolov5", "yolov8_det", "yolov8_pose", "yolo26_pose", "yolo26_depth", "yolov5_seg"}
+MODEL_TYPES = {"yolov8_obb", "yolov5", "yolov8_det", "yolov8_pose", "yolo26_pose", "yolo26_depth", "zip_depth", "yolov5_seg"}
 
 
 def app_directory(root: Path, name: str) -> Path:
@@ -89,11 +89,11 @@ def compatibility_error(info: dict, model_type: str) -> str:
         return f"{model_type} 当前要求 NHWC 输入布局"
     outputs = info.get("outputs", [])
     width, height = info.get("width", 0), info.get("height", 0)
-    if model_type == "yolo26_depth":
+    if model_type in {"yolo26_depth", "zip_depth"}:
         if width <= 0 or height <= 0 or info.get("format") not in {"NHWC", "NCHW"}:
-            return "yolo26_depth 要求有效的 RGB 图像输入"
+            return f"{model_type} 要求有效的 RGB 图像输入"
         if len(outputs) != 1:
-            return "yolo26_depth 要求单个米制深度输出"
+            return f"{model_type} 要求单个深度输出"
         output = outputs[0]
         shape = output.get("shape", [])
         fmt = output.get("format")
@@ -106,13 +106,13 @@ def compatibility_error(info: dict, model_type: str) -> str:
         elif len(shape) == 2:
             spatial = shape
         else:
-            return "yolo26_depth 输出必须为单通道 [1,1,H,W] / [1,H,W,1] / [1,H,W] / [H,W]"
+            return f"{model_type} 输出必须为单通道 [1,1,H,W] / [1,H,W,1] / [1,H,W] / [H,W]"
         if min(spatial) <= 0 or output.get("elements") != spatial[0] * spatial[1]:
-            return "yolo26_depth 输出元素数量与张量形状不匹配"
+            return f"{model_type} 输出元素数量与张量形状不匹配"
         if spatial[0] > height or spatial[1] > width or spatial[0] * width != spatial[1] * height:
-            return "yolo26_depth 输出必须与输入画布宽高比一致，可为较低分辨率深度图"
+            return f"{model_type} 输出必须与输入画布宽高比一致，可为较低分辨率深度图"
         if output.get("type") not in {0, 1, 2, 3}:
-            return "yolo26_depth 输出仅支持 FLOAT32/FLOAT16/INT8/UINT8"
+            return f"{model_type} 输出仅支持 FLOAT32/FLOAT16/INT8/UINT8"
         return ""
     if model_type == "yolo26_pose":
         shape = [dim for dim in outputs[0].get("shape", []) if dim != 1] if len(outputs) == 1 else []
@@ -127,6 +127,21 @@ def compatibility_error(info: dict, model_type: str) -> str:
         return ""
     if width <= 0 or height <= 0 or width % 32 or height % 32:
         return f"{model_type} 当前要求输入宽高为 32 的整数倍"
+    if model_type == "yolov8_obb":
+        if len(outputs) != 4:
+            return "yolov8_obb 要求 3 个 DFL 检测头及 1 个角度输出"
+        classes = outputs[0].get("shape", [0, 0])[1] - 64 if len(outputs[0].get("shape", [])) == 4 else 0
+        if classes <= 0:
+            return "yolov8_obb 检测头通道数必须为 64 + 类别数"
+        cells = 0
+        for head, stride in zip(outputs[:3], (8, 16, 32)):
+            shape = [1, 64 + classes, height // stride, width // stride]
+            if head.get("format") != "NCHW" or head.get("shape") != shape:
+                return "yolov8_obb 输出布局或步长不兼容"
+            cells += shape[2] * shape[3]
+        if outputs[3].get("elements") != cells:
+            return "yolov8_obb 角度输出大小不匹配"
+        return ""
     if model_type == "yolov8_det":
         if len(outputs) != 9:
             return "yolov8_det 要求三个检测分支、共 9 个输出张量"
@@ -157,8 +172,11 @@ def compatibility_error(info: dict, model_type: str) -> str:
                 if coeff.get("format") != "NCHW" or coeff.get("shape") != [1, 96, *shape[2:]]:
                     return "yolov5_seg 要求每个检测头对应 32 维 mask 系数"
         if count == 7 and (outputs[6].get("format") != "NCHW"
-                           or outputs[6].get("shape") != [1, 32, 160, 160]):
-            return "yolov5_seg 当前仅支持 32×160×160 的 proto 输出，其他尺寸需先升级分割解码器"
+                           or len(outputs[6].get("shape", [])) != 4
+                           or outputs[6]["shape"][:2] != [1, 32]
+                           or not (0 < outputs[6]["shape"][2] <= height)
+                           or not (0 < outputs[6]["shape"][3] <= width)):
+            return "yolov5_seg 要求 NCHW 的 32 通道有效 proto 输出"
     elif model_type == "yolov8_pose":
         if len(outputs) < 4:
             return "yolov8_pose 要求三个检测头和关键点输出"
@@ -211,9 +229,6 @@ def validate_model_config(app: Path, config: dict[str, Any]) -> None:
     for index, channel in enumerate(channels):
         if not isinstance(channel, dict):
             raise ValueError("通道配置必须为对象")
-        if not channel.get("enable", True) or not channel.get("infer_enable", True):
-            continue
-        expected = None
         models = channel.get("models", [])
         if not isinstance(models, list):
             raise ValueError("通道 models 必须为数组")
@@ -233,12 +248,8 @@ def validate_model_config(app: Path, config: dict[str, Any]) -> None:
                 raise ValueError(f"{label}: {exc}") from exc
             if not info.get("ok"):
                 raise ValueError(f"{label}: {info.get('error', '模型检查失败')}")
-            size = (info["width"], info["height"])
-            if model_type == "yolo26_depth":
-                continue  # each depth child is independently resized by the video executor
-            if expected is not None and size != expected:
-                raise ValueError(f"{label}: 同通道多个模型输入尺寸必须一致，已选 {expected[0]}×{expected[1]}，该模型为 {size[0]}×{size[1]}")
-            expected = size
+            # Every child gets its own input resize and result coordinate mapping.
+            # Compatibility is checked per model; siblings need not share a size.
 
 
 def runtime_status(app: Path, name: str) -> dict:

@@ -2,12 +2,14 @@
 
 import json
 import os
-import socket
 from pathlib import Path
 from typing import Any, Dict, List
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
+from fastapi.concurrency import run_in_threadpool
+from services.app_paths import application_directory
+from services.logic_client import send_action
 from pydantic import BaseModel, Field
 
 from services import process_manager as pm
@@ -22,10 +24,7 @@ class LogicActionRequest(BaseModel):
 
 
 def _app_dir(name: str) -> Path:
-    app_dir = APPS_ROOT / name
-    if not app_dir.exists():
-        raise HTTPException(status_code=404, detail=f"App '{name}' not found")
-    return app_dir
+    return application_directory(APPS_ROOT, name)
 
 
 def _load_json(path: Path, default: Any) -> Any:
@@ -45,13 +44,13 @@ def _logic_defs(app_dir: Path, catalog_key: str) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def _enabled_channels(channels: Any) -> List[tuple[int, Dict[str, Any]]]:
-    """Return enabled channels keyed only by their configured channel ID."""
+def _configured_channels(channels: Any) -> List[tuple[int, Dict[str, Any]]]:
+    """Return channels keyed only by their configured channel ID."""
     enabled: List[tuple[int, Dict[str, Any]]] = []
     if not isinstance(channels, list):
         return []
     for source_index, channel in enumerate(channels):
-        if not isinstance(channel, dict) or not bool(channel.get("enable", True)):
+        if not isinstance(channel, dict):
             continue
         try:
             channel_id = int(channel.get("id", source_index))
@@ -76,7 +75,7 @@ async def get_logic_actions(name: str):
     global_logic_defs = _logic_defs(app_dir, "global_logics")
 
     out_channels = []
-    for channel_id, ch in _enabled_channels(channels):
+    for channel_id, ch in _configured_channels(channels):
         logic_name = str(ch.get("logic") or "").strip()
         if not logic_name:
             out_channels.append({
@@ -132,7 +131,7 @@ async def get_logic_actions(name: str):
 @router.post("/apps/{name}/channels/{channel_id}/actions/{action}")
 async def post_channel_action(name: str, channel_id: int, action: str, req: LogicActionRequest):
     app_dir = _app_dir(name)
-    status = pm.get_status(name)
+    status = await run_in_threadpool(pm.get_status, name)
     if status.get("status") != "running":
         raise HTTPException(status_code=409, detail="app is not running")
 
@@ -147,31 +146,13 @@ async def post_channel_action(name: str, channel_id: int, action: str, req: Logi
         "payload": req.payload or {},
     }
 
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(3.0)
-            client.connect(str(socket_path))
-            client.sendall((json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8"))
-            raw = client.recv(64 * 1024)
-    except FileNotFoundError:
-        raise HTTPException(status_code=503, detail="channel control socket not found")
-    except OSError as e:
-        raise HTTPException(status_code=503, detail=f"channel control unavailable: {e}")
-
-    try:
-        resp = json.loads(raw.decode("utf-8").strip() or "{}")
-    except Exception:
-        raise HTTPException(status_code=502, detail="invalid response from channel control")
-
-    if not resp.get("ok"):
-        raise HTTPException(status_code=409, detail=resp.get("message") or "channel action rejected")
-    return resp
+    return await run_in_threadpool(send_action, socket_path, message)
 
 
 @router.post("/apps/{name}/global-logics/{instance_id}/actions/{action}")
 async def post_global_action(name: str, instance_id: str, action: str, req: LogicActionRequest):
     app_dir = _app_dir(name)
-    status = pm.get_status(name)
+    status = await run_in_threadpool(pm.get_status, name)
     if status.get("status") != "running":
         raise HTTPException(status_code=409, detail="app is not running")
 
@@ -187,21 +168,4 @@ async def post_global_action(name: str, instance_id: str, action: str, req: Logi
         "payload": req.payload or {},
     }
 
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(3.0)
-            client.connect(str(socket_path))
-            client.sendall((json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8"))
-            raw = client.recv(64 * 1024)
-    except FileNotFoundError:
-        raise HTTPException(status_code=503, detail="logic control socket not found")
-    except OSError as exc:
-        raise HTTPException(status_code=503, detail=f"logic control unavailable: {exc}")
-
-    try:
-        resp = json.loads(raw.decode("utf-8").strip() or "{}")
-    except Exception:
-        raise HTTPException(status_code=502, detail="invalid response from logic control")
-    if not resp.get("ok"):
-        raise HTTPException(status_code=409, detail=resp.get("message") or "global action rejected")
-    return resp
+    return await run_in_threadpool(send_action, socket_path, message)

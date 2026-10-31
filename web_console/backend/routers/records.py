@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -49,6 +50,10 @@ def _selected_paths(name: str, ids: Optional[list[str]]) -> list[Path]:
 
 @router.post("/apps/{name}/records/delete-selected")
 async def delete_selected_records(name: str, selection: RecordSelection):
+    return await run_in_threadpool(_delete_selected_records, name, selection)
+
+
+def _delete_selected_records(name: str, selection: RecordSelection):
     if selection.ids is None:
         raise HTTPException(400, "请选择要清空的记录")
     deleted, failed = [], []
@@ -103,10 +108,11 @@ class _ZipOutput:
         pass
 
 
-def _stream_raw_images(name: str, images: list[dict]):
+def _stream_raw_images(name: str, images: list[dict], folder_name: str):
     output = _ZipOutput()
     missing = []
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
+        archive.writestr(f"{folder_name}/", b"")
         for image in images:
             path = _store_dir(name) / image["id"] / "raw.jpg"
             try:
@@ -114,7 +120,7 @@ def _stream_raw_images(name: str, images: list[dict]):
             except OSError:
                 missing.append(image["id"])
                 continue
-            with source, archive.open(image["filename"], "w", force_zip64=True) as destination:
+            with source, archive.open(f"{folder_name}/{image['filename']}", "w", force_zip64=True) as destination:
                 while True:
                     chunk = source.read(65536)
                     if not chunk:
@@ -125,7 +131,7 @@ def _stream_raw_images(name: str, images: list[dict]):
             while output.chunks:
                 yield output.chunks.popleft()
         if missing:
-            archive.writestr("missing-images.txt", "图片在导出期间已被删除：\n" + "\n".join(missing))
+            archive.writestr(f"{folder_name}/missing-images.txt", "图片在导出期间已被删除：\n" + "\n".join(missing))
     while output.chunks:
         yield output.chunks.popleft()
 
@@ -136,7 +142,7 @@ async def download_image_export(name: str, download_id: str):
         job = _exports.get(download_id)
     if not job or job[0] < time.monotonic() or job[1] != name:
         raise HTTPException(404, "导出已过期，请重新导出")
-    return StreamingResponse(_stream_raw_images(name, job[2]), media_type="application/zip",
+    return StreamingResponse(_stream_raw_images(name, job[2], Path(job[3]).stem), media_type="application/zip",
                              headers={"Content-Disposition": f'attachment; filename="{job[3]}"',
                                       "Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 

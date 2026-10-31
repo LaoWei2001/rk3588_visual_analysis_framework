@@ -1,3 +1,4 @@
+#include "inference/npu_device_owner.h"
 #include "yolo/yolo26depth.h"
 #include <algorithm>
 #include <cassert>
@@ -8,6 +9,7 @@
 
 int main(int argc, char **argv)
 {
+    npu::DeviceOwner device_owner;
     assert(argc >= 3);
     cv::setNumThreads(2);
     cv::Mat image = cv::imread(argv[2]);

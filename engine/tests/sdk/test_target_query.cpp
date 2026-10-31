@@ -203,6 +203,19 @@ void compatibility_and_isolation()
 
 int main()
 {
+    Fixture scoped;
+    scoped.results = {detection("person", .8f), detection("person", .9f)};
+    scoped.results[0].model_id="a"; scoped.results[0].model_type="yolov8_det";
+    scoped.results[1].model_id="b"; scoped.results[1].model_type="yolov8_obb";
+    TargetQuery query; query.model_id="a";
+    assert(scoped.ctx.query_targets(query).best == &scoped.results[0]);
+    query.model_type="yolov8_obb"; assert(scoped.ctx.query_targets(query).count == 0);
+    query.model_id="b"; assert(scoped.ctx.query_targets(query).best == &scoped.results[1]);
+    scoped.results[1].boxMask=cv::Mat::ones(640,640,CV_8UC1);
+    assert(scoped.ctx.segmentation_result("b") == &scoped.results[1]);
+    assert(!scoped.ctx.segmentation_result("a"));
+    scoped.ctx.inference_valid=false;
+    assert(!scoped.ctx.segmentation_result("b"));
     filters_and_best();
     regions_and_union();
     anchor_and_boundary();

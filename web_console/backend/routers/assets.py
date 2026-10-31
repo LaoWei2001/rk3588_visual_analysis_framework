@@ -1,10 +1,12 @@
 import os
 import shutil
+import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from services import model_info
+from services.app_paths import application_directory
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 
@@ -47,9 +49,7 @@ def _category(suffix: str) -> str:
 
 @router.get("/apps/{name}/assets")
 async def list_assets(name: str):
-    app_dir = APPS_ROOT / name
-    if not app_dir.exists():
-        raise HTTPException(status_code=404, detail=f"App '{name}' not found")
+    app_dir = application_directory(APPS_ROOT, name)
 
     assets_dir = app_dir / "assets"
     models, labels, videos = [], [], []
@@ -82,9 +82,7 @@ async def upload_asset(
     - 若同名文件已存在：overwrite=true 覆盖；否则另存为 <名>_copy.<扩展>（保留原文件）。
     返回最终落盘的相对路径，便于前端自动选中。
     """
-    app_dir = APPS_ROOT / name
-    if not app_dir.exists():
-        raise HTTPException(status_code=404, detail=f"App '{name}' not found")
+    app_dir = application_directory(APPS_ROOT, name)
 
     fname = Path(file.filename or "").name        # 去掉任何目录部分，防路径穿越
     if not fname:
@@ -100,34 +98,42 @@ async def upload_asset(
     assets_dir.mkdir(exist_ok=True)
 
     do_overwrite = str(overwrite).lower() in ("1", "true", "yes", "on")
-    target  = assets_dir / fname
-    renamed = False
-    if target.exists() and not do_overwrite:
-        stem, ext = Path(fname).stem, Path(fname).suffix
-        stem = f"{stem}_copy"
-        cand = assets_dir / f"{stem}{ext}"
-        while cand.exists():                       # _copy 仍冲突 → 继续追加 _copy
-            stem = f"{stem}_copy"
-            cand = assets_dir / f"{stem}{ext}"
-        target  = cand
-        renamed = True
+    if assets_dir.resolve().parent != app_dir:
+        raise HTTPException(400, "资源目录越界")
 
-    tmp = assets_dir / f".upload_{target.name}.tmp"
-
-    def _save() -> None:
-        file.file.seek(0)                          # 多段解析后指针可能在末尾
-        with open(tmp, "wb") as out:
-            shutil.copyfileobj(file.file, out)
-        os.replace(tmp, target)                    # 同盘原子替换
+    def _save():
+        # A private staging file plus atomic hard-link publication makes the
+        # no-overwrite contract safe across threads and worker processes.
+        tmp = None
+        target = assets_dir / fname
+        try:
+            with tempfile.NamedTemporaryFile(dir=assets_dir, prefix=".upload_", suffix=".tmp", delete=False) as out:
+                tmp = Path(out.name)
+                file.file.seek(0)
+                shutil.copyfileobj(file.file, out)
+            if do_overwrite:
+                os.replace(tmp, target)
+            else:
+                stem, ext = Path(fname).stem, Path(fname).suffix
+                index = 0
+                while True:
+                    try:
+                        os.link(tmp, target)
+                        break
+                    except FileExistsError:
+                        index += 1
+                        suffix = "_copy" if index == 1 else f"_copy_{index}"
+                        target = assets_dir / f"{stem}{suffix}{ext}"
+            return target
+        finally:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
 
     try:
-        await run_in_threadpool(_save)
-    except Exception as e:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise HTTPException(status_code=500, detail=f"保存失败: {e}")
+        target = await run_in_threadpool(_save)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"保存失败: {exc}") from exc
+    renamed = target.name != fname
 
     return {
         "ok": True,
@@ -145,9 +151,7 @@ async def delete_asset(name: str, path: str):
     - path: 相对路径，如 assets/yolov8.rknn、assets/labels.txt
     - 仅允许删除受支持的文件类型（.rknn / .txt / .mp4 / .avi / .mkv）
     """
-    app_dir = APPS_ROOT / name
-    if not app_dir.exists():
-        raise HTTPException(status_code=404, detail=f"App '{name}' not found")
+    app_dir = application_directory(APPS_ROOT, name)
 
     # 防路径穿越：规范化后必须在 app_dir/assets 内
     fname = Path(path).name

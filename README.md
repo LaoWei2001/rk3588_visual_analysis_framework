@@ -1,20 +1,261 @@
-# RK3588 可扩展多路视觉分析引擎与管理平台
+# RK3588 多路视觉分析框架
 
-> 让 RK3588 多路视觉算法从“每个项目从零重新搭一遍”，变成可复用、可快捷开发、部署、便于维护的工程平台。
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![Platform: RK3588 / AArch64](https://img.shields.io/badge/Platform-RK3588%20%2F%20AArch64-informational.svg)](engine/vendor/rockchip/PLATFORM_COMPATIBILITY.env)
 
-本项目是一套面向 RK3588 边缘设备的高性能、多路、可扩展视觉分析引擎，并配备完整的 Web
-可视化管理平台。它将视频采集、RKNN 推理、目标跟踪、业务算法、画面显示、RTSP 推流、
-事件录像和可靠上报组织成统一运行管线，帮助开发者更快地把一个视觉算法原型转化为能够在
-现场长期运行和远程维护的实际应用。
+面向 **Rockchip RK3588** 的 C++ 多路视觉分析框架：将视频接入、RKNN 推理、目标跟踪、业务规则、事件证据和 Web 运维组织成可配置的边缘应用。
 
-传统视觉项目往往把视频源、模型、业务判断、线程调度和上报代码紧密耦合。需求一变，就需要
-复制工程、修改主流程、重新编译并重新调试。本项目通过 `ChannelContext`、自注册 Logic、
-声明式配置和 Web 编排，将业务算法与底层运行框架分离：同一个 Logic 可以组合到不同视频源和
-不同通道，新业务也可以在不破坏既有模块的情况下持续扩展。
+*A C++ multi-stream vision analysis framework for RK3588, integrating RKNN inference, video pipelines, extensible application logic and Web management.*
 
-无论是园区安防、工业检测、人员行为分析，还是需要多摄像头、多模型协同的边缘 AI视觉检测
-场景，都可以在这套框架上复用已有的采集、推理、显示、录像、上报和运维能力，把开发重点真正
-放回业务算法本身。
+开发者通过公开 C++ SDK 编写业务模块，复用采集、调度、录像、投递和部署能力。适用于多摄像头人员检测、区域告警、工业视觉和需要现场维护的边缘分析项目；具体识别效果与吞吐需按模型和现场负载验证。
+
+**[快速开始](#快速开始) · [模型与业务接入](#模型与业务接入) · [性能与验证](#性能与验证) · [项目指南](docs/project-guide.md) · [SDK](docs/sdk/README.md) · [全部文档](docs/README.md)**
+
+## 项目状态与兼容性
+
+最近一轮本机硬件回归记录为 **2026-10-26**；以下环境与当前源码锁定信息、本机只读检查相符。其他板卡和发行版需要重新验收。
+
+| 项目 | 已记录的验证范围 |
+| --- | --- |
+| 硬件 | RK3588 / AArch64；本机设备树报告 RK3588 EVB7 LP4 V10，约 8 GB RAM。原 README 记录作者使用 EAI-BOX-3000，不能据此推广到所有 RK3588 设备 |
+| 系统 | Debian 11，Rockchip BSP 内核 `5.10.160` |
+| NPU | RKNPU driver `0.9.0`；仓库固定 RKNN Runtime `2.4.2a2`，构建校验头文件与库哈希 |
+| 视频栈 | 兼容基线记录 RGA driver `1.2.27`、Rockchip GStreamer MPP 插件 `1.14.4`；需匹配板卡 BSP |
+| 扩展接口 | 公共源码 SDK `0.1.0`；业务随引擎编译，不提供独立插件 ABI |
+| 容量 | 通道 ID 范围 `0–14` 是软件配置上限，**不代表 15 路已达到某种分辨率或帧率** |
+
+版本依据：[平台基线](engine/vendor/rockchip/PLATFORM_COMPATIBILITY.env)、[Runtime 清单](engine/vendor/rknn/2.4.2a2/RUNTIME_MANIFEST.txt)、[SDK 版本](engine/include/version.h)。Ubuntu 有独立制包入口，尚不能等同于已验证的 Debian 组合；Armbian、RK3588S 和其他 SoC 未在这份基线中认证。
+
+| 能力 | 当前状态与边界 |
+| --- | --- |
+| RKNN 与多模型 | 已实现 7 种模型适配；有文件输入混跑记录，以及 RTSP + USB 的自动/固定核心对照。具体覆盖见[实测报告](docs/npu-core-placement.md) |
+| 视频输入与输出 | 已实现 RTSP、文件、USB 输入；有文件、局域网 RTSP、USB、HDMI 与 RTSP 输出回归。其他摄像头、USB 格式和显示设备需现场测试 |
+| 跟踪与业务模块 | SORT、ByteTrack、通道/全局 Logic 已实现，有示例与软件测试；场景效果需评估 |
+| 事件、Web 与恢复 | 已实现事件媒体、异步投递、Web 管理及故障恢复机制；对端、录像、GPIO、OTA 和长期运行需分别验收 |
+| AI 辅助开发 | `develop_feature` 为实验入口，尚未开发完成；见[开发向导](docs/skills/rk3588-feature-wizard/SKILL.md) |
+
+## 演示材料
+
+目前没有整理成可公开核验的 Web 控制台、多路运行、跟踪或事件录像演示。仓库的 Logo/GIF 与深度示例输入图片不作为运行效果或性能证据。
+
+待补充：控制台配置与实时画面截图、多路检测/跟踪短视频、事件前后录像示例。提交材料时请同时给出配置、模型、软件版本与拍摄日期，并隐去现场地址及账号；真实材料发布后再加入本节。
+
+## 核心机制
+
+- **按完整配置协调 NPU。** worker 持有独立 RKNN context；自动模型优先避开显式核心，自动通道数与可用核心数相等时按通道隔离，其余情况均衡共享。同核 SDK 生命周期互斥，不同核心可并行，故障后停止新提交；规划只在启动/热更新计算。[调度实现与边界](engine/src/inference/NPU_SCHEDULING.md)。
+- **每个模型使用自己的输入尺寸。** 从 RKNN 张量查询宽高，从源帧分别生成输入，检测框、关键点、掩码和深度结果统一映射到 `640×640` 业务坐标。切换精度档位需要相应尺寸的 RKNN 权重。[坐标约定](docs/business-coordinates.md)。
+- **硬件路径与 CPU 回退并存。** 合适的 DMA-BUF 输入可经 RGA 直接写 RKNN 输入内存；缺少 FD、需要补边/多边形处理等情况有 CPU 路径。RTSP 使用 MPP 解码，文件通过 decodebin 优先选择 MPP，编码按插件和 DMA 条件选择硬件或软件。**DMA-BUF 优先不等于全链路零拷贝**，绘图、JPEG、事件媒体仍可能转换和复制。
+- **以新帧优先控制积压。** `max_fps` 控制分析节拍；有界队列满时淘汰最旧 pending 帧，`queue_size=1` 保留最新待处理帧，已开始的任务继续执行。较旧的完成结果不会覆盖较新的已发布结果；预览、分析和事件录像使用各自节拍。
+- **业务模块与底层管线分离。** `ChannelContext`、`REGISTER_LOGIC`、`logic.json` 提供目标查询、参数、状态、ROI、绘图、动作和事件接口；全局 Logic 消费跨通道快照。新增业务随构建注册，无需复制采集/推理线程。[公开 SDK](engine/include/README.md)。
+- **管理与投递可追踪。** Web 编辑配置、管理应用、查看画面和日志；C++ 写本地事件发件箱，独立上传服务维护各 delivery 的重试状态。热更新按字段和模块策略应用，拓扑变化需重启；保存成功不能代替运行日志确认。
+
+## 快速开始
+
+以下为 **RK3588 板端**流程，命令从仓库根目录开始。需要板卡厂商提供的可用 BSP、RKNPU/RGA/MPP 驱动和插件；普通桌面 Linux 依赖不能替代它们。构建依赖包括 CMake、C/C++ 编译器、OpenCV（含 FreeType）、GStreamer/RTSP Server、GTK3、libgpiod、Python 3；平台安装还需要 Node.js/npm，精确依赖由脚本及清单管理。
+
+### 1. 准备环境
+
+已有依赖时先做只读检查：
+
+```bash
+bash install_deps.sh --check
+```
+
+新设备可联网时执行平台统一安装：
+
+```bash
+sudo ./install.sh online
+./install.sh status
+```
+
+安装器会准备依赖并部署 Web、运行管理和 GPIO 服务；**首次安装默认把继电器 `GPIO6_A2` 置低并保存状态**，连接设备前请核对板卡接线。依赖齐全且前端依赖/产物已准备好时可用 `sudo ./install.sh offline`。
+
+首次断网部署使用同发行版、同版本 ARM64 制作的完整 bundle，执行包内 `install_offline.sh`。根目录 `install.sh offline` 不携带一套裸机安装依赖。详见 [Debian 离线包](tools/offline_dev_install/debian/README.md)、[Ubuntu 离线包](tools/offline_dev_install/ubuntu/README.md)及[部署细节](docs/project-guide.md#部署与离线交付)。
+
+### 2. 先验证视频链路
+
+准备一段自己的、MPP 可解码的 H.264 MP4。`/path/to/input.mp4` 是需要替换的占位路径；视频和大部分模型不会随 Git 检出自动具备。`readme_demo` 应使用一个新的应用名。
+
+```bash
+cp /path/to/input.mp4 projects/assets/input.mp4
+./build.sh readme_demo
+cp docs/examples/quickstart.json dist/readme_demo/assets/quickstart.json
+
+cd dist/readme_demo
+export ASSETS_DIR="$PWD/assets"
+export LD_LIBRARY_PATH="$PWD/libs:$LD_LIBRARY_PATH"
+./vision_analysis --validate-config ./assets/quickstart.json
+./vision_analysis ./assets/quickstart.json
+```
+
+发布前检查交付资产：当前打包脚本会复制整个 `projects/assets/`，既有现场配置和媒体需要脱敏、筛选；不要把包含账号的配置当成通用示例。
+
+[最小配置](docs/examples/quickstart.json)关闭 HDMI、业务 Logic 和推理，使用 `assets/input.mp4` 循环播放，开启 H.264 RTSP：`rtsp://<设备IP>:8554/live`。用 VLC/FFmpeg 等客户端打开；此时应有视频，**不会有模型推理结果**。
+
+前台日志输出到当前终端，按 **Ctrl+C** 停止。先停止其他视觉实例再运行：框架使用进程级 NPU 占用锁，一个应用内部配置多通道。不要用 `run.sh` 替代上面的无界面命令；当前生成脚本会把所选配置的 `enable_display` 改成 `1`。
+
+### 3. 开启模型推理
+
+将兼容的 RK3588 RKNN 权重和对应标签放到应用的 `assets/`，修改 `assets/quickstart.json` 中通道 0 的 `infer_enable` 为 `true`，并把 `models` 替换为：
+
+```json
+[
+  {
+    "id": "detector",
+    "enable": true,
+    "model_type": "yolov8_det",
+    "model_path": "assets/detector.rknn",
+    "label_path": "assets/labels.txt",
+    "obj_thresh": 0.3,
+    "nms_thresh": 0.45,
+    "detect_classes": [],
+    "npu_core": -1
+  }
+]
+```
+
+这里的文件名是由你提供的资源名，不代表通用 YOLO 权重均可直接使用。先检查张量、再校验配置并启动：
+
+```bash
+./vision_analysis --inspect-model ./assets/detector.rknn
+./vision_analysis --validate-config ./assets/quickstart.json
+./vision_analysis ./assets/quickstart.json
+```
+
+开启 `performance_display` 后，日志 `[Perf][ch00]` 中应持续出现 `completed>0`、`failed=0`、非零 `infer_fps`，并核对 `published/publish_fps` 和实际结果。空场景可以没有目标框，进程存活或视频流畅都不能单独证明推理成功。多模型还需检查各子模型结果及异常日志。
+
+`--validate-config` 检查结构与资源路径，不运行模型或连接视频；`--inspect-model` 查询 RKNN 元数据，也不能替代实际推理验证。
+
+### 4. 用 Web 托管
+
+停止前台程序，回到仓库根目录安装应用包：
+
+```bash
+cd ../..
+sudo ./install_app.sh readme_demo
+```
+
+访问 `http://<设备IP>:8080`，用板端 Linux 系统账号登录，在程序管理中选择 `quickstart.json` 并启动；通过页面查看日志、实时画面并停止。平台日志可用 `journalctl -u rk3588-console.service -f`，引擎日志从具体应用页查看。[Web 使用说明](docs/skills/rk3588-console-ops/references/web-console-user-guide.md)。
+
+本次文档验证范围及未执行的全新系统安装步骤见[验收记录](docs/benchmark.md#本次文档验收)。
+
+## 模型与业务接入
+
+### 已实现的模型适配
+
+| `model_type` | 结果与契约 | 最近硬件回归证据 |
+| --- | --- | --- |
+| `yolov5` | YOLOv5 检测，需匹配输出头与标签 | 有 |
+| `yolov8_det` | YOLOv8 检测，需匹配 DFL 输出布局与标签 | 有，含 640 / 1088 输入 |
+| `yolov8_pose` | DFL 检测头与关键点布局 | 有，640×640，RTSP 混跑 |
+| `yolo26_pose` | COCO17，one-to-many 输出契约 | 本轮缺对应权重 |
+| `yolov5_seg` | 检测、mask 系数与 proto；含固定 proto 尺寸假设 | 有，640×640，混跑与同帧组合 |
+| `yolo26_depth` | 米制深度输出契约 | 有，640×640 |
+| `zip_depth` | 相对逆深度，越大越近，**不能直接解释为米** | 有，768×768 FP16 |
+
+支持项由[模型工厂](engine/src/inference/inference_executor.cpp)、[配置校验器](engine/src/config/config_validator.cpp)与[能力目录](projects/catalog.json)共同约束。更换同类型权重无需新增 C++ 类型，但必须满足该后处理器的张量、类别、归一化和尺寸契约。深度和姿态可留空标签；检测和分割要求标签。
+
+视频源在 `channels[].stream` 显式指定：
+
+```json
+{"src_type": "rtsp", "url": "rtsp://CAMERA_HOST/live", "video_enc": "h264"}
+```
+
+也可使用 `{"src_type":"file","url":"assets/input.mp4","loop":true}` 或 `{"src_type":"usb","device":"/dev/video0","usb_width":1280,"usb_height":720}`。地址、文件和 USB 采集档位必须按设备修改；添加通道使用唯一 ID，并同步调整显示网格。[完整配置约定](docs/skills/rk3588-src-modules/references/configuration.md)。
+
+### 业务扩展入口
+
+通道业务放在 `projects/modules/<模块>/logic.cpp + logic.json`，包含 `<channel.h>`，实现回调并 `REGISTER_LOGIC`；跨通道业务放在 `projects/global_modules/`，使用 `<global.h>` 与 `REGISTER_GLOBAL_LOGIC`。状态用 `ctx->get_state<T>()`，参数和输出在本模块清单中声明，重新构建后配置 `channels[].logic`。
+
+最小 C++/清单、事件规则、模型类型扩展步骤见[项目指南](docs/project-guide.md#扩展模型与业务)，完整例子见[区域持续占用报警](projects/modules/logic_roi_dwell_demo/README.md)。事件通过 `EventRequest` / `report_event()` 提交，媒体与投递由 `report_policy` 配置；`accepted()` 不代表落盘或远端送达。[事件与上报](docs/skills/rk3588-console-ops/references/event-reporting.md)。
+
+新模型类型需实现 `ModelBase` 并更新工厂、校验、能力目录及必要的 Web 元数据识别，重新编译；不存在任意模型自动适配或运行时动态加载业务 `.so` 的机制。
+
+## 架构与目录
+
+```mermaid
+flowchart LR
+    A["RTSP / File / USB"] --> B["capturer/DecChannel<br/>GStreamer · MPP / decodebin"]
+    B --> C["pipeline/frame_inlet<br/>分析节拍与有界队列"]
+    C --> D["inference<br/>RGA / CPU 预处理 · NPU 核心协调"]
+    D --> E["yolo + zip-depth<br/>RKNN 与后处理"]
+    E --> F["pipeline/result_dispatch<br/>同帧业务处理"]
+    F --> G["tracking + logic/core<br/>ChannelContext · 通道/全局 Logic"]
+    C --> H["display + rtsp<br/>独立预览节拍"]
+    G -->|最近结果与绘图| H
+    C --> I["recorder<br/>独立事件视频缓存"]
+    G --> J["event<br/>事件与媒体请求"]
+    I --> J
+    J --> K["event_store + upload 服务"]
+    W["Web · FastAPI + React"] -.->|配置 / 动作 / 状态| M["config / control / runtime"]
+    M -.-> C
+```
+
+无模型通道走传统 CV worker；实时预览使用最新解码帧与最近结果叠加，事件/业务同帧一致性与预览低延迟分别处理。详细数据面、构建和部署控制面见[项目指南](docs/project-guide.md#技术架构)。
+
+```text
+engine/
+  include/               公共业务 SDK
+  src/capturer/          视频输入、重连与同源复用
+  src/pipeline/          帧入口、结果分发与通道生命周期
+  src/inference/         有界队列、模型实例、核心协调、坐标映射
+  src/yolo/ + zip-depth/ 模型适配与后处理
+  src/tracking/          SORT / ByteTrack
+  src/display/ + rtsp/   拼接、叠加、本地显示与 RTSP
+  src/event/ + recorder/ 事件证据与录像
+  tests/ + bench/        软件测试、硬件回归与微基准
+projects/                通道/全局业务模块、资产与能力目录
+web_console/             React 前端与 FastAPI 后端
+services/framework/      投递、模型更新、运行管理、系统恢复与 GPIO
+tools/                   构建清单、板端工具与离线制包
+docs/                    SDK、配置、部署、验收与开发文档
+build.sh                 应用构建和打包入口
+install.sh               平台安装入口
+install_app.sh           将应用包安装至 /opt/ai_apps
+```
+
+## 性能与验证
+
+**2026-10-26，真实 RTSP + USB 三路混合推理**：RK3588 / 8 GB，RKNN `2.4.2a2`，每路 3 worker、queue=1、max_fps=25，SORT、1280×720 HDMI 和 H.264 RTSP 输出均开启。预热 15 秒、采集 60 秒，下表为各路成功推理 FPS：
+
+| 核心配置 / 版本 | ZipDepth 768 FP16 | YOLOv5n 640 USB | YOLOv8 Pose 640 |
+| --- | ---: | ---: | ---: |
+| 手动 0/1/2，原基线 | 3.99 | 17.19 | 24.80 |
+| 自动 / 1 / 2，修正前 | 10.28 | 10.47 | 9.03 |
+| 自动 / 1 / 2，修正后 | 4.00 | 17.17 | 24.92 |
+| 三路全自动，修正后 | 4.03 | 17.21 | 24.99 |
+
+自动分配修正后，检测/姿态的 queue+worker 均值由 271.80 / 337.34 ms 降到 17.91 / 27.46 ms，恢复到手动分核水平。**这是资源隔离：深度由三核预算退回一核，其自身 FPS 降低**。新配置各路推理和发布 FPS 相同，旧部分自动的深度发布为 8.34 FPS；这些均值不是端到端延迟。
+
+两个 RTSP 通道使用同一摄像头并共享解码器，USB 实际供帧约 17.2 FPS；这是整管线成绩，不能外推独立摄像头容量或裸模型吞吐。更多路数、同帧组合、逐路发布、CPU、哈希与原始窗口见[自动核心实测](docs/npu-core-placement.md)。[Benchmark](docs/benchmark.md)还保留历史文件输入与绘制微基准；不同条件不混成一个成绩。权重和全部现场素材未随报告公开，不能承诺任意设备精确复现数值。
+
+端到端 P50/P95、统一丢帧率、完整内存/散热曲线及长期稳定性仍待补测。此前两轮输出/锁优化因发布率回退已撤回，见[历史实验](engine/src/inference/NPU_PERFORMANCE.md)；当前核心规划没有采用那些改动。
+
+## 限制与故障排查
+
+- 吞吐受模型、输入尺寸、量化、worker 数、解码并发、DDR、CPU 后处理、散热和输出负载共同影响；更多线程不保证更高吞吐。
+- 同核请求会排队；未知 RKNN AUTO/绑核失败按全核心保护。不同进程的旧版或外部 RKNN 程序不一定遵守本框架占用锁。
+- 模型宽高自动读取不等于支持任意导出结构；分割等适配器有布局限制。ZipDepth 的 `full_plus_roi` 只做整帧推理，避免合并不可比的裁剪相对深度。
+- 热更新有边界：通道数量/ID/启用状态、显示/RTSP 拓扑及 `restart_required` 参数变化需重启，模型或源切换须检查实际应用日志。
+- 录像、投递与恢复依赖可用磁盘、独立服务及硬件状态；已有短时回归不构成长期无人值守承诺。
+
+| 现象 | 首先检查 |
+| --- | --- |
+| 找不到配置、视频、权重或标签 | 从应用根目录运行，核对 `assets/` 相对路径；模型和视频不保证都随 Git 提供 |
+| OpenCV FreeType / RKNN 库 / MPP 插件缺失 | `bash install_deps.sh --check`；恢复匹配 BSP 和锁定 Runtime，勿随意替换系统库 |
+| 模型能加载但无正确结果 | `--inspect-model` 查看张量；核对类型、标签、输出布局和归一化，再用真实帧推理 |
+| 第二个实例提示 NPU 已占用 | 停止当前实例，在同一应用内增加通道；Web 也只托管一个运行中的视觉应用 |
+| 预览有画面却无推理更新 | 确认 `infer_enable`、`performance_display`、`completed/published/failed`，并排查较旧结果丢弃 |
+| RKNN `-22`、驱动超时或无法正常停止 | 保留应用及内核日志；恢复设备后重启推理，热更新不会清除故障标记，5 秒 SDK 超时不能保证取消卡住的 ioctl |
+| Web 无视频、配置保存后无变化 | 开启 H.264 RTSP，核对客户端连接、配置阶段日志与需重启字段；见[运维排障](docs/skills/rk3588-console-ops/references/troubleshooting.md) |
+
+待完善的验证工作包括：发布可获取的模型/视频/日志与运行演示、补齐 YOLO26 Pose 和更多尺寸变体、覆盖更多 BSP/摄像头、记录延迟分位数与长时资源曲线。这是待验证清单，不是已经交付的能力。
+
+## 贡献与许可证
+
+欢迎反馈可复现问题和提交改进。请附板卡、系统/驱动/Runtime、模型输入输出、脱敏配置、日志、复现步骤和已运行的测试；性能改动需逐路比较推理、发布和延迟。修改 Logic 前可运行 `python3 tools/build/generate_logics_catalog.py --check`；测试入口见 [Benchmark 文档](docs/benchmark.md#软件回归)和[项目指南](docs/project-guide.md#一致性检查)。
+
+项目基于 [GNU GPL v3.0](LICENSE) 发布；第三方库、字体和模型遵循各自授权。现有作者联系方式：Sunny_Wei，`1927096839@qq.com`。
 
 ## 项目愿景
 
@@ -32,965 +273,3 @@
 所帮助，欢迎 Star，提出建议或参与改进，让更多开发者能够发现、使用并共同完善它。
 
 祝朋友们编程愉快！Happy coding！:)
-
-## 为什么选择本项目
-
-- **面向 RK3588 进行深度优化**：统一使用 RKNN NPU、RGA、MPP 和 GStreamer，兼顾多路并发、
-  低延迟预览和边缘设备资源约束；
-- **业务逻辑低耦合**：算法开发者围绕 `ChannelContext` 编写独立 Logic，无需重复处理视频解码、
-  NPU 调度、线程生命周期等底层工作；
-- **任意通道灵活组合**：RTSP、USB 摄像头和视频文件可以按配置绑定不同模型、ROI、Logic 和
-  上报策略，同一模块能够跨项目复用；
-- **不止是推理 Demo**：项目同时覆盖配置、启动、实时画面、日志、录像、断网重试、OTA、
-  网络设置、systemd 服务和离线交付；
-- **降低二次开发门槛**：课程 Logic、模块清单、配置 Schema、开发向导和 Web 画布共同约束
-  开发方式，让新人能够沿着统一规则逐步参与；
-- **适合长期维护**：应用包、运行数据和控制台彼此分离，支持配置热更新、版本化接口契约和
-  可重复的部署流程。
-
-仓库提供从基础绘制、推理结果读取、ROI 判断、跨帧状态、按钮动作到事件上报的课程示例，也包含
-行车安全、人员警戒、跌倒检测、GPIO/继电器等实际业务模块，可作为教学、科研和工程二次开发的
-共同起点。
-
-> 当前主要验证平台是 RK3588/AArch64。内核、设备树和 RKNPU/RGA/MPP 驱动必须来自适配板卡的
-> BSP。离线包不能跨发行版使用：Debian 11、Ubuntu 22.04 等系统必须分别在同版本 ARM64
-> 制作机上生成 bundle。仓库当前记录的完整硬件基线是 Debian 11；Ubuntu 需要重新制包并完成
-> 摄像头、NPU、RGA/MPP、显示和推流冒烟测试后，才能视为已验证平台。
-
-## 从哪里开始
-
-| 目标 | 建议入口 |
-|---|---|
-| 第一次了解系统 | 先阅读下方“系统架构”和“仓库结构”，再完成“快速开始” |
-| 开发一个业务算法 | [通道 Logic 开发指南](docs/skills/rk3588-channel-logic/SKILL.md) |
-| 开发跨通道逻辑 | [全局 Logic 开发指南](docs/skills/rk3588-global-logic/SKILL.md) |
-| 修改引擎、线程或生命周期 | [源码模块索引](docs/skills/rk3588-src-modules/SKILL.md) |
-| 操作 Web、投递、OTA 或排障 | [控制台与运维指南](docs/skills/rk3588-console-ops/SKILL.md) |
-| 首次配置设备网络 | [first_net_config 使用说明](tools/device/first_net_config/README.md) |
-| 制作断网安装包 | [Debian 离线包](tools/offline_dev_install/debian/README.md) / [Ubuntu 离线包](tools/offline_dev_install/ubuntu/README.md) |
-| 查阅全部文档 | [文档总入口](docs/README.md) |
-
-仓库中的 `logic_course_01`～`logic_course_10` 是逐步学习 Logic API 的示例。第一次接触项目时，
-建议先运行已有配置，再修改一个示例模块，不要直接从采集、推理或多线程核心开始。
-
-## AI 辅助 Logic 开发（实验功能，未开发完成）
-
-安装并登录 Codex CLI 或 Claude Code 后，可在仓库根目录运行：
-
-```bash
-./develop_feature
-```
-
-Windows 可使用 `develop_feature.cmd`。向导只允许回写通道和全局 Logic 目录；涉及 Web、服务、
-配置格式或引擎核心的需求会报告超出边界。常用参数：
-
-```bash
-./develop_feature --check
-./develop_feature --plan-only
-./develop_feature --confirm-before-code
-```
-
-详细边界见 [AI 开发向导](docs/skills/rk3588-feature-wizard/SKILL.md)。报警、图片/视频及 HTTP/Dify
-上报请先阅读[事件与上报开发](docs/skills/rk3588-console-ops/references/event-reporting.md)。
-
-## 项目组成
-
-- **视觉分析运行引擎（底层设施）**：C++ 实现的多路视频采集、推理、跟踪、业务逻辑和输出管线；
-- **程序管理平台（前端）**：React + FastAPI 实现的可视化配置、程序管理、实时画面、日志、记录、终端和服务控制；
-- **业务应用（核心）**：通过 `logic_xxx` 模块和 JSON 配置构建的具体分析方案；
-- **设备工具与部署**：首次网络配置、依赖安装、离线 bundle、GPIO 和继电器测试工具。
-
-> Web 画布编排的是视频源、模型、ROI、业务逻辑和上报等固定角色，不是任意 DAG 工作流引擎。
-
-## 技术栈
-
-| 层次 | 主要技术 | 用途 |
-|---|---|---|
-| 硬件与运行平台 | Rockchip RK3588、AArch64、Linux、RKNPU、RGA、MPP、GPIO | 边缘部署、NPU 推理、图像转换、硬件编解码和现场设备控制 |
-| 视觉分析引擎 | C/C++、CMake、POSIX Threads、OpenCV（含 FreeType）、cJSON、libgpiod | 多路分析管线、图像处理、业务 Logic、配置解析和 GPIO 控制 |
-| AI 推理与跟踪 | RKNN Runtime `2.4.2a2`、YOLO、SORT、ByteTrack | RK3588 NPU 模型推理、检测/姿态/分割后处理及跨帧目标跟踪 |
-| 视频与显示 | GStreamer、GStreamer RTSP Server、GTK3 | RTSP/File/USB 采集、解码、录像、拼接显示与 RTSP 输出 |
-| Web 前端 | React 18、TypeScript 5、Vite 6、XYFlow、Zustand、Axios、xterm.js | 可视化画布、参数配置、实时状态、日志和浏览器终端 |
-| Web 后端 | Python 3、FastAPI、Uvicorn、Pydantic、WebSocket | 应用管理、配置 API、实时日志、终端、设备与服务控制 |
-| 配置与模块契约 | JSON、JSON Schema、声明式 `logic.json` | 通道配置、Logic 参数、动作、输出、上报字段和热重载校验 |
-| 部署与运维 | Shell、systemd、离线 bundle、Debian/Ubuntu ARM64 | 一键安装、服务托管、离线交付、升级、检查与故障定位 |
-
-其中 RKNN Runtime 随仓库固定版本并在构建时校验，Web 前端和后端的精确依赖版本分别以
-`web_console/frontend/package.json` 和 `web_console/backend/requirements.txt` 为准。
-
-## 核心能力
-
-### 视频推理能力
-
-- RTSP、视频文件和 USB 摄像头输入；
-- 最多 15 个稳定通道 ID；
-- YOLOv5 检测、YOLOv8 检测、YOLOv8-Pose、YOLOv5-Seg；
-- 单通道多模型组合推理，结果按同一帧合并；
-- RKNN NPU 多核心分配、RGA 图像转换和 DMA-BUF 零拷贝优先路径；
-- 支持多路并发推理；在作者验证的多路配置中，3 个 NPU 核心利用率均可达到 95% 以上，
-  实际吞吐量取决于模型、分辨率、视频源、驱动和散热条件；
-- 每通道独立 FPS、模型阈值、类别过滤和跟踪参数；任务队列深度当前来自全局 `queue_size`；
-- SORT风格目标跟踪及稳定 `track_id`；
-- 推理通道和无模型传统 CV 通道可同时运行。
-
-### 业务逻辑灵活拓展能力
-
-- 每种业务逻辑位于独立的 `projects/modules/logic_xxx/` 目录；
-- 通过 `REGISTER_LOGIC(logic_xxx)` 自动注册，无需修改中央分发表；
-- `ChannelContext` 提供帧、推理结果、ROI、时间、状态、参数、绘制和跨通道快照；
-- `logic.json` 统一声明模块参数、Web 动作、上报字段及热重载策略；
-- 每通道拥有独立的 `ctx->state`，同一逻辑可安全复用于多个通道；
-- 支持业务按钮动作、系统级动作和跨通道全局逻辑；
-- Logic 与视频通道可按配置组合；
-- 新增 Logic 无需修改其他业务模块，并与线程调度、视频解码等底层实现解耦。
-
-### 显示、录像与事件投递
-
-- HDMI/GTK 窗格显示；
-- 内置 RTSP 服务，可流式输出与本地显示一致的拼接画面；
-- ROI、检测框、姿态、分割和自定义绘制统一渲染；
-- 带标注图片、原始图片与事件视频（`none` 保持源分辨率，`custom`/`all` 按实时显示窗格渲染）；
-- 事件前后视频环形缓冲和异步 MP4 编码；
-- 本地持久化事件发件箱，断网时保留并自动重试；
-- `http` 与 `dify_workflow` Adapter，支持可复用接口契约、图片、视频和纯数据事件；
-- Web 请求预览、本地事件测试发送与可扩展 adapter catalog；
-- 每个 delivery 独立维护上传状态，全部成功后自动删除本地事件。
-
-### Web 管理平台
-
-- 可视化编排视频源、模型、ROI、业务逻辑、参数和上报策略；
-- 应用包上传、安装、启动、停止和状态查看；
-- 支持选择不同配置文件启动；
-- 实时画面、运行日志和待上报记录查看；
-- 独立视频采集页面：RTSP H.264 原码流直接封装 MP4；H.265/H.265+ 通过 RK3588
-  MPP 硬件解码、硬件编码为标准 H.264 MP4，避免不同摄像头的 H.265 封装差异；
-  USB MJPEG/NV12/YUYV 统一以受控码率的软件编码生成高质量 H.264，
-  避免逐帧 MJPEG 文件过大，并正确处理非 16 对齐分辨率和 MJPEG 色彩范围；
-- Web 按钮向指定通道业务逻辑发送动作（动作处理逻辑由业务模块实现）；
-- 浏览器终端、板级后台服务管理，以及当前应用独立的投递连接、接口契约和 OTA 配置；
-- 配置保存后由 C++ 运行时自动检测并热更新。
-
-## 系统架构
-
-构建、部署与控制面：
-
-```mermaid
-flowchart TB
-    subgraph Build[仓库与构建期]
-        direction LR
-        EngineSrc[engine/src<br/>通用引擎]
-        ProjectSrc[projects/modules + global_modules<br/>assets + catalog.json]
-        AppServices[services/framework<br/>upload + model_update]
-        Builder[build.sh + CMake<br/>tools/build 生成清单]
-        Package[dist/&lt;app&gt;<br/>可部署应用包]
-        WebSource[web_console<br/>React + FastAPI]
-        GpioSource[services/framework/gpio_state]
-        PlatformInstall[install.sh<br/>web_console/deploy.sh]
-        EngineSrc --> Builder
-        ProjectSrc --> Builder
-        AppServices --> Builder
-        Builder --> Package
-        WebSource --> PlatformInstall
-        GpioSource --> PlatformInstall
-    end
-
-    subgraph Console[Web 管理面 · rk3588-console.service]
-        direction LR
-        Browser[浏览器中的 React / XYFlow]
-        Backend[FastAPI<br/>routers + services]
-        Browser <-->|HTTP / WebSocket| Backend
-    end
-
-    subgraph Device[板端运行目录与 systemd]
-        direction LR
-        AppDir["/opt/ai_apps/&lt;app&gt;<br/>二进制 + assets + services"]
-        AppUnit[rk3588-app-*.service<br/>systemd-run --pipe]
-        Vision[vision_analysis]
-        DataDir["/opt/ai_apps/.data/&lt;app&gt;<br/>event_store + 连接 + 契约"]
-        UploadUnit[unified_upload.service]
-        OtaUnit[ota_agent.service]
-        GpioControl[rk3588-gpio-control.service]
-        GpioRestore[rk3588-gpio-restore.service]
-
-        AppDir --> AppUnit --> Vision
-        Vision -->|事件持久化| DataDir
-        DataDir --> UploadUnit
-        OtaUnit -->|配置/模型更新| AppDir
-    end
-
-    subgraph External[外部系统]
-        direction LR
-        Delivery[HTTP / Dify / 自定义投递端]
-        OtaServer[模型与配置 OTA 服务端]
-    end
-
-    Package -->|上传安装或 install_app.sh| AppDir
-    PlatformInstall --> Backend
-    PlatformInstall --> GpioControl
-    PlatformInstall --> GpioRestore
-    Backend -->|应用、配置与资产管理| AppDir
-    Backend -->|启动/停止、日志| AppUnit
-    Backend <-->|run.control.sock<br/>run.playback.sock| Vision
-    Backend -->|绑定当前应用并管理| UploadUnit
-    Backend -->|绑定当前应用并管理| OtaUnit
-    Backend -->|电平保持状态与开关| GpioRestore
-    GpioRestore --> GpioControl
-    Vision -->|GPIO 控制 socket| GpioControl
-    Vision -->|拼接画面 RTSP| Backend
-    Backend -->|浏览器直播| Browser
-    UploadUnit --> Delivery
-    OtaServer --> OtaUnit
-```
-
-`web_console/` 由根安装器独立部署到 `/opt/ai_apps/_console`；业务应用包由 `build.sh` 生成，
-安装到 `/opt/ai_apps/<app>`。应用代码与持久数据分离，删除或替换应用包不会把
-`/opt/ai_apps/.data/<app>` 中的事件、连接和上报契约混入程序目录。
-
-视觉引擎内部数据面：
-
-```mermaid
-flowchart LR
-    Sources[RTSP / 视频文件 / USB]
-    Capture[capturer<br/>GStreamer 解码、重连、同源复用]
-    Inlet[pipeline/frame_inlet<br/>唯一帧入口]
-
-    Sources --> Capture --> Inlet
-
-    subgraph Analysis[分析链路 · 每通道 max_fps]
-        direction LR
-        Schedule[交错节拍<br/>最新帧优先]
-        Infer[inference + yolo<br/>推理 ROI / RGA / RKNN]
-        Dispatch[pipeline/result_dispatch<br/>严格同帧结果分发]
-        Traditional[传统 CV worker<br/>无模型通道]
-        ChannelPipeline[pipeline/channel_pipeline + tracking<br/>SORT / ByteTrack / 动作]
-        Logic[logic/core + projects/modules<br/>ChannelContext / 业务 ROI]
-
-        Schedule -->|有模型| Infer --> Dispatch --> ChannelPipeline
-        Schedule -->|无模型| Traditional --> ChannelPipeline
-        ChannelPipeline --> Logic
-    end
-
-    subgraph Preview[实时预览链路 · 独立于分析节拍]
-        direction LR
-        DisplayQueue[最新帧显示队列]
-        Render[display<br/>拼接与统一叠加]
-        VideoOut[HDMI / 内置 RTSP]
-        DisplayQueue --> Render --> VideoOut
-    end
-
-    subgraph Events[事件媒体链路 · 独立录像 FPS]
-        direction LR
-        Recorder[recorder<br/>源帧环形缓冲与 MP4]
-        Event[event<br/>标准事件与证据图片]
-        Store[event_store]
-        Recorder --> Event --> Store
-    end
-
-    Inlet --> Schedule
-    Inlet --> DisplayQueue
-    Inlet --> Recorder
-    Logic -->|绘制命令与最近结果| Render
-    Logic -->|事件请求| Event
-```
-
-### 单帧运行链路
-
-```text
-GStreamer appsink
-  → pipeline_submit_frame()
-  ├─ 按录像自身 FPS → 事件视频源帧缓存
-  ├─ 按预览安全上限 → HDMI/有客户端的 RTSP 最新帧队列
-  └─ 每通道 max_fps 交错节拍
-       ├─ 无模型通道：惰性保留源帧 → 单槽传统 CV worker
-       └─ 推理通道：最新帧任务队列 → RGA/RKNN worker → 同帧结果分发
-            → tracker
-            → 构造 ChannelContext
-            → 执行动作处理器与当前 logic_xxx
-            → 原子写回 frame / results / state / draw commands
-            → 显示叠加、事件图片和跨通道快照
-```
-
-业务发布与事件图片通过版本检查保持帧/结果一致；事件视频走独立源帧环形缓冲；实时预览优先显示
-最新解码帧，并使用最近结果进行叠加，以降低观看延迟。
-
-## 仓库结构
-
-```text
-.
-├── engine/             # C++ 视觉分析引擎
-│   ├── src/
-│   │   ├── capturer/            # GStreamer RTSP/File/USB 采集与重连
-│   │   ├── pipeline/            # 帧入口、结果分发与业务调用
-│   │   ├── inference/           # 推理任务、模型实例与热换
-│   │   ├── tracking/            # 每通道目标跟踪
-│   │   ├── logic/core/          # ChannelContext、注册表、参数和全局逻辑
-│   │   ├── display/             # HDMI 显示与统一叠加
-│   │   ├── rtsp/                # 拼接画面 RTSP 输出
-│   │   ├── event/               # 标准事件与媒体发件箱生产端
-│   │   ├── recorder/            # 事件前后视频
-│   │   ├── control/             # Web/外部通道动作控制
-│   │   ├── config/              # 配置解析、校验和热重载字段
-│   │   ├── runtime/             # APP_CTRL、快照与运行状态
-│   │   └── yolo/                # RKNN 模型实现与后处理
-│   ├── vendor/                  # 固定版本的 RKNN Runtime
-│   └── CMakeLists.txt           # 仅描述引擎编译目标
-├── projects/                    # 二次开发内容的唯一迁移单元
-│   ├── modules/                 # 可自由组合的通道 Logic
-│   ├── global_modules/          # 可自由组合的全局 Logic
-│   ├── assets/                  # 配置、RKNN、标签、视频和字体
-│   └── catalog.json             # 模型类型等共享能力
-├── web_console/
-│   ├── frontend/                # React、TypeScript、XYFlow、Zustand
-│   ├── backend/                 # FastAPI 管理 API 与 WebSocket
-│   └── deploy.sh                # 根安装器调用的 Web 控制台部署器
-├── services/framework/
-│   ├── upload/                  # 框架可靠事件上传服务
-│   ├── model_update/            # 框架模型 OTA 服务
-│   └── gpio_state/              # 框架 GPIO 开机恢复服务
-├── tools/
-│   ├── build/                   # Logic 清单和上报模板生成器
-│   ├── device/                  # 独立板端诊断与配置工具
-│   │   ├── first_net_config/    # 首次网络配置终端工具
-│   │   └── gpio_test/           # GPIO 独立测试工具
-│   └── offline_dev_install/     # 离线开发环境与安装包制作工具
-│       ├── debian/              # Debian 制包入口与依赖清单
-│       └── ubuntu/              # Ubuntu 制包入口与依赖清单
-├── build/engine/                # CMake 中间产物（不提交）
-├── dist/<app>/                  # 最终应用包（不提交）
-├── docs/                        # 开发、运维和模块文档
-├── develop_feature              # Codex/Claude 隔离式 Logic 需求澄清与自动开发入口
-├── develop_feature.cmd          # 原生 Windows 的同一向导入口
-├── build.sh                     # 仓库唯一的应用构建入口
-├── install_app.sh               # 将 dist/<app>/ 安装到 Web 应用目录
-├── install.sh                   # 平台统一安装、升级、状态与卸载入口
-├── install_deps.sh              # 内部依赖准备或只读环境检查脚本
-└── LICENSE                      # GPL-3.0
-```
-
-## 支持的模型与输入源
-
-| 类别 | 当前支持 |
-|---|---|
-| 输入源 | `rtsp`、`file`、`usb` |
-| 模型类型 | `yolov5`、`yolov8_det`、`yolov8_pose`、`yolo26_pose`、`yolov5_seg` |
-| 模型格式 | Rockchip RKNN |
-| 图像处理 | OpenCV、RGA |
-| 解码与推流 | GStreamer、GStreamer RTSP Server |
-| 本地显示 | GTK3 |
-| 管理前端 | React、TypeScript、Vite、XYFlow、Zustand |
-| 管理后端 | FastAPI、WebSocket |
-
-新增模型类型目前需要实现 `ModelBase` 并在模型工厂中注册，然后重新编译主程序。
-
-YOLO26 人体姿态模型使用独立类型 `yolo26_pose`，适配 Ultralytics 导出的
-`[1,56,8400]` FP16 one-to-many 输出。项目已内置模型
-`projects/assets/yolo26n-pose-rk3588.rknn`，该类型不要求标签文件：
-
-```json
-{
-  "id": "pose26",
-  "enable": true,
-  "model_type": "yolo26_pose",
-  "model_path": "assets/yolo26n-pose-rk3588.rknn",
-  "label_path": "",
-  "obj_thresh": 0.25,
-  "nms_thresh": 0.45,
-  "detect_classes": [],
-  "npu_core": -1
-}
-```
-
-完整的单路配置见 `projects/assets/config_yolo26_pose.json`。`yolo26_pose`
-产出的 `AlgoResult` 与 `yolov8_pose` 一致，包含人员框、17 个 COCO 关键点及其置信度，
-并统一标记为 `PoseKeypointSchema::Coco17`，业务逻辑无需判断具体 YOLO 版本即可直接进入
-跟踪、画面骨架渲染和跌倒检测逻辑。`model_type` 仍保留具体版本，供日志和来源追踪使用。
-
-## 快速开始
-
-### 1. 环境要求
-
-项目主要在搭载 RK3588 的 EAI-BOX-3000 边缘计算盒子上开发和验证：
-
-- RK3588 / AArch64 Linux；
-- Debian、Ubuntu、Armbian 或兼容发行版；
-- 可用的 Rockchip RKNPU 内核驱动和 RGA；RKNN 用户态 Runtime 已由项目固定；
-- GStreamer 1.x；
-- 带 `freetype` 模块的 OpenCV；
-- 构建 Web 前端时需要 Node.js 18+。
-
-“可以运行脚本”不等于“发行版之间二进制兼容”。尤其是离线仓库中的 FFmpeg、OpenCV、Python
-和 systemd 软件包具有精确版本关系，必须遵守：
-
-```text
-制作机发行版 + 版本 + 架构 = 目标机发行版 + 版本 + 架构
-```
-
-例如 Debian 11 bundle 只能用于 Debian 11 ARM64，Ubuntu 22.04 bundle 必须在 Ubuntu 22.04
-ARM64 制作。不要把 Debian bundle 强制安装到 Ubuntu，也不要通过降级系统库解决冲突。
-硬件验证基线见
-[平台兼容矩阵](docs/skills/rk3588-feature-wizard/references/platform-matrix.md)。
-
-### 2. 统一安装
-
-设备可以联网时，在项目根目录执行一条命令即可安装依赖、Web 控制台、GPIO 实时控制器和
-电平保持服务：
-
-```bash
-sudo ./install.sh online
-```
-
-后续更新源码后直接重新部署，也可以随时查看安装状态：
-
-```bash
-sudo ./install.sh online   # 依赖或前端依赖发生变化
-sudo ./install.sh offline  # 依赖齐全且前端已经构建
-./install.sh status
-```
-
-根目录 `install.sh` 是面向使用者的唯一源码安装入口；`install_deps.sh`、
-`web_console/deploy.sh` 和 `services/framework/gpio_state/install.sh` 是内部组件脚本。
-
-联网安装需要在盒子仍能访问 APT、PyPI/npm 镜像时执行，会安装完整第三方运行依赖、
-锁定安装前端依赖并预生成 `web_console/frontend/dist`。RKNPU 内核驱动、RGA、MPP 等
-Rockchip BSP 组件不由该脚本安装；用户态 `librknnrt.so` 和 `rknn_api.h` 已固定在
-`engine/vendor/rknn/`。APT 阶段只补装缺失包，不升级已经安装或被厂家设为
-`hold` 的 BSP 包；单个无关软件源更新失败时，会使用其他成功更新的索引继续安装。
-Python requirements 直接安装到系统 `/usr/bin/python3`，不会创建项目虚拟环境；已满足
-版本约束的模块会由 pip 跳过。这与默认完整离线包采用相同的解释器和依赖规则。
-
-如果目标设备明确只运行预编译应用，可以选择精简环境：
-
-```bash
-bash install_deps.sh --runtime-only
-```
-
-这属于高级依赖准备方式，不会完成 Web 控制台和 GPIO 服务部署。
-
-现场设备不能访问 APT、PyPI 或 npm 时，在系统版本完全相同且可以联网的 ARM64 制作机上
-生成环境与 Web 控制台安装包：
-
-```bash
-# 制作机必须和目标机使用相同发行版及版本
-bash tools/offline_dev_install/debian/create_bundle.sh
-
-# 已装过完整包且只修改源码时，生成快速源码更新包（不编译、不联网）
-bash tools/offline_dev_install/debian/create_bundle.sh --source-only
-
-# Ubuntu ARM64 使用对应入口（首次先运行 prepare_host.sh）
-bash tools/offline_dev_install/ubuntu/prepare_host.sh
-bash tools/offline_dev_install/ubuntu/create_bundle.sh --refresh-debs
-
-# 把 output/full-bundle 复制到断网 RK3588，然后在包目录内一键安装
-cd /userdata/full-bundle
-sudo bash install_offline.sh
-```
-
-制包脚本会在制作机临时编译当前 C++ 程序以检测运行依赖，并构建前端，然后把系统依赖、
-系统 Python requirements、Web 控制台和 Rockchip 用户态组件组成一个本地 APT 仓库。临时编译的
-C++ 程序不会装入目标机的程序列表。目标机只需在所选 bundle 目录内运行
-`install_offline.sh`，安装完成后可直接访问 `http://<RK3588-IP>:8080`，无需再执行
-根目录安装器或手工安装依赖。默认完整包也包含源码、板端 C/C++ 编译环境、
-ARM64 Node.js/npm 和前端 `node_modules`，源码入口为
-`/userdata/rk3588_visual_analysis_framework`；目标机可以直接编译主程序和重新构建前端。
-程序仍需由用户之后明确安装，或通过 Web 上传。
-默认完整离线包的一键安装流程也会自动安装 GPIO 服务并在首次安装时将继电器置低，无需再
-进入 `services/framework/gpio_state/` 执行命令。
-
-日常源码迭代可复制 `tools/offline_dev_install/debian/output/source-update` 到已安装过完整包的设备，
-并运行 `sudo bash install_source_update.sh`。依赖清单、前端锁文件或固定 RKNN 文件变化时，
-快速模式会拒绝制包并提示重新生成 `full-bundle`；全新设备也始终使用完整包。
-
-联网 `install_deps.sh` 和离线安装现在使用同一套系统 `/usr/bin/python3`；pip 对已经满足
-requirements 约束的包会跳过，只补装缺失项或调整不兼容版本。两条路径都会核验模块导入和
-依赖关系。仓库不会绑定项目源码哈希；发行版
-软件包按制作机对应的软件源解析，开发机上由 dpkg 管理、但软件源没有的厂家用户态包才会重新
-封装，项目固定的 RKNN Runtime 也会单独封装。完整包生成到
-`tools/offline_dev_install/debian/output/full-bundle`，精简包生成到
-`tools/offline_dev_install/debian/output/runtime-only-bundle`。升级时重新制包并再次运行安装脚本即可；新增依赖和
-手工补包方法见
-[Debian 说明](tools/offline_dev_install/debian/README.md) 或
-[Ubuntu 说明](tools/offline_dev_install/ubuntu/README.md)。
-
-如需单独排查厂家 BSP、硬件驱动或应用动态库，可运行只读诊断（它不是离线安装步骤，
-诊断失败也不代表 deb 安装失败）：
-
-```bash
-bash install_deps.sh --check
-# 只验收运行环境时：bash install_deps.sh --check --runtime-only
-```
-
-`--check` 会进行五层只读检测：系统/架构与已验证基线、RKNPU/RGA/MPP/DMA 设备、
-Python/通用动态库、Rockchip GStreamer 硬件插件，以及项目和 `/opt/ai_apps` 中
-实际可执行文件的 ELF 架构、`ldd` 和包内 RKNN Runtime 哈希。检测结果分为：
-
-- `[通过]`：当前检查项符合要求；
-- `[警告]`：可能可以运行，但驱动版本、可选硬件能力或应用包可追溯性尚未完全验证，
-  命令返回值仍为 0；
-- `[失败]`：存在会阻止核心功能运行的问题，命令返回非 0。
-
-检查不会启动摄像头、模型或推理进程，因此静态检查通过后仍应使用现场摄像头、实际
-`.rknn` 模型和 RTSP/录像输出做一次冒烟测试。项目已经验证的平台组合记录在
-`engine/vendor/rockchip/PLATFORM_COMPATIBILITY.env`；只有完成硬件冒烟测试后
-才应更新该基线。
-
-已经用 `install_deps.sh` 或完整离线包准备好依赖时，可以使用离线模式完成统一安装。
-源码更新后的目录如果没有前端产物，安装器会使用已有 `node_modules` 自动离线构建前端：
-
-```bash
-sudo ./install.sh offline
-```
-
-卸载统一安装的系统服务和控制台时使用：
-
-```bash
-sudo ./install.sh uninstall
-```
-
-卸载前会要求明确确认；应用包和 GPIO 保存状态会保留，已安装的控制台目录会移动到带时间戳
-的备份目录。完整离线 bundle 仍然只需执行包内的 `install_offline.sh`，不需要再运行根安装器。
-首次统一安装默认开启电平保持并将继电器 `GPIO6_A2` 置为低电平，后续升级会保留 Web 页面中
-的开关状态和已经保存的 GPIO 电平。
-
-`install_deps.sh` 是“联网预配置 + 断网验收”脚本，不包含 deb/wheel/npm 离线安装包；
-因此不能把一台从未准备过的裸机带到无公网现场后再首次执行普通安装模式。
-
-目标机仍需使用能正确启动 RK3588 的厂家内核、设备树和固件。离线仓库负责 RGA/MPP、
-Rockchip GStreamer 和 RKNN 等用户态组件，但不会尝试用用户态 `.so` 替代内核驱动。
-
-### 2.1 固定的 RKNN Runtime
-
-编译和发布统一使用 `engine/vendor/rknn/2.4.2a2/` 中的 AArch64 Runtime，
-不再根据构建设备的 `ldconfig` 顺序选择 `librknnrt.so`。CMake 和 `build.sh` 都会校验
-头文件及 Runtime 的 SHA-256；文件缺失、被替换、架构或版本不符时构建会直接失败。
-
-当前锁定并在 RK3588 / RKNPU driver v0.9.0 上验证的 Runtime 为：
-
-```text
-librknnrt version: 2.4.2a2 (5fd9678a8f@2026-04-27T15:52:16)
-SHA-256: bf50d51705ae433013927a13520ae781b534fdb1481c47bdddbc726f63ed4970
-```
-
-### 3. 板端调试构建
-
-```bash
-./build.sh --debug
-cd projects
-../build/engine/vision_analysis ./assets/config_global.json
-```
-
-`--debug` 只生成可执行文件，不创建完整应用包。请根据设备修改视频源、模型和标签路径。
-调试构建会使用项目锁定的 RKNN 头文件和 Runtime 进行链接；正式运行及跨设备验证请使用
-完整发布包，以便由包内 `libs/librknnrt.so` 和 `$ORIGIN/libs` 保证运行时版本一致。
-
-### 4. 构建发布包
-
-```bash
-./build.sh my_app
-```
-
-脚本会自动判断构建方式：
-
-- AArch64/ARM：在板端原生编译；
-- x86_64：使用配置好的 `rk3588_builder` Docker 交叉编译镜像。
-
-发布目录 `dist/my_app/` 包含：
-
-- `vision_analysis` 可执行程序；
-- `libs/` 动态库，其中 `librknnrt.so` 来自项目锁定版本并带版本清单；
-- `assets/` 模型、标签和配置；
-- `logics.json` Web 能力清单；
-- `services/upload` 和 `services/model_update`；
-- `report_templates/`、`run.sh` 和 `setup_python.sh`。
-
-前台运行发布包：
-
-```bash
-cd dist/my_app
-OFFLINE=1 bash setup_python.sh  # 已执行根目录 install_deps.sh 的现场盒子
-bash run.sh ./assets/config_global.json
-```
-
-`run.sh` 会把所选配置的 `global.enable_display` 改为 1。生产托管请把完整包安装到 Web 控制台；
-当前 `build.sh` 不生成历史文档中的 `deploy.sh`/`stop.sh`。
-
-### 5. 安装 Web 管理平台
-
-```bash
-cd /userdata/rk3588_visual_analysis_framework
-sudo ./install.sh online
-```
-
-该统一入口也会安装 GPIO 子系统；已经完成依赖准备且不允许联网时改用
-`sudo ./install.sh offline`。
-
-安装完成后访问：
-
-```text
-http://<RK3588-IP>:8080
-```
-
-控制台默认从 `/opt/ai_apps/` 扫描应用包。将刚构建的应用包安装到控制台：
-
-```bash
-sudo ./install_app.sh my_app
-```
-
-离线环境包不会自动执行这一步，也不会预装名为 `vision_analysis` 的程序。Web 程序列表只显示
-用户明确上传或安装到 `/opt/ai_apps` 的应用。
-
-### 6. 首次网络配置工具
-
-`first_net_config` 是独立的 C/ANSI 终端工具，用于首次设置有线、Wi-Fi、设备名称、路由优先级，
-以及检查网络冲突。它直接管理 NetworkManager，不依赖 Web 控制台：
-
-```bash
-cd tools/device/first_net_config
-sudo ./first_net_config
-```
-
-全屏界面使用 ANSI 转义序列和 Linux/POSIX 自带的 termios，不依赖 ncurses；源码构建只需要
-CMake 和 C 编译器。仓库随附 ARM64 成品（要求 glibc 2.29 或更高），可以在 RK3588 离线状态
-先完成网络配置，再运行联网依赖安装；修改源码后才需要执行 `./build.sh`。完整功能、SSH
-切换网络的回滚方式及高风险操作边界见
-[tools/device/first_net_config/README.md](tools/device/first_net_config/README.md)。
-
-## 新成员开发路径
-
-建议按下面顺序熟悉项目，不要一开始就修改采集、推理和多线程核心：
-
-1. 在独立测试设备上完成依赖安装、编译、发布包安装、启动、日志查看和删除。
-2. 修改一个 `logic_course_xx` 示例，理解 `ChannelContext`、配置参数和绘制接口。
-3. 独立新增一个小型通道 Logic，并完成配置校验和板端冒烟测试。
-4. 根据个人方向进入 Web 前端、FastAPI 后端、设备工具或 C++ 引擎模块。
-5. 最后学习离线制包、系统服务、网络修改和发布回滚。
-
-对每次改动至少要求：能够编译、相关检查通过、异常路径验证、测试设备冒烟测试、文档同步更新，
-并由另一名开发者完成代码审查。涉及密码、SSH、网络清理、systemd、文件删除和线程生命周期的
-改动不得直接在生产设备上练习。
-
-## 配置示例
-
-配置没有根级版本号契约；OTA 模型版本只写在 `channels[].models[].version`。模型只允许写在
-`channels[].models[]`；业务 ROI 只允许写在 `channels[].roi_zones[]`；通道级推理范围写在
-`channels[].inference_roi`；录像设置只保存在 `report_policy`；`stream.src_type` 必须显式指定。
-Web 画布中“业务 ROI”节点直接连接视频流节点，表示它归属于该视频通道。业务 ROI 即使在
-没有模型的传统算法通道中也可以保存、显示并通过 `ChannelContext` 读取。每个通道可配置一个推理
-多边形；矩形由四个顶点表示，矩形和任意多边形使用同一份配置结构。推理范围支持三种模式：
-`roi_only`（只推理局部）、`full_plus_roi`（整帧推理一次、
-局部再推理一次），以及 `full_frame_roi_filter`（保持整帧尺度推理一次，只输出区域内目标）。局部
-取景可选 `stretch`（直接拉伸）、`expand`（扩展周边画面匹配模型比例，触边后只对不足部分补黑）
-或 `letterbox`（保持比例并补黑边）。多边形使用 `stretch`/`letterbox` 时，多边形外的模型输入严格
-填黑；使用 `expand` 时则保留扩展后的真实周边上下文。Web 编辑器以 640×640 参考画布预览取景，使用相同类型的偶数边界
-对齐、缩放和填黑规则；实际输入的像素取整仍以加载模型的宽高为准。`roi_only` 和
-`full_frame_roi_filter` 要求业务 ROI 的全部顶点和边完全位于推理区域内。检测框、姿态关键点和分割
-掩码都会使用完整画面坐标；结果受限模式还会清除区域外掩码，
-`full_plus_roi` 的两批结果则会执行跨批次 NMS，因此业务逻辑不需要感知推理裁剪或结果过滤。
-已配置的推理 ROI 会作为青色边框叠加到实时显示、带叠加的录像和上报图片；该边框只在推理完成后的
-统一输出渲染阶段绘制，不会进入模型输入或污染业务逻辑读取的源帧。
-
-业务画布固定为 **640×640**，与视频源分辨率、模型实际输入尺寸独立。模型读取 `.rknn` 中的
-输入宽高，并从原始视频缓冲直接生成所需输入；检测框、姿态关键点和分割掩码在进入跟踪/业务逻辑前
-统一映射到完整画面的 640×640 坐标。启动顺序、模型热切换和重启不会改变业务坐标。
-因此原来的 `(320,320)` 中心、业务像素距离/面积阈值和 ROI 均可沿用；更改摄像头取景或裁剪方式后，
-仍需检查物理测量标定。分割模型的输出结构须与解码器兼容，固定业务画布不代表所有模型已支持任意尺寸。
-
-业务代码可用 `ctx->business_width()` / `business_height()` / `business_size()` / `business_center()`
-查询画布，不触发取帧。`ctx->business_frame()` 和保留的 `ctx->model_frame()` 共用同一份惰性 640×640
-BGR 缓存；只有读取像素时才转换。`ctx->source_frame()` 保留原图尺寸，原图上的检测坐标需显式按
-`src_width/640`、`src_height/640` 转换。`inference_get_input_w/h()` 和全局逻辑的历史字段
-`model_width/model_height` 也表示业务尺寸，不用于查询实际 NPU 输入。
-坐标约定、迁移示例和回归验证见 [固定业务坐标与模型输入尺寸](docs/business-coordinates.md)。
-
-```json
-{
-  "global": {
-    "enable_display": false,
-    "enable_rtsp": true,
-    "disp_width": 1280,
-    "disp_height": 720,
-    "tile_cols": 1,
-    "tile_rows": 1,
-    "max_fps": 25,
-    "queue_size": 1
-  },
-  "channels": [
-    {
-      "id": 0,
-      "enable": true,
-      "infer_enable": true,
-      "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://192.168.1.10/live",
-        "video_enc": "h264"
-      },
-      "models": [
-        {
-          "id": "detector",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8n.rknn",
-          "label_path": "assets/labels.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": 0
-        }
-      ],
-      "inference_roi": {
-        "mode": "full_plus_roi",
-        "resize_mode": "expand",
-        "polygon": [[0.25, 0.2], [0.75, 0.25], [0.68, 0.8], [0.3, 0.72]]
-      },
-      "logic": "logic_default",
-      "logic_parameters": {},
-      "roi_zones": [
-        {
-          "name": "entrance",
-          "polygon": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]]
-        }
-      ],
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      }
-    }
-  ]
-}
-```
-
-通道 `id` 是运行时、Web API、告警、录像和控制动作共同使用的唯一身份，必须唯一且位于 `[0, 15)`。
-
-只校验配置而不启动视频、NPU 和后台线程：
-
-```bash
-cd projects
-../build/engine/vision_analysis --validate-config ./assets/config_global.json
-```
-
-## 开发新的通道逻辑
-
-每个通道逻辑由一个 C++ 入口和一个模块清单组成：
-
-```text
-projects/modules/logic_people_count/
-├── logic.cpp
-└── logic.json
-```
-
-最小 `logic.cpp`：
-
-```cpp
-#include <channel.h>
-#include <drawing.h>  // 公共接口：engine/include/
-
-static void logic_people_count(ChannelContext *ctx)
-{
-    const int count = ctx->target_count("person");
-    draw_text(ctx,
-              ("person: " + std::to_string(count)).c_str(),
-              cv::Point(20, 40),
-              cv::Scalar(0, 255, 0));
-}
-
-REGISTER_LOGIC(logic_people_count);
-```
-
-最小 `logic.json`：
-
-```json
-{
-  "label": "人员计数",
-  "event_types": [],
-  "parameters": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  },
-  "report_fields": []
-}
-```
-
-新增模块后重新运行 CMake 或 `build.sh`。构建过程会：
-
-1. 递归收集 `projects/modules/` 中的 C++ 源文件；
-2. 从 `REGISTER_LOGIC()` 获取唯一 logic ID；
-3. 校验 `logic.json`、参数访问器和热重载策略；
-4. 将 Schema 嵌入二进制；
-5. 在发布包中生成供 Web 使用的 `logics.json`。
-
-普通模块参数应声明在 `logic.json.parameters.properties`，运行时通过以下接口读取：
-
-- `ctx->param_float()`；
-- `ctx->param_int()`；
-- `ctx->param_bool()`；
-- `ctx->param_string()`；
-- `ctx->param_json()`。
-
-不要使用函数内 `static` 保存每通道状态；跨帧状态应保存在 `ctx->state`，以避免不同的通道逻辑混用变量。
-
-## 内置通道逻辑
-
-| Logic ID/分组 | 作用 |
-|---|---|
-| `logic_course_01` … `logic_course_10` | 从绘制、上下文、推理结果、ROI、状态、按钮到事件上报的课程示例 |
-| `logic_course_gpio` | 检测结果驱动 GPIO |
-| `logic_default` | 可删除的空白逻辑示例 |
-| `logic_dify` | Dify 周期截图与自定义变量 |
-| `logic_roi_person_count_demo` | 发布 ROI 内 `person` 人数，作为当前全局人数聚合示例的上游 |
-| `logic_crane_motion`、`logic_crane_hook` | 行车运动检测，以及固定半径、随吊钩高度插值圆心的吊钩状态检测 |
-| `logic_crane_hook_calibration` | 播放视频时按需保存正常铅垂圆心和 `box_scale` 标定样本 |
-| `logic_crane_intrusion`、`logic_crane_helmet` | 行车投影区域入侵和静止安全帽检测 |
-| `logic_relay` | Action 控制继电器 |
-
-数据集采集统一从 Web 侧边栏配置，复用通道已有推理结果，图片保存到电脑，不占用业务 Logic。详见[数据集采集说明](docs/computer-dataset-collection.md)。
-
-当前全局 Logic 包括 `global_person_count_alarm_demo` 和 `global_crane_safety_controller`。
-
-全局实例在任一通道发布新业务状态时立即唤醒；`poll_interval_ms` 只负责没有新发布时的兜底
-运行，不是固定回调周期。二次开发代码应使用 `gctx->timestamp_ms`/`gctx->dt_ms` 计时，不能用
-调用次数或 tick 序号推算时间。快速连续发布可能合并为一次最新状态回调。
-
-当前未注册 `logic_path_sop`，Web 也不会再生成这个无效 Logic ID。
-
-通道可以不配置 `logic`。此时仍会执行视频、模型、跟踪和通用绘制管线，但不会调用业务后处理模块。
-
-## 配置热重载
-
-运行时监控当前配置文件，等待文件写入稳定后重新解析。当前支持：
-
-- 阈值、检测类别、队列深度和跟踪参数更新；
-- ROI 和 logic 参数更新；
-- logic 切换及状态安全清理；
-- 模型热替换；
-- 视频源地址和 USB 参数切换；
-- 全局逻辑实例重启；
-- 模块参数的 `preserve_state`、`reset_state`、`restart_required` 策略。
-
-以下变化涉及固定运行拓扑，热重载会拒绝并要求重启：
-
-- 通道数量、ID 或启用状态变化；
-- HDMI/RTSP 输出开关、布局、端口、编码等输出拓扑变化。
-
-配置采用不可变运行快照发布。业务帧持有快照后，本帧所见的通道配置、ROI 和模块参数保持一致。
-
-## 告警事件与可靠上传
-
-业务逻辑只调用统一入口：
-
-```cpp
-EventRequest request;
-request.event_type = "person_enter";
-request.message = "检测到人员进入";
-request.fields = {
-    event_field("label", "person"),
-    event_field("count", 1),
-};
-EventReportResult report = report_event(ctx, request);
-if (!report.accepted())
-    fprintf(stderr, "report rejected: %s (%s)\n",
-            event_report_status_name(report.status), report.detail.c_str());
-```
-
-媒体类型、叠加方式、视频前后时间窗、接收端和字段映射由 Web 保存的 `report_policy` 决定。
-`report.accepted()` 只表示创建/合并请求已进入本地持久化队列，不表示已经落盘或远端成功；失败时
-通过 `status/detail` 精确定位。
-
-事件链路：
-
-```text
-channel logic / global logic
-  → event_store/<event_id>/event.json
-  → media_state.json / delivery_state.json
-  → annotated.jpg / raw.jpg / clip.mp4
-  → unified_upload 扫描
-  → delivery 独立上传和重试
-  → 全部成功后删除事件目录
-```
-
-全局逻辑使用同一个 `EventRequest` 与 `report_event(gctx, request)`。聚合事件通过
-`evidence_channel_ids` 描述本次涉及的通道；Web 上报节点决定图片使用证据通道、指定通道或全部
-画布连入通道，并按全局显示尺寸和网格拼接。聚合事件没有主通道，`source_channel_id` 只用于
-确实来自单路通道的来源元数据，不参与媒体选择。事件视频固定使用全局节点明确配置的
-`media_source_channel_id`。Web 画布以“通道逻辑 → 全局逻辑 → 上报配置”连线生成输入和上报策略。
-
-事件目录按写入者拆分：C++ 维护 `event.json` 和 `media_state.json`，并初始化
-`delivery_state.json`；此后上传服务独占 delivery 状态，避免两个进程并发覆盖同一份状态。
-
-默认发件箱上限为 1 GiB，并保留至少 512 MiB 可用磁盘空间。可以通过以下环境变量覆盖：
-
-- `EVENT_STORE_DIR`；
-- `EVENT_STORE_MAX_BYTES`；
-- `EVENT_STORE_MIN_FREE_BYTES`。
-
-## 一致性检查
-
-校验所有 logic 注册、模块清单、参数 Schema 和 C++ 参数访问器：
-
-```bash
-python3 tools/build/generate_logics_catalog.py --check
-```
-
-编译后查看二进制实际注册的通道逻辑：
-
-```bash
-build/engine/vision_analysis --list-logics
-```
-
-构建 Web 前端：
-
-```bash
-cd web_console/frontend
-npm ci
-npm run build
-```
-
-运行 Web 后端测试：
-
-```bash
-cd web_console/backend
-python3 -m pytest -q tests
-```
-
-修改安装脚本后检查 Shell 语法：
-
-```bash
-bash -n install_deps.sh \
-  tools/offline_dev_install/debian/create_bundle.sh \
-  tools/offline_dev_install/debian/templates/install_offline.sh \
-  build.sh
-```
-
-测试通过只说明软件层面的静态行为符合预期。涉及摄像头、NPU、RGA/MPP、GPIO、显示、RTSP 或
-系统网络的修改，仍须在独立 RK3588 测试设备上进行硬件冒烟测试。
-
-## 项目边界
-
-- 通道 logic 是编译期模块，不是运行时动态加载的 `.so` 插件；
-- Web 图编辑器编排固定的视觉分析角色，暂不支持用户自定义 DAG；
-- 模型类型由 C++ 模型工厂注册，新增类型需要重新编译；
-- 全局 logic 与通道 logic 一样是编译期自注册模块；
-- Web 只允许从当前 App 的 Logic 清单选择已注册模块。
-
-## 文档
-
-- [文档总入口](docs/README.md)
-- [首次网络配置工具](tools/device/first_net_config/README.md)
-- [离线环境与 Web 控制台安装](tools/offline_dev_install/debian/README.md)
-- [Skill 与二次开发索引](docs/skills/README.md)
-- [交互式功能开发总入口](docs/skills/rk3588-feature-wizard/SKILL.md)
-- [通道逻辑开发指南](docs/skills/rk3588-channel-logic/SKILL.md)
-- [全局逻辑开发指南](docs/skills/rk3588-global-logic/SKILL.md)
-- [控制台、部署与运维指南](docs/skills/rk3588-console-ops/SKILL.md)
-- [源码模块索引](docs/skills/rk3588-src-modules/SKILL.md)
-
-如文档与当前实现存在差异，以源码、头文件、模块 `logic.json`、前端序列化和后端路由为准。
-
-维护 README 时避免记录未经复测的性能结论；发行版、驱动、RKNN Runtime、模型或配置契约变化后，
-必须同步更新兼容性说明和对应模块文档。
-
-## License
-
-本项目受到 GNU 计划与自由软件运动的启发，基于
-[GNU General Public License v3.0](LICENSE) 开源。如有任何问题与建议可随时联系 Sunny_Wei：
-1927096839@qq.com。

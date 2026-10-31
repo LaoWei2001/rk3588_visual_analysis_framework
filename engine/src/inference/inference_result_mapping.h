@@ -8,5 +8,6 @@
 void map_results_to_business_frame(int source_width, int source_height, const InferenceRoiTransform &transform,
                                    int model_width, int model_height, std::vector<AlgoResult> &results);
 
-// Full-frame + ROI: preserve one depth payload per model, ROI valid pixels win.
+// Metric full-frame + ROI: preserve one payload per model, ROI valid pixels win.
+// Relative predictions from independent crops remain separate.
 void merge_depth_results(std::vector<AlgoResult> &results);

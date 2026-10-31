@@ -5,9 +5,11 @@
 #pragma once
 
 #include <coordinates.h>
+#include <array>
 #include <algorithm>
 #include <cstring>
 #include <cstdint>
+#include <limits>
 #include <opencv2/core.hpp>
 #include <string>
 #include <vector>
@@ -20,9 +22,17 @@ enum class PoseKeypointSchema : uint8_t
     Hand21,
 };
 
+enum class DepthKind : uint8_t
+{
+    Metric = 0,       // metres, smaller is nearer (YOLO26Depth)
+    RelativeInverse, // unitless, larger is nearer (ZipDepth)
+};
+
 struct AlgoResult
 {
-    cv::Rect box;
+    cv::Rect box; // OBB: axis-aligned envelope for existing tracking/business logic
+    bool has_obb = false;
+    std::array<cv::Point2f, 4> obb_corners{}; // actual polygon, same coordinates as box
     std::string label;
     int class_id = -1;
     float score = 0.0f;
@@ -70,12 +80,21 @@ struct AlgoResult
     std::string text_result;
     cv::Mat boxMask;
 
-    /* 单目深度结果：CV_32FC1，单位米；坐标与 box/ROI 相同（业务层固定 640×640）。
-     * 无效/未推理区域为 0。每个深度模型每帧一条结果，不参与目标计数、跟踪或 NMS。
+    /* 单目深度结果：CV_32FC1，单位由 depth_kind 指定；业务坐标固定 640×640。
+     * 米制无效区域为 0；相对逆深度无效区域为 NaN（0/负数也可为有效预测）。
+     * 每个深度模型每帧一条结果，不参与目标计数、跟踪或 NMS。
      * Mat 引用可安全跨帧持有；如需修改像素，先 clone()。 */
     cv::Mat depth_map;
+    DepthKind depth_kind = DepthKind::Metric;
 
     bool is_depth() const { return !depth_map.empty(); }
+    bool is_metric_depth() const { return is_depth() && depth_kind == DepthKind::Metric; }
+    bool is_relative_inverse_depth() const { return is_depth() && depth_kind == DepthKind::RelativeInverse; }
+
+    float invalid_depth_value() const
+    {
+        return depth_kind == DepthKind::RelativeInverse ? std::numeric_limits<float>::quiet_NaN() : 0.0f;
+    }
 
     // 位检查也适用于宿主工程启用 -ffast-math 的场合。
     static bool valid_depth(float value)
@@ -85,13 +104,27 @@ struct AlgoResult
         return bits != 0 && bits < 0x7f800000U;
     }
 
-    // 越界、无深度或无效像素返回 0，正常值为米。
+    bool valid_depth_value(float value) const
+    {
+        if (depth_kind == DepthKind::Metric) return valid_depth(value);
+        uint32_t bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        return (bits & 0x7fffffffU) < 0x7f800000U;
+    }
+
+    bool depth_valid_at(int x, int y) const
+    {
+        return depth_map.type() == CV_32FC1 && x >= 0 && y >= 0 && x < depth_map.cols && y < depth_map.rows &&
+               valid_depth_value(depth_map.at<float>(y, x));
+    }
+
+    // 返回原始深度值（参见 depth_kind）。无效返回 0；相对深度可用 depth_valid_at 区分有效的 0。
     float depth_at(int x, int y) const
     {
         if (depth_map.type() != CV_32FC1 || x < 0 || y < 0 || x >= depth_map.cols || y >= depth_map.rows)
             return 0.0f;
         const float value = depth_map.at<float>(y, x);
-        return valid_depth(value) ? value : 0.0f;
+        return valid_depth_value(value) ? value : 0.0f;
     }
 
     // 取区域内有效深度的中位数。默认每 4 像素采样；step=1 为精确中位数。
@@ -106,7 +139,7 @@ struct AlgoResult
         {
             const float *row = depth_map.ptr<float>(y);
             for (int x = area.x; x < area.x + area.width; x += step)
-                if (valid_depth(row[x])) values.push_back(row[x]);
+                if (valid_depth_value(row[x])) values.push_back(row[x]);
         }
         if (values.empty()) return 0.0f;
         const auto middle = values.begin() + values.size() / 2;

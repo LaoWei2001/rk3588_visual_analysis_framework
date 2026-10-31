@@ -28,11 +28,12 @@ def test_selected_export_preserves_original_bytes_and_does_not_substitute_annota
     result = asyncio.run(records.prepare_image_export("demo", records.RecordSelection(ids=["one", "two", "one"])))
     assert result["image_count"] == 1
     assert result["skipped_count"] == 1
-    chunks = list(records._stream_raw_images("demo", result["images"]))
+    folder = result["filename"][:-4]
+    chunks = list(records._stream_raw_images("demo", result["images"], folder))
     assert max(map(len, chunks)) <= 65536
     with zipfile.ZipFile(io.BytesIO(b"".join(chunks))) as archive:
-        assert archive.namelist() == ["one_raw.jpg"]
-        assert archive.read("one_raw.jpg") == raw
+        assert archive.namelist() == [f"{folder}/", f"{folder}/one_raw.jpg"]
+        assert archive.read(f"{folder}/one_raw.jpg") == raw
     with pytest.raises(HTTPException, match="404"):
         asyncio.run(records.record_original_image("demo", "two"))
 
@@ -44,10 +45,12 @@ def test_export_all_includes_images_beyond_display_limit_and_handles_deleted_ima
     result = asyncio.run(records.prepare_image_export("demo", records.RecordSelection()))
     assert result["image_count"] == 505
     (tmp_path / result["images"][0]["id"] / "raw.jpg").unlink()
-    content = b"".join(records._stream_raw_images("demo", result["images"]))
+    folder = result["filename"][:-4]
+    content = b"".join(records._stream_raw_images("demo", result["images"], folder))
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
         assert len([name for name in archive.namelist() if name.endswith('.jpg')]) == 504
-        assert 'missing-images.txt' in archive.namelist()
+        assert f"{folder}/missing-images.txt" in archive.namelist()
+        assert all(name.startswith(folder + "/") for name in archive.namelist())
         assert archive.testzip() is None
 
 
@@ -73,3 +76,20 @@ def test_export_download_is_scoped_to_app_and_expires(tmp_path, monkeypatch):
     monkeypatch.setattr(records.time, "monotonic", lambda: float('inf'))
     with pytest.raises(HTTPException):
         asyncio.run(records.download_image_export("first", job['download_id']))
+
+
+def test_download_zip_has_one_top_level_folder(tmp_path, monkeypatch):
+    monkeypatch.setenv("EVENT_STORE_DIR", str(tmp_path))
+    event(tmp_path, "one", raw=b"original-one")
+    event(tmp_path, "two", raw=b"original-two")
+    async def download():
+        job = await records.prepare_image_export("demo", records.RecordSelection())
+        response = await records.download_image_export("demo", job["download_id"])
+        data = b"".join([chunk async for chunk in response.body_iterator])
+        return job, response, data
+    job, response, data = asyncio.run(download())
+    folder = job["filename"][:-4]
+    assert job["filename"] in response.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        assert archive.namelist() == [folder + "/", folder + "/one_raw.jpg", folder + "/two_raw.jpg"]
+        assert archive.read(folder + "/two_raw.jpg") == b"original-two"

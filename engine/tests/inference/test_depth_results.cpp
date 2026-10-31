@@ -1,6 +1,7 @@
 #include <channel.h>
 #include "inference/inference_result_mapping.h"
 #include "inference/inference_roi_filter.h"
+#include "zip-depth/depth_resize.h"
 #include <cassert>
 #include <limits>
 #include <iostream>
@@ -64,5 +65,51 @@ int main()
     results.push_back(extra);
     merge_depth_results(results);
     assert(results.size() == 2);
+
+    // Relative values may be zero or negative. Invalid ROI pixels are NaN.
+    AlgoResult relative;
+    relative.depth_kind = DepthKind::RelativeInverse;
+    relative.depth_map = (cv::Mat_<float>(2,2) << -2, 0, 2, 4);
+    assert(relative.is_relative_inverse_depth() && !relative.is_metric_depth());
+    assert(relative.depth_valid_at(1,0) && relative.depth_at(0,0) == -2);
+    assert(relative.depth_median(cv::Rect(0,0,2,2),1) == 1);
+    assert(!relative.valid_depth_value(std::numeric_limits<float>::infinity()));
+    cv::Mat resized;
+    zip_depth::resize_depth(relative.depth_map, resized, cv::Size(3,3));
+    assert(resized.at<float>(1,1) == 1 && resized.at<float>(2,2) == 4);
+    zip_depth::resize_depth(relative.depth_map, resized, cv::Size(1,1));
+    assert(resized.at<float>(0,0) == -2);
+    cv::Mat single = (cv::Mat_<float>(1,2) << 0, 4);
+    zip_depth::resize_depth(single, resized, cv::Size(5,3));
+    assert(resized.at<float>(2,1) == 1 && resized.at<float>(0,4) == 4);
+
+    for (const auto size : {cv::Size(384,384), cv::Size(672,384), cv::Size(768,768)})
+    {
+        // Source gradient has a closed-form reference for endpoint alignment.
+        relative.depth_map.create(size, CV_32FC1);
+        for (int y = 0; y < size.height; ++y)
+            for (int x = 0; x < size.width; ++x)
+                relative.depth_map.at<float>(y,x) = float(x)/(size.width-1) + float(y)/(size.height-1);
+        relative.box = cv::Rect(0,0,size.width,size.height);
+        results = {relative};
+        map_results_to_business_frame(1920,1080,
+            {cv::Rect(0,0,1920,1080), cv::Rect(0,0,size.width,size.height)}, size.width,size.height,results);
+        assert(results[0].depth_map.size() == cv::Size(640,640));
+        assert(std::abs(results[0].depth_at(137,291) - (137.f+291.f)/639) < 1e-6);
+        assert(results[0].depth_valid_at(0,0));
+
+        results = {relative};
+        map_results_to_business_frame(1920,1080,
+            {cv::Rect(480,270,960,540), cv::Rect(0,0,size.width,size.height)}, size.width,size.height,results);
+        assert(!results[0].depth_valid_at(0,0));
+        assert(results[0].depth_valid_at(160,160) && results[0].depth_at(160,160) == 0);
+        assert(std::abs(results[0].depth_at(479,479) - 2) < 1e-6);
+        filter_results_to_inference_roi(results, roi, 640,640);
+        assert(results[0].depth_valid_at(170,170));
+        assert(!results[0].depth_valid_at(320,320));
+    }
+    results = {relative, relative};
+    merge_depth_results(results);
+    assert(results.size() == 2); // never blend independently normalized predictions
     std::cout << "Depth SDK queries, finite values, ROI mapping/filtering and full+ROI merge: PASS\n";
 }

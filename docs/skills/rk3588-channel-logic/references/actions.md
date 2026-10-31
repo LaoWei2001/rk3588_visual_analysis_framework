@@ -56,8 +56,11 @@ GET /api/apps/{app_name}/logic-actions
 POST /api/apps/{app_name}/channels/{channel_id}/actions/{action_id}
 ```
 
-当前控制台特意将通道/全局 Action 的 POST 路径设为免登录入口，便于外部控制器调用；这意味着
-部署者必须通过可信网络、反向代理或外围访问控制保护它，不能把“免登录”误写成“无需安全边界”。
+为兼容已有外部控制器，未设置 `LOGIC_ACTION_TOKEN` 时通道/全局 Action POST 保留免登录行为，
+控制台启动时会打印提示。部署者必须通过可信网络、反向代理或外围访问控制保护此兼容模式。
+在控制台进程环境中设置非空 `LOGIC_ACTION_TOKEN` 后，外部控制器必须通过 `X-Logic-Token`
+请求头提交相同令牌；有效的控制台 Bearer 登录也可调用。令牌不允许放在 URL 查询参数中。
+此令牌目前覆盖全部 Action，不提供逐应用授权；多租户部署仍需外围访问控制。
 动作列表 GET 以及其他普通 API 仍受控制台鉴权约束。
 
 当前 HTTP 请求体必须包一层 `payload`：

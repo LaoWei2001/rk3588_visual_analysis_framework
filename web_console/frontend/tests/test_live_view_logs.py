@@ -46,6 +46,7 @@ def console():
             def api(route):
                 path = urlsplit(route.request.url).path
                 responses = {
+                    '/api/auth/me': {'username': 'tester'},
                     '/api/apps': [dict(name='demo', status='running', pid=123, active_config='config.json')],
                     '/api/apps/demo/config': {'global': {'enable_rtsp': 0}, 'channels': []},
                     '/api/apps/demo/logic-actions': {'globals': [], 'channels': [], 'socket_ready': True},

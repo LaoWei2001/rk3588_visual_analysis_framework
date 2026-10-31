@@ -10,7 +10,7 @@ class YoloV8Det : public ModelBase
 {
   public:
     YoloV8Det(const std::string &model_path, const std::string &label_path, int core_mask = RKNN_NPU_CORE_0_1_2,
-              float obj_thresh = 0.25f, float nms_thresh = 0.45f);
+              float obj_thresh = 0.25f, float nms_thresh = 0.45f, bool obb = false);
     virtual ~YoloV8Det();
 
     virtual bool infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat *perf = nullptr) override;
@@ -55,6 +55,17 @@ class YoloV8Det : public ModelBase
     }
 
   private:
+    bool obb_ = false;
+    struct ObbCandidate {
+        float cx, cy, w, h, angle, score, a, b, c, determinant;
+        int cls;
+    };
+    std::vector<ObbCandidate> obb_candidates_;
+    std::vector<size_t> obb_kept_;
+    float obb_exp_[3][256]{};
+    float obb_scores_[3][256]{};
+    void query_obb_info();
+    int post_process_obb(rknn_output *, LetterBoxInfo &, std::vector<AlgoResult> &);
     void init_rknn(const std::string &model_path, int core_mask);
     void load_labels(const std::string &path);
     void query_model_info();
@@ -75,7 +86,6 @@ class YoloV8Det : public ModelBase
     void compute_dfl(float *tensor, int dfl_len, float *box);
     int nms(int validCount, std::vector<float> &outputLocations, std::vector<int> &classIds, std::vector<int> &order,
             int filterId, float threshold);
-    void quick_sort_indice_inverse(std::vector<float> &input, int left, int right, std::vector<int> &indices);
 
   private:
     rknn_context ctx_ = 0;

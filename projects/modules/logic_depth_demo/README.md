@@ -57,7 +57,7 @@ static void logic_my_depth(ChannelContext *ctx)
     if (!ctx) return;
     // 不传 ID 取本帧首个深度模型；也可用 ctx->depth_result("depth")。
     const AlgoResult *depth = ctx->depth_result();
-    if (!depth) return;
+    if (!depth || !depth->is_metric_depth()) return;
 
     const float center_m = depth->depth_at(320, 320);
     const float region_m = depth->depth_median(cv::Rect(240, 240, 160, 160));

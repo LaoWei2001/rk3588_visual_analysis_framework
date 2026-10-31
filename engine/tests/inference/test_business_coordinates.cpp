@@ -1,4 +1,5 @@
 #include "display/display.h"
+#include "yolo/result_masks.h"
 #include "inference/inference_internal.h"
 #include "inference/inference_result_mapping.h"
 #include "inference/inference_roi_filter.h"
@@ -289,11 +290,25 @@ void test_depth_background_and_overlay_order()
     model.model_path = "assets/depth.rknn";
     channel.models = {model};
     assert(channel_uses_depth_background(&channel));
+    channel.models[0].model_type = "zip_depth";
+    assert(channel_uses_depth_background(&channel));
     channel.models[0].enable = false;
     assert(!channel_uses_depth_background(&channel));
     channel.models[0].enable = true;
     channel.infer_enable = false;
     assert(!channel_uses_depth_background(&channel));
+
+    AlgoResult relative;
+    relative.depth_kind = DepthKind::RelativeInverse;
+    relative.depth_map = cv::Mat(640,640,CV_32FC1,cv::Scalar(-2));
+    relative.depth_map(cv::Rect(320,0,320,640)).setTo(2);
+    relative.depth_map.at<float>(0,0) = relative.invalid_depth_value();
+    results = {relative};
+    ++params.result_frame_id;
+    render_overlays(image,params);
+    assert(image.at<cv::Vec3b>(200,100)[0] > image.at<cv::Vec3b>(200,100)[2]); // low = blue/far
+    assert(image.at<cv::Vec3b>(200,500)[2] > image.at<cv::Vec3b>(200,500)[0]); // high = red/near
+    assert(image.at<cv::Vec3b>(0,0) == cv::Vec3b(0,0,0)); // invalid = black
 
     // First result has not arrived, or depth inference failed for this batch.
     results.clear();
@@ -311,6 +326,29 @@ void test_depth_background_and_overlay_order()
 
 int main()
 {
+    {
+        AlgoResult a, b, c;
+        a.model_id=b.model_id="seg_a"; c.model_id="seg_b";
+        a.boxMask=cv::Mat(640,640,CV_8UC1,cv::Scalar(2));
+        c.boxMask=cv::Mat(640,640,CV_8UC1,cv::Scalar(3));
+        std::vector<AlgoResult> results{a,b,c};
+        ResultMasks masks(results); results.erase(results.begin()); masks.restore(results);
+        assert(results[0].boxMask.at<unsigned char>(0,0)==2);
+        assert(results[1].boxMask.at<unsigned char>(0,0)==3);
+    }
+    for (auto size : {cv::Size(640,640),cv::Size(960,960),cv::Size(768,1088)})
+        for (const std::string mode : {"stretch","letterbox","expand"}) {
+            auto transform=make_inference_roi_transform({320,180,640,360},1280,720,size.width,size.height,mode,true);
+            AlgoResult r; r.has_obb=true; r.box=transform.model_content_rect;
+            auto c=transform.model_content_rect;
+            r.obb_corners={{{float(c.x),float(c.y)},{float(c.br().x),float(c.y)},
+                            {float(c.br().x),float(c.br().y)},{float(c.x),float(c.br().y)}}};
+            std::vector<AlgoResult> results{r};
+            map_results_to_business_frame(1280,720,transform,size.width,size.height,results);
+            assert(cv::norm(results[0].obb_corners[0]-cv::Point2f(transform.source_rect.x*.5f,transform.source_rect.y*640.f/720))<.01);
+            assert(cv::norm(results[0].obb_corners[2]-cv::Point2f(transform.source_rect.br().x*.5f,transform.source_rect.br().y*640.f/720))<.01);
+        }
+
     cv::setNumThreads(1);
     test_fixed_contract_and_model_switch();
     test_identity_reuses_mask_and_preserves_box();

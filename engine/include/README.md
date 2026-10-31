@@ -11,7 +11,7 @@
 | 创建通道逻辑、接收按钮动作 | `REGISTER_LOGIC`、`REGISTER_LOGIC_ACTION`、`LogicAction` | [channel.h](channel.h)、[actions.h](actions.h) |
 | 读取当前帧和目标 | `ctx->business_frame()`、`source_frame()`、`results`、`inference_valid` | [channel.h](channel.h)、[types.h](types.h) |
 | 查询目标数量、位置、姿态 | `has_target()`、`target_count()`；`AlgoResult::box_center()`、`box_contains()`、`is_pose()` | [channel.h](channel.h)、[types.h](types.h) |
-| 读取像素/目标区域深度（米） | `ctx->depth_result()`、`AlgoResult::depth_map/depth_at()/depth_median()` | [channel.h](channel.h)、[types.h](types.h) |
+| 读取像素/目标区域深度（米制/相对逆深度） | `ctx->depth_result()`、`AlgoResult::depth_kind/depth_map/depth_at()/depth_median()` | [channel.h](channel.h)、[types.h](types.h) |
 | 组合类别、置信度、ROI 条件，获取数量和最佳目标 | `TargetQuery`、`ctx->query_targets()`、`TargetQueryResult` | [channel.h](channel.h) |
 | 查找 ROI、判断目标是否在区域内 | `roi_find()`、`roi_contains()`、`roi_has_target()`、`roi_count_target()`、`ctx->roi_by_name()` | [channel.h](channel.h) |
 | 获取统一坐标和时间 | `business_width/height/size/center()`、`timestamp_ms`、`dt_ms`、`time_str()`、`datetime()` | [channel.h](channel.h)、[coordinates.h](coordinates.h) |
@@ -103,3 +103,5 @@ if (selected.best)
 不能仅因为两个行车模块共用，就把行车辅助函数搬进 SDK。
 
 完整边界、构建方式和参考设计见 [SDK 说明](../../docs/sdk/README.md)。
+
+模型尺寸、推理 ROI 及多模型结果访问的统一契约见 [模型结果调用指南](../../docs/model-result-contract.md)。

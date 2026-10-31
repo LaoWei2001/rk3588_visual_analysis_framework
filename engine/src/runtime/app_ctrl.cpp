@@ -7,6 +7,7 @@
 
 #include "app_ctrl.h"
 #include "inference/inference_engine.h"
+#include "inference/npu_core_assignment.h"
 #include "logic/core/context_access.h"
 
 #include "config/config_registry.h"
@@ -340,9 +341,14 @@ extern "C" void *config_monitor_thread_func(void *arg)
 
         /* 锁外检测哪些通道需要模型热重载 */
         std::vector<size_t> model_reload_indices;
+        std::vector<npu::AutoCorePlacement> requested_placements(update_cnt);
         for (size_t i = 0; i < update_cnt; ++i)
         {
-            if (model_runtime_changed(old_cfg.channels[i], new_cfg.channels[i]))
+            const auto &channel = new_cfg.channels[i];
+            requested_placements[i] = npu::channel_auto_placement(new_cfg.channels, channel.id);
+            const bool core_plan_changed = npu::has_automatic_models(channel) &&
+                inference_get_auto_core_plan(channel.id) != requested_placements[i].key();
+            if (model_runtime_changed(old_cfg.channels[i], channel) || core_plan_changed)
             {
                 model_reload_indices.push_back(i);
             }
@@ -353,7 +359,8 @@ extern "C" void *config_monitor_thread_func(void *arg)
         std::vector<unsigned char> model_reload_applied(update_cnt, 0);
         for (size_t config_index : model_reload_indices)
         {
-            if (inference_reload_channel_model(new_cfg.channels[config_index].id, new_cfg.channels[config_index]))
+            if (inference_reload_channel_model(new_cfg.channels[config_index].id,
+                                               new_cfg.channels[config_index], requested_placements[config_index]))
             {
                 model_reload_applied[config_index] = 1;
             }
@@ -363,6 +370,25 @@ extern "C" void *config_monitor_thread_func(void *arg)
                         new_cfg.channels[config_index].id);
                 restore_model_runtime(new_cfg.channels[config_index], old_cfg.channels[config_index]);
             }
+        }
+
+        // Loading a newly pinned model may have failed and restored its old
+        // configuration. Reconcile AUTO with the *applied* reservations, not
+        // the failed proposal; only a successful context replacement updates
+        // inference_get_auto_core_plan(). This also covers unchanged channels.
+        for (size_t i = 0; i < update_cnt; ++i)
+        {
+            const auto &channel = new_cfg.channels[i];
+            const auto applied_placement = npu::channel_auto_placement(new_cfg.channels, channel.id);
+            if (!npu::has_automatic_models(channel) ||
+                inference_get_auto_core_plan(channel.id) == applied_placement.key()) continue;
+            if (std::find(model_reload_indices.begin(), model_reload_indices.end(), i) == model_reload_indices.end())
+                model_reload_indices.push_back(i);
+            if (inference_reload_channel_model(channel.id, channel, applied_placement))
+                model_reload_applied[i] = 1;
+            else
+                fprintf(stderr, "[NPU] ch%d automatic core reassignment failed; old contexts retained; restart required\n",
+                        channel.id);
         }
 
         /* 阶段 A: 锁外比对 global_logics */

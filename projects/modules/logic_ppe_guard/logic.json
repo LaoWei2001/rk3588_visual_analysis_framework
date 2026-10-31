@@ -1,0 +1,388 @@
+{
+  "label": "安全穿戴编排（部位级三态）",
+  "event_types": [
+    {
+      "id": "logic_ppe_violation",
+      "label": "人员安全穿戴违规",
+      "help": "按人员跟踪 ID 与部位累计多帧证据；同一跟踪会话只创建一次事件，部位状态区分可核验/候选/已确认。"
+    }
+  ],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "person_labels": {
+        "type": "string",
+        "title": "人员类别标签",
+        "default": "person",
+        "description": "可与人体/头部检测模型的类别名一致，多个用英文逗号分隔。",
+        "x-hot-reload": "reset_state"
+      },
+      "person_min_score": {
+        "type": "number",
+        "title": "人员最低置信度",
+        "default": 0.35,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state"
+      },
+      "violation_min_score": {
+        "type": "number",
+        "title": "违规目标最低置信度（报警门槛）",
+        "default": 0.75,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state",
+        "description": "低于该置信度的违规框一律不采信；现场要求 0.75，调低会明显提高误报。"
+      },
+      "keypoint_min_score": {
+        "type": "number",
+        "title": "关键点可见性阈值",
+        "description": "低于该分数的关键点视为不可见；没有姿态结果时所有部位记为未知，仅显式违规标签仍可累计证据。",
+        "default": 0.3,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state"
+      },
+      "roi_name": {
+        "type": "string",
+        "title": "作业区域名称",
+        "description": "只统计人员框中心落在该 ROI 内的人员；留空表示整帧。区域不存在时停止判定。",
+        "default": "",
+        "x-hot-reload": "reset_state"
+      },
+      "check_helmet": {
+        "type": "boolean",
+        "title": "检测未戴安全帽",
+        "default": true,
+        "x-hot-reload": "reset_state"
+      },
+      "no_helmet_labels": {
+        "type": "string",
+        "title": "未戴安全帽违规标签",
+        "description": "只填模型明确表示“没戴”的负类（如 no_helmet）。把中性的“头/人”类（如 bare_head、head）填进来，会让戴着安全帽的人也报警。",
+        "default": "no_helmet",
+        "x-hot-reload": "reset_state"
+      },
+      "check_workwear": {
+        "type": "boolean",
+        "title": "检测未穿工作服",
+        "default": true,
+        "x-hot-reload": "reset_state"
+      },
+      "no_workwear_labels": {
+        "type": "string",
+        "title": "未穿工作服违规标签",
+        "description": "填写模型明确输出的未穿工作服类别，不能用“没有检测到工作服”代替。",
+        "default": "no_workwear,no_uniform",
+        "x-hot-reload": "reset_state"
+      },
+      "check_gloves": {
+        "type": "boolean",
+        "title": "检测未戴手套",
+        "default": true,
+        "x-hot-reload": "reset_state"
+      },
+      "no_gloves_labels": {
+        "type": "string",
+        "title": "未戴手套违规标签",
+        "description": "填写模型明确输出的裸手/未戴手套类别；有姿态结果时按腕点位置分左右手，分不清则只计一次不分侧证据。",
+        "default": "bare_hand,no_glove",
+        "x-hot-reload": "reset_state"
+      },
+      "geometry_gate": {
+        "type": "boolean",
+        "title": "部位几何门控",
+        "description": "开启后，违规框必须落在对应部位该在的位置与尺寸范围内才算证据：安全帽在上部、工作服在躯干、手套贴近腕点。关闭仅用于排障对比。",
+        "default": true,
+        "x-hot-reload": "preserve_state"
+      },
+      "helmet_top_ratio": {
+        "type": "number",
+        "title": "安全帽框垂直上限",
+        "description": "安全帽框中心允许的最高位置，按占人员框高度的比例计算，0.35 表示上部 35%。",
+        "default": 0.35,
+        "minimum": 0.05,
+        "maximum": 0.8,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state"
+      },
+      "helmet_area_min_ratio": {
+        "type": "number",
+        "title": "安全帽框面积下限",
+        "description": "安全帽框面积 / 人员框面积 的下限，占比过小视为噪声框。",
+        "default": 0.01,
+        "minimum": 0.0,
+        "maximum": 0.3,
+        "x-step": 0.005,
+        "x-hot-reload": "preserve_state"
+      },
+      "helmet_area_max_ratio": {
+        "type": "number",
+        "title": "安全帽框面积上限",
+        "description": "安全帽框面积 / 人员框面积 的上限，占比过大说明框到了躯干甚至整个人。",
+        "default": 0.12,
+        "minimum": 0.01,
+        "maximum": 0.8,
+        "x-step": 0.01,
+        "x-hot-reload": "preserve_state"
+      },
+      "helmet_head_ratio": {
+        "type": "number",
+        "title": "安全帽框到头部的距离上限",
+        "description": "有姿态关键点时，安全帽框中心到鼻/眼的距离不得超过该比例 × 人员框高。",
+        "default": 0.35,
+        "minimum": 0.05,
+        "maximum": 1.0,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state"
+      },
+      "workwear_top_ratio": {
+        "type": "number",
+        "title": "工作服框垂直区间起点",
+        "description": "工作服框中心的最低位置下限，0.25 表示从人员框 25% 高度开始。",
+        "default": 0.25,
+        "minimum": 0.0,
+        "maximum": 0.9,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state"
+      },
+      "workwear_bottom_ratio": {
+        "type": "number",
+        "title": "工作服框垂直区间终点",
+        "description": "工作服框中心的最高位置上限，0.75 表示到人员框 75% 高度为止。",
+        "default": 0.75,
+        "minimum": 0.1,
+        "maximum": 1.0,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state"
+      },
+      "glove_wrist_ratio": {
+        "type": "number",
+        "title": "手套框到腕点的距离上限",
+        "description": "手套/裸手框中心到对应腕点的距离不得超过该比例 × 人员框高；超出视为不是手。",
+        "default": 0.2,
+        "minimum": 0.02,
+        "maximum": 0.8,
+        "x-step": 0.02,
+        "x-hot-reload": "preserve_state"
+      },
+      "evidence_window_sec": {
+        "type": "integer",
+        "title": "违规证据时间窗口",
+        "default": 4,
+        "minimum": 1,
+        "maximum": 30,
+        "x-unit": "秒",
+        "x-hot-reload": "reset_state"
+      },
+      "evidence_gap_ms": {
+        "type": "integer",
+        "title": "独立证据最小间隔",
+        "description": "避免相邻重复帧被当成多次独立证据。",
+        "default": 250,
+        "minimum": 0,
+        "maximum": 5000,
+        "x-unit": "毫秒",
+        "x-hot-reload": "reset_state"
+      },
+      "required_observations": {
+        "type": "integer",
+        "title": "违规确认所需观测次数",
+        "default": 3,
+        "minimum": 2,
+        "maximum": 20,
+        "x-hot-reload": "reset_state"
+      },
+      "required_span_ms": {
+        "type": "integer",
+        "title": "违规证据最小跨度",
+        "default": 1000,
+        "minimum": 0,
+        "maximum": 30000,
+        "x-unit": "毫秒",
+        "x-hot-reload": "reset_state"
+      },
+      "reacquire_gap_ms": {
+        "type": "integer",
+        "title": "轨迹断开重置间隔",
+        "description": "同一跟踪 ID 消失超过该时长后重新出现，视为新的一次作业会话，重新积累证据并可再次报警。",
+        "default": 3000,
+        "minimum": 0,
+        "maximum": 600000,
+        "x-unit": "毫秒",
+        "x-hot-reload": "preserve_state"
+      },
+      "state_ttl_sec": {
+        "type": "integer",
+        "title": "人员状态保留时长",
+        "description": "超过该时长未再出现的跟踪 ID 会从内部状态表移除，避免长时间运行后内存增长。",
+        "default": 600,
+        "minimum": 30,
+        "maximum": 86400,
+        "x-unit": "秒",
+        "x-hot-reload": "preserve_state"
+      },
+      "dedupe_iou": {
+        "type": "number",
+        "title": "同类框去重 IoU 阈值",
+        "description": "同一类别两个框的 IoU 达到该值时只保留置信度高的一个，避免同一物品被重复计数。",
+        "default": 0.6,
+        "minimum": 0.0,
+        "maximum": 0.95,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state"
+      },
+      "require_pose_for_violation": {
+        "type": "boolean",
+        "title": "只采信可见部位",
+        "description": "打开后，该部位关键点不可见（遮挡、出画、模糊）就不采信违规证据，宁可不报。需要通道输出人体姿态模型。",
+        "default": false,
+        "x-hot-reload": "preserve_state"
+      },
+      "positive_veto": {
+        "type": "boolean",
+        "title": "正类否决负类",
+        "description": "同一部位上识别到「戴好了」的正类框时，本帧的负类框一律丢弃，避免「戴了却报未戴」。",
+        "default": true,
+        "x-hot-reload": "preserve_state"
+      },
+      "helmet_positive_labels": {
+        "type": "string",
+        "title": "安全帽正类标签",
+        "description": "模型表示「已戴安全帽」的类别名，逗号分隔；留空则不做正类否决。",
+        "default": "helmet",
+        "x-hot-reload": "reset_state"
+      },
+      "workwear_positive_labels": {
+        "type": "string",
+        "title": "工作服正类标签",
+        "description": "模型表示「已穿工作服」的类别名，逗号分隔；留空则不做正类否决。",
+        "default": "",
+        "x-hot-reload": "reset_state"
+      },
+      "glove_positive_labels": {
+        "type": "string",
+        "title": "手套正类标签",
+        "description": "模型表示「已戴手套」的类别名，逗号分隔；留空则不做正类否决。",
+        "default": "glove",
+        "x-hot-reload": "reset_state"
+      },
+      "helmet_infer_by_absence": {
+        "type": "boolean",
+        "title": "按“没检测到安全帽”推断未戴",
+        "description": "没有安全帽框时推断“没戴”。**实测会产生大量误报**（人体框只到肩颈、设备遮挡、检测器漏检都会被当成没戴），默认关闭；只有接入了可核验的头部信号或改用带 no_helmet 负类的模型时才考虑打开。",
+        "default": false,
+        "x-hot-reload": "preserve_state"
+      },
+      "helmet_search_up_ratio": {
+        "type": "number",
+        "title": "安全帽归属上扩比例",
+        "default": 0.6,
+        "minimum": 0.0,
+        "maximum": 1.5,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state",
+        "description": "人体框常只框到肩颈，帽子在框顶之上。取安全帽框中心是否落在“人体框上抬该比例”的搜索区内。"
+      },
+      "helmet_search_side_ratio": {
+        "type": "number",
+        "title": "安全帽归属左右外扩比例",
+        "default": 0.15,
+        "minimum": 0.0,
+        "maximum": 0.5,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state",
+        "description": "安全帽框中心左右允许超出人体框的比例；越大越不容易把“戴了”判成“没戴”，但多人并排时可能算到别人头上。"
+      }
+    }
+  },
+  "outputs": [
+    {
+      "key": "ppe_alarm",
+      "type": "boolean",
+      "label": "存在已确认穿戴违规人员"
+    },
+    {
+      "key": "confirmed_people",
+      "type": "integer",
+      "label": "已确认违规人员数"
+    },
+    {
+      "key": "duplicate_observations",
+      "type": "integer",
+      "label": "被同类去重丢弃的框数"
+    },
+    {
+      "key": "vetoed_observations",
+      "type": "integer",
+      "label": "因正类否决丢弃的负类框数"
+    },
+    {
+      "key": "candidate_observations",
+      "type": "integer",
+      "label": "当前帧违规候选观测数"
+    },
+    {
+      "key": "rejected_observations",
+      "type": "integer",
+      "label": "被几何门控丢弃的违规框数"
+    },
+    {
+      "key": "tracked_people",
+      "type": "integer",
+      "label": "本帧参与判定的人员数"
+    }
+  ],
+  "report_fields": [
+    {
+      "key": "track_id",
+      "type": "number",
+      "label": "人员跟踪 ID"
+    },
+    {
+      "key": "violation_types",
+      "type": "string",
+      "label": "违规类型"
+    },
+    {
+      "key": "part_states",
+      "type": "string",
+      "label": "部位状态快照"
+    },
+    {
+      "key": "person_score",
+      "type": "number",
+      "label": "人员检测置信度"
+    }
+  ],
+  "actions": [
+    {
+      "id": "ppe_reset_alarm",
+      "label": "复位穿戴告警",
+      "style": "primary",
+      "help": "清除所有人员的已确认状态与证据队列；正在发生的违规会重新累计。"
+    },
+    {
+      "id": "ppe_sensitivity_up",
+      "label": "灵敏度 +",
+      "style": "default",
+      "help": "报警置信度门槛 +0.05（上限 0.95）；画面上会显示当前门槛。"
+    },
+    {
+      "id": "ppe_sensitivity_down",
+      "label": "灵敏度 -",
+      "style": "default",
+      "help": "报警置信度门槛 -0.05（下限 0.50）；画面上会显示当前门槛。"
+    },
+    {
+      "id": "ppe_toggle_debug",
+      "label": "调试信息开关",
+      "style": "default",
+      "help": "隐藏/显示左上角候选、丢弃、灵敏度等调试文字；检测框与人号徽标保留。"
+    }
+  ]
+}

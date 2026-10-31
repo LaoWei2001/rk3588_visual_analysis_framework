@@ -28,6 +28,7 @@ def console():
                   isolation_mode='host-route', conflicts=[], warnings=[], address_preexisting=False,
                   route_preexisting=False, address_owned=True, route_owned=True, applied_at=1)
     snapshots = {
+        '/api/auth/me': {'username': 'tester'},
         '/api/apps': [app],
         '/api/system/daily-reboot': dict(enabled=False, configured_enabled=False, time='04:00', installed=True,
             active=False, unit_enabled=False, next_run=None, timezone='Asia/Shanghai', current_time='',
@@ -722,3 +723,15 @@ def test_business_roi_balances_images_and_removes_empty_space_without_resizing_d
     sidebar.get_by_role('button', name='取消', exact=True).click()
     assert_roi_dimensions_unchanged(dialog, baseline)
     assert_roi_content_fits_without_scrolling(dialog)
+
+
+def test_stream_node_has_no_retired_channel_switches(console):
+    page, url, snapshots, _, _ = console
+    snapshots['/api/apps/demo/config']['channels'] = [dict(
+        id=0, enable=False, infer_enable=False, swap_rb=True, models=[],
+        stream=dict(src_type='file', url='assets/isolated.mp4'))]
+    page.goto(url + '/editor/demo')
+    page.locator('.react-flow__node-stream').click()
+    pw_api.expect(page.get_by_text('通道编号 (channel_id)', exact=True)).to_be_visible()
+    for label in ['启用通道', '允许模型推理', '显示红蓝互换']:
+        pw_api.expect(page.get_by_role('checkbox', name=label, exact=True)).to_have_count(0)

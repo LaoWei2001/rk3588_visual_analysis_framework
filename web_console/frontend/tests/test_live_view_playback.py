@@ -179,7 +179,7 @@ def test_real_disconnect_preserves_frame_and_recovers(playback):
     assert 'retry_ahead_ms' in state['queries'][-1]
 
 
-def test_starvation_accumulates_reserve_without_reconnect(playback):
+def test_starvation_recovers_low_latency_without_reconnect(playback):
     page, _, state = playback
     page.evaluate('''() => {
         window.starvedVideo = document.querySelector('video');
@@ -194,7 +194,11 @@ def test_starvation_accumulates_reserve_without_reconnect(playback):
     position = page.evaluate('starvedVideo.currentTime')
     state['paused'] = False
     page.wait_for_function('window.resumeAhead !== null && starvedVideo.currentTime > 4', timeout=8000)
-    assert page.evaluate('window.resumeAhead') >= .9
+    assert .3 <= page.evaluate('window.resumeAhead') < 1
+    # The reserve is temporary: healthy playback must return to the live edge.
+    page.wait_for_timeout(12000)
+    ahead = page.locator('video').evaluate('v => v.buffered.end(v.buffered.length - 1) - v.currentTime')
+    assert ahead < .7, ahead
     assert state['requests'] == 1
     assert page.evaluate('document.querySelector("video") === starvedVideo && !starvedVideo.error')
     assert page.evaluate('starvedVideo.currentTime') > position

@@ -1,24 +1,20 @@
 import asyncio
-import os
-import pty
-import struct
-import fcntl
-import termios
-import signal
-import shutil
+import json
 import logging
+import re
+import secrets
+import struct
+import time
 
 from fastapi import APIRouter, WebSocket
-
 from services.auth_service import get_session
-from services.data_dir import APPS_ROOT
+from services.terminal_sessions import terminal_sessions
 
 router = APIRouter()
-log = logging.getLogger("terminal")
-
-
-def _set_winsize(fd: int, rows: int, cols: int) -> None:
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+log = logging.getLogger("uvicorn.error")
+HEARTBEAT_INTERVAL = 15
+SESSION_ID = re.compile(r"^[a-f0-9]{32}$")
+RESIZE = re.compile(r"^\x1b\[resize:(\d+)x(\d+)$")
 
 
 @router.websocket("/ws/terminal")
@@ -27,133 +23,142 @@ async def websocket_terminal(websocket: WebSocket):
     if not get_session(token):
         await websocket.close(code=1008)
         return
-
-    await websocket.accept()
-
-    pid, fd = pty.fork()
-    if pid == 0:
-        # 子进程：尽量和板端 SSH 登录一致
-        os.environ["TERM"] = os.environ.get("TERM", "xterm-256color")
-        os.environ.setdefault("LANG", "C.UTF-8")
-        # GNU ls 默认不主动输出颜色。首次提示符出现前为当前交互 shell 注入别名，
-        # 让目录、普通文件、可执行文件等使用 xterm 的 ANSI 颜色区分。
-        color_ls = "alias ls='ls --color=auto'"
-        existing_prompt_command = os.environ.get("PROMPT_COMMAND", "")
-        os.environ["PROMPT_COMMAND"] = (
-            f"{color_ls};{existing_prompt_command}" if existing_prompt_command else color_ls
-        )
-        try:
-            os.chdir(APPS_ROOT)
-        except Exception:
-            pass
-        shell_path = shutil.which("bash") or "/bin/sh"
-        os.execlp(shell_path, shell_path, "-l")
-        os._exit(1)
-
-    loop = asyncio.get_event_loop()
-
-    # 先给一个合法初始尺寸，避免 vim 等程序因 0x0 卡死；前端连上后会发真实尺寸覆盖。
-    _set_winsize(fd, 40, 120)
-    os.set_blocking(fd, False)
-
-    # PTY master 是字符设备，用 loop.add_reader 直接读裸 fd，再用队列按序回传 websocket。
-    out_queue: "asyncio.Queue[bytes | None]" = asyncio.Queue()
-
-    def on_readable():
-        try:
-            data = os.read(fd, 65536)
-        except BlockingIOError:
-            return
-        except OSError:
-            data = b""  # slave 关闭（子进程退出）会抛 EIO
-        if not data:
-            try:
-                loop.remove_reader(fd)
-            except Exception:
-                pass
-            out_queue.put_nowait(None)  # EOF 哨兵
-            return
-        out_queue.put_nowait(data)
-
-    loop.add_reader(fd, on_readable)
-
-    async def pty_to_ws():
-        while True:
-            chunk = await out_queue.get()
-            if chunk is None:
-                break
-            try:
-                await websocket.send_bytes(chunk)
-            except Exception:
-                break
-
-    def safe_write(data: bytes):
-        try:
-            os.write(fd, data)
-        except (BlockingIOError, OSError):
-            pass
-
-    async def ws_to_pty():
-        while True:
-            try:
-                data = await websocket.receive()
-            except Exception:
-                break
-
-            if data["type"] == "websocket.disconnect":
-                break
-
-            if data.get("bytes") is not None:
-                safe_write(data["bytes"])
-            elif data.get("text") is not None:
-                text = data["text"]
-                if text.startswith("\x1b[resize:"):
-                    try:
-                        rows_s, cols_s = text[len("\x1b[resize:"):].split("x")
-                        rows, cols = int(rows_s), int(cols_s)
-                        # 忽略非法/退化尺寸，否则 SIGWINCH 会把 vim 重绘进 0 宽视口
-                        if rows >= 1 and cols >= 1:
-                            _set_winsize(fd, rows, cols)
-                            os.kill(pid, signal.SIGWINCH)
-                    except Exception:
-                        pass
-                else:
-                    safe_write(text.encode())
-
-    pty_task = asyncio.create_task(pty_to_ws())
-    input_task = asyncio.create_task(ws_to_pty())
-
+    managed = websocket.query_params.get("protocol") == "2"
+    session_id = websocket.query_params.get("sid", "") if managed else secrets.token_hex(16)
     try:
-        # 任一方向结束（子进程退出或 ws 断开）就收尾
-        await asyncio.wait(
-            {pty_task, input_task}, return_when=asyncio.FIRST_COMPLETED
-        )
-    finally:
-        for t in (pty_task, input_task):
-            t.cancel()
-        try:
-            loop.remove_reader(fd)
-        except Exception:
-            pass
-        # 关闭 master：给 PTY 前台进程组发 SIGHUP，vim/top 等前台程序随之退出
-        try:
-            os.close(fd)
-        except Exception:
-            pass
-        # 先 SIGHUP 让 bash 挂断并清理自己的作业，给一点时间，再 SIGKILL 兜底整个进程组
-        try:
-            os.kill(pid, signal.SIGHUP)
-        except Exception:
-            pass
-        await asyncio.sleep(0.1)
-        try:
-            os.killpg(pid, signal.SIGKILL)  # pty.fork 已 setsid，pid 即进程组长
-        except Exception:
+        offset = int(websocket.query_params.get("offset", "0")) if managed else 0
+        if not SESSION_ID.fullmatch(session_id) or offset < 0:
+            raise ValueError()
+    except ValueError:
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    session, resumed = None, False
+    try:
+        session, resumed = terminal_sessions.acquire(
+            token, session_id, managed and websocket.query_params.get("resume") == "1")
+        await session.attach(websocket, offset)
+    except PermissionError:
+        await websocket.close(code=1008, reason="terminal owner mismatch")
+        return
+    except (LookupError, ValueError):
+        if session is not None and not resumed:
+            await session.close("invalid-initial-offset")
+        await websocket.close(code=4004, reason="terminal session unavailable")
+        return
+    except OverflowError:
+        await websocket.close(code=1013, reason="terminal session limit")
+        return
+
+    started = time.monotonic()
+    close_code, cause = 1000, "transport-closed"
+    send_lock = asyncio.Lock()
+
+    async def control(kind, **fields):
+        async with send_lock:
+            await websocket.send_text(json.dumps({"type": f"terminal.{kind}", **fields}))
+
+    async def send_output():
+        cursor = offset
+        while not session.closed and session.socket is websocket:
+            session.changed.clear()
+            cursor = max(cursor, session.acked)
+            for end, data in session.pending(cursor):
+                if session.socket is not websocket or session.closed:
+                    return "replaced"
+                async with send_lock:
+                    await websocket.send_bytes((struct.pack("!Q", end) if managed else b"") + data)
+                cursor = end
+                if not managed:
+                    session.ack(end)
+            if session.eof and cursor == session.end and session.acked == session.end:
+                if managed:
+                    await control("exit", exit_code=session.exit_code)
+                await session.close("shell-exited")
+                return "shell-exited"
+            await session.changed.wait()
+        return "session-closed"
+
+    async def receive_input():
+        nonlocal close_code
+        while session.socket is websocket and not session.closed:
+            data = await websocket.receive()
+            if session.socket is not websocket or session.closed:
+                return "replaced"
+            if data["type"] == "websocket.disconnect":
+                close_code = data.get("code", 1006)
+                return "websocket-disconnect"
+            binary, text = data.get("bytes"), data.get("text")
+            if binary is not None and managed:
+                try:
+                    if len(binary) > 4096:
+                        raise ValueError()
+                    message = json.loads(binary)
+                    kind = message["type"]
+                    if kind in ("ack", "pong"):
+                        session.ack(message["offset"])
+                    elif kind == "close":
+                        await session.close("client-close")
+                        return "client-close"
+                    else:
+                        raise ValueError()
+                except (ValueError, KeyError, TypeError, UnicodeError):
+                    close_code = 1002
+                    await websocket.close(code=1002, reason="invalid terminal control")
+                    return "protocol-error"
+            elif text is not None:
+                match = RESIZE.fullmatch(text)
+                if match:
+                    session.resize(*map(int, match.groups()))
+                else:
+                    try:
+                        session.feed_input(text.encode())
+                    except ValueError:
+                        close_code = 1009
+                        await websocket.close(code=1009, reason="terminal input limit")
+                        return "input-limit"
+            elif binary is not None:
+                try:
+                    session.feed_input(binary)
+                except ValueError:
+                    close_code = 1009
+                    await websocket.close(code=1009, reason="terminal input limit")
+                    return "input-limit"
+        return "replaced"
+
+    async def heartbeat():
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
+            if session.closed or session.socket is not websocket:
+                return "session-closed"
+            await control("ping")
+
+    tasks = []
+    try:
+        if managed:
+            await control("ready", resumed=resumed, offset=offset)
+        log.info("[Terminal] session=%s event=%s offset=%d pending=%d",
+                 session_id[:8], "resumed" if resumed else "attached", offset, session.buffered)
+        tasks = [asyncio.create_task(send_output()), asyncio.create_task(receive_input())]
+        if managed:
+            tasks.append(asyncio.create_task(heartbeat()))
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
             try:
-                os.kill(pid, signal.SIGKILL)
-            except Exception:
-                pass
-        try:
-            os.waitpid(pid, 0)  # 回收 bash，避免僵尸；其子进程由 init 回收
-        except Exception:
-            pass
+                cause = task.result()
+            except Exception as exc:
+                cause = type(exc).__name__
+                close_code = getattr(exc, "code", 1006)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if session.closing:
+            await asyncio.shield(session.closing)
+        if managed:
+            session.detach(websocket)
+        else:
+            await session.close("legacy-disconnect")
+        log.info("[Terminal] session=%s event=detached cause=%s code=%s age=%.1fs output=%d ack=%d pending=%d",
+                 session_id[:8], cause, close_code, time.monotonic()-started,
+                 session.end, session.acked, session.buffered)

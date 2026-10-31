@@ -125,6 +125,8 @@ struct InferenceRuntime
     std::vector<std::unique_ptr<InferenceTaskQueue>> task_queues;
     std::atomic<bool> running{false};
     std::atomic<bool> chn_reload_stop[MAX_CHANNEL_NUM]{};
+    // Requested placement of active contexts; retained when reload rolls back.
+    std::atomic<int> auto_core_plan[MAX_CHANNEL_NUM]{};
     pthread_mutex_t chn_reload_mtx[MAX_CHANNEL_NUM];
     std::vector<pthread_t> worker_tids;
     std::vector<unsigned char> worker_started;

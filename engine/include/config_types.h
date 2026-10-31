@@ -126,7 +126,7 @@ struct ChannelModelConfig
     float obj_thresh = 0.3f;
     float nms_thresh = 0.45f;
     std::vector<std::string> detect_classes;
-    int npu_core = -1; /* -1=RKNN runtime 自动调度, 0/1/2=固定 NPU 核 */
+    int npu_core = -1; /* -1=框架全局规划自动核心池, 0/1/2=固定 NPU 核 */
 };
 
 inline bool operator==(const ChannelModelConfig &a, const ChannelModelConfig &b)

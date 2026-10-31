@@ -1,33 +1,6 @@
-import axios from 'axios'
+import { api } from './http'
 import { useAuthStore } from '../store/authStore'
-
-
-const captureApi = axios.create({ baseURL: '/api/video-capture' })
-
-captureApi.interceptors.request.use(config => {
-  const token = useAuthStore.getState().token
-  if (token) config.headers.Authorization = `Bearer ${token}`
-  return config
-})
-
-captureApi.interceptors.response.use(
-  response => response,
-  error => {
-    if (error.response?.status === 401) {
-      useAuthStore.getState().clearAuth()
-      if (!window.location.pathname.startsWith('/login')) window.location.href = '/login'
-    }
-    return Promise.reject(error)
-  },
-)
-
-export const videoCaptureErrorMessage = (error: unknown): string => {
-  if (axios.isAxiosError(error)) {
-    const detail = error.response?.data?.detail ?? error.response?.data?.message
-    return typeof detail === 'string' ? detail : error.message
-  }
-  return error instanceof Error ? error.message : String(error)
-}
+export { apiErrorMessage as videoCaptureErrorMessage } from './http'
 
 export type CaptureSourceType = 'rtsp' | 'usb'
 
@@ -97,30 +70,30 @@ export interface CaptureStatus {
 }
 
 export const fetchCaptureDevices = () =>
-  captureApi.get<{ devices: UsbCaptureDevice[] }>('/devices').then(response => response.data.devices)
+  api.get<{ devices: UsbCaptureDevice[] }>('/video-capture/devices').then(response => response.data.devices)
 
 export const fetchCaptureStorage = (path: string) =>
-  captureApi.get<CaptureStorageInfo>('/storage', { params: { path } }).then(response => response.data)
+  api.get<CaptureStorageInfo>('/video-capture/storage', { params: { path } }).then(response => response.data)
 
 export const fetchCaptureStatus = () =>
-  captureApi.get<CaptureStatus>('/status').then(response => response.data)
+  api.get<CaptureStatus>('/video-capture/status').then(response => response.data)
 
 export const startCapturePreview = (source: CaptureSourceInput) =>
-  captureApi.post<CaptureStatus>('/preview/start', source).then(response => response.data)
+  api.post<CaptureStatus>('/video-capture/preview/start', source).then(response => response.data)
 
 export const stopCapturePreview = () =>
-  captureApi.post<CaptureStatus>('/preview/stop').then(response => response.data)
+  api.post<CaptureStatus>('/video-capture/preview/stop').then(response => response.data)
 
 export const startCaptureRecording = (
   source: CaptureSourceInput,
   maxFileSizeMb: number,
-) => captureApi.post<CaptureStatus>('/recordings/start', {
+) => api.post<CaptureStatus>('/video-capture/recordings/start', {
   ...source,
   max_file_size_mb: maxFileSizeMb,
 }).then(response => response.data)
 
 export const stopCaptureRecording = () =>
-  captureApi.post<CaptureStatus>('/recordings/stop').then(response => response.data)
+  api.post<CaptureStatus>('/video-capture/recordings/stop').then(response => response.data)
 
 export const captureRecordingUrl = (downloadId: string): string =>
   `/api/video-capture/recordings/${encodeURIComponent(downloadId)}/stream`

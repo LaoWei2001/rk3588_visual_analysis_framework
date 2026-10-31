@@ -53,7 +53,7 @@ void filter_results_to_inference_roi(std::vector<AlgoResult> &results, const Inf
             polygon.emplace_back(cvRound(point.first * result.depth_map.cols), cvRound(point.second * result.depth_map.rows));
         cv::Mat keep = cv::Mat::zeros(result.depth_map.size(), CV_8UC1);
         cv::fillPoly(keep, std::vector<std::vector<cv::Point>>{polygon}, cv::Scalar(255));
-        cv::Mat clipped = cv::Mat::zeros(result.depth_map.size(), CV_32FC1);
+        cv::Mat clipped(result.depth_map.size(), CV_32FC1, cv::Scalar(result.invalid_depth_value()));
         result.depth_map.copyTo(clipped, keep);
         result.depth_map = std::move(clipped);
     }

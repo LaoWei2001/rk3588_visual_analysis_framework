@@ -50,6 +50,8 @@ struct TargetQuery
     float min_score = 0.0f;
     int roi = ROI_FRAME;
     TargetAnchor anchor = TargetAnchor::Center;
+    std::string model_id;   // optional: configured model node ID
+    std::string model_type; // optional: yolov8_obb / yolov5_seg / ...
 };
 
 enum class TargetQueryStatus
@@ -137,10 +139,19 @@ struct ChannelContext
     // 推理结果
     std::vector<AlgoResult> *results = nullptr;
 
-    /* 与 ctx->results 同帧，借用指针仅在当前回调有效。空 model_id 取首个深度模型。
-     * 示例：if (auto *d = ctx->depth_result()) d->depth_median(person.box); */
+    /* 查询当前帧分割掩码；空 model_id 取首个分割模型。返回指针仅在当前回调有效。 */
+    const AlgoResult *segmentation_result(const std::string &model_id = "") const
+    {
+        if (!inference_valid || !infer_enabled) return nullptr;
+        if (results) for (const auto &result : *results)
+            if (!result.boxMask.empty() && (model_id.empty() || result.model_id == model_id)) return &result;
+        return nullptr;
+    }
+
+    /* 深度结果：Metric 为米，RelativeInverse 为相对逆深度；指针仅在当前回调有效。 */
     const AlgoResult *depth_result(const std::string &model_id = "") const
     {
+        if (!inference_valid || !infer_enabled) return nullptr;
         if (results)
             for (const auto &result : *results)
                 if (result.is_depth() && (model_id.empty() || result.model_id == model_id)) return &result;

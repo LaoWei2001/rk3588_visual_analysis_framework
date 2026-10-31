@@ -3,9 +3,11 @@
     "model_types": [
         "yolov5",
         "yolov8_det",
+        "yolov8_obb",
         "yolov8_pose",
         "yolo26_pose",
         "yolo26_depth",
+        "zip_depth",
         "yolov5_seg"
     ]
 }

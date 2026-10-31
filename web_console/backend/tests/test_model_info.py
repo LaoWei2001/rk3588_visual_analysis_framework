@@ -94,18 +94,17 @@ def test_symlink_outside_assets_is_rejected(app, tmp_path):
 
 
 @pytest.mark.parametrize("target", ["default", "named"])
-def test_mixed_input_size_rejected_before_writing(app, monkeypatch, target):
+def test_mixed_input_sizes_supported_in_one_channel(app, monkeypatch, target):
     monkeypatch.setattr(model_info, "_probe", lambda _, __, path: detector(960 if path.stem == "large" else 640))
     destination = app / "assets" / ("config.json" if target == "default" else "custom.json")
     destination.write_text('{"old":true}')
-    with pytest.raises(HTTPException) as error:
-        if target == "default":
-            asyncio.run(config_io.save_config("demo", config("small", "large")))
-        else:
-            asyncio.run(config_io.save_config_file("demo", "assets/custom.json", config("small", "large")))
-    assert error.value.status_code == 422
-    assert "640×640" in error.value.detail and "960×960" in error.value.detail
-    assert json.loads(destination.read_text()) == {"old": True}
+    requested = config("small", "large")
+    if target == "default":
+        asyncio.run(config_io.save_config("demo", requested))
+    else:
+        asyncio.run(config_io.save_config_file("demo", "assets/custom.json", requested))
+    saved = json.loads(destination.read_text())
+    assert saved["channels"][0]["models"] == requested["channels"][0]["models"]
 
 
 def test_disabled_models_and_empty_draft_need_no_probe(app, monkeypatch):
@@ -116,29 +115,32 @@ def test_disabled_models_and_empty_draft_need_no_probe(app, monkeypatch):
     model_info.validate_model_config(app, disabled)
     disabled["channels"][0]["models"][0]["enable"] = True
     disabled["channels"][0]["infer_enable"] = False
-    model_info.validate_model_config(app, disabled)
+    with pytest.raises(ValueError):
+        model_info.validate_model_config(app, disabled)
 
 
 @pytest.mark.parametrize("shape,fmt", [([1, 1, 640, 640], "NCHW"),
                                        ([1, 352, 640, 1], "NHWC"),
                                        ([1, 160, 160], "UNDEFINED"),
                                        ([160, 160], "UNDEFINED")])
-def test_depth_output_contract(shape, fmt):
+@pytest.mark.parametrize("model_type", ["yolo26_depth", "zip_depth"])
+def test_depth_output_contract(shape, fmt, model_type):
     output = {"shape": shape, "format": fmt, "type": 0, "elements": 1}
     for size in shape:
         output["elements"] *= size
     info = {"width": 640, "height": 352 if fmt == "NHWC" else 640, "format": "NCHW", "outputs": [output]}
-    assert model_info.compatibility_error(info, "yolo26_depth") == ""
+    assert model_info.compatibility_error(info, model_type) == ""
     output["elements"] += 1
-    assert "元素" in model_info.compatibility_error(info, "yolo26_depth")
+    assert "元素" in model_info.compatibility_error(info, model_type)
 
 
-def test_depth_can_share_channel_with_different_detection_resolution(app, monkeypatch):
+@pytest.mark.parametrize("model_type", ["yolo26_depth", "zip_depth"])
+def test_depth_can_share_channel_with_different_detection_resolution(app, monkeypatch, model_type):
     depth = {"ok": True, "width": 640, "height": 640, "format": "NCHW", "outputs": [
         {"format": "NCHW", "shape": [1, 1, 640, 640], "elements": 409600, "type": 0}]}
     monkeypatch.setattr(model_info, "_probe", lambda _, __, path: detector(960) if path.stem == "large" else depth)
     both = config("small", "large")
-    both["channels"][0]["models"][0]["model_type"] = "yolo26_depth"
+    both["channels"][0]["models"][0]["model_type"] = model_type
     model_info.validate_model_config(app, both)
     both["channels"][0]["models"].reverse()
     model_info.validate_model_config(app, both)
@@ -186,6 +188,8 @@ def test_segmentation_proto_size_guard():
         ])
     outputs.append({"format": "NCHW", "shape": [1, 32, 240, 240]})
     info = {"width": 960, "height": 960, "format": "NHWC", "outputs": outputs}
+    assert not model_info.compatibility_error(info, "yolov5_seg")
+    outputs[-1]["shape"][1] = 31
     assert "proto" in model_info.compatibility_error(info, "yolov5_seg")
     outputs[-1]["shape"] = [1, 32, 160, 160]
     assert not model_info.compatibility_error(info, "yolov5_seg")
@@ -258,3 +262,54 @@ def test_stopped_runtime_does_not_open_socket(app, monkeypatch):
     monkeypatch.setattr(model_info.pm, "get_status", lambda _: {"status": "stopped", "config": None})
     monkeypatch.setattr(model_info.socket, "socket", lambda *args: pytest.fail("socket should not open"))
     assert model_info.runtime_status(app, "demo") == {"status": "stopped", "config": None, "channels": []}
+
+
+def test_obb_tensor_contract():
+    import copy
+    outputs = [{"shape": [1, 79, 640 // stride, 640 // stride], "format": "NCHW"}
+               for stride in (8, 16, 32)]
+    outputs.append({"shape": [1, 1, 8400], "elements": 8400})
+    info = {"width": 640, "height": 640, "format": "NHWC", "outputs": outputs}
+    assert not model_info.compatibility_error(info, "yolov8_obb")
+    assert model_info.compatibility_error(info, "yolov8_det")
+    for change in ("angle", "classes", "layout", "count"):
+        bad = copy.deepcopy(info)
+        if change == "angle": bad["outputs"][3]["elements"] = 8399
+        if change == "classes": bad["outputs"][1]["shape"][1] = 80
+        if change == "layout": bad["outputs"][0]["format"] = "NHWC"
+        if change == "count": bad["outputs"].pop()
+        assert model_info.compatibility_error(bad, "yolov8_obb")
+
+
+def test_segmentation_dynamic_prototype_sizes():
+    for width, height in [(640, 640), (960, 960), (768, 1088)]:
+        outputs = []
+        for stride in (8, 16, 32):
+            for channels in (255, 96):
+                outputs.append({"shape": [1, channels, height // stride, width // stride], "format": "NCHW"})
+        outputs.append({"shape": [1, 32, height // 4, width // 4], "format": "NCHW"})
+        info = {"width": width, "height": height, "format": "NHWC", "outputs": outputs}
+        assert not model_info.compatibility_error(info, "yolov5_seg")
+        outputs[-1]["shape"][2] = 0
+        assert model_info.compatibility_error(info, "yolov5_seg")
+
+
+@pytest.mark.parametrize("target", ["default", "named"])
+def test_retired_stream_switches_are_discarded_on_load_and_save(app, monkeypatch, target):
+    monkeypatch.setattr(model_info, "_probe", lambda *args: detector())
+    requested = config("small")
+    channel = requested["channels"][0]
+    channel.update(enable=False, infer_enable=False, swap_rb=True)
+    requested["global"] = {"enable_display": False}
+    destination = app / "assets" / ("config.json" if target == "default" else "legacy.json")
+    destination.write_text(json.dumps(requested))
+    loaded = asyncio.run(config_io.get_config("demo") if target == "default" else
+                         config_io.load_config_file("demo", "assets/legacy.json"))
+    assert not {"enable", "infer_enable", "swap_rb"} & loaded["channels"][0].keys()
+    if target == "default": asyncio.run(config_io.save_config("demo", requested))
+    else: asyncio.run(config_io.save_config_file("demo", "assets/legacy.json", requested))
+    saved = json.loads(destination.read_text())
+    assert not {"enable", "infer_enable", "swap_rb"} & saved["channels"][0].keys()
+    assert saved["channels"][0]["models"] == channel["models"]
+    assert saved["global"] == requested["global"]
+    assert channel["enable"] is False  # caller's input is not mutated

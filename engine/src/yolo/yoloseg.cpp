@@ -1,4 +1,7 @@
 #include "yoloseg.h"
+#include "inference/npu_execution.h"
+#include "rknn_query_utils.h"
+#include "detection_order.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -27,7 +30,7 @@ static int nms_seg(int validCount, std::vector<float> &outputLocations, std::vec
 {
     for (int i = 0; i < validCount; ++i)
     {
-        if (order[i] == -1 || classIds[i] != filterId)
+        if (order[i] == -1 || classIds[order[i]] != filterId)
         {
             continue;
         }
@@ -36,7 +39,7 @@ static int nms_seg(int validCount, std::vector<float> &outputLocations, std::vec
         {
             int m = order[j];
             if (m == -1 ||
-                classIds[i] != filterId) // Original standalone bug fixed: should check classIds[j] or just use filterId
+                classIds[m] != filterId)
             {
                 continue;
             }
@@ -61,39 +64,6 @@ static int nms_seg(int validCount, std::vector<float> &outputLocations, std::vec
     return 0;
 }
 
-static int quick_sort_indice_inverse(std::vector<float> &input, int left, int right, std::vector<int> &indices)
-{
-    float key;
-    int key_index;
-    int low = left;
-    int high = right;
-    if (left < right)
-    {
-        key_index = indices[left];
-        key = input[left];
-        while (low < high)
-        {
-            while (low < high && input[high] <= key)
-            {
-                high--;
-            }
-            input[low] = input[high];
-            indices[low] = indices[high];
-            while (low < high && input[low] >= key)
-            {
-                low++;
-            }
-            input[high] = input[low];
-            indices[high] = indices[low];
-        }
-        input[low] = key;
-        indices[low] = key_index;
-        quick_sort_indice_inverse(input, left, low - 1, indices);
-        quick_sort_indice_inverse(input, low + 1, right, indices);
-    }
-    return low;
-}
-
 // qnt_f32_to_affine / deqnt_affine_to_f32 使用 yolo_utils.h 中的全局 inline 版本
 
 YoloSeg::YoloSeg(const std::string &model_path, const std::string &label_path, int core_mask, float obj_thresh,
@@ -102,9 +72,19 @@ YoloSeg::YoloSeg(const std::string &model_path, const std::string &label_path, i
     obj_thresh_ = obj_thresh;
     nms_thresh_ = nms_thresh;
     load_labels(label_path);
-    init_rknn(model_path, core_mask);
-    query_model_info();
-    init_zero_copy_input();
+    try
+    {
+        init_rknn(model_path, core_mask);
+        query_model_info();
+        init_zero_copy_input();
+    }
+    catch (...)
+    {
+        if (input_rga_handle_) releasebuffer_handle(static_cast<rga_buffer_handle_t>(input_rga_handle_));
+        if (in_mem_ && ctx_) rknn_destroy_mem(ctx_, in_mem_);
+        if (ctx_) rknn_destroy(ctx_);
+        throw;
+    }
 }
 
 YoloSeg::~YoloSeg()
@@ -147,6 +127,7 @@ void YoloSeg::init_rknn(const std::string &model_path, int core_mask)
         throw std::runtime_error("RKNN init failed");
     }
     ret = rknn_set_core_mask(ctx_, (rknn_core_mask)core_mask);
+    npu_core_mask_ = ret < 0 ? 0 : core_mask;
     if (ret < 0)
     {
         printf("[YoloSeg] warn: set core mask failed, fallback single core\n");
@@ -159,35 +140,50 @@ void YoloSeg::init_rknn(const std::string &model_path, int core_mask)
 
 void YoloSeg::query_model_info()
 {
-    rknn_input_output_num io_num;
-    rknn_query(ctx_, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
+    rknn_input_output_num io_num{};
+    model_io::query(ctx_, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
+    model_io::validate_io(io_num);
+    if (io_num.n_output != 7) throw std::runtime_error("Unsupported yoloseg output count");
     io_num_in_ = io_num.n_input;
     io_num_out_ = io_num.n_output;
 
     memset(&in_attr_, 0, sizeof(in_attr_));
     in_attr_.index = 0;
-    rknn_query(ctx_, RKNN_QUERY_INPUT_ATTR, &in_attr_, sizeof(in_attr_));
+    model_io::query(ctx_, RKNN_QUERY_INPUT_ATTR, &in_attr_, sizeof(in_attr_));
+    model_io::validate_image(in_attr_);
+    if (in_attr_.fmt != RKNN_TENSOR_NHWC) throw std::runtime_error("This decoder requires NHWC input");
     model_w_ = in_attr_.dims[2]; // nhwc
     model_h_ = in_attr_.dims[1];
 
     out_attrs_.clear();
-    bool all_float = true;
     for (int i = 0; i < io_num_out_; i++)
     {
-        rknn_tensor_attr attr;
+        rknn_tensor_attr attr{};
         memset(&attr, 0, sizeof(attr));
         attr.index = i;
-        rknn_query(ctx_, RKNN_QUERY_OUTPUT_ATTR, &attr, sizeof(attr));
+        model_io::query(ctx_, RKNN_QUERY_OUTPUT_ATTR, &attr, sizeof(attr));
+        if (attr.n_dims != 4 || !attr.n_elems) throw std::runtime_error("Invalid detection output tensor");
         out_attrs_.push_back(attr);
 
-        if (attr.type != RKNN_TENSOR_FLOAT16 && attr.type != RKNN_TENSOR_FLOAT32)
-        {
-            all_float = false;
-        }
     }
 
-    is_quant_ = !all_float;
-    proto_cache_.resize(PROTO_CHANNEL * PROTO_HEIGHT * PROTO_WEIGHT);
+    is_quant_ = std::all_of(out_attrs_.begin(), out_attrs_.end(), [](const rknn_tensor_attr &a) {
+        return a.type == RKNN_TENSOR_INT8 && a.qnt_type == RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC;
+    });
+    const auto &proto = out_attrs_.at(6);
+    model_io::validate_proto(proto, model_w_, model_h_);
+    proto_channels_ = proto.dims[1]; proto_height_ = proto.dims[2]; proto_width_ = proto.dims[3];
+    for (int i = 0; i < 3; ++i) {
+        const auto &box = out_attrs_[i * 2], &coeff = out_attrs_[i * 2 + 1];
+        const unsigned h = model_h_ / (8 << i), w = model_w_ / (8 << i);
+        if (model_h_ % (8 << i) || model_w_ % (8 << i) || box.fmt != RKNN_TENSOR_NCHW ||
+            box.dims[0] != 1 || box.dims[1] <= 15 || box.dims[1] % 3 ||
+            box.dims[1] != out_attrs_[0].dims[1] || box.dims[2] != h || box.dims[3] != w ||
+            coeff.fmt != RKNN_TENSOR_NCHW || coeff.dims[0] != 1 ||
+            coeff.dims[1] != unsigned(3 * proto_channels_) || coeff.dims[2] != h || coeff.dims[3] != w)
+            throw std::runtime_error("Unsupported segmentation detection/mask head");
+    }
+    proto_cache_.resize(proto_channels_ * proto_height_ * proto_width_);
 
     if (!out_attrs_.empty())
     {
@@ -223,6 +219,7 @@ bool YoloSeg::init_zero_copy_input()
     in_mem_ = rknn_create_mem(ctx_, alloc_size);
     if (!in_mem_ || !in_mem_->virt_addr)
     {
+        if (in_mem_) rknn_destroy_mem(ctx_, in_mem_);
         in_mem_ = nullptr;
         printf("[YoloSeg] zero-copy input disabled: rknn_create_mem failed\n");
         return false;
@@ -309,7 +306,7 @@ int YoloSeg::process_i8(rknn_output *all_input, int input_id, const int *anchor,
         int8_t *input_proto = (int8_t *)all_input[input_id].buf;
         int32_t zp_proto = out_attrs_[input_id].zp;
         float scale_proto = out_attrs_[input_id].scale;
-        for (int i = 0; i < PROTO_CHANNEL * PROTO_HEIGHT * PROTO_WEIGHT; i++)
+        for (int i = 0; i < proto_channels_ * proto_height_ * proto_width_; i++)
         {
             proto[i] = deqnt_affine_to_f32(input_proto[i], zp_proto, scale_proto);
         }
@@ -335,7 +332,7 @@ int YoloSeg::process_i8(rknn_output *all_input, int input_id, const int *anchor,
                 if (box_confidence >= thres_i8)
                 {
                     int offset = (prop_box_size * a) * grid_len + i * grid_w + j;
-                    int offset_seg = (PROTO_CHANNEL * a) * grid_len + i * grid_w + j;
+                    int offset_seg = (proto_channels_ * a) * grid_len + i * grid_w + j;
                     int8_t *in_ptr = input + offset;
                     int8_t *in_ptr_seg = input_seg + offset_seg;
 
@@ -367,7 +364,7 @@ int YoloSeg::process_i8(rknn_output *all_input, int input_id, const int *anchor,
                     float limit_score = box_conf_f32 * class_prob_f32;
                     if (limit_score > threshold)
                     {
-                        for (int k = 0; k < PROTO_CHANNEL; k++)
+                        for (int k = 0; k < proto_channels_; k++)
                         {
                             float seg_element_fp = deqnt_affine_to_f32(in_ptr_seg[(k)*grid_len], zp_seg, scale_seg);
                             segments.push_back(seg_element_fp);
@@ -405,7 +402,7 @@ int YoloSeg::process_fp32(rknn_output *all_input, int input_id, const int *ancho
     if (input_id == 6)
     {
         float *input_proto = (float *)all_input[input_id].buf;
-        for (int i = 0; i < PROTO_CHANNEL * PROTO_HEIGHT * PROTO_WEIGHT; i++)
+        for (int i = 0; i < proto_channels_ * proto_height_ * proto_width_; i++)
         {
             proto[i] = input_proto[i];
         }
@@ -425,7 +422,7 @@ int YoloSeg::process_fp32(rknn_output *all_input, int input_id, const int *ancho
                 if (box_confidence >= threshold)
                 {
                     int offset = (prop_box_size * a) * grid_len + i * grid_w + j;
-                    int offset_seg = (PROTO_CHANNEL * a) * grid_len + i * grid_w + j;
+                    int offset_seg = (proto_channels_ * a) * grid_len + i * grid_w + j;
                     float *in_ptr = input + offset;
                     float *in_ptr_seg = input_seg + offset_seg;
 
@@ -454,7 +451,7 @@ int YoloSeg::process_fp32(rknn_output *all_input, int input_id, const int *ancho
                     float limit_score = maxClassProbs * box_confidence;
                     if (limit_score > threshold)
                     {
-                        for (int k = 0; k < PROTO_CHANNEL; k++)
+                        for (int k = 0; k < proto_channels_; k++)
                         {
                             float seg_element_f32 = in_ptr_seg[(k)*grid_len];
                             segments.push_back(seg_element_f32);
@@ -488,7 +485,7 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
     filterBoxes.reserve(256 * 4);
     objProbs.reserve(256);
     classId.reserve(256);
-    filterSegments.reserve(256 * PROTO_CHANNEL);
+    filterSegments.reserve(256 * proto_channels_);
 
     int validCount = 0;
     int stride = 0;
@@ -541,7 +538,7 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
         indexArray.push_back(i);
     }
 
-    quick_sort_indice_inverse(objProbs, 0, validCount - 1, indexArray);
+    sort_detection_indices(objProbs, indexArray);
 
     std::set<int> class_set(std::begin(classId), std::end(classId));
 
@@ -568,9 +565,9 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
         int id = classId[n];
         float obj_conf = objProbs[n]; // Fixed to use proper index
 
-        for (int k = 0; k < PROTO_CHANNEL; k++)
+        for (int k = 0; k < proto_channels_; k++)
         {
-            filterSegments_by_nms.push_back(filterSegments[n * PROTO_CHANNEL + k]);
+            filterSegments_by_nms.push_back(filterSegments[n * proto_channels_ + k]);
         }
 
         validModelBoxes.push_back(cv::Rect_<float>(x1, y1, x2 - x1, y2 - y1));
@@ -604,8 +601,8 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
     /* Mask generation: OpenCV GEMM 会使用平台优化内核（RK3588 上可走 NEON），替代
      * boxes × 32 ×
      * 25600 的手写标量三重循环。 */
-    cv::Mat coefficients(boxes_num, PROTO_CHANNEL, CV_32FC1, filterSegments_by_nms.data());
-    cv::Mat proto_matrix(PROTO_CHANNEL, PROTO_HEIGHT * PROTO_WEIGHT, CV_32FC1, proto);
+    cv::Mat coefficients(boxes_num, proto_channels_, CV_32FC1, filterSegments_by_nms.data());
+    cv::Mat proto_matrix(proto_channels_, proto_height_ * proto_width_, CV_32FC1, proto);
     cv::Mat matmul_out;
     cv::gemm(coefficients, proto_matrix, 1.0, cv::Mat(), 0.0, matmul_out);
     float *matmul_ptr = reinterpret_cast<float *>(matmul_out.data);
@@ -614,7 +611,7 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
     cv::Mat seg_mask(boxes_num, model_h_ * model_w_, CV_32FC1);
     for (int b = 0; b < boxes_num; b++)
     {
-        cv::Mat src_image(PROTO_HEIGHT, PROTO_WEIGHT, CV_32F, &matmul_ptr[b * PROTO_HEIGHT * PROTO_WEIGHT]);
+        cv::Mat src_image(proto_height_, proto_width_, CV_32F, &matmul_ptr[b * proto_height_ * proto_width_]);
         cv::Mat dst_image = seg_mask.row(b).reshape(1, model_h_);
         cv::resize(src_image, dst_image, cv::Size(model_w_, model_h_), 0, 0, cv::INTER_LINEAR);
     }
@@ -685,6 +682,7 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
 
 bool YoloSeg::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat *perf)
 {
+    results.clear();
     if (frame.empty())
         return false;
 
@@ -693,6 +691,7 @@ bool YoloSeg::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfSt
     cv::Mat input_mat = preprocess(frame, lb);
     auto t1 = std::chrono::steady_clock::now();
 
+    npu::Execution execution(npu_core_mask_);
     if (zero_copy_input_enabled_ && in_mem_ && in_mem_->virt_addr)
     {
         if (in_copy_size_ > in_mem_->size)
@@ -710,10 +709,10 @@ bool YoloSeg::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfSt
         inputs[0].fmt = RKNN_TENSOR_NHWC;
         inputs[0].size = model_w_ * model_h_ * 3;
         inputs[0].buf = input_mat.data;
-        rknn_inputs_set(ctx_, 1, inputs);
+        if (execution.inputs_set(ctx_, 1, inputs) < 0) return false;
     }
 
-    if (rknn_run(ctx_, NULL) < 0)
+    if (execution.run(ctx_) < 0)
         return false;
     auto t2 = std::chrono::steady_clock::now();
 
@@ -725,7 +724,8 @@ bool YoloSeg::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfSt
         outputs[i].want_float = is_quant_ ? 0 : 1;
     }
 
-    if (rknn_outputs_get(ctx_, io_num_out_, outputs, NULL) < 0)
+    npu::Outputs output_lease(execution, ctx_, io_num_out_, outputs);
+    if (output_lease.get() < 0)
         return false;
 
     std::vector<AlgoResult> candidates;
@@ -737,7 +737,7 @@ bool YoloSeg::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfSt
 
     results.swap(candidates);
 
-    rknn_outputs_release(ctx_, io_num_out_, outputs);
+    if (output_lease.release() < 0) return false;
 
     if (perf)
     {
@@ -750,6 +750,7 @@ bool YoloSeg::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfSt
 
 bool YoloSeg::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *perf)
 {
+    results.clear();
     if (!zero_copy_input_enabled_ || !in_mem_ || in_mem_->fd < 0)
         return false;
 
@@ -757,7 +758,8 @@ bool YoloSeg::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *pe
 
     auto t1 = std::chrono::steady_clock::now();
 
-    if (rknn_run(ctx_, NULL) < 0)
+    npu::Execution execution(npu_core_mask_);
+    if (execution.run(ctx_) < 0)
     {
         printf("[YoloSeg] rknn_run (zero-copy) failed\n");
         return false;
@@ -771,7 +773,8 @@ bool YoloSeg::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *pe
         outputs[i].index = i;
         outputs[i].want_float = is_quant_ ? 0 : 1;
     }
-    if (rknn_outputs_get(ctx_, io_num_out_, outputs, NULL) < 0)
+    npu::Outputs output_lease(execution, ctx_, io_num_out_, outputs);
+    if (output_lease.get() < 0)
     {
         printf("[YoloSeg] rknn_outputs_get (zero-copy) failed\n");
         return false;
@@ -790,7 +793,7 @@ bool YoloSeg::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *pe
     candidates.reserve(128);
     post_process(outputs, lb, model_w_, model_h_, candidates);
 
-    rknn_outputs_release(ctx_, io_num_out_, outputs);
+    if (output_lease.release() < 0) return false;
 
     results.swap(candidates);
 

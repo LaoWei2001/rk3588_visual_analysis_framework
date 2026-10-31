@@ -14,6 +14,7 @@ import {
 } from '../api/client'
 import { getSrcType, SRC_TYPES } from '../utils/streamSource'
 import { MODEL_ID_MAX_LENGTH, validateModelId } from '../utils/modelId'
+import { FALLBACK_MODEL_TYPES, isDepthModel, modelCapabilities } from '../models/capabilities'
 import AssetPicker         from './AssetPicker'
 import NumberField         from './NumberField'
 import ReportForm          from './ReportForm'
@@ -313,20 +314,6 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
 
   return (
     <div className="ncp-form">
-      <div className="node-row">
-        <label className="node-toggle">
-          <input type="checkbox" checked={d.enable !== false} onChange={e => set('enable', e.target.checked)} />
-          启用通道
-        </label>
-        <label className="node-toggle">
-          <input type="checkbox" checked={d.infer_enable !== false} onChange={e => set('infer_enable', e.target.checked)} />
-          允许模型推理
-        </label>
-        <label className="node-toggle">
-          <input type="checkbox" checked={d.swap_rb === true} onChange={e => set('swap_rb', e.target.checked)} />
-          显示红蓝互换
-        </label>
-      </div>
       <F label="通道编号 (channel_id)">
         <NumberField min="0" def={0} value={d.channel_id} onChange={v => set('channel_id', v ?? 0)} />
       </F>
@@ -509,7 +496,7 @@ function ModelForm({ node, onUpdate, duplicateIdError, channelId }: {
   const assetsReady = useEditorStore(s => s.assetsStatus === 'ready'
     && s.assetsForApp === s.appName)
   const info       = useConsoleStore(s => s.info)
-  const modelTypes = info?.known_model_types ?? ['yolov8_det', 'yolov5', 'yolov8_pose', 'yolo26_pose', 'yolo26_depth', 'yolov5_seg']
+  const modelTypes = info?.known_model_types ?? FALLBACK_MODEL_TYPES
   const { busy, progress, upload } = useAssetUpload()
 
   const d   = node.data as Record<string, unknown>
@@ -518,7 +505,8 @@ function ModelForm({ node, onUpdate, duplicateIdError, channelId }: {
   const modelIdError = validateModelId(modelId) ?? duplicateIdError
   const deleteModel = useAssetDelete(String(d.model_path ?? ''), v => set('model_path', v))
   const deleteLabel = useAssetDelete(String(d.label_path ?? ''), v => set('label_path', v))
-  const isDepth = d.model_type === 'yolo26_depth'
+  const isRelativeDepth = modelCapabilities(String(d.model_type))?.relativeDepth === true
+  const isDepth = isDepthModel(String(d.model_type))
 
   return (
     <div className="ncp-form">
@@ -554,11 +542,15 @@ function ModelForm({ node, onUpdate, duplicateIdError, channelId }: {
         <F label="模型类型">
           <select value={String(d.model_type ?? 'yolov8_det')} onChange={e => {
             const model_type = e.target.value
-            onUpdate(node.id, { model_type, ...(model_type === 'yolo26_depth' ? { label_path: '', detect_classes: [] } : {}) })
+            onUpdate(node.id, { model_type, ...(isDepthModel(model_type) ? { label_path: '', detect_classes: [] } : {}) })
           }}>
             {modelTypes.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
         </F>
+      </div>
+
+      <div className="ncp-hint">
+        「自动」优先避开启用模型显式指定的核心；自动通道数等于可用核心数时各分一核，其余情况均衡共享。同核推理串行执行，增加线程不会提高该核心吞吐。改变分配后请检查运行日志中的核心池。
       </div>
 
       <F label="模型文件 (.rknn)">
@@ -581,7 +573,7 @@ function ModelForm({ node, onUpdate, duplicateIdError, channelId }: {
         modelType={String(d.model_type ?? 'yolov8_det')} modelId={modelId}
         channelId={channelId} assetsRevision={assets} />
 
-      {isDepth ? <div className="ncp-hint">输出每个像素的估计深度（米），无需标签文件。可在业务逻辑中读取像素或区域距离。</div> : <>
+      {isDepth ? <div className="ncp-hint">{isRelativeDepth ? '输出相对逆深度，数值越大越近，无需标签文件；不能直接作为米制距离。选择不同尺寸的 RKNN 模型即可切换推理精度与速度，视频帧自动适配。整帧＋ROI 模式使用整帧深度，避免不同取景的相对值混合。' : '输出每个像素的估计深度（米），无需标签文件。可在业务逻辑中读取像素或区域距离。'}</div> : <>
       <F label="标签文件 (.txt)">
         <AssetPicker
           value={String(d.label_path ?? '')}

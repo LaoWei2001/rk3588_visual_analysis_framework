@@ -8,9 +8,6 @@
 #include <string>
 #include <vector>
 
-#define PROTO_CHANNEL 32
-#define PROTO_HEIGHT 160
-#define PROTO_WEIGHT 160
 
 class YoloSeg : public ModelBase
 {
@@ -86,6 +83,7 @@ class YoloSeg : public ModelBase
     rknn_tensor_mem *in_mem_ = nullptr;
     uint32_t in_copy_size_ = 0;
     bool zero_copy_input_enabled_ = false;
+    int proto_channels_ = 32, proto_height_ = 0, proto_width_ = 0;
     int model_w_ = 640;
     int model_h_ = 640;
     int num_classes_ = 80;

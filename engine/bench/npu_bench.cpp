@@ -36,6 +36,9 @@
  */
 
 #include <rknn_api.h>
+#include "../src/inference/npu_execution.h"
+#include "../src/inference/npu_device_owner.h"
+#include <memory>
 
 #include <atomic>
 #include <chrono>
@@ -65,6 +68,7 @@ struct BenchCtx
     rknn_context ctx = 0;
     rknn_tensor_mem *in_mem = nullptr;
     std::vector<rknn_tensor_mem *> out_mems; // 仅 ceiling 模式绑定
+    int core_mask = 0;
     int core = -1;                           // 绑定的物理核(单核模式), -1 = driver 调度
     int n_out = 0;
     bool is_quant = false;
@@ -140,7 +144,9 @@ static bool setup_ctx(BenchCtx &bc, unsigned char *model_data, int model_size, i
         bc.core = ctx_idx % NUM_CORES;
         mask = single[bc.core];
     }
-    if (rknn_set_core_mask(bc.ctx, mask) < 0)
+    const int core_rc = rknn_set_core_mask(bc.ctx, mask);
+    bc.core_mask = core_rc < 0 ? 0 : static_cast<int>(mask);
+    if (core_rc < 0)
         fprintf(stderr, "[ctx%d] warn: set_core_mask failed\n", ctx_idx);
 
     rknn_input_output_num io_num;
@@ -227,21 +233,30 @@ static void worker_loop(int tid, BenchCtx *bc)
     {
         auto t0 = std::chrono::steady_clock::now();
 
-        if (rknn_run(bc->ctx, nullptr) < 0)
+        try
         {
-            fprintf(stderr, "[ctx%d] rknn_run failed, worker exit\n", tid);
-            break;
-        }
-
-        if (g_readback)
-        {
-            for (int i = 0; i < bc->n_out; ++i)
+            npu::Execution execution(bc->core_mask);
+            if (execution.run(bc->ctx) < 0)
+                throw std::runtime_error("rknn_run failed");
+            if (g_readback)
             {
-                memset(&outs[i], 0, sizeof(rknn_output));
-                outs[i].want_float = bc->is_quant ? 0 : 1; // 对齐 want_float = !is_quant
+                for (int i = 0; i < bc->n_out; ++i)
+                {
+                    memset(&outs[i], 0, sizeof(rknn_output));
+                    outs[i].index = i;
+                    outs[i].want_float = bc->is_quant ? 0 : 1;
+                }
+                npu::Outputs outputs(execution, bc->ctx, bc->n_out, outs.data());
+                if (outputs.get() < 0 || outputs.release() < 0)
+                    throw std::runtime_error("NPU output readback failed");
             }
-            if (rknn_outputs_get(bc->ctx, bc->n_out, outs.data(), nullptr) >= 0)
-                rknn_outputs_release(bc->ctx, bc->n_out, outs.data());
+        }
+        catch (const std::exception &error)
+        {
+            fprintf(stderr, "[ctx%d] %s, worker exit\n", tid, error.what());
+            g_stop.store(true);
+            npu::CoreLease::stop();
+            break;
         }
 
         auto t1 = std::chrono::steady_clock::now();
@@ -263,6 +278,13 @@ int main(int argc, char **argv)
         printf("用法: %s <model.rknn> [contexts=12] [seconds=15] [core_mode=0] [readback=0]\n", argv[0]);
         printf("  core_mode: 0=单核轮询绑定(i%%3)  1=CORE_0_1_2  2=CORE_AUTO\n");
         printf("  readback : 0=纯rknn_run(天花板)  1=带outputs_get(真实每帧NPU侧开销)\n");
+        return 1;
+    }
+    std::unique_ptr<npu::DeviceOwner> device_owner;
+    try { device_owner.reset(new npu::DeviceOwner()); }
+    catch (const std::exception &error)
+    {
+        fprintf(stderr, "%s\n", error.what());
         return 1;
     }
     const char *model_path = argv[1];
@@ -335,6 +357,7 @@ int main(int argc, char **argv)
     }
 
     g_stop.store(true, std::memory_order_relaxed);
+    npu::CoreLease::stop();
     for (auto &t : ths)
         t.join();
     auto t_end = std::chrono::steady_clock::now();

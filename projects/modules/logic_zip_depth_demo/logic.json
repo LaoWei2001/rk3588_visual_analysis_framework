@@ -1,0 +1,16 @@
+{
+  "label": "ZipDepth 相对深度示例",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "depth_model_id": {"type": "string", "title": "ZipDepth 模型 ID", "default": "zip_depth", "x-hot-reload": "reset_state"}
+    }
+  },
+  "outputs": [
+    {"key": "depth_valid", "type": "boolean", "label": "中心相对深度有效"},
+    {"key": "center_inverse_depth", "type": "number", "label": "中心相对逆深度（越大越近）"}
+  ],
+  "report_fields": []
+}

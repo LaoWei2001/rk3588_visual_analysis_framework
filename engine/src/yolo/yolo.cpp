@@ -1,4 +1,6 @@
 #include "yolo.h"
+#include "inference/npu_execution.h"
+#include "rknn_query_utils.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -13,9 +15,19 @@ YOLO::YOLO(const std::string &model_path, const std::string &label_path, int cor
     obj_thresh_ = obj_thresh;
     nms_thresh_ = nms_thresh;
     load_labels(label_path);
-    init_rknn(model_path, core_mask);
-    query_model_info();
-    init_zero_copy_input();
+    try
+    {
+        init_rknn(model_path, core_mask);
+        query_model_info();
+        init_zero_copy_input();
+    }
+    catch (...)
+    {
+        if (input_rga_handle_) releasebuffer_handle(static_cast<rga_buffer_handle_t>(input_rga_handle_));
+        if (in_mem_ && ctx_) rknn_destroy_mem(ctx_, in_mem_);
+        if (ctx_) rknn_destroy(ctx_);
+        throw;
+    }
 }
 
 YOLO::~YOLO()
@@ -61,6 +73,7 @@ void YOLO::init_rknn(const std::string &model_path, int core_mask)
         throw std::runtime_error("RKNN init failed");
     }
     ret = rknn_set_core_mask(ctx_, (rknn_core_mask)core_mask);
+    npu_core_mask_ = ret < 0 ? 0 : core_mask;
     if (ret < 0)
     {
         printf("[YOLO] warn: set core mask failed, fallback single core\n");
@@ -73,32 +86,36 @@ void YOLO::init_rknn(const std::string &model_path, int core_mask)
 
 void YOLO::query_model_info()
 {
-    rknn_input_output_num io_num;
-    rknn_query(ctx_, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
+    rknn_input_output_num io_num{};
+    model_io::query(ctx_, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
+    model_io::validate_io(io_num);
+    if (io_num.n_output != 3) throw std::runtime_error("Unsupported yolo output count");
     io_num_in_ = io_num.n_input;
     io_num_out_ = io_num.n_output;
 
     memset(&in_attr_, 0, sizeof(in_attr_));
     in_attr_.index = 0;
-    rknn_query(ctx_, RKNN_QUERY_INPUT_ATTR, &in_attr_, sizeof(in_attr_));
+    model_io::query(ctx_, RKNN_QUERY_INPUT_ATTR, &in_attr_, sizeof(in_attr_));
+    model_io::validate_image(in_attr_);
+    if (in_attr_.fmt != RKNN_TENSOR_NHWC) throw std::runtime_error("This decoder requires NHWC input");
     model_w_ = in_attr_.dims[2];
     model_h_ = in_attr_.dims[1];
 
     out_attrs_.clear();
     for (int i = 0; i < io_num_out_; i++)
     {
-        rknn_tensor_attr attr;
+        rknn_tensor_attr attr{};
         attr.index = i;
-        rknn_query(ctx_, RKNN_QUERY_OUTPUT_ATTR, &attr, sizeof(attr));
+        model_io::query(ctx_, RKNN_QUERY_OUTPUT_ATTR, &attr, sizeof(attr));
+        if (attr.n_dims != 4 || !attr.n_elems) throw std::runtime_error("Invalid detection output tensor");
         out_attrs_.push_back(attr);
     }
     num_classes_ = (out_attrs_[0].dims[1] / 3) - 5;
 
-    is_quant_ = false;
-    if (out_attrs_[0].qnt_type == RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC && out_attrs_[0].type != RKNN_TENSOR_FLOAT16)
-    {
-        is_quant_ = true;
-    }
+    is_quant_ = model_io::all_int8(out_attrs_);
+    if (num_classes_ <= 0 || out_attrs_[0].dims[1] % 3) throw std::runtime_error("Invalid YOLOv5 head channels");
+    for (int i = 0; i < 3; ++i)
+        model_io::validate_head(out_attrs_[i], model_w_, model_h_, 3 * (num_classes_ + 5), 8 << i);
 
     printf("[YOLO] model %dx%d, classes %d, is_quant=%d\n", model_w_, model_h_, num_classes_, is_quant_);
 
@@ -121,6 +138,7 @@ bool YOLO::init_zero_copy_input()
     in_mem_ = rknn_create_mem(ctx_, alloc_size);
     if (!in_mem_ || !in_mem_->virt_addr)
     {
+        if (in_mem_) rknn_destroy_mem(ctx_, in_mem_);
         in_mem_ = nullptr;
         printf("[YOLO] zero-copy input disabled: rknn_create_mem failed\n");
         return false;
@@ -347,6 +365,7 @@ void YOLO::post_process(void *feat, int out_idx, int feat_h, int feat_w, LetterB
 
 bool YOLO::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat *perf)
 {
+    results.clear();
     if (frame.empty())
         return false;
 
@@ -355,6 +374,7 @@ bool YOLO::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat 
     cv::Mat input_mat = preprocess(frame, lb);
     auto t1 = std::chrono::steady_clock::now();
 
+    npu::Execution execution(npu_core_mask_);
     if (zero_copy_input_enabled_ && in_mem_ && in_mem_->virt_addr)
     {
         if (in_copy_size_ > in_mem_->size)
@@ -372,10 +392,10 @@ bool YOLO::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat 
         inputs[0].fmt = RKNN_TENSOR_NHWC;
         inputs[0].size = model_w_ * model_h_ * 3;
         inputs[0].buf = input_mat.data;
-        rknn_inputs_set(ctx_, 1, inputs);
+        if (execution.inputs_set(ctx_, 1, inputs) < 0) return false;
     }
 
-    if (rknn_run(ctx_, NULL) < 0)
+    if (execution.run(ctx_) < 0)
         return false;
     auto t2 = std::chrono::steady_clock::now();
 
@@ -386,7 +406,8 @@ bool YOLO::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat 
         rknn_outputs_cache_[i].index = i;
         rknn_outputs_cache_[i].want_float = (!is_quant_);
     }
-    if (rknn_outputs_get(ctx_, io_num_out_, rknn_outputs_cache_.data(), NULL) < 0)
+    npu::Outputs output_lease(execution, ctx_, io_num_out_, rknn_outputs_cache_.data());
+    if (output_lease.get() < 0)
         return false;
 
     /* 复用内存存储检测结果 */
@@ -401,7 +422,7 @@ bool YOLO::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat 
     /* 以极低开销将结果转移给调用方 */
     results.swap(candidates_cache_);
 
-    rknn_outputs_release(ctx_, io_num_out_, rknn_outputs_cache_.data());
+    if (output_lease.release() < 0) return false;
 
     if (perf)
     {
@@ -414,6 +435,7 @@ bool YOLO::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat 
 
 bool YOLO::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *perf)
 {
+    results.clear();
     if (!zero_copy_input_enabled_ || !in_mem_ || in_mem_->fd < 0)
         return false;
 
@@ -421,7 +443,8 @@ bool YOLO::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *perf)
 
     auto t1 = std::chrono::steady_clock::now();
     /* NPU 已被 RGA 在硬件层填好数据，直接执行推理 */
-    if (rknn_run(ctx_, NULL) < 0)
+    npu::Execution execution(npu_core_mask_);
+    if (execution.run(ctx_) < 0)
         return false;
     auto t2 = std::chrono::steady_clock::now();
 
@@ -431,7 +454,8 @@ bool YOLO::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *perf)
         rknn_outputs_cache_[i].index = i;
         rknn_outputs_cache_[i].want_float = (!is_quant_);
     }
-    if (rknn_outputs_get(ctx_, io_num_out_, rknn_outputs_cache_.data(), NULL) < 0)
+    npu::Outputs output_lease(execution, ctx_, io_num_out_, rknn_outputs_cache_.data());
+    if (output_lease.get() < 0)
         return false;
 
     candidates_cache_.clear();
@@ -452,7 +476,7 @@ bool YOLO::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *perf)
     auto t3 = std::chrono::steady_clock::now();
 
     results.swap(candidates_cache_);
-    rknn_outputs_release(ctx_, io_num_out_, rknn_outputs_cache_.data());
+    if (output_lease.release() < 0) return false;
 
     if (perf)
     {

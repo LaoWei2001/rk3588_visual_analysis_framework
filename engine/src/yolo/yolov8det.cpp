@@ -1,4 +1,7 @@
 #include "yolov8det.h"
+#include "inference/npu_execution.h"
+#include "rknn_query_utils.h"
+#include "detection_order.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -8,14 +11,25 @@
 #include <set>
 
 YoloV8Det::YoloV8Det(const std::string &model_path, const std::string &label_path, int core_mask, float obj_thresh,
-                     float nms_thresh)
+                     float nms_thresh, bool obb)
 {
+    obb_ = obb;
     obj_thresh_ = obj_thresh;
     nms_thresh_ = nms_thresh;
-    load_labels(label_path);
-    init_rknn(model_path, core_mask);
-    query_model_info();
-    init_zero_copy_input();
+    if (!obb_ || !label_path.empty()) load_labels(label_path);
+    try
+    {
+        init_rknn(model_path, core_mask);
+        query_model_info();
+        init_zero_copy_input();
+    }
+    catch (...)
+    {
+        if (input_rga_handle_) releasebuffer_handle(static_cast<rga_buffer_handle_t>(input_rga_handle_));
+        if (in_mem_ && ctx_) rknn_destroy_mem(ctx_, in_mem_);
+        if (ctx_) rknn_destroy(ctx_);
+        throw;
+    }
 }
 
 YoloV8Det::~YoloV8Det()
@@ -58,6 +72,7 @@ void YoloV8Det::init_rknn(const std::string &model_path, int core_mask)
         throw std::runtime_error("RKNN init failed");
     }
     ret = rknn_set_core_mask(ctx_, (rknn_core_mask)core_mask);
+    npu_core_mask_ = ret < 0 ? 0 : core_mask;
     if (ret < 0)
     {
         printf("[YoloV8Det] warn: set core mask failed, fallback single core\n");
@@ -70,14 +85,18 @@ void YoloV8Det::init_rknn(const std::string &model_path, int core_mask)
 
 void YoloV8Det::query_model_info()
 {
-    rknn_input_output_num io_num;
-    rknn_query(ctx_, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
+    if (obb_) { query_obb_info(); return; }
+    rknn_input_output_num io_num{};
+    model_io::query(ctx_, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
+    model_io::validate_io(io_num);
+    if (io_num.n_output != 9) throw std::runtime_error("Unsupported yolov8det output count");
     io_num_in_ = io_num.n_input;
     io_num_out_ = io_num.n_output;
 
     memset(&in_attr_, 0, sizeof(in_attr_));
     in_attr_.index = 0;
-    rknn_query(ctx_, RKNN_QUERY_INPUT_ATTR, &in_attr_, sizeof(in_attr_));
+    model_io::query(ctx_, RKNN_QUERY_INPUT_ATTR, &in_attr_, sizeof(in_attr_));
+    model_io::validate_image(in_attr_);
 
     if (in_attr_.fmt == RKNN_TENSOR_NCHW)
     {
@@ -93,22 +112,15 @@ void YoloV8Det::query_model_info()
     out_attrs_.clear();
     for (int i = 0; i < io_num_out_; i++)
     {
-        rknn_tensor_attr attr;
+        rknn_tensor_attr attr{};
         memset(&attr, 0, sizeof(attr));
         attr.index = i;
-        rknn_query(ctx_, RKNN_QUERY_OUTPUT_ATTR, &attr, sizeof(attr));
+        model_io::query(ctx_, RKNN_QUERY_OUTPUT_ATTR, &attr, sizeof(attr));
+        if (attr.n_dims != 4 || !attr.n_elems) throw std::runtime_error("Invalid detection output tensor");
         out_attrs_.push_back(attr);
     }
 
-    if (out_attrs_[0].qnt_type == RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC && out_attrs_[0].type != RKNN_TENSOR_FLOAT32)
-    {
-        is_quant_ = true;
-    }
-    else
-    {
-        is_quant_ = false;
-    }
-
+    is_quant_ = model_io::all_int8(out_attrs_);
     if (io_num_out_ > 1)
     {
         const rknn_tensor_attr &score_attr = out_attrs_[1];
@@ -126,6 +138,12 @@ void YoloV8Det::query_model_info()
         num_classes_ = labels_.empty() ? 80 : (int)labels_.size();
     }
 
+    const unsigned dfl_channels = out_attrs_[0].dims[1];
+    if (dfl_channels < 4 || dfl_channels % 4) throw std::runtime_error("Invalid DFL channels");
+    for (int i = 0; i < 3; ++i) {
+        model_io::validate_head(out_attrs_[3*i], model_w_, model_h_, dfl_channels, 8 << i);
+        model_io::validate_head(out_attrs_[3*i+1], model_w_, model_h_, num_classes_, 8 << i);
+    }
     printf("[YoloV8Det] model %dx%d, classes=%d, quant=%d, outputs=%d\n", model_w_, model_h_, num_classes_, is_quant_,
            io_num_out_);
 
@@ -147,6 +165,7 @@ bool YoloV8Det::init_zero_copy_input()
     in_mem_ = rknn_create_mem(ctx_, alloc_size);
     if (!in_mem_ || !in_mem_->virt_addr)
     {
+        if (in_mem_) rknn_destroy_mem(ctx_, in_mem_);
         in_mem_ = nullptr;
         printf("[YoloV8Det] zero-copy input disabled: rknn_create_mem failed\n");
         return false;
@@ -393,32 +412,9 @@ int YoloV8Det::nms(int validCount, std::vector<float> &outputLocations, std::vec
     return 0;
 }
 
-void YoloV8Det::quick_sort_indice_inverse(std::vector<float> &input, int left, int right, std::vector<int> &indices)
-{
-    if (left >= right)
-        return;
-    float key = input[left];
-    int key_index = indices[left];
-    int low = left, high = right;
-    while (low < high)
-    {
-        while (low < high && input[high] <= key)
-            high--;
-        input[low] = input[high];
-        indices[low] = indices[high];
-        while (low < high && input[low] >= key)
-            low++;
-        input[high] = input[low];
-        indices[high] = indices[low];
-    }
-    input[low] = key;
-    indices[low] = key_index;
-    quick_sort_indice_inverse(input, left, low - 1, indices);
-    quick_sort_indice_inverse(input, low + 1, right, indices);
-}
-
 int YoloV8Det::post_process(rknn_output *outputs, LetterBoxInfo &lb, std::vector<AlgoResult> &results)
 {
+    if (obb_) return post_process_obb(outputs, lb, results);
     std::vector<float> filterBoxes;
     std::vector<float> objProbs;
     std::vector<int> classId;
@@ -473,7 +469,7 @@ int YoloV8Det::post_process(rknn_output *outputs, LetterBoxInfo &lb, std::vector
     std::vector<int> indexArray(validCount);
     for (int i = 0; i < validCount; i++)
         indexArray[i] = i;
-    quick_sort_indice_inverse(objProbs, 0, validCount - 1, indexArray);
+    sort_detection_indices(objProbs, indexArray);
 
     std::set<int> class_set;
     for (int i = 0; i < validCount; i++)
@@ -516,6 +512,7 @@ int YoloV8Det::post_process(rknn_output *outputs, LetterBoxInfo &lb, std::vector
 
 bool YoloV8Det::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat *perf)
 {
+    results.clear();
     if (frame.empty())
         return false;
 
@@ -532,14 +529,15 @@ bool YoloV8Det::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerf
     inputs[0].size = model_w_ * model_h_ * 3;
     inputs[0].buf = input_mat.data;
 
-    int ret = rknn_inputs_set(ctx_, io_num_in_, inputs);
+    npu::Execution execution(npu_core_mask_);
+    int ret = execution.inputs_set(ctx_, io_num_in_, inputs);
     if (ret < 0)
     {
         printf("[YoloV8Det] rknn_inputs_set failed: %d\n", ret);
         return false;
     }
 
-    ret = rknn_run(ctx_, nullptr);
+    ret = execution.run(ctx_);
     if (ret < 0)
     {
         printf("[YoloV8Det] rknn_run failed: %d\n", ret);
@@ -555,7 +553,8 @@ bool YoloV8Det::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerf
         outputs[i].want_float = (!is_quant_);
     }
 
-    ret = rknn_outputs_get(ctx_, io_num_out_, outputs, nullptr);
+    npu::Outputs output_lease(execution, ctx_, io_num_out_, outputs);
+    ret = output_lease.get();
     if (ret < 0)
     {
         printf("[YoloV8Det] rknn_outputs_get failed: %d\n", ret);
@@ -563,7 +562,7 @@ bool YoloV8Det::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerf
     }
 
     post_process(outputs, lb, results);
-    rknn_outputs_release(ctx_, io_num_out_, outputs);
+    if (output_lease.release() < 0) return false;
     auto t3 = std::chrono::steady_clock::now();
 
     if (perf)
@@ -578,6 +577,7 @@ bool YoloV8Det::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerf
 
 bool YoloV8Det::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *perf)
 {
+    results.clear();
     if (!zero_copy_input_enabled_ || !in_mem_ || in_mem_->fd < 0)
         return false;
 
@@ -586,7 +586,8 @@ bool YoloV8Det::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *
     auto t1 = std::chrono::steady_clock::now();
 
     /* NPU 输入显存已被 RGA 直写完毕, 直接跑推理 */
-    int ret = rknn_run(ctx_, nullptr);
+    npu::Execution execution(npu_core_mask_);
+    int ret = execution.run(ctx_);
     if (ret < 0)
     {
         printf("[YoloV8Det] rknn_run (zero-copy) failed: %d\n", ret);
@@ -600,7 +601,8 @@ bool YoloV8Det::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *
         rknn_outputs_cache_[i].index = i;
         rknn_outputs_cache_[i].want_float = (!is_quant_);
     }
-    ret = rknn_outputs_get(ctx_, io_num_out_, rknn_outputs_cache_.data(), nullptr);
+    npu::Outputs output_lease(execution, ctx_, io_num_out_, rknn_outputs_cache_.data());
+    ret = output_lease.get();
     if (ret < 0)
     {
         printf("[YoloV8Det] rknn_outputs_get (zero-copy) failed: %d\n", ret);
@@ -615,7 +617,7 @@ bool YoloV8Det::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *
     lb.dh = 0;
 
     post_process(rknn_outputs_cache_.data(), lb, results);
-    rknn_outputs_release(ctx_, io_num_out_, rknn_outputs_cache_.data());
+    if (output_lease.release() < 0) return false;
 
     auto t3 = std::chrono::steady_clock::now();
     if (perf)
@@ -626,3 +628,5 @@ bool YoloV8Det::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *
     }
     return true;
 }
+
+#include "yolov8obb_impl.h"

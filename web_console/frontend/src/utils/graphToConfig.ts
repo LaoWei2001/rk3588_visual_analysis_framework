@@ -66,7 +66,6 @@ export function graphToConfig(
       .map(e => nodes.find(n => n.id === e.target))
       .filter((n): n is Node => n?.type === 'model')
       .sort((a, b) => a.position.y - b.position.y)
-    const isModel = modelNodes.length > 0
     const stream = buildStream(streamData)
 
     const directLogicEdge = edges.find(e => e.source === streamNode.id && e.sourceHandle === 'stream-out' &&
@@ -127,26 +126,12 @@ export function graphToConfig(
       : []
     const reportData = reportNodes.map(n => n.data as Record<string, unknown>)
 
-    // ── 通道基础字段 ── YOLO 与传统通道字段集不同 ──
-    const ch: Record<string, unknown> = isModel
-      ? {
-          id:             chId,
-          enable:         streamData.enable !== false,
-          infer_enable:   streamData.infer_enable !== false,
-          swap_rb:        streamData.swap_rb === true,
-          stream,
-          models:         modelConfigs,
-        }
-      : {
-          // 传统/无推理通道: models 为空；C++ 跳过 NPU 推理，
-          // 仍解码/显示；连接了 logic 时才以空 results 逐帧执行后处理。
-          id:           chId,
-          enable:       streamData.enable !== false,
-          infer_enable: false,
-          swap_rb:      streamData.swap_rb === true,
-          stream,
-          models:       [],
-        }
+    // 视频流节点就是通道；是否推理由连接且启用的模型决定。
+    const ch: Record<string, unknown> = {
+      id: chId,
+      stream,
+      models: modelConfigs,
+    }
 
     // 不写 logic 字段即表示“不执行后处理模块”；模型检测结果仍由框架负责绘制。
     if (hasLogic) ch.logic = logic

@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAutoSync } from '../hooks/useAutoSync'
 import ConfigSyncNotice from './ConfigSyncNotice'
-import axios from 'axios'
+import { apiErrorMessage as errMsg } from '../api/http'
 import {
   fetchServices, controlService, setServiceAutostart, fetchServiceLogs,
   type ServiceInfo, type AppInfo,
@@ -18,10 +18,6 @@ interface Props {
   onToast: (msg: string, type?: 'ok' | 'err') => void
 }
 
-function errMsg(e: unknown): string {
-  if (axios.isAxiosError(e)) return e.response?.data?.detail ?? e.message
-  return e instanceof Error ? e.message : String(e)
-}
 
 function fmtUptime(s: number | null): string {
   if (s == null) return '-'

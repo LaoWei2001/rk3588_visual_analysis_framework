@@ -32,10 +32,9 @@ export function videoTimelineLayout(config: Record<string, unknown>): VideoLayou
     if (!value || typeof value !== 'object') return []
     const channel = value as Record<string, unknown>
     const stream = (channel.stream ?? {}) as Record<string, unknown>
-    const enabled = channel.enable === undefined || Boolean(channel.enable)
     const location = stream.src_type === 'usb' ? stream.device : stream.url
     const id = channel.id === undefined ? index : Number(channel.id)
-    return enabled && typeof location === 'string' && location.length > 0 && Number.isInteger(id) && id >= 0
+    return typeof location === 'string' && location.length > 0 && Number.isInteger(id) && id >= 0
       ? [id] : []
   }).sort((a, b) => a - b)
   const rows = Math.max(positiveInteger(global.tile_rows, 2), Math.ceil(channelIds.length / columns))

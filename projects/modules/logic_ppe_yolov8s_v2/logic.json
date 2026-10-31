@@ -1,0 +1,326 @@
+{
+  "label": "YOLOv8s三类装备疑似缺失 V2（公共SDK）",
+  "event_types": [
+    {
+      "id": "ppe_yolov8s_v2_suspected",
+      "label": "装备疑似缺失",
+      "help": "正类检测框启发式，需复核；同一候选会话只提交一次被接受的事件。"
+    }
+  ],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "alarm_enabled": {
+        "type": "boolean",
+        "default": true,
+        "title": "启用疑似报警",
+        "description": "只上报疑似缺失，不表示已确认未穿戴。须配置检查区与投递策略。",
+        "x-hot-reload": "preserve_state"
+      },
+      "model_index": {
+        "type": "integer",
+        "default": 0,
+        "title": "模型序号",
+        "description": "当前三类别模型在有效模型列表中的序号；类别必须为0=outfit、1=helmet、2=glove。",
+        "x-hot-reload": "restart_required",
+        "minimum": 0,
+        "maximum": 31
+      },
+      "confidence": {
+        "type": "number",
+        "default": 0.5,
+        "title": "有效检测置信度",
+        "description": "有效框阈值；低于此值但达到ambiguity_confidence的框只用于阻止缺失判断。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 0.01,
+        "maximum": 1.0
+      },
+      "ambiguity_confidence": {
+        "type": "number",
+        "default": 0.25,
+        "title": "不确定检测置信度",
+        "description": "低分装备或人员锚点只用于阻止缺失判定；推理阶段过滤掉的框无法在此恢复。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 0.01,
+        "maximum": 1.0
+      },
+      "work_roi": {
+        "type": "string",
+        "default": "PPE_WORK",
+        "title": "作业区域",
+        "description": "必须绘制同名有效多边形。无区域时不报警。",
+        "x-hot-reload": "preserve_state"
+      },
+      "helmet_clear_roi": {
+        "type": "string",
+        "default": "PPE_HEAD_CLEAR",
+        "title": "头部检查区",
+        "description": "只在推定头部完整落入此多边形时检查帽缺失。不是自动可见性判断。",
+        "x-hot-reload": "preserve_state"
+      },
+      "outfit_clear_roi": {
+        "type": "string",
+        "default": "PPE_BODY_CLEAR",
+        "title": "工作服检查区",
+        "description": "只在衣服框或由帽推定的衣服区域完整落入此区域时检查。",
+        "x-hot-reload": "preserve_state"
+      },
+      "glove_clear_roi": {
+        "type": "string",
+        "default": "PPE_HAND_CLEAR",
+        "title": "手套检查区",
+        "description": "应限定为允许检查双手的工位/姿态区，无法区分背手、握工具和裸手。",
+        "x-hot-reload": "preserve_state"
+      },
+      "occluder_prefix": {
+        "type": "string",
+        "default": "PPE_BLOCK_",
+        "title": "遮挡区域名前缀",
+        "description": "例如 PPE_BLOCK_CABINET。部位矩形与任意同前缀多边形接触即为未知。",
+        "x-hot-reload": "preserve_state"
+      },
+      "glove_check_enabled": {
+        "type": "boolean",
+        "default": true,
+        "title": "启用手套疑似缺失",
+        "description": "检查关联到候选区域的手套框数量，不具备左右手识别；必须配置手部检查区。",
+        "x-hot-reload": "preserve_state"
+      },
+      "required_gloves": {
+        "type": "integer",
+        "default": 2,
+        "title": "手套框期望数量",
+        "description": "1=至少检测到一个；2=期望两个。两个框不等于已证明双手正确佩戴。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 1,
+        "maximum": 2
+      },
+      "head_to_outfit_width": {
+        "type": "number",
+        "default": 0.38,
+        "title": "估计头宽/衣服框宽",
+        "description": "衣服框上方估计头部的几何参数，需根据模型标注方式配置。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 0.1,
+        "maximum": 1.0
+      },
+      "outfit_to_helmet_width": {
+        "type": "number",
+        "default": 2.63,
+        "title": "估计衣服宽/帽框宽",
+        "description": "只有帽子时估计衣服区域。默认按上衣框近似。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 1.0,
+        "maximum": 6.0
+      },
+      "outfit_height_ratio": {
+        "type": "number",
+        "default": 1.4,
+        "title": "估计衣服高/宽",
+        "description": "只有帽子时使用。若 outfit 标注整套工服，需调整为相应高度。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 0.5,
+        "maximum": 5.0
+      },
+      "crowd_overlap": {
+        "type": "number",
+        "default": 0.15,
+        "title": "多人重叠阈值",
+        "description": "两个人候选躯干交集/较小框面积达到阈值时，清除缺失证据。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 0.01,
+        "maximum": 1.0
+      },
+      "match_distance": {
+        "type": "number",
+        "default": 1.8,
+        "title": "会话关联距离",
+        "description": "头部中心距离/较大头宽。优先使用同类装备track_id辅助关联，仍须通过几何门控；歧义时暂停。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 0.1,
+        "maximum": 5.0
+      },
+      "min_part_pixels": {
+        "type": "integer",
+        "default": 16,
+        "title": "部位最小宽高",
+        "description": "固定640×640业务坐标系像素值。过小记为未知；不能替代清晰度模型。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 4,
+        "maximum": 512
+      },
+      "sample_interval_ms": {
+        "type": "integer",
+        "default": 200,
+        "title": "证据采样间隔",
+        "description": "同一帧/同一推理结果不重复计数。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 50,
+        "maximum": 5000
+      },
+      "evidence_window_ms": {
+        "type": "integer",
+        "default": 3000,
+        "title": "证据窗口",
+        "description": "只保留最近窗口内的有效观察。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 500,
+        "maximum": 60000
+      },
+      "min_samples": {
+        "type": "integer",
+        "default": 5,
+        "title": "最少缺失样本",
+        "description": "窗口内至少具有此数量的缺失样本。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 2,
+        "maximum": 100
+      },
+      "missing_ratio": {
+        "type": "number",
+        "default": 0.8,
+        "title": "缺失样本占比",
+        "description": "有效样本中缺失比例达到此值才能触发；未知不投票。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 0.5,
+        "maximum": 1.0
+      },
+      "min_evidence_span_ms": {
+        "type": "integer",
+        "default": 1000,
+        "title": "缺失证据最小跨度",
+        "description": "首末缺失证据至少跨越此时间；应小于证据窗口。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 100,
+        "maximum": 60000
+      },
+      "warmup_ms": {
+        "type": "integer",
+        "default": 1500,
+        "title": "新会话观察时间",
+        "description": "新候选需观察达到此时间才能触发。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 0,
+        "maximum": 60000
+      },
+      "session_retention_ms": {
+        "type": "integer",
+        "default": 300000,
+        "title": "丢失会话保留时间",
+        "description": "默认五分钟。保留期间唯一匹配可续接已报警状态；不是永久身份。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 1000,
+        "maximum": 86400000
+      },
+      "max_frame_gap_ms": {
+        "type": "integer",
+        "default": 1000,
+        "title": "最大有效帧间隔",
+        "description": "超出时清除证据，保留报警锁；旧推理结果也按此阈值过滤。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 100,
+        "maximum": 10000
+      },
+      "max_sessions": {
+        "type": "integer",
+        "default": 128,
+        "title": "通道会话上限",
+        "description": "会话容量上限。达到上限时停止创建新会话并输出session_capacity状态，不删除已有报警锁。",
+        "x-hot-reload": "preserve_state",
+        "minimum": 1,
+        "maximum": 1024
+      },
+      "draw_status": {
+        "type": "boolean",
+        "default": true,
+        "title": "绘制状态",
+        "description": "画出候选编号、UNKNOWN、SUSPECT 和 reported；不显示未经证明的合规结论。",
+        "x-hot-reload": "preserve_state"
+      },
+      "dedupe_iou": {
+        "type": "number",
+        "title": "同类重复框去重 IoU",
+        "default": 0.8,
+        "minimum": 0.5,
+        "maximum": 1.0,
+        "description": "先去除高度重叠的同类框，避免一个手套被计数两次；并非真正左右手识别。",
+        "x-hot-reload": "preserve_state"
+      }
+    }
+  },
+  "report_fields": [
+    {
+      "key": "person_session_id",
+      "type": "string",
+      "label": "候选人员会话ID"
+    },
+    {
+      "key": "missing_items",
+      "type": "string",
+      "label": "疑似缺失项目"
+    },
+    {
+      "key": "suspected",
+      "type": "boolean",
+      "label": "是否疑似事件"
+    },
+    {
+      "key": "glove_count",
+      "type": "number",
+      "label": "关联手套框数"
+    },
+    {
+      "key": "work_roi",
+      "type": "string",
+      "label": "作业区域"
+    },
+    {
+      "key": "basis",
+      "type": "string",
+      "label": "判断依据"
+    },
+    {
+      "key": "evidence_window_ms",
+      "type": "number",
+      "label": "证据窗口毫秒"
+    }
+  ],
+  "outputs": [
+    {
+      "key": "candidate_count",
+      "type": "integer",
+      "label": "当前已关联候选数"
+    },
+    {
+      "key": "suspected_count",
+      "type": "integer",
+      "label": "当前疑似缺失候选数"
+    },
+    {
+      "key": "status",
+      "type": "string",
+      "label": "运行状态"
+    },
+    {
+      "key": "sessions",
+      "type": "json",
+      "label": "当前候选状态及累计缺失项目"
+    },
+    {
+      "key": "ppe_alarm",
+      "type": "boolean",
+      "label": "本帧存在达到多帧门槛的疑似缺失"
+    },
+    {
+      "key": "unresolved_count",
+      "type": "integer",
+      "label": "身份不确定的候选数"
+    },
+    {
+      "key": "equipment_counts",
+      "type": "json",
+      "label": "有效装备框数"
+    }
+  ]
+}

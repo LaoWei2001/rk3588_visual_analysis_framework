@@ -1,24 +1,25 @@
-import { useEffect, useState, useRef } from 'react'
+import { lazy, Suspense, useEffect, useState, useRef } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom'
 import AppsPage    from './pages/AppsPage'
-import LiveViewPage from './pages/LiveViewPage'
-import VideoCapturePage from './pages/VideoCapturePage'
-import DatasetPage from './pages/DatasetPage'
-import EditorPage  from './pages/EditorPage'
-import LogsPage    from './pages/LogsPage'
-import RecordsPage from './pages/RecordsPage'
 import LoginPage   from './pages/LoginPage'
-import TerminalPage from './pages/TerminalPage'
-import ServicesPage from './pages/ServicesPage'
-import SystemSettingsPage from './pages/SystemSettingsPage'
-import RecoveryPage from './pages/RecoveryPage'
-import CameraSettingsPage from './pages/CameraSettingsPage'
-import { destroyAllTerminals } from './pages/terminalSession'
+import { destroyAllTerminals } from './features/terminal/sessionLifecycle'
 import ErrorBoundary from './components/ErrorBoundary'
 import { useAuthStore } from './store/authStore'
 import { useEditorStore } from './store/editorStore'
-import { apiLogout }    from './api/client'
+import { apiLogout, apiCheckSession } from './api/client'
 import './App.css'
+
+const LiveViewPage = lazy(() => import('./pages/LiveViewPage'))
+const VideoCapturePage = lazy(() => import('./pages/VideoCapturePage'))
+const DatasetPage = lazy(() => import('./pages/DatasetPage'))
+const EditorPage = lazy(() => import('./pages/EditorPage'))
+const LogsPage = lazy(() => import('./pages/LogsPage'))
+const RecordsPage = lazy(() => import('./pages/RecordsPage'))
+const TerminalPage = lazy(() => import('./features/terminal/TerminalPage'))
+const ServicesPage = lazy(() => import('./pages/ServicesPage'))
+const SystemSettingsPage = lazy(() => import('./pages/SystemSettingsPage'))
+const RecoveryPage = lazy(() => import('./pages/RecoveryPage'))
+const CameraSettingsPage = lazy(() => import('./pages/CameraSettingsPage'))
 
 // 编辑器或当前应用集成有未保存改动时，侧边栏跳转/退出前先确认。
 const confirmLeaveIfDirty = (): boolean => {
@@ -52,6 +53,19 @@ function SidebarLogo() {
 // ── Protected route wrapper ───────────────────────────────────────────────
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore(s => s.token)
+  useEffect(() => {
+    if (!token) { destroyAllTerminals(); return }
+    const check = () => {
+      if (!document.hidden) void apiCheckSession().catch(() => { /* Only HTTP 401 expires the login. */ })
+    }
+    check()
+    window.addEventListener('online', check)
+    document.addEventListener('visibilitychange', check)
+    return () => {
+      window.removeEventListener('online', check)
+      document.removeEventListener('visibilitychange', check)
+    }
+  }, [token])
   if (!token) return <Navigate to="/login" replace />
   return <>{children}</>
 }
@@ -123,6 +137,7 @@ function AppShell() {
 
       <main className="main-content">
         <ErrorBoundary>
+          <Suspense fallback={<div role="status">正在加载页面…</div>}>
           <Routes>
             <Route path="/"                  element={<AppsPage />} />
             <Route path="/live-view"         element={<LiveViewPage />} />
@@ -138,6 +153,7 @@ function AppShell() {
             <Route path="/recovery/:section" element={<RecoveryPage />} />
             <Route path="/camera-settings" element={<CameraSettingsPage />} />
           </Routes>
+          </Suspense>
         </ErrorBoundary>
       </main>
     </div>

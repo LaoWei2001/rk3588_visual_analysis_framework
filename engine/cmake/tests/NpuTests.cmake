@@ -1,0 +1,78 @@
+option(BUILD_ZIP_DEPTH_TESTS "Build ZipDepth RK3588 integration tests" OFF)
+option(BUILD_NPU_TESTS "Build common NPU dispatch and model input tests" OFF)
+# Preserve the tests historically enabled by BUILD_ZIP_DEPTH_TESTS.
+if(BUILD_NPU_TESTS OR BUILD_ZIP_DEPTH_TESTS)
+    enable_testing()
+    add_executable(npu_core_gate_tests tests/inference/test_npu_core_gate.cpp)
+    target_include_directories(npu_core_gate_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(npu_core_gate_tests PRIVATE -UNDEBUG)
+    target_link_libraries(npu_core_gate_tests PRIVATE Threads::Threads)
+    add_test(NAME npu_core_gate_regression COMMAND npu_core_gate_tests)
+    set_tests_properties(npu_core_gate_regression PROPERTIES TIMEOUT 10)
+    add_executable(npu_execution_tests tests/inference/test_npu_execution.cpp
+        tests/inference/test_npu_execution_peer.cpp)
+    target_include_directories(npu_execution_tests PRIVATE ${PROJECT_SOURCE_DIR}/src ${RKNN_API_INCLUDE_DIR})
+    target_compile_options(npu_execution_tests PRIVATE -UNDEBUG)
+    target_link_libraries(npu_execution_tests PRIVATE Threads::Threads)
+    add_test(NAME npu_execution_regression COMMAND npu_execution_tests)
+    foreach(stage input run get release)
+        add_test(NAME npu_execution_${stage}_failure COMMAND npu_execution_tests ${stage})
+        set_tests_properties(npu_execution_${stage}_failure PROPERTIES TIMEOUT 10)
+    endforeach()
+    set_tests_properties(npu_execution_regression PROPERTIES TIMEOUT 10)
+    foreach(test combinations device_owner)
+        add_executable(npu_${test}_tests tests/inference/test_npu_${test}.cpp)
+        target_include_directories(npu_${test}_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+        target_compile_options(npu_${test}_tests PRIVATE -UNDEBUG)
+        target_link_libraries(npu_${test}_tests PRIVATE Threads::Threads)
+        add_test(NAME npu_${test}_regression COMMAND npu_${test}_tests)
+        set_tests_properties(npu_${test}_regression PROPERTIES TIMEOUT 20)
+    endforeach()
+    add_test(NAME npu_dispatch_audit COMMAND "${PYTHON3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/inference/check_npu_dispatch.py")
+    add_test(NAME npu_performance_report_regression COMMAND "${PYTHON3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/inference/test_npu_performance_report.py")
+    set_tests_properties(npu_performance_report_regression PROPERTIES TIMEOUT 10)
+    add_executable(npu_model_inputs_tests tests/inference/test_npu_model_inputs.cpp
+        src/yolo/yolo.cpp src/yolo/yolov8det.cpp src/yolo/yolopose.cpp src/yolo/yoloseg.cpp
+        src/yolo/yolo26pose.cpp src/yolo/yolo26depth.cpp src/zip-depth/zip_depth.cpp
+        src/inference/inference_roi_geometry.cpp src/inference/inference_result_mapping.cpp)
+    target_include_directories(npu_model_inputs_tests PRIVATE ${custom_inc} ${api_inc})
+    target_compile_options(npu_model_inputs_tests PRIVATE -UNDEBUG)
+    target_link_libraries(npu_model_inputs_tests PRIVATE ${OpenCV_LIBS} rknnrt_vendor rga Threads::Threads)
+endif()
+if(BUILD_ZIP_DEPTH_TESTS)
+    enable_testing()
+    add_executable(zip_depth_runtime_tests tests/inference/test_zip_depth_runtime.cpp
+        src/zip-depth/zip_depth.cpp src/inference/inference_result_mapping.cpp
+        src/pipeline/frame_transform.cpp src/pipeline/image_convert.cpp)
+    target_include_directories(zip_depth_runtime_tests PRIVATE ${custom_inc} ${api_inc})
+    target_compile_options(zip_depth_runtime_tests PRIVATE -UNDEBUG -ffunction-sections -fdata-sections)
+    set_target_properties(zip_depth_runtime_tests PROPERTIES LINK_FLAGS "-Wl,--gc-sections")
+    target_link_libraries(zip_depth_runtime_tests PRIVATE ${OpenCV_LIBS} ${GSTOPT_LIBS} rknnrt_vendor rga Threads::Threads)
+    set(ZIP_DEPTH_TEST_MODEL "${VISION_REPOSITORY_ROOT}/projects/assets/zipdepth_npu_768x768-rk3588-fp16.rknn"
+        CACHE FILEPATH "ZipDepth RKNN for hardware test")
+    set(ZIP_DEPTH_TEST_IMAGE "${VISION_REPOSITORY_ROOT}/zipdepth/zipdepth-rknn/examples/sample.jpg"
+        CACHE FILEPATH "ZipDepth test image")
+    if(EXISTS "${ZIP_DEPTH_TEST_MODEL}")
+        set(zip_depth_test_image_arg "--synthetic")
+        if(EXISTS "${ZIP_DEPTH_TEST_IMAGE}")
+            set(zip_depth_test_image_arg "${ZIP_DEPTH_TEST_IMAGE}")
+        endif()
+        add_test(NAME zip_depth_runtime_regression COMMAND zip_depth_runtime_tests
+            "${ZIP_DEPTH_TEST_MODEL}" "${zip_depth_test_image_arg}")
+        set_tests_properties(zip_depth_runtime_regression PROPERTIES TIMEOUT 120 RESOURCE_LOCK npu LABELS hardware)
+    endif()
+endif()
+
+if(BUILD_NPU_TESTS)
+    add_executable(obb_runtime_tests tests/inference/test_obb_runtime.cpp
+        src/yolo/yolov8det.cpp src/yolo/yolopose.cpp src/inference/inference_result_mapping.cpp)
+    target_include_directories(obb_runtime_tests PRIVATE ${custom_inc} ${api_inc})
+    target_compile_options(obb_runtime_tests PRIVATE -UNDEBUG)
+    target_link_libraries(obb_runtime_tests PRIVATE ${OpenCV_LIBS} rknnrt_vendor rga Threads::Threads)
+    if(EXISTS "${VISION_REPOSITORY_ROOT}/projects/assets/yolov8n_obb.rknn")
+        add_test(NAME obb_runtime_regression COMMAND obb_runtime_tests "${VISION_REPOSITORY_ROOT}")
+        set_tests_properties(obb_runtime_regression PROPERTIES TIMEOUT 120 RESOURCE_LOCK npu LABELS hardware)
+    endif()
+endif()

@@ -1,4 +1,6 @@
 #include "yolopose.h"
+#include "detection_order.h"
+#include "inference/npu_execution.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -53,6 +55,7 @@ void YoloPose::init_rknn(const std::string &model_path, int core_mask)
         throw std::runtime_error("RKNN init failed for YoloPose");
     }
     ret = rknn_set_core_mask(ctx_, (rknn_core_mask)core_mask);
+    npu_core_mask_ = ret < 0 ? 0 : core_mask;
     if (ret < 0)
     {
         printf("[YoloPose] warn: set core mask failed, fallback single core\n");
@@ -493,35 +496,6 @@ int YoloPose::process_quantized(const T *input, int grid_h, int grid_w, int stri
     return valid_count;
 }
 
-static int quick_sort_indice_inverse(std::vector<float> &input, int left, int right, std::vector<int> &indices)
-{
-    float key;
-    int key_index;
-    int low = left;
-    int high = right;
-    if (left < right)
-    {
-        key_index = indices[left];
-        key = input[left];
-        while (low < high)
-        {
-            while (low < high && input[high] <= key)
-                high--;
-            input[low] = input[high];
-            indices[low] = indices[high];
-            while (low < high && input[low] >= key)
-                low++;
-            input[high] = input[low];
-            indices[high] = indices[low];
-        }
-        input[low] = key;
-        indices[low] = key_index;
-        quick_sort_indice_inverse(input, left, low - 1, indices);
-        quick_sort_indice_inverse(input, low + 1, right, indices);
-    }
-    return low;
-}
-
 int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std::vector<AlgoResult> &results)
 {
     std::vector<float> filterBoxes;
@@ -563,7 +537,7 @@ int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std:
     {
         indexArray.push_back(i);
     }
-    quick_sort_indice_inverse(objProbs, 0, validCount - 1, indexArray);
+    sort_detection_indices(objProbs, indexArray);
 
     for (int i = 0; i < validCount; ++i)
     {
@@ -647,6 +621,7 @@ int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std:
 
 bool YoloPose::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfStat *perf)
 {
+    results.clear();
     if (frame.empty())
         return false;
 
@@ -662,10 +637,11 @@ bool YoloPose::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfS
     inputs[0].fmt = RKNN_TENSOR_NHWC;
     inputs[0].size = model_w_ * model_h_ * model_c_;
     inputs[0].buf = input_mat.data;
-    if (rknn_inputs_set(ctx_, 1, inputs) < 0)
+    npu::Execution execution(npu_core_mask_);
+    if (execution.inputs_set(ctx_, 1, inputs) < 0)
         return false;
 
-    if (rknn_run(ctx_, NULL) < 0)
+    if (execution.run(ctx_) < 0)
         return false;
     auto t2 = std::chrono::steady_clock::now();
 
@@ -676,14 +652,15 @@ bool YoloPose::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfS
         outputs[i].index = i;
         outputs[i].want_float = is_quant_ ? 0 : 1;
     }
-    if (rknn_outputs_get(ctx_, io_num_out_, outputs, NULL) < 0)
+    npu::Outputs output_lease(execution, ctx_, io_num_out_, outputs);
+    if (output_lease.get() < 0)
         return false;
 
     results.clear();
     post_process(outputs, lb, results);
     auto t3 = std::chrono::steady_clock::now();
 
-    rknn_outputs_release(ctx_, io_num_out_, outputs);
+    if (output_lease.release() < 0) return false;
 
     if (perf)
     {
@@ -696,6 +673,7 @@ bool YoloPose::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPerfS
 
 bool YoloPose::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *perf)
 {
+    results.clear();
     if (!zero_copy_input_enabled_ || !in_mem_ || in_mem_->fd < 0)
         return false;
 
@@ -704,7 +682,8 @@ bool YoloPose::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *p
     auto t1 = std::chrono::steady_clock::now();
 
     /* NPU 输入显存已被 RGA 直写, 直接推理 */
-    if (rknn_run(ctx_, NULL) < 0)
+    npu::Execution execution(npu_core_mask_);
+    if (execution.run(ctx_) < 0)
     {
         printf("[YoloPose] rknn_run (zero-copy) failed\n");
         return false;
@@ -717,7 +696,8 @@ bool YoloPose::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *p
         rknn_outputs_cache_[i].index = i;
         rknn_outputs_cache_[i].want_float = is_quant_ ? 0 : 1;
     }
-    if (rknn_outputs_get(ctx_, io_num_out_, rknn_outputs_cache_.data(), NULL) < 0)
+    npu::Outputs output_lease(execution, ctx_, io_num_out_, rknn_outputs_cache_.data());
+    if (output_lease.get() < 0)
     {
         printf("[YoloPose] rknn_outputs_get (zero-copy) failed\n");
         return false;
@@ -734,7 +714,7 @@ bool YoloPose::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *p
     results.clear();
     post_process(rknn_outputs_cache_.data(), lb, results);
 
-    rknn_outputs_release(ctx_, io_num_out_, rknn_outputs_cache_.data());
+    if (output_lease.release() < 0) return false;
 
     auto t3 = std::chrono::steady_clock::now();
     if (perf)

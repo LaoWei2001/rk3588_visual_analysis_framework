@@ -1,4 +1,5 @@
 #include "yolo26depth.h"
+#include "inference/npu_execution.h"
 
 #include <algorithm>
 #include <chrono>
@@ -22,6 +23,7 @@ Yolo26Depth::Yolo26Depth(const std::string &path, int core_mask)
     {
         check(rknn_init(&context_, const_cast<char *>(path.c_str()), 0, 0, nullptr), "rknn_init");
         check(rknn_set_core_mask(context_, static_cast<rknn_core_mask>(core_mask)), "set_core_mask");
+        npu_core_mask_ = core_mask;
         query_model();
         output_pool_.reserve(4);
         init_input_memory();
@@ -126,15 +128,26 @@ bool Yolo26Depth::run(std::vector<AlgoResult> &results, YoloPerfStat *perf, floa
 {
     results.clear();
     const auto begin = Clock::now();
-    check(rknn_run(context_, nullptr), "run");
+    npu::Execution execution(npu_core_mask_);
+    if (!input_mem_)
+    {
+        rknn_input input{};
+        input.buf = rgb_.data;
+        input.size = static_cast<uint32_t>(rgb_.total() * rgb_.elemSize());
+        input.type = RKNN_TENSOR_UINT8;
+        input.fmt = RKNN_TENSOR_NHWC;
+        check(execution.inputs_set(context_, 1, &input), "set RGB input");
+    }
+    check(execution.run(context_), "run");
     cv::Mat map = acquire_output();
     rknn_output output{};
     output.want_float = 1;
     output.is_prealloc = 1;
     output.buf = map.data;
     output.size = static_cast<uint32_t>(map.total() * map.elemSize());
-    check(rknn_outputs_get(context_, 1, &output, nullptr), "get depth");
-    check(rknn_outputs_release(context_, 1, &output), "release output");
+    npu::Outputs output_lease(execution, context_, 1, &output);
+    check(output_lease.get(), "get depth");
+    check(output_lease.release(), "release output");
     const float infer_ms = ms(begin);
     const auto post_begin = Clock::now();
     if (map.cols != width_ || map.rows != height_)
@@ -171,20 +184,13 @@ bool Yolo26Depth::infer(cv::Mat &frame, std::vector<AlgoResult> &results, YoloPe
     }
     if (input_mem_) rgb_ = cv::Mat(height_, width_, CV_8UC3, input_mem_->virt_addr);
     cv::cvtColor(source, rgb_, cv::COLOR_BGR2RGB);
-    if (!input_mem_)
-    {
-        rknn_input input{};
-        input.buf = rgb_.data;
-        input.size = static_cast<uint32_t>(rgb_.total() * rgb_.elemSize());
-        input.type = RKNN_TENSOR_UINT8;
-        input.fmt = RKNN_TENSOR_NHWC;
-        check(rknn_inputs_set(context_, 1, &input), "set RGB input");
-    }
+
     return run(results, perf, ms(begin));
 }
 
 bool Yolo26Depth::infer_zero_copy(std::vector<AlgoResult> &results, YoloPerfStat *perf)
 {
+    results.clear();
     if (!input_mem_) { results.clear(); return false; }
     return run(results, perf, 0.0f);
 }

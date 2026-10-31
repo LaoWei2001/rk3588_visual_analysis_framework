@@ -90,7 +90,7 @@ Python worker 会各持一份不同协议。
   悬浮退出按钮或捕获阶段的 Esc 恢复（避免作为终端按键发送给 shell），保留各会话、滚屏和当前字号。ResizeObserver 自动重排字符格并同步 PTY/光学尺寸。
   字号支持直接输入 8–128 CSS px（含小数），有效输入实时应用并保存，失焦/回车规范范围，空值恢复上一次有效值。
   VT323 的可见字形高度小于字体 em 尺寸，例如 20px 的 M 墨迹约 11px；字号按标准 CSS px 应用，不以某个字形的墨迹高度换算。
-- 终端外观在 `pages/terminalAppearance.ts` 定义：默认经典琥珀，可切换荧光绿、白磷屏、现代原色。
+- 终端外观在 `features/terminal/terminalAppearance.ts` 定义：默认经典琥珀，可切换荧光绿、白磷屏、现代原色。
   “显示调校”可开关 CRT 并调节辉光 Glow、光晕扩散 Bloom、亮度闪烁 Flicker、文字抖动 Jitter、水平同步干扰、RGB 色散、像素点阵及尺寸、扫描线、暗角、雪花质感、边缘畸变、边框反射、荧光残影和动态扫光；外观保存在浏览器
   `terminal-appearance-v1`，字号仍使用 `terminal-fontSize`。配色直接更新已有 xterm 实例，
   不重建 WebSocket/PTY；ANSI 颜色保持可区分。CSS 覆盖层不接收鼠标事件，动态扫光默认关闭，

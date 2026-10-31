@@ -1,18 +1,12 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import axios from 'axios'
+import { apiErrorMessage as errMsg } from '../api/http'
 import { useAutoSync } from '../hooks/useAutoSync'
 import ConfigSyncNotice from '../components/ConfigSyncNotice'
 import { fetchApps, fetchLogTail, startApp, stopApp, setAppAutostart, uploadApp, deleteApp, AppInfo } from '../api/client'
 import { loadLastConfig } from '../utils/lastConfig'
 import './AppsPage.css'
 
-function errMsg(e: unknown): string {
-  if (axios.isAxiosError(e)) {
-    return e.response?.data?.detail ?? e.response?.data?.message ?? e.message
-  }
-  return e instanceof Error ? e.message : String(e)
-}
 
 function fmtUptime(s: number | null): string {
   if (s == null) return '-'

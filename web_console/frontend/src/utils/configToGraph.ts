@@ -115,9 +115,6 @@ export function configToGraph(
     const streamData: Record<string, unknown> = {
       ...stream,
       channel_id: origId,
-      enable: configBool(ch.enable, true),
-      infer_enable: configBool(ch.infer_enable, true),
-      swap_rb: configBool(ch.swap_rb, false),
     }
     if (ch.inference_roi && typeof ch.inference_roi === 'object' && !Array.isArray(ch.inference_roi))
       streamData.inference_roi = ch.inference_roi

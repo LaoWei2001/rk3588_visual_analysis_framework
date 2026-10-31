@@ -83,7 +83,7 @@ class Yolo26Pose final : public ModelBase
 
     cv::Mat &preprocess(const cv::Mat &image, Letterbox &letterbox);
     bool run_and_decode(const Letterbox &letterbox, int image_width, int image_height, std::vector<AlgoResult> &results,
-                        YoloPerfStat *perf, float preprocess_ms);
+                        YoloPerfStat *perf, float preprocess_ms, rknn_input *input = nullptr);
     void decode(const Letterbox &letterbox, int image_width, int image_height, const void *output,
                 std::vector<AlgoResult> &results);
     float output_value(const void *output, int candidate, int feature) const;

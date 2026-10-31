@@ -12,7 +12,7 @@ import pytest
 
 pw_api = pytest.importorskip('playwright.sync_api')
 BACKEND = Path(__file__).resolve().parents[1]
-DIST = BACKEND.parent / 'frontend/dist'
+DIST = Path(os.environ.get('RK3588_TEST_FRONTEND_DIST', BACKEND.parent / 'frontend/dist'))
 urlopen = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
 
 SERVER = r'''

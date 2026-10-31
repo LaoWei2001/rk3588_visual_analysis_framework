@@ -180,3 +180,5 @@ CMake 编译（包括 `build.sh --debug`）会生成并编译嵌入式能力清�
 - `global_modules/global_xxx/` 只存放该跨通道逻辑自己的代码和元数据。
 - 小逻辑可以只有一个 `logic.cpp`；只有文件确实变大时才继续按状态、算法、上报、绘制拆分。
 - 模块之间不要通过相对路径包含彼此的内部头文件；需要复用的稳定能力应提升到明确的公共层。
+
+ZipDepth 相对深度接入见 [logic_zip_depth_demo](modules/logic_zip_depth_demo/README.md)，示例配置为 `assets/zip_depth_video.json`。

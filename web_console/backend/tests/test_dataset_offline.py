@@ -136,7 +136,7 @@ def test_invalid_offline_channel_is_rejected(offline, change):
     manager, assets, app_config = offline
     channel = app_config['channels'][0]
     model = channel['models'][0]
-    if change == 'disabled': channel['enable'] = False
+    if change == 'disabled': model['enable'] = False
     elif change == 'multi_model': channel['models'].append(copy.deepcopy(model))
     elif change == 'pose': model['model_type'] = 'yolov8_pose'
     elif change == 'filtered': model['detect_classes'] = ['helmet']
