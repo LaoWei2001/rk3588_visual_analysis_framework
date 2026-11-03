@@ -1,6 +1,6 @@
 # GlobalContext API
 
-本文对应当前 `engine/include/global.h`、`engine/src/logic/core/global_logic.cpp` 和 `engine/include/snapshot.h`。
+本文对应当前 `engine/include/global.h`、`engine/src/logic/global_logic.cpp` 和 `engine/include/snapshot.h`。
 
 ## Tick 和实例字段
 

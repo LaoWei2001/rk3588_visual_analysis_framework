@@ -41,10 +41,10 @@ def test_recovery_reserve_is_bounded_and_returns_to_live_latency(tmp_path):
         assert.equal(buffer.targetSeconds,target); // Real frame presentation decays the reserve.
         for(let now=22250;now<=40000;now+=250) buffer.observePlayback(now,true);
         assert.equal(buffer.targetSeconds,target);
-        assert.equal(livePlaybackRate(10,10+target+.1),1);
+        assert.equal(livePlaybackRate(10,10+target+.02),1);
         assert(livePlaybackRate(10,10+target+.3)>1);
         assert.equal(livePlaybackRate(NaN,11),1);
-        assert.equal(livePlaybackTarget(10,9,10.8,true),null);
+        assert.equal(livePlaybackTarget(10,9,10.5,true),null);
         assert(Math.abs(livePlaybackTarget(10,9,12,true)- (12-target))<1e-9);
         assert.equal(livePlaybackTarget(0,10,10.1,false),null);
         assert(Math.abs(livePlaybackTarget(0,10,11,false)-(11-target))<1e-9);

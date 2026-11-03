@@ -139,6 +139,7 @@ export default function LiveViewPage() {
   const [seekBusy, setSeekBusy] = useState<Record<number, boolean>>({})
   const [activeTimelineChannel, setActiveTimelineChannel] = useState<number | null>(null)
   const [videoLayout, setVideoLayout] = useState<VideoLayout | null>(null)
+  const [focusedChannel, setFocusedChannel] = useState<number | null>(null)
   const [pictureBounds, setPictureBounds] = useState({ left: 0, top: 0, width: 0, height: 0 })
   const [actionBusy, setActionBusy] = useState<Record<string, boolean>>({})
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
@@ -153,6 +154,7 @@ export default function LiveViewPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const videoSnapshotRef = useRef<HTMLCanvasElement>(null)
   const videoFrameRef = useRef<HTMLDivElement>(null)
+  const videoStageRef = useRef<HTMLDivElement>(null)
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const seekDraftsRef = useRef<Record<number, number>>({})
   const seekBusyRef = useRef(new Set<number>())
@@ -242,11 +244,24 @@ export default function LiveViewPage() {
   const runningConfig = runningApp?.config ?? ''
   const rtspEnabled = rtspState === 'enabled'
   const fileTimelineEnabled = !!appName && rtspEnabled && !streamLoading && !streamErr
+  const focusedTile = videoLayout?.tiles.find(tile => tile.channelId === focusedChannel) ?? null
+  const viewTiles = useMemo(() => focusedTile
+    ? [{ ...focusedTile, left: 0, top: 0, width: 1, height: 1 }]
+    : videoLayout?.tiles ?? [], [videoLayout, focusedTile])
+  const cropStyle: React.CSSProperties | undefined = focusedTile ? {
+    position: 'absolute', objectFit: 'fill',
+    width: `${100 / focusedTile.width}%`, height: `${100 / focusedTile.height}%`,
+    left: `${-100 * focusedTile.left / focusedTile.width}%`,
+    top: `${-100 * focusedTile.top / focusedTile.height}%`, right: 'auto', bottom: 'auto',
+  } : undefined
 
-  const timelineTiles = useMemo(() => fileTimelineEnabled ? videoLayout?.tiles.flatMap(tile => {
+  useEffect(() => { setFocusedChannel(null) }, [appName, runningConfig, runningApp?.pid])
+
+
+  const timelineTiles = useMemo(() => fileTimelineEnabled ? viewTiles.flatMap(tile => {
     const source = fileSources.find(item => item.channel_ids.includes(tile.channelId))
     return source ? [{ ...tile, source }] : []
-  }) ?? [] : [], [fileTimelineEnabled, videoLayout, fileSources])
+  }) : [], [fileTimelineEnabled, viewTiles, fileSources])
   const timelineKey = timelineTiles.map(tile => `${tile.channelId}:${tile.source.owner_channel_id}`).join(',')
 
   const clearFileTimelineTimer = useCallback(() => {
@@ -300,11 +315,12 @@ export default function LiveViewPage() {
   const measurePicture = useCallback(() => {
     const frame = videoFrameRef.current
     const video = videoRef.current
-    if (!frame || !video || !videoLayout) return null
+    const stage = videoStageRef.current
+    if (!frame || !video || !stage || !videoLayout) return null
     const frameBox = frame.getBoundingClientRect()
-    const box = video.getBoundingClientRect()
-    const width = video.videoWidth || videoLayout.width
-    const height = video.videoHeight || videoLayout.height
+    const box = stage.getBoundingClientRect()
+    const width = (video.videoWidth || videoLayout.width) * (focusedTile?.width ?? 1)
+    const height = (video.videoHeight || videoLayout.height) * (focusedTile?.height ?? 1)
     const scale = Math.min(box.width / width, box.height / height)
     return {
       left: box.left - frameBox.left + (box.width - width * scale) / 2,
@@ -312,7 +328,7 @@ export default function LiveViewPage() {
       width: width * scale,
       height: height * scale,
     }
-  }, [videoLayout])
+  }, [videoLayout, focusedTile])
 
   useLayoutEffect(() => {
     const measure = () => {
@@ -325,7 +341,7 @@ export default function LiveViewPage() {
     const video = videoRef.current
     const observer = new ResizeObserver(measure)
     if (frame) observer.observe(frame)
-    if (video) observer.observe(video)
+    if (videoStageRef.current) observer.observe(videoStageRef.current)
     video?.addEventListener('loadedmetadata', measure)
     video?.addEventListener('resize', measure)
     window.addEventListener('resize', measure)
@@ -1017,7 +1033,7 @@ export default function LiveViewPage() {
             <div
               className="live-view-video-frame"
               ref={videoFrameRef}
-              tabIndex={timelineTiles.length > 0 ? 0 : undefined}
+              tabIndex={viewTiles.length > 0 ? 0 : undefined}
               onFocus={focusTimeline}
               onKeyDown={selectTimelineByKeyboard}
             >
@@ -1029,21 +1045,25 @@ export default function LiveViewPage() {
                 <span aria-hidden="true">{videoFullscreen ? '⊠' : '⛶'}</span>
                 {videoFullscreen ? '退出全屏' : '全屏'}
               </button>
-              <div className="live-view-video-stage">
+              <div className="live-view-video-stage" ref={videoStageRef}>
                 {rtspEnabled ? (
                   !streamErr ? (
                     <>
+                      <div className="live-view-video-crop" data-focused-channel={focusedTile?.channelId ?? 'grid'}
+                        style={focusedTile ? { left: pictureBounds.left, top: pictureBounds.top,
+                          width: pictureBounds.width, height: pictureBounds.height } : undefined}>
                       <video
                         ref={videoRef}
                         key={`${appName}-${streamNonce}`}
                         className="live-view-video"
-                        style={streamLoading && !snapshotReady ? { visibility: 'hidden' } : undefined}
+                        style={{ ...cropStyle, visibility: streamLoading && !snapshotReady ? 'hidden' : undefined }}
                         muted
                         autoPlay
                         playsInline
                         onPlaying={handleStreamLoad}
                       />
-                      <canvas ref={videoSnapshotRef} className="live-view-video-snapshot" hidden={!streamLoading || !snapshotReady} />
+                      <canvas ref={videoSnapshotRef} className="live-view-video-snapshot" style={cropStyle} hidden={!streamLoading || !snapshotReady} />
+                      </div>
                       {streamLoading && (
                         <div className={`live-view-loading${snapshotReady ? ' reconnecting' : ''}`}>
                           <div className="live-view-spinner" />
@@ -1082,6 +1102,19 @@ export default function LiveViewPage() {
                   </div>
                 )}
               </div>
+              {videoLayout && videoLayout.tiles.length > 1 && fileTimelineEnabled && (
+                <div className="live-view-tile-targets" style={{ left: pictureBounds.left, top: pictureBounds.top,
+                  width: pictureBounds.width, height: pictureBounds.height }}>
+                  {viewTiles.map(tile => <button key={tile.channelId}
+                    className={`live-view-tile-target${focusedTile ? ' is-focused' : ''}`}
+                    aria-label={focusedTile ? '点击画面返回拼接' : `单独查看通道 ${tile.channelId}`}
+                    style={{ left: `${tile.left * 100}%`, top: `${tile.top * 100}%`,
+                      width: `${tile.width * 100}%`, height: `${tile.height * 100}%` }}
+                    onClick={() => setFocusedChannel(focusedTile ? null : tile.channelId)}>
+                    <span>{focusedTile ? '点击画面返回拼接' : `通道 ${tile.channelId} · 单独查看`}</span>
+                  </button>)}
+                </div>
+              )}
               {timelineTiles.length > 0 && videoLayout && (
                 <div
                   className="live-view-file-timelines"

@@ -11,7 +11,7 @@
  * 参考: Bewley et al., "Simple Online and Realtime Tracking", ICIP 2016
  */
 #include "tracker.h"
-#include "yolo/yolo_utils.h"
+#include "model/yolo/yolo_utils.h"
 
 #include <algorithm>
 #include <cmath>

@@ -1,6 +1,6 @@
 # ZipDepth 视频与算法开发
 
-底层实现位于 `engine/src/zip-depth/`，模型类型为 `zip_depth`。
+底层实现位于 `engine/src/model/zip-depth/`，模型类型为 `zip_depth`。
 使用与 YOLO 相同的模型节点、通道、多模型结果列表和业务回调。
 当前 768×768 FP16 模型及元数据已放到 `projects/assets/`，随项目一起打包。
 

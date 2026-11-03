@@ -1,6 +1,7 @@
 # RK3588 性能记录与复现
 
-本页保留 2026-10-26 较早的文件输入实测与测试入口。**最新 RTSP + USB、核心分配 A/B 和不同路数结果见[自动核心实测](npu-core-placement.md)。** 两批输入、输出与版本条件不同，不能直接合并。所有记录均不是不同 RK3588 项目的排名或任意模型/板卡的性能保证。
+最新真实 RTSP、15 路推理、原生输出优化和模型矩阵见[实时多路推理实测](npu-live-performance.md)。
+本页保留 2026-10-26 较早的文件输入实测与测试入口；核心分配规则及 RTSP + USB 对照见[自动核心实测](npu-core-placement.md)。不同输入、输出与版本条件的记录不能直接合并。
 
 [返回首页](../README.md#性能与验证) · [机器可读记录](benchmarks/2026-10-26-baseline.json) · [NPU 调度说明](../engine/src/inference/NPU_SCHEDULING.md)
 
@@ -88,25 +89,19 @@ python3 engine/tests/inference/run_npu_performance.py \
 
 用于组合、绑核、热换与线程创建失败回退的板端脚本见 [run_model_matrix.py](../engine/tests/inference/run_model_matrix.py)和 [NPU 调度文档](../engine/src/inference/NPU_SCHEDULING.md)。它们验证运行行为，不自动给出真实摄像头端到端延迟。
 
-### 裸 NPU 吞吐
+### 模型独立推理
 
-`engine/bench/npu_bench.cpp` 是现有独立程序，当前不属于 CMake 默认可执行目标。在 RK3588、依赖已准备好时，显式使用锁定 SDK 构建：
+独立工具位于 [`tools/device/npu_bench/`](../tools/device/npu_bench/README.md)，由自己的 `build.sh` 使用锁定 SDK 构建，不参与主引擎的默认构建。在 RK3588、依赖已准备好时，从仓库根目录执行：
 
 ```bash
-mkdir -p build/bench
-g++ -O3 -std=c++14 -pthread \
-  -Iengine/vendor/rknn/2.4.2a2/include \
-  engine/bench/npu_bench.cpp \
-  -Lengine/vendor/rknn/2.4.2a2/lib/aarch64 \
-  -lrknnrt -o build/bench/npu_bench
-
-LD_LIBRARY_PATH="$PWD/engine/vendor/rknn/2.4.2a2/lib/aarch64" \
-  build/bench/npu_bench /path/to/model.rknn 3 15 0 1
+./tools/device/npu_bench/build.sh
+./tools/device/npu_bench/npu_bench /path/to/model.rknn --mode latency --seconds 15 --repeats 3
+./tools/device/npu_bench/npu_bench /path/to/model.rknn --mode throughput --instances 3 --json result.json
 ```
 
-参数依次为模型、context 数、秒数、core_mode、readback。`0` 核心模式为按 context 轮询绑定 0/1/2；`readback=1` 含输出获取，`0` 只计 NPU 执行及绑定输出，均不含视频、RGA、模型后处理、跟踪和网络。模型输出/输入布局必须与该程序假设相容。
+新版默认使用模型原生输入输出，输入数据和内存都提前准备好；计时包含模型执行中必需的 CPU/NPU 运算，不包含视频、RGA、业务编排、后处理和网络。`latency` 默认单实例、核心 0；`throughput` 默认三实例分配到核心 0/1/2。每轮先预热再计时，输出平均耗时、P50/P95 和窗口吞吐；`--io readback` 可额外测量输出取回。旧数字位置参数已取消，完整用法及动态尺寸限制见工具 README。
 
-`bench_sweep.sh` 固定寻找同目录的 `npu_bench`，且源码注释的系统 `-lrknnrt` 构建命令没有保证使用锁定 Runtime；本页显式编译路径用于避免该歧义。本次仅验证此构建命令，不重新运行裸 NPU 负载，也不改动这些脚本。
+构建会校验 SDK，并为程序写入锁定 Runtime 的库搜索路径。逐层 profiling 工具放在 [`tools/device/rknn_profile/`](../tools/device/rknn_profile/README.md)，通过自己的 `build.sh` 在原目录生成可执行文件。频率实验工具单独放在 [`tools/device/npu_freq/`](../tools/device/npu_freq/README.md)，直接运行 `npu_freq.sh`，无需编译。
 
 ### 软件回归
 

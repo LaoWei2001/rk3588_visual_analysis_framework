@@ -36,7 +36,7 @@ description: >-
 
 通过 `develop_feature` 运行时，只能写入 `projects/modules/**` 和
 `projects/global_modules/**`。本 Skill 的通道产物必须全部放在所属
-`modules/<logic_id>/` 内；上报模板也放在该目录的 `report_templates/`。公共 `logic/core`、配置、测试、
+`modules/<logic_id>/` 内；上报模板也放在该目录的 `report_templates/`。公共 `logic`、配置、测试、
 Web、服务、文档、脚本和生成物全部只读。无法使用现有公共接口和 manifest 完成时立即停止，不新增公共
 API，也不请求扩大权限。机械执行规则见
 [`Logic-only 写入边界`](../rk3588-feature-wizard/references/write-boundary.md)。

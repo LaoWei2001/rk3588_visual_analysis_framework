@@ -242,6 +242,50 @@
   overflow: hidden;
 }
 
+.live-view-video-crop {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.live-view-tile-targets {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.live-view-tile-target {
+  position: absolute;
+  pointer-events: auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.live-view-tile-target.is-focused { cursor: zoom-out; }
+
+.live-view-tile-target span {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  border-radius: 4px;
+  padding: 4px 6px;
+  background: rgba(15, 17, 23, 0.8);
+  color: #fff;
+  font-size: 12px;
+  opacity: 0;
+}
+
+.live-view-tile-target:hover,
+.live-view-tile-target:focus-visible {
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.live-view-tile-target:hover span,
+.live-view-tile-target:focus-visible span { opacity: 1; }
+
 .live-view-video-frame:fullscreen {
   width: 100vw;
   height: 100vh;

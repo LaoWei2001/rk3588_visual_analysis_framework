@@ -27,7 +27,7 @@ FP16 网络与检测网络的算子、精度和中间张量规模也不同，不
 
 ## 改动
 
-`engine/src/zip-depth/zip_depth.cpp` 保留 RGA 的 RGB8 目标缓冲，另绑定模型原生 FP16 输入。
+`engine/src/model/zip-depth/zip_depth.cpp` 保留 RGA 的 RGB8 目标缓冲，另绑定模型原生 FP16 输入。
 用 ARM NEON 批量完成 RGB8 → FP16 `/255`，再以 `pass_through=1` 提交，ImageNet 归一化仍由原网络执行。
 CPU 转换计入 `preprocess_ms`，在取得 NPU 核心前执行；全部 RKNN 执行和输出读取仍受原核心保护。
 未改变权重、输入尺寸、输出精度、核心规划、队列或丢弃过期结果的规则。
@@ -90,14 +90,11 @@ cd build/engine
 ctest --output-on-failure -R zip_depth_runtime
 ```
 
-独立逐层诊断工具只需要锁定的 SDK，执行前应让其他 NPU 推理程序退出：
+独立[逐层诊断工具](../tools/device/rknn_profile/README.md)只需要锁定的 SDK，从仓库根目录构建和运行，执行前应让其他 NPU 推理程序退出：
 
 ```bash
-g++ -O3 -std=c++14 -pthread -Iengine/vendor/rknn/2.4.2a2/include \
-  engine/bench/rknn_profile.cpp -Lengine/vendor/rknn/2.4.2a2/lib/aarch64 \
-  -Wl,-rpath,"$PWD/engine/vendor/rknn/2.4.2a2/lib/aarch64" \
-  -lrknnrt -o build/engine/rknn_profile
-build/engine/rknn_profile projects/assets/zipdepth_npu_768x768-rk3588-fp16.rknn 5
+./tools/device/rknn_profile/build.sh
+./tools/device/rknn_profile/rknn_profile projects/assets/zipdepth_npu_768x768-rk3588-fp16.rknn 5
 ```
 
 原权重仍包含 CPU Transpose，本次没有消除它。进一步优化需要原始 ONNX/导出工程，检查该

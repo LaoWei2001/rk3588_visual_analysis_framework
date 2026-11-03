@@ -3,9 +3,13 @@
 Each frame carries the producer's monotonic milliseconds as a 24-bit barcode.
 This is transport/playback latency, not a camera-to-physical-display benchmark.
 Optional RK3588_TEST_FRONTEND_DIST / RK3588_TEST_STREAM_ROUTER select A/B builds.
+RK3588_TEST_ENGINE_BINARY/CONFIG/APP optionally insert the real inference engine
+between the timestamp RTSP source and the preview, using a private config copy.
 """
 import json
+import hashlib
 import os
+import signal
 from pathlib import Path
 import socket
 import statistics
@@ -23,7 +27,7 @@ ROUTER = Path(os.environ.get('RK3588_TEST_STREAM_ROUTER', BACKEND/'routers/strea
 urlopen = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
 
 SERVER = r'''
-import asyncio, importlib.util, json, pathlib, sys, threading, time
+import asyncio, importlib.util, json, os, pathlib, signal, socket, subprocess, sys, threading, time
 from contextlib import asynccontextmanager
 import gi
 gi.require_version('Gst', '1.0')
@@ -33,6 +37,8 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
+for key in list(os.environ):
+    if key.lower().endswith('_proxy'):os.environ.pop(key,None)
 
 root, dist, router_file, http_port, rtsp_port = sys.argv[1:]
 root, dist = pathlib.Path(root), pathlib.Path(dist)
@@ -78,11 +84,122 @@ server.get_mount_points().add_factory('/live',factory)
 assert server.attach(None)
 loop = GLib.MainLoop()
 threading.Thread(target=loop.run,daemon=True).start()
+engine = None
+engine_log = None
+direct_probe = None
+direct_ages = []
+hdmi_ages = []
+capture_stop = threading.Event()
+capture_thread = None
+crop_cols = crop_rows = 1
+engine_binary = os.environ.get('RK3588_TEST_ENGINE_BINARY')
+if engine_binary:
+    app_dir = pathlib.Path(os.environ['RK3588_TEST_ENGINE_APP']).resolve()
+    config = json.loads(pathlib.Path(os.environ['RK3588_TEST_ENGINE_CONFIG']).read_text())
+    with socket.socket() as port_probe:
+        port_probe.bind(('127.0.0.1',0))
+        output_port = port_probe.getsockname()[1]
+    config['global'].update(enable_display=bool(os.environ.get('RK3588_TEST_HDMI')),enable_rtsp=True,rtsp_codec='h264',rtsp_port=output_port,rtsp_path='/live')
+    crop_cols = config['global']['tile_cols']
+    crop_rows = config['global']['tile_rows']
+    for channel in config['channels']:
+        channel['stream'].update(src_type='rtsp',url=f'rtsp://127.0.0.1:{rtsp_port}/live',video_enc='h264')
+    engine_config = root/'engine-config.json'
+    engine_config.write_text(json.dumps(config,indent=2))
+    engine_config.chmod(0o600)
+    (assets/'config.json').write_text(json.dumps({'global':{'enable_rtsp':1,'rtsp_port':output_port}}))
+    env = dict(os.environ,LD_LIBRARY_PATH=str(app_dir/'libs'),ASSETS_DIR=str(app_dir/'assets'))
+    # The fixture's loopback RTSP source must not use the shell's HTTP proxy.
+    for key in list(env):
+        if key.lower().endswith('_proxy'):env.pop(key,None)
+    # Keep UNIX socket paths short and isolated from the installed application's.
+    import tempfile
+    sockets = tempfile.TemporaryDirectory(prefix='rk-delay-')
+    for key,name in [('RK_LOGIC_CONTROL_SOCKET','logic'),('RK_DATASET_SOCKET','dataset'),('RK_FILE_PLAYBACK_CONTROL_SOCKET','playback')]:
+        env[key] = str(pathlib.Path(sockets.name)/(name+'.sock'))
+    for key in ('NOTIFY_SOCKET','WATCHDOG_PID','WATCHDOG_USEC'):env.pop(key,None)
+    engine_log = (root/'engine.log').open('w')
+    engine = subprocess.Popen([str(pathlib.Path(engine_binary).resolve()),str(engine_config.resolve())],cwd=app_dir,env=env,stdout=engine_log,stderr=subprocess.STDOUT)
+    deadline = time.monotonic()+90
+    while time.monotonic()<deadline:
+        assert engine.poll() is None,'Engine exited during timestamp test'
+        with socket.socket() as probe:
+            if probe.connect_ex(('127.0.0.1',output_port))==0:break
+        time.sleep(.1)
+    else:raise RuntimeError('Engine RTSP startup timeout')
+    if os.environ.get('RK3588_TEST_RTSP_PROBE'):
+        width,height = config['global']['disp_width'],config['global']['disp_height']
+        right = ((width+15)&~15)-((width//crop_cols)&~3)
+        bottom = ((height+15)&~15)-((height//crop_rows)&~1)
+        direct_probe = Gst.parse_launch(f'rtspsrc location=rtsp://127.0.0.1:{output_port}/live protocols=tcp latency=0 '
+            '! rtph264depay ! h264parse ! mppvideodec '
+            f'! videocrop right={right} bottom={bottom} ! videoscale ! video/x-raw,width=320,height=180 '
+            '! videoconvert ! video/x-raw,format=RGB ! appsink name=age_sink sync=false max-buffers=1 drop=true emit-signals=true')
+        def sample_age(sink):
+            sample = sink.emit('pull-sample')
+            ok,mapped = sample.get_buffer().map(Gst.MapFlags.READ)
+            if ok:
+                row = mapped.data[40*320*3:41*320*3]
+                stamp = 0
+                for bit in range(24):stamp = stamp*2+(row[(22+bit*12)*3]>128)
+                age = (time.monotonic()*1000-stamp)%16777216
+                if stamp:direct_ages.append(age)
+                sample.get_buffer().unmap(mapped)
+            return Gst.FlowReturn.OK
+        direct_probe.get_by_name('age_sink').connect('new-sample',sample_age)
+        direct_probe.set_state(Gst.State.PLAYING)
+    if os.environ.get('RK3588_TEST_HDMI'):
+        # Read the X11 HDMI application's pixels, not a pipeline timestamp.
+        # This excludes the monitor's own scanout/pixel response latency.
+        def capture_hdmi():
+            import ctypes,re
+            os.environ.setdefault('DISPLAY',':0')
+            os.environ.setdefault('XAUTHORITY','/run/lightdm/root/:0')
+            xid = None
+            while not capture_stop.wait(.1):
+                result = subprocess.run(['xwininfo','-name','rtsp_yolo_grid'],capture_output=True,text=True)
+                match = re.search(r'Window id: (0x[0-9a-f]+)',result.stdout)
+                if match:xid=int(match[1],16);break
+            if xid is None:return
+            xlib = ctypes.CDLL('libX11.so.6')
+            xlib.XOpenDisplay.argtypes=[ctypes.c_char_p];xlib.XOpenDisplay.restype=ctypes.c_void_p
+            xlib.XGetImage.argtypes=[ctypes.c_void_p,ctypes.c_ulong,ctypes.c_int,ctypes.c_int,ctypes.c_uint,ctypes.c_uint,ctypes.c_ulong,ctypes.c_int]
+            xlib.XGetImage.restype=ctypes.c_void_p
+            xlib.XGetPixel.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_int];xlib.XGetPixel.restype=ctypes.c_ulong
+            xlib.XDestroyImage.argtypes=[ctypes.c_void_p]
+            xlib.XCloseDisplay.argtypes=[ctypes.c_void_p]
+            display=xlib.XOpenDisplay(None)
+            if not display:return
+            tile_w=(config['global']['disp_width']//crop_cols)&~3
+            tile_h=(config['global']['disp_height']//crop_rows)&~1
+            try:
+                while not capture_stop.wait(.1):
+                    pixels=xlib.XGetImage(display,xid,0,int(tile_h*40/180),tile_w,1,ctypes.c_ulong(-1).value,2)
+                    if not pixels:continue
+                    stamp=0
+                    for bit in range(24):
+                        pixel=xlib.XGetPixel(pixels,int((22+bit*12)*tile_w/320),0)
+                        stamp=stamp*2+(((pixel>>16)&255)>128)
+                    xlib.XDestroyImage(pixels)
+                    if stamp:hdmi_ages.append((time.monotonic()*1000-stamp)%16777216)
+            finally:xlib.XCloseDisplay(display)
+        capture_thread=threading.Thread(target=capture_hdmi,daemon=True)
+        capture_thread.start()
 state = {'paused_until':0}
 @asynccontextmanager
 async def lifespan(_app):
     yield
     await stream._stream_pool.shutdown()
+    if direct_probe:direct_probe.set_state(Gst.State.NULL)
+    capture_stop.set()
+    if capture_thread:capture_thread.join(3)
+    if engine:
+        engine.send_signal(signal.SIGINT)
+        try:engine.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            engine.kill();engine.wait()
+        engine_log.close()
+        sockets.cleanup()
     loop.quit()
 app = FastAPI(lifespan=lifespan)
 class NetworkPause:
@@ -97,7 +214,11 @@ class NetworkPause:
 app.add_middleware(NetworkPause)
 app.include_router(stream.router,prefix='/api')
 @app.get('/test/clock')
-async def clock(): return {'ms':time.monotonic()*1000}
+async def clock(): return {'ms':time.monotonic()*1000,'crop_cols':crop_cols,'crop_rows':crop_rows}
+@app.get('/test/direct')
+async def direct(): return {'frames':len(direct_ages),'last_ages_ms':direct_ages[-120:]}
+@app.get('/test/hdmi')
+async def hdmi(): return {'frames':len(hdmi_ages),'last_ages_ms':hdmi_ages[-50:]}
 @app.post('/test/pause')
 async def pause():
     state['paused_until']=time.monotonic()+1.1
@@ -105,7 +226,7 @@ async def pause():
 @app.get('/api/apps')
 async def apps(): return [dict(name='demo',status='running',pid=1,config='config.json')]
 @app.get('/api/apps/demo/config')
-async def config(): return {'global':{'enable_rtsp':1},'channels':[]}
+async def app_config(): return {'global':{'enable_rtsp':1},'channels':[]}
 @app.get('/api/apps/demo/logic-actions')
 async def actions(): return {'globals':[],'channels':[],'socket_ready':True}
 @app.get('/api/apps/demo/file-playback')
@@ -130,10 +251,10 @@ def test_frame_age_returns_to_live_after_network_stalls(tmp_path):
     with (tmp_path/'server.log').open('w') as log:
         proc = subprocess.Popen([sys.executable, str(script), str(tmp_path/'apps'),
             str(DIST), str(ROUTER), str(http_port), str(rtsp_port)], stdout=log, stderr=log,
-            env={**os.environ, 'PYTHONPATH': str(BACKEND)})
+            env={**os.environ, 'PYTHONPATH': str(BACKEND)}, start_new_session=True)
         base = 'http://127.0.0.1:'+str(http_port)
         try:
-            for _ in range(100):
+            for _ in range(900 if os.environ.get('RK3588_TEST_ENGINE_BINARY') else 100):
                 assert proc.poll() is None, (tmp_path/'server.log').read_text()
                 try:
                     urlopen(base+'/test/clock', timeout=1).close()
@@ -162,6 +283,7 @@ def test_frame_age_returns_to_live_after_network_stalls(tmp_path):
                         for(let i=0;i<8;i++) {
                             const start=performance.now();
                             const result=await fetch('/test/clock').then(r=>r.json());
+                            window.cropCols=result.crop_cols;window.cropRows=result.crop_rows;
                             const end=performance.now();
                             pairs.push({rtt:end-start,offset:result.ms-(start+end)/2});
                         }
@@ -171,7 +293,7 @@ def test_frame_age_returns_to_live_after_network_stalls(tmp_path):
                         clockCanvas.width=320;clockCanvas.height=180;
                         window.sampleClock=()=>{
                             const v=document.querySelector('video'),c=clockCanvas.getContext('2d');
-                            c.drawImage(v,0,0,320,180);
+                            c.drawImage(v,0,0,v.videoWidth/cropCols,v.videoHeight/cropRows,0,0,320,180);
                             const row=c.getImageData(0,40,320,1).data;
                             let stamp=0;
                             for(let i=0;i<24;i++) stamp=stamp*2+(row[(22+i*12)*4]>128?1:0);
@@ -197,11 +319,33 @@ def test_frame_age_returns_to_live_after_network_stalls(tmp_path):
                     assert all(not x.get('error') for x in before+after)
                     ages = sorted(x['age_ms'] for x in after)
                     report = dict(startup_seconds=startup,source='320x180@30 synthetic monotonic barcode',
+                        engine_binary=os.environ.get('RK3588_TEST_ENGINE_BINARY'),
+                        boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+                        frontend_index_sha256=hashlib.sha256((DIST/'index.html').read_bytes()).hexdigest(),
+                        router_sha256=hashlib.sha256(ROUTER.read_bytes()).hexdigest(),
                         forced_http_stalls=3,stall_seconds=1.1,stream_requests=len(requests),
                         before=before,after=after,after_p50_ms=statistics.median(ages),
                         after_p95_ms=ages[int(.95*(len(ages)-1))])
+                    if report['engine_binary']:
+                        report['engine_sha256']=hashlib.sha256(Path(report['engine_binary']).read_bytes()).hexdigest()
+                    if os.environ.get('RK3588_TEST_RTSP_PROBE'):
+                        direct = json.loads(urlopen(base+'/test/direct').read())
+                        direct_values = sorted(direct['last_ages_ms'])
+                        assert len(direct_values)==120, 'Direct RTSP probe did not receive frames'
+                        report['direct_rtsp'] = dict(frames=direct['frames'],p50_ms=statistics.median(direct_values),
+                            p95_ms=direct_values[int(.95*(len(direct_values)-1))],samples_ms=direct_values)
+                    if os.environ.get('RK3588_TEST_HDMI'):
+                        hdmi = json.loads(urlopen(base+'/test/hdmi').read())
+                        hdmi_values = sorted(hdmi['last_ages_ms'])
+                        assert len(hdmi_values)==50, 'HDMI window probe did not receive frames'
+                        report['hdmi_window'] = dict(frames=hdmi['frames'],p50_ms=statistics.median(hdmi_values),
+                            p95_ms=hdmi_values[int(.95*(len(hdmi_values)-1))],samples_ms=hdmi_values)
                     (tmp_path/'latency-report.json').write_text(json.dumps(report,indent=2))
-                    print('LATENCY',json.dumps({k:v for k,v in report.items() if k not in ('before','after')}),flush=True)
+                    page.locator('video').screenshot(path=str(tmp_path/'video.png'))
+                    summary={k:v for k,v in report.items() if k not in ('before','after')}
+                    for key in ('direct_rtsp','hdmi_window'):
+                        if key in summary:summary[key]={k:v for k,v in summary[key].items() if k!='samples_ms'}
+                    print('LATENCY',json.dumps(summary),flush=True)
                     assert after[-1]['frames']>after[0]['frames']+30
                     assert len(requests)==1, 'Short jitter should recover without reopening the stream'
                     assert report['after_p95_ms']<float(os.environ.get('RK3588_TEST_MAX_LIVE_LATENCY_MS','1200')),report
@@ -210,7 +354,12 @@ def test_frame_age_returns_to_live_after_network_stalls(tmp_path):
         finally:
             proc.terminate()
             try:
-                proc.wait(timeout=8)
+                proc.wait(timeout=30 if os.environ.get('RK3588_TEST_ENGINE_BINARY') else 8)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                os.killpg(proc.pid,signal.SIGKILL)
                 proc.wait()
+            finally:
+                # Also clean up a child engine if fixture startup failed before
+                # uvicorn installed its lifespan/signal handlers.
+                try:os.killpg(proc.pid,signal.SIGTERM)
+                except ProcessLookupError:pass

@@ -178,9 +178,9 @@ flowchart LR
     A["RTSP / File / USB"] --> B["capturer/DecChannel<br/>GStreamer · MPP / decodebin"]
     B --> C["pipeline/frame_inlet<br/>分析节拍与有界队列"]
     C --> D["inference<br/>RGA / CPU 预处理 · NPU 核心协调"]
-    D --> E["yolo + zip-depth<br/>RKNN 与后处理"]
+    D --> E["model/yolo + model/zip-depth<br/>RKNN 与后处理"]
     E --> F["pipeline/result_dispatch<br/>同帧业务处理"]
-    F --> G["tracking + logic/core<br/>ChannelContext · 通道/全局 Logic"]
+    F --> G["tracking + logic<br/>ChannelContext · 通道/全局 Logic"]
     C --> H["display + rtsp<br/>独立预览节拍"]
     G -->|最近结果与绘图| H
     C --> I["recorder<br/>独立事件视频缓存"]
@@ -199,15 +199,16 @@ engine/
   src/capturer/          视频输入、重连与同源复用
   src/pipeline/          帧入口、结果分发与通道生命周期
   src/inference/         有界队列、模型实例、核心协调、坐标映射
-  src/yolo/ + zip-depth/ 模型适配与后处理
+  src/model/             YOLO / ZipDepth 模型适配与后处理
   src/tracking/          SORT / ByteTrack
   src/display/ + rtsp/   拼接、叠加、本地显示与 RTSP
   src/event/ + recorder/ 事件证据与录像
-  tests/ + bench/        软件测试、硬件回归与微基准
+  tests/                软件测试、硬件回归与绘制微基准
 projects/                通道/全局业务模块、资产与能力目录
 web_console/             React 前端与 FastAPI 后端
 services/framework/      投递、模型更新、运行管理、系统恢复与 GPIO
 tools/                   构建清单、板端工具与离线制包
+  device/                网络、GPIO、NPU 吞吐、逐层分析与定频工具
 docs/                    SDK、配置、部署、验收与开发文档
 build.sh                 应用构建和打包入口
 install.sh               平台安装入口

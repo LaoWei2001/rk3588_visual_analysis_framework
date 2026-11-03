@@ -1,11 +1,11 @@
 #include "event_report.h"
 #include "event_retention.h"
-#include "logic/core/context_access.h"
+#include "logic/context_access.h"
 #include "runtime/app_ctrl.h"
 
 #include "config/config.h"
 #include "display/display.h"
-#include "logic/core/global_logic.h"
+#include "logic/global_logic.h"
 #include "recorder/event_video_recorder.h"
 #include <channel.h>
 #include <drawing.h>

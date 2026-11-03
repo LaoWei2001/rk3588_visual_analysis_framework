@@ -31,8 +31,8 @@
 #include "pipeline/frame_transform.h"
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
-#include "yolo/composite_model.h"
-#include "yolo/yolo.h"
+#include "model/yolo/composite_model.h"
+#include "model/yolo/yolo.h"
 
 namespace
 {

@@ -19,7 +19,7 @@ def test_build_ffmpeg_args_uses_zero_transcode_fragmented_mp4():
     assert args[args.index("-c:v") + 1] == "copy"
     assert args[args.index("-f") + 1] == "mp4"
     assert args[args.index("-movflags") + 1] == "empty_moov+default_base_moof+frag_keyframe"
-    assert args[args.index("-frag_duration") + 1] == "100000"
+    assert args[args.index("-frag_duration") + 1] == "33333"
     assert args.index("-analyzeduration") < args.index("-i")
     assert args[args.index("-analyzeduration") + 1] == "100000"
     assert args[args.index("-probesize") + 1] == "65536"

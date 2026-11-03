@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 REPO_MARKERS = (
-    "engine/src/logic/core",
+    "engine/src/logic",
     "projects/modules",
     "tools/build/generate_logics_catalog.py",
     "docs/skills",

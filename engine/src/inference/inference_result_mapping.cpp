@@ -1,5 +1,5 @@
 #include "inference/inference_result_mapping.h"
-#include "zip-depth/depth_resize.h"
+#include "model/zip-depth/depth_resize.h"
 #include <coordinates.h>
 #include <opencv2/imgproc.hpp>
 

@@ -1,5 +1,5 @@
 #include "inference/model_status.h"
-#include "yolo/composite_model.h"
+#include "model/yolo/composite_model.h"
 #include <cassert>
 #include <iostream>
 #include <json.h>

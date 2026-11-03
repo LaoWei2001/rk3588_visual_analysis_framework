@@ -12,7 +12,7 @@ description: >-
 
 本 Skill 面向跨通道组合判断和独立周期任务。当前权威源码是：
 
-- `engine/include/global.h`、`engine/src/logic/core/global_logic.cpp`；
+- `engine/include/global.h`、`engine/src/logic/global_logic.cpp`；
 - `engine/include/snapshot.h` 中的通道快照；
 - `projects/global_modules/`；
 - `engine/include/config_types.h` 中的 `GlobalLogicConfig`。
@@ -37,7 +37,7 @@ description: >-
 通过 `develop_feature` 运行时，只能写入 `projects/modules/**` 和
 `projects/global_modules/**`。全局模块及其 manifest/模板必须放在所属
 `global_modules/<global_logic_id>/`；需要新增上游输出时，只能修改或新增 `modules/<logic_id>/`。
-公共 `logic/core`、运行配置、测试、Web、服务、文档、脚本和生成物全部只读。现有接口不足时立即停止，
+公共 `logic`、运行配置、测试、Web、服务、文档、脚本和生成物全部只读。现有接口不足时立即停止，
 不请求扩大权限。机械执行规则见
 [`Logic-only 写入边界`](../rk3588-feature-wizard/references/write-boundary.md)。
 

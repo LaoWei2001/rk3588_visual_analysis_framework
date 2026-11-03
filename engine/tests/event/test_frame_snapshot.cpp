@@ -1,6 +1,6 @@
 #include "display/display.h"
-#include "logic/core/context_access.h"
-#include "logic/core/global_logic.h"
+#include "logic/context_access.h"
+#include "logic/global_logic.h"
 #include "pipeline/frame_source_owner.h"
 #include "pipeline/frame_transform.h"
 #include "runtime/app_ctrl.h"

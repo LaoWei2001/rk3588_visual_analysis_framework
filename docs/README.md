@@ -8,8 +8,11 @@
 首次使用先看[首页快速开始](../README.md#快速开始)。原首页的架构、部署、离线交付、配置和业务扩展细节已整理为[项目指南](project-guide.md)；实测条件、基线记录与复现入口见 [Benchmark](benchmark.md)，可复制的无推理配置见[最小示例](examples/quickstart.json)。
 
 Web 画面在卡顿后持续落后于本地显示的修复、播放缓冲策略与实测范围见 [Web 实时延迟](web-live-latency.md)。
+最新的 HDMI、直接 RTSP、Web 三路延迟对照，以及真实摄像头减少推理排队的结果见 [实时低延迟实测](live-low-latency.md)。
 
 自动核心拖慢其他模型的问题、全局分配规则、RTSP / USB 逐路对照与复现见 [NPU 核心实测](npu-core-placement.md)。
+真实摄像头 15 路推理、原生输出优化及不同模型/路数组合见 [实时多路推理实测](npu-live-performance.md)。
+更多混合模型、同帧多模型、AUTO 分核局限及 worker 数量对照见 [多路组合扩展验证](npu-live-performance-extended.md)。
 
 现场部署与故障恢复见[无人值守恢复说明](unattended-recovery.md)。
 有线/Wi-Fi 管理网络自愈见[网络失联自动恢复](network-recovery.md)。
@@ -55,7 +58,7 @@ Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` �
 | 主题 | 真源 |
 |---|---|
 | 通道 API | `engine/include/channel.h`、`engine/include/actions.h` |
-| 全局 API | `engine/include/global.h`、`engine/src/logic/core/global_logic.cpp` |
+| 全局 API | `engine/include/global.h`、`engine/src/logic/global_logic.cpp` |
 | 逻辑清单 | `projects/modules/*/logic.json`、`projects/global_modules/*/logic.json` |
 | 配置与热重载 | `engine/src/config/`、`src/runtime/app_ctrl.cpp` |
 | 事件与媒体 | `engine/include/events.h`、`engine/src/event/event_report.cpp`、`src/recorder/` |

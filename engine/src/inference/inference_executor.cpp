@@ -12,7 +12,7 @@
  */
 
 #include <algorithm>
-#include "yolo/result_masks.h"
+#include "model/yolo/result_masks.h"
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -44,14 +44,14 @@
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
 #include "runtime/service_watchdog.h"
-#include "yolo/composite_model.h"
-#include "yolo/yolo.h"
-#include "yolo/yolo26pose.h"
-#include "yolo/yolo26depth.h"
-#include "zip-depth/zip_depth.h"
-#include "yolo/yolopose.h"
-#include "yolo/yoloseg.h"
-#include "yolo/yolov8det.h"
+#include "model/yolo/composite_model.h"
+#include "model/yolo/yolo.h"
+#include "model/yolo/yolo26pose.h"
+#include "model/yolo/yolo26depth.h"
+#include "model/zip-depth/zip_depth.h"
+#include "model/yolo/yolopose.h"
+#include "model/yolo/yoloseg.h"
+#include "model/yolo/yolov8det.h"
 
 /* compute_iou 声明在 inference_engine.h / yolo.h 全局命名空间，此处显式引入供 nms_inplace 使用 */
 using ::compute_iou;

@@ -10,8 +10,8 @@
  *     两条路径: 推理通道 (new_results 非空) / 非推理异步 logic worker
  */
 
-#include "logic/core/context_access.h"
-#include "logic/core/logic_registry.h"
+#include "logic/context_access.h"
+#include "logic/logic_registry.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>

@@ -65,7 +65,7 @@ ctest --output-on-failure -E '^zip_depth_runtime_regression$'
 - 终端退出清理使用轻量注册入口，避免其他页面提前加载xterm；页面按路由懒加载。
 - 生产构建的入口JS由约1240KB降至256.88KB（gzip约379KB降至87.45KB）；编辑器和终端独立包分别约354KB、407KB，不再触发500KB警告。这是入口资源大小，不是总资源体积或视频推理帧率的测量。
 - 前端模型类型后备列表、标签必填和深度模型能力集中到 `src/models/capabilities.ts`；在线可用类型仍以后端为准。
-- `engine/CMakeLists.txt` 从669行缩至290行，测试按职责拆到6个 `cmake/tests/*.cmake` 模块；原有选项与目标名称保留。
+- 测试构建配置统一放在 `engine/CMakeLists.txt`，按职责分组；原有选项与目标名称保留，默认不启用。
 - 新增独立 `BUILD_NPU_TESTS`；旧 `BUILD_ZIP_DEPTH_TESTS` 继续兼容启用通用测试。实际模型推理CTest标记为 `hardware`，非硬件回归用 `-LE hardware` 排除。
 - 新增 `tools/check.py` 代表性回归入口和API/终端目录说明；运行入口不会安装、部署或重启服务。
 

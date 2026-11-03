@@ -40,7 +40,7 @@
  * 信号 → isRunning=0 → 唤醒所有等待线程 → 逆序 join → 释放资源
  */
 
-#include "logic/core/logic_registry.h"
+#include "logic/logic_registry.h"
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -64,7 +64,7 @@
 #include "display/display_pipeline.h"
 #include "event/event_report.h"
 #include "gpio/gpio_runtime.h"
-#include "logic/core/global_logic.h"
+#include "logic/global_logic.h"
 #include "pipeline/pipeline_runtime.h"
 #include "recorder/event_video_recorder.h"
 #include "rtsp/rtsp_streamer.h"
@@ -72,7 +72,7 @@
 #include "runtime/pause_ctrl.h"
 #include "runtime/process_signals.h"
 #include "runtime/service_watchdog.h"
-#include "yolo/model_inspection.h"
+#include "model/yolo/model_inspection.h"
 #include "inference/npu_device_owner.h"
 #include "inference/npu_core_gate.h"
 #include <channel.h>

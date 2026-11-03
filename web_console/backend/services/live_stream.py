@@ -17,7 +17,9 @@ log = logging.getLogger("uvicorn.error")
 MAX_BOX_BYTES = 16 * 1024 * 1024
 MAX_INIT_BYTES = 1024 * 1024
 MAX_QUEUE_BYTES = 4 * 1024 * 1024
-MAX_QUEUE_FRAGMENTS = 32
+# One-frame fragments at 30 FPS need more slots than the former 100 ms
+# fragments. Preserve the same 3 s / byte limits, including late-join GOPs.
+MAX_QUEUE_FRAGMENTS = 96
 MAX_QUEUE_AGE = 3.0
 IDLE_GRACE_SECONDS = 3.0
 

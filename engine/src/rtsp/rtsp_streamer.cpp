@@ -399,7 +399,7 @@ static void on_media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media
     const guint64 frame_bytes =
         g_st.use_hw ? (guint64)g_st.enc_w * g_st.enc_h * 3 / 2 : (guint64)g_st.enc_w * g_st.enc_h * 3;
     g_object_set(G_OBJECT(appsrc), "format", GST_FORMAT_TIME, "is-live", TRUE, "do-timestamp", TRUE, "block", FALSE,
-                 "max-bytes", frame_bytes * 2, nullptr);
+                 "max-bytes", frame_bytes, nullptr);
 
     GstCaps *caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, g_st.use_hw ? "NV12" : "RGB", "width",
                                         G_TYPE_INT, g_st.enc_w, "height", G_TYPE_INT, g_st.enc_h, "framerate",
@@ -588,7 +588,7 @@ static std::string build_launch_string(void)
     {
         /* 硬件编码属性在 media-configure 中按插件实际支持项设置，避免版本差异导致 launch 解析失败。 */
         snprintf(launch, sizeof(launch),
-                 "( appsrc name=mysrc ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream "
+                 "( appsrc name=mysrc ! queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream "
                  "! video/x-raw,format=NV12 ! %s name=video_encoder "
                  "! %s ! %s name=pay0 pt=96 config-interval=1 )",
                  enc_hw, parse_elem, pay_elem);
@@ -599,7 +599,7 @@ static std::string build_launch_string(void)
     {
         const char *enc_sw = h265 ? "x265enc" : "x264enc";
         snprintf(launch, sizeof(launch),
-                 "( appsrc name=mysrc ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream "
+                 "( appsrc name=mysrc ! queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream "
                  "! videoconvert ! %s name=video_encoder tune=zerolatency speed-preset=ultrafast bitrate=%d "
                  "! %s ! %s name=pay0 pt=96 config-interval=1 )",
                  enc_sw, g_st.bitrate, parse_elem, pay_elem);

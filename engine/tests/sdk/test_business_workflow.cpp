@@ -1,8 +1,8 @@
 // 测试夹具可以绑定内部上下文；被测业务单独编译，只获得 Vision::SDK include 路径。
 #include "display/display.h"
-#include "logic/core/context_access.h"
-#include "logic/core/logic_parameters.h"
-#include "logic/core/logic_registry.h"
+#include "logic/context_access.h"
+#include "logic/logic_parameters.h"
+#include "logic/logic_registry.h"
 #include <cassert>
 #include <cmath>
 #include <events.h>

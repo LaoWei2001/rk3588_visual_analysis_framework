@@ -27,7 +27,7 @@ description: Interactively discover, formalize, implement, and validate a channe
 - `projects/modules/**`；
 - `projects/global_modules/**`。
 
-仓库其他位置只读，包括 `engine/src/logic/core/**`、配置、测试、文档、Web、服务、脚本和生成物。
+仓库其他位置只读，包括 `engine/src/logic/**`、配置、测试、文档、Web、服务、脚本和生成物。
 不得请求用户扩大白名单，不得要求切换 Full Access、`danger-full-access` 或 `bypassPermissions`，不得创建
 指向白名单外的符号链接。其他 Skill 中要求同步框架、Web 或文档的步骤在本向导内一律让位于此边界。
 

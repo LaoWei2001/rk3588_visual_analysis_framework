@@ -28,13 +28,13 @@ class CoreLease
         s.tail = &waiter;
         try
         {
-            s.changed.wait(lock, [&] { return s.failed || s.stopping || available(s, waiter); });
+            waiter.changed.wait(lock, [&] { return s.failed || s.stopping || available(s, waiter); });
             check(s);
         }
         catch (...)
         {
             remove(s, waiter);
-            s.changed.notify_all();
+            wake(s);
             throw;
         }
         remove(s, waiter);
@@ -43,8 +43,9 @@ class CoreLease
     ~CoreLease()
     {
         auto &s = state();
-        { std::lock_guard<std::mutex> lock(s.mutex); s.active &= ~mask_; }
-        s.changed.notify_all();
+        std::lock_guard<std::mutex> lock(s.mutex);
+        s.active &= ~mask_;
+        wake(s);
     }
     CoreLease(const CoreLease &) = delete;
     CoreLease &operator=(const CoreLease &) = delete;
@@ -57,14 +58,16 @@ class CoreLease
     void mark_failed()
     {
         auto &s = state();
-        { std::lock_guard<std::mutex> lock(s.mutex); s.failed = true; }
-        s.changed.notify_all();
+        std::lock_guard<std::mutex> lock(s.mutex);
+        s.failed = true;
+        wake(s);
     }
     static void stop()
     {
         auto &s = state();
-        { std::lock_guard<std::mutex> lock(s.mutex); s.stopping = true; }
-        s.changed.notify_all();
+        std::lock_guard<std::mutex> lock(s.mutex);
+        s.stopping = true;
+        wake(s);
     }
     static void resume()
     {
@@ -84,11 +87,10 @@ class CoreLease
     }
 
   private:
-    struct Waiter { int mask; Waiter *next; };
+    struct Waiter { int mask; Waiter *next; std::condition_variable changed; };
     struct State
     {
         std::mutex mutex;
-        std::condition_variable changed;
         int active = 0;
         bool failed = false, stopping = false;
         Waiter *head = nullptr, *tail = nullptr;
@@ -112,6 +114,18 @@ class CoreLease
         for (auto *w = s.head; w != &waiter; w = w->next)
             if (w->mask & waiter.mask) return false;
         return true;
+    }
+    static void wake(State &s)
+    {
+        // Notify while holding the mutex: waiters live on their thread's stack.
+        // Older overlapping masks still take priority; independent cores wake
+        // together. Avoid waking every blocked inference worker on every frame.
+        int blocked = s.active;
+        for (auto *w = s.head; w; w = w->next)
+        {
+            if (s.failed || s.stopping || !(blocked & w->mask)) w->changed.notify_one();
+            blocked |= w->mask;
+        }
     }
     static void remove(State &s, Waiter &waiter)
     {

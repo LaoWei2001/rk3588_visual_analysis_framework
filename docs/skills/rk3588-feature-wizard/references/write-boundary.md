@@ -15,7 +15,7 @@ projects/global_modules/**
 典型模块产物是 `logic.cpp`、`logic.json`，以及确有远端契约时放在同一模块目录下的
 `report_templates/*.json`。不得创建符号链接、子模块或特殊文件。
 
-`engine/src/logic/core/**` 不在白名单内。虽然它位于 `src/logic` 下，但属于公共框架代码，向导
+`engine/src/logic/**` 不在白名单内。虽然它位于 `src/logic` 下，但属于公共框架代码，向导
 只能读取，不能修改。
 
 ## 明确禁止写回

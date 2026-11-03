@@ -115,7 +115,7 @@ flowchart LR
         Dispatch[pipeline/result_dispatch<br/>严格同帧结果分发]
         Traditional[传统 CV worker<br/>无模型通道]
         ChannelPipeline[pipeline/channel_pipeline + tracking<br/>SORT / ByteTrack / 动作]
-        Logic[logic/core + projects/modules<br/>ChannelContext / 业务 ROI]
+        Logic[logic + projects/modules<br/>ChannelContext / 业务 ROI]
 
         Schedule -->|有模型| Infer --> Dispatch --> ChannelPipeline
         Schedule -->|无模型| Traditional --> ChannelPipeline
@@ -175,7 +175,7 @@ GStreamer appsink
 │   │   ├── pipeline/            # 帧入口、结果分发与业务调用
 │   │   ├── inference/           # 推理任务、模型实例与热换
 │   │   ├── tracking/            # 每通道目标跟踪
-│   │   ├── logic/core/          # ChannelContext、注册表、参数和全局逻辑
+│   │   ├── logic/               # ChannelContext、注册表、参数和全局逻辑
 │   │   ├── display/             # HDMI 显示与统一叠加
 │   │   ├── rtsp/                # 拼接画面 RTSP 输出
 │   │   ├── event/               # 标准事件与媒体发件箱生产端
@@ -183,8 +183,9 @@ GStreamer appsink
 │   │   ├── control/             # Web/外部通道动作控制
 │   │   ├── config/              # 配置解析、校验和热重载字段
 │   │   ├── runtime/             # APP_CTRL、快照与运行状态
-│   │   ├── zip-depth/           # ZipDepth 相对逆深度适配
-│   │   └── yolo/                # RKNN 模型实现与后处理
+│   │   └── model/               # 模型适配与后处理
+│   │       ├── yolo/            # YOLO 检测、姿态、分割与深度
+│   │       └── zip-depth/       # ZipDepth 相对逆深度适配
 │   ├── vendor/                  # 固定版本的 RKNN Runtime
 │   └── CMakeLists.txt           # 仅描述引擎编译目标
 ├── projects/                    # 二次开发内容的唯一迁移单元
@@ -592,7 +593,7 @@ cd projects
 ../build/engine/vision_analysis --validate-config ./assets/quickstart.local.json
 ```
 
-ZipDepth 相对逆深度在不同裁剪间没有共同尺度，因此 `full_plus_roi` 仅执行整帧；米制与相对深度通过 `AlgoResult::depth_kind` 区分。模型输入尺寸不从文件名或 sidecar JSON 推断，不能只修改配置宽高来改变 RKNN 网络尺寸。详见 [ZipDepth 适配说明](../engine/src/zip-depth/README.md)。
+ZipDepth 相对逆深度在不同裁剪间没有共同尺度，因此 `full_plus_roi` 仅执行整帧；米制与相对深度通过 `AlgoResult::depth_kind` 区分。模型输入尺寸不从文件名或 sidecar JSON 推断，不能只修改配置宽高来改变 RKNN 网络尺寸。详见 [ZipDepth 适配说明](../engine/src/model/zip-depth/README.md)。
 
 
 ## 扩展模型与业务
@@ -610,9 +611,9 @@ ZipDepth 相对逆深度在不同裁剪间没有共同尺度，因此 `full_plus
 
 这需要修改引擎并重新构建，属于独立代码任务：
 
-- 以 `engine/src/yolo/model_base.h` 的 `ModelBase` 为接口，实现普通输入、尺寸查询、阈值与结果语义；可选实现 `get_input_fd()` / `get_input_rga_handle()` / `infer_zero_copy()`。
+- 以 `engine/src/model/yolo/model_base.h` 的 `ModelBase` 为接口，实现普通输入、尺寸查询、阈值与结果语义；可选实现 `get_input_fd()` / `get_input_rga_handle()` / `infer_zero_copy()`。
 - 在 `engine/src/inference/inference_executor.cpp` 的 `create_inference_model()` 中添加构造分支，供启动和重载共用。
-- 同步 `engine/src/config/config_validator.cpp` 的类型及标签规则、`projects/catalog.json` 和 Web 的模型识别/校验 `web_console/backend/services/model_info.py`；必要时扩展 `engine/src/yolo/model_inspection.cpp` 中的模型检查 CLI。
+- 同步 `engine/src/config/config_validator.cpp` 的类型及标签规则、`projects/catalog.json` 和 Web 的模型识别/校验 `web_console/backend/services/model_info.py`；必要时扩展 `engine/src/model/yolo/model_inspection.cpp` 中的模型检查 CLI。
 - SDK 提交统一通过 `engine/src/inference/npu_execution.h`，并正确记录实际生效的核心掩码；输出缓冲遵守 `npu::Outputs` 生命周期。新增模型不能绕过公共调度直接调用 RKNN 提交接口。
 - 输出使用 `AlgoResult`，保留 `model_id/model_type/model_index`；新结果语义需要同步公共接口、坐标映射、业务查询与渲染，不能仅让模型工厂“能加载”。
 - 增加张量契约、数值/坐标及同核/异核混跑回归，验收推理、发布和延迟；见 [NPU 调度](../engine/src/inference/NPU_SCHEDULING.md)与 [Benchmark](benchmark.md)。

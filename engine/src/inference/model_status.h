@@ -1,7 +1,7 @@
 #pragma once
 
 #include "config/config.h"
-#include "yolo/model_base.h"
+#include "model/yolo/model_base.h"
 #include <memory>
 #include <string>
 #include <vector>

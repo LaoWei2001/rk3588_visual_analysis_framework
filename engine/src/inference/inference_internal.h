@@ -29,7 +29,7 @@
 #include "config/config.h"
 #include "inference_engine.h"
 #include "pipeline/frame_transform.h" /* RgaImportedBuffer / LazyVideoFrame */
-#include "yolo/yolo.h"                /* ModelBase */
+#include "model/yolo/yolo.h"                /* ModelBase */
 #include <coordinates.h>
 
 /*======================== 内部任务结构 ========================*/

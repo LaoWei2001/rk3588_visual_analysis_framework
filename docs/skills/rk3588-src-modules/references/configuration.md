@@ -144,7 +144,7 @@ file path 可相对 App 工作目录或使用绝对路径。当前初始验证�
 同一帧可运行多个启用模型，结果通过 `model_id/model_type/model_index` 区分。模型 ID 也是 OTA 定位
 契约，不能随意变成数组下标。
 
-各子模型从源帧生成各自尺寸的输入，结果统一映射到 640×640 业务坐标；不要求不同模型输入尺寸相同，但每个模型必须满足对应适配器的张量契约。`yolo26_depth` 使用米制深度契约，`zip_depth` 产生相对逆深度，不能直接标为米。ZipDepth 在 `full_plus_roi` 中只做整帧推理，避免合并不同裁剪的不可比相对尺度；其他模型保留各自 ROI 行为。详见 [ZipDepth 适配](../../../../engine/src/zip-depth/README.md)。
+各子模型从源帧生成各自尺寸的输入，结果统一映射到 640×640 业务坐标；不要求不同模型输入尺寸相同，但每个模型必须满足对应适配器的张量契约。`yolo26_depth` 使用米制深度契约，`zip_depth` 产生相对逆深度，不能直接标为米。ZipDepth 在 `full_plus_roi` 中只做整帧推理，避免合并不同裁剪的不可比相对尺度；其他模型保留各自 ROI 行为。详见 [ZipDepth 适配](../../../../engine/src/model/zip-depth/README.md)。
 
 ### ROI、logic 与事件
 

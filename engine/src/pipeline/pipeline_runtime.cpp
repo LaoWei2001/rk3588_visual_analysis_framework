@@ -34,7 +34,7 @@
 
 #include "common/logging.h"
 #include "inference/inference_engine.h"
-#include "logic/core/global_logic.h"
+#include "logic/global_logic.h"
 #include "pipeline_internal.h" /* DisplayTask/DisplayQueue 定义、extern 声明、时间辅助 */
 #include "pipeline_runtime.h"
 #include "recorder/event_video_recorder.h"

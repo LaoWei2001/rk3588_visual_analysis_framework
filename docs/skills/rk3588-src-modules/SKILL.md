@@ -21,8 +21,8 @@ description: >-
 - 运行状态与热更：`src/runtime/app_ctrl.h/.cpp`；
 - 服务心跳与在途处理超时：`src/runtime/service_watchdog.h/.cpp`；
 - 帧管线：`src/pipeline/`；
-- 推理：`src/inference/` 和 `src/yolo/`；
-- Logic 公共框架：`src/logic/core/`；业务扩展：仓库根 `projects/modules/` 和 `projects/global_modules/`；
+- 推理：`src/inference/` 和 `src/model/yolo/`；
+- Logic 公共框架：`src/logic/`；业务扩展：仓库根 `projects/modules/` 和 `projects/global_modules/`；
 - 构建：`engine/CMakeLists.txt`、`build.sh`。
 
 ## 修改前的架构判断

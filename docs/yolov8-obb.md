@@ -45,6 +45,6 @@ cmake --build build/obb-check --target obb_runtime_tests -j4
 
 硬件测试创建两个标签不同的 OBB 实例，以及检测、姿态实例；同核/跨核两种模式共 240 次并发推理，逐次对比独立基线的数量、类别、标签、置信度、包围框及四角。另验证 40 次真实 RGA 写 DMA 的输出一致性和非等比 ROI 坐标映射。测试需要当前 NPU 设备可由测试进程独占。
 
-源码关键位置：`engine/src/yolo/yolov8det.cpp` 复用执行生命周期；`yolov8obb_impl.h` 为独立 OBB 解码；`engine/tests/inference/test_obb_runtime.cpp` 为板端回归。后端张量兼容测试覆盖错误输出数量、类别数、布局及角度数量。
+源码关键位置：`engine/src/model/yolo/yolov8det.cpp` 复用执行生命周期；`yolov8obb_impl.h` 为独立 OBB 解码；`engine/tests/inference/test_obb_runtime.cpp` 为板端回归。后端张量兼容测试覆盖错误输出数量、类别数、布局及角度数量。
 
 完整引擎还完成了 60 秒同核混合视频测试（OBB + 1088 安全帽检测 + 姿态，三个模型共用核心 0），每个统计窗口 `failed=0`，组合推理约 11.9 FPS；RTSP 客户端解码 1781 帧，停止后 0.52 秒正常退出。临时报告及日志已按要求清理，验证结论保留在本文。23 项现有 CTest 回归、31 项后端模型检查测试以及前端生产构建通过。

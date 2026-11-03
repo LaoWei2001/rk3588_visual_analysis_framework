@@ -1,5 +1,5 @@
 #include "logic_control.h"
-#include "logic/core/logic_registry.h"
+#include "logic/logic_registry.h"
 #include "remote_dataset.h"
 
 #include <atomic>
@@ -23,7 +23,7 @@
 #include <unistd.h>
 
 #include "inference/model_status.h"
-#include "logic/core/global_logic.h"
+#include "logic/global_logic.h"
 #include "runtime/app_ctrl.h"
 #include <json.h>
 

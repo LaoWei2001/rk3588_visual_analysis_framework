@@ -12,7 +12,7 @@
 | `event/` | EventRequest、本地 schema v3、图片任务、投递初始状态 | `events.h`、`event_report.cpp` |
 | `gpio/` | libgpiod 引脚解析、输入输出 | `gpio.h/.cpp` |
 | `inference/` | 模型实例、任务队列、RKNN worker、同帧结果发布与热换 | `inference_engine.h` |
-| `logic/core/` | Channel/Global Context、注册表、参数、outputs | `channel.h`、`global.h`、`channel_logic.cpp` |
+| `logic/` | Channel/Global Context、注册表、参数、outputs | `channel.h`、`global.h`、`channel_logic.cpp` |
 | `projects/modules/` | 单通道可插拔业务 | 每模块 `logic.cpp + logic.json` |
 | `projects/global_modules/` | 全局可插拔业务 | 每模块 `logic.cpp + logic.json` |
 | `pipeline/` | 帧入口、惰性转换、tracker 后业务调用、显示/结果分发 | `pipeline_runtime.h` |
@@ -22,7 +22,8 @@
 | `third_party/gst_opt/` | 随引擎编译的 GStreamer 辅助实现 | `gst_opt.h` |
 | `third_party/json/` | vendored cJSON | `cJSON.h/.c` |
 | `tracking/` | 每通道 tracker | `tracker.h/.cpp` |
-| `yolo/` | YOLOv5/seg/v8 det/pose 的模型封装和后处理 | `model_base.h`、`composite_model.h` |
+| `model/yolo/` | YOLO 检测、分割、姿态、深度的模型封装和后处理 | `model_base.h`、`composite_model.h` |
+| `model/zip-depth/` | ZipDepth 相对逆深度模型适配 | `zip_depth.h/.cpp` |
 
 顶层 `main.cpp` 只负责编排生命周期、信号和线程，不应吸收业务规则。
 
@@ -33,7 +34,7 @@
 | 新单通道业务规则/参数/按钮 | 新 `projects/modules/<id>/` |
 | 新跨通道组合规则 | 新 `projects/global_modules/<id>/` |
 | 新通道输出数据类型 | 先评估 `logic_outputs` 公共契约和所有消费者 |
-| 新模型后处理格式 | `yolo/` + inference 组合层 + 配置验证/Web 类型 |
+| 新模型后处理格式 | `model/yolo/` + inference 组合层 + 配置验证/Web 类型 |
 | 新输入源 | `capturer/` + stream config + Web 双向转换 |
 | 新显示叠加 primitive | `logic` API + `display` 渲染 + 图片/视频出口 |
 | 新事件媒体 | `event` + `recorder`/生成 worker + Python contract/adapter + Web |
@@ -42,8 +43,8 @@
 
 ## 构建收集与依赖
 
-`CMakeLists.txt` 显式收集 config/runtime/capturer/pipeline/inference/tracking/control/gpio/display/rtsp/yolo/
-recorder/event、`src/logic/core`，并递归收集仓库根 `projects/modules` 与 `projects/global_modules`。
+`CMakeLists.txt` 收集引擎各模块源码，包括 `src/logic/`、`src/model/yolo/` 和
+`src/model/zip-depth/`，并递归收集仓库根 `projects/modules` 与 `projects/global_modules`。
 Logic manifest 会在构建时验证并嵌入二进制。
 
 当前必需库包括 OpenCV（必须有 `opencv2/freetype.hpp`）、GTK3、Threads、RGA、RKNN runtime 和

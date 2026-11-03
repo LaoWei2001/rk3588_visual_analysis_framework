@@ -16,14 +16,14 @@
  */
 
 #pragma once
-#include "logic/core/logic_outputs.h"
+#include "logic/logic_outputs.h"
 #include <coordinates.h>
 #include <snapshot.h>
 
 #include "common/performance_metrics.h"
 #include "config/config.h"
 #include "display/display.h"
-#include "logic/core/logic_parameters.h"
+#include "logic/logic_parameters.h"
 #include "runtime/publication_signal.h"
 #include <atomic>
 #include <channel.h>

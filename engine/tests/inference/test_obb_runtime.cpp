@@ -1,5 +1,5 @@
-#include "yolo/yolov8det.h"
-#include "yolo/yolopose.h"
+#include "model/yolo/yolov8det.h"
+#include "model/yolo/yolopose.h"
 #include "inference/npu_device_owner.h"
 #include "inference/inference_result_mapping.h"
 #include <rga/im2d.h>

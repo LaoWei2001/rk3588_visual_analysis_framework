@@ -8,7 +8,7 @@
 #include "app_ctrl.h"
 #include "inference/inference_engine.h"
 #include "inference/npu_core_assignment.h"
-#include "logic/core/context_access.h"
+#include "logic/context_access.h"
 
 #include "config/config_registry.h"
 #include "pipeline/frame_transform.h"
@@ -21,7 +21,7 @@
 #include <cstring>
 
 #include "capturer/decChannel.h"
-#include "logic/core/global_logic.h"
+#include "logic/global_logic.h"
 
 /*======================== 全局变量 ========================*/
 APP_CTRL *g_pCtrl = nullptr;

@@ -6,11 +6,17 @@ RK3588 上模型实例锁只保护一个 RKNN context，不能协调不同 worke
 
 所有 7 个 RKNN 模型适配器现在通过 `npu_execution.h` 调用 inputs_set/run/get/release，
 共用 `npu_core_gate.h` 的进程级状态，普通输入和 DMA 输入均受保护。
-模型实例锁仍保护输入缓冲，同核锁保护从 SDK 输入提交到输出释放的完整周期。
-输出描述符由 `npu::Outputs` 托管，即使后处理抛出异常也释放厂商缓冲。
+模型实例锁保护同一 context 的输入、输出及后处理。标准输出路径的同核锁覆盖
+SDK 输入提交、run、get、release；输出由 `npu::Outputs` 托管。
+YOLOv5、YOLOv8 检测/OBB、分割和姿态使用 `rknn_output_buffers.h` 管理实例私有输出：
+布局通过校验时绑定原生 DMA 输出，阻塞 run 完成后释放同核锁，再由 CPU 重排/转换并后处理。
+不支持的布局使用预分配的普通输出，get/release 完成后同样在锁外后处理。
+实例锁保证 CPU 读取期间该 context 不会开始下一帧；没有把 SDK 临时指针带出锁。
+YOLO26 Depth 保留原来的浮点读回，以保持已验证的深度结果。
 不同明确核心可并行；未知 runtime AUTO 按三个核心全占用处理。
 直接调用模型推理也使用同一保护，组合模型本身不重复持有核心锁，以免嵌套死锁。
 核心掩码一次性申请，不会拿着部分核心等待其他核心；较早的重叠请求优先，避免饥饿。
+每个排队请求有自己的条件变量，释放核心时只唤醒可运行的请求，减少多路场景下的无效唤醒。
 停止或故障会唤醒所有排队请求，无需等正在运行的 ioctl 释放核心。
 正常停止后可在空闲状态重新初始化；热更新和重新初始化都不会清除驱动故障标志。
 
@@ -155,5 +161,6 @@ cc -shared -fPIC engine/tests/inference/fail_first_model_thread.c -ldl -o build/
 
 性能改动同时对比每路推理吞吐、发布吞吐和排队/处理耗时，不能只用合计推理 FPS 判断。
 2026-10-26 较早的两轮输出/锁优化未通过严格的全通道发布性能验收，已经撤回；
-测试方法、逐路数据及原因见 [NPU_PERFORMANCE.md](NPU_PERFORMANCE.md)。当前全局核心规划
-保持原有 SDK 生命周期，另按资源预算与每路指标验收，见上方对照报告。
+测试方法、逐路数据及原因见 [NPU_PERFORMANCE.md](NPU_PERFORMANCE.md)。
+2026-11-02 的原生输出方案、真实 RTSP 配置及模型矩阵见
+[实时多路推理实测](../../../docs/npu-live-performance.md)。

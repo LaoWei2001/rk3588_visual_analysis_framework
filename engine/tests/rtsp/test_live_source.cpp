@@ -41,7 +41,7 @@ static void pressure_test(bool bounded)
     g_object_get(source, "current-level-bytes", &bytes, nullptr);
     if (bounded)
     {
-        assert(bytes <= 8192 && accepted <= 3);
+        assert(bytes <= 4096 && accepted <= 2);
         // Consumption resumes without inheriting an unbounded FIFO.
         std::this_thread::sleep_for(std::chrono::milliseconds(700));
         assert(rtsp_source_has_room(source, 4096));

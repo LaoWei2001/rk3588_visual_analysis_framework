@@ -1,5 +1,5 @@
 #include "inference/npu_device_owner.h"
-#include "yolo/yolo26depth.h"
+#include "model/yolo/yolo26depth.h"
 #include <algorithm>
 #include <cassert>
 #include <chrono>

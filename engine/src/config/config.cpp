@@ -5,7 +5,7 @@
 #include "config.h"
 #include "config_registry.h"
 #include "config_validator.h"
-#include "logic/core/logic_parameters.h"
+#include "logic/logic_parameters.h"
 #include <algorithm>
 #include <cctype>
 #include <fstream>

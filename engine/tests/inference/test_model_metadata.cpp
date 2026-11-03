@@ -1,5 +1,5 @@
-#include "yolo/rknn_query_utils.h"
-#include "yolo/detection_order.h"
+#include "model/yolo/rknn_query_utils.h"
+#include "model/yolo/detection_order.h"
 #include <cassert>
 #include <cmath>
 #include <limits>

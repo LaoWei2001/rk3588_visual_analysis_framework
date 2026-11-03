@@ -1,8 +1,8 @@
 // The latest continuous range is the only valid destination after a gap.
-export const LIVE_START_BUFFER_SECONDS = 0.3
-export const LIVE_TARGET_LATENCY_SECONDS = 0.3
-export const LIVE_MAX_LATENCY_SECONDS = 1
-export const LIVE_MAX_RECOVERY_BUFFER_SECONDS = 0.6
+export const LIVE_START_BUFFER_SECONDS = 0.1
+export const LIVE_TARGET_LATENCY_SECONDS = 0.1
+export const LIVE_MAX_LATENCY_SECONDS = 0.5
+export const LIVE_MAX_RECOVERY_BUFFER_SECONDS = 0.3
 
 export function livePlaybackTarget(currentTime: number, start: number, end: number, started: boolean,
   targetLatency = LIVE_TARGET_LATENCY_SECONDS): number | null {
@@ -18,8 +18,8 @@ export function livePlaybackTarget(currentTime: number, start: number, end: numb
 // fragment arrival jitter stays inside the dead band and does not trigger seek.
 export function livePlaybackRate(currentTime: number, end: number, targetLatency = LIVE_TARGET_LATENCY_SECONDS): number {
   const drift = end - currentTime - targetLatency
-  if (!Number.isFinite(drift) || drift <= 0.15) return 1
-  return drift > 0.4 ? 1.12 : 1.08
+  if (!Number.isFinite(drift) || drift <= 0.05) return 1
+  return drift > 0.15 ? 1.12 : 1.08
 }
 
 // Keep the last decoded frame while accumulating a modest reserve after real
@@ -32,9 +32,9 @@ export class LivePlaybackBuffer {
   private lastDecreaseAt = 0
 
   starved(ahead: number): boolean {
-    if (this.rebuffering || !Number.isFinite(ahead) || ahead > 0.25) return false
+    if (this.rebuffering || !Number.isFinite(ahead) || ahead > 0.1) return false
     this.targetSeconds = Math.min(LIVE_MAX_RECOVERY_BUFFER_SECONDS,
-      Math.round((this.targetSeconds + 0.15) * 1000) / 1000)
+      Math.round((this.targetSeconds + 0.1) * 1000) / 1000)
     this.stableSince = null
     this.rebuffering = true
     return true

@@ -1,7 +1,7 @@
 #include <channel.h>
 #include "inference/inference_result_mapping.h"
 #include "inference/inference_roi_filter.h"
-#include "zip-depth/depth_resize.h"
+#include "model/zip-depth/depth_resize.h"
 #include <cassert>
 #include <limits>
 #include <iostream>

@@ -1,6 +1,6 @@
 #include "inference/npu_device_owner.h"
-#include "zip-depth/zip_depth.h"
-#include "zip-depth/depth_resize.h"
+#include "model/zip-depth/zip_depth.h"
+#include "model/zip-depth/depth_resize.h"
 #include "inference/inference_result_mapping.h"
 #include "pipeline/frame_transform.h"
 #include <cassert>

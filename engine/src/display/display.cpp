@@ -1,7 +1,7 @@
 #include "display.h"
 #include "common/logging.h"
 #include "inference/inference_engine.h"
-#include "logic/core/context_access.h"
+#include "logic/context_access.h"
 #include "runtime/app_ctrl.h"
 #include "runtime/pause_ctrl.h"
 #include "runtime/process_signals.h"

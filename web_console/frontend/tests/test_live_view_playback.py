@@ -16,13 +16,14 @@ DIST = Path(os.environ.get('RK3588_TEST_FRONTEND_DIST', Path(__file__).resolve()
 
 
 @pytest.fixture(scope='module')
-def fragments(tmp_path_factory):
+def fragments(tmp_path_factory, request):
+    fragment_us = getattr(request, 'param', 200000)
     path = tmp_path_factory.mktemp('live-video') / 'sample.mp4'
     subprocess.run([
         'ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i',
         'testsrc2=size=320x180:rate=10', '-t', '60', '-an', '-c:v', 'libx264',
         '-preset', 'ultrafast', '-tune', 'zerolatency', '-g', '10', '-pix_fmt', 'yuv420p',
-        '-movflags', 'empty_moov+default_base_moof', '-frag_duration', '200000', str(path),
+        '-movflags', 'empty_moov+default_base_moof', '-frag_duration', str(fragment_us), str(path),
     ], check=True, timeout=30)
     data = path.read_bytes()
     parts, current, offset = [], bytearray(), 0
@@ -37,12 +38,14 @@ def fragments(tmp_path_factory):
     if current:
         parts.append(bytes(current))
     assert len(parts) > 200
-    return parts
+    return parts, fragment_us / 1000000
 
 
 @pytest.fixture
 def playback(fragments):
-    state = dict(requests=0, paused=False, drop=False, queries=[])
+    fragments, fragment_seconds = fragments
+    state = dict(requests=0, paused=False, drop=False, queries=[],
+                 config={'global': {'enable_rtsp': 1}, 'channels': []}, sources=[])
     stopped = threading.Event()
 
     class Handler(SimpleHTTPRequestHandler):
@@ -61,7 +64,7 @@ def playback(fragments):
                 due = time.monotonic()
                 for index, part in enumerate(fragments):
                     if index:
-                        due += .2
+                        due += fragment_seconds
                     if stopped.wait(max(0, due - time.monotonic())):
                         return
                     while state['paused'] and not stopped.wait(.02):
@@ -77,9 +80,9 @@ def playback(fragments):
                 return
             responses = {
                 '/api/apps': [dict(name='demo', status='running', pid=123, config='config.json')],
-                '/api/apps/demo/config': {'global': {'enable_rtsp': 1}, 'channels': []},
+                '/api/apps/demo/config': state['config'],
                 '/api/apps/demo/logic-actions': {'globals': [], 'channels': [], 'socket_ready': True},
-                '/api/apps/demo/file-playback': {'sources': []},
+                '/api/apps/demo/file-playback': {'sources': state['sources']},
             }
             if path in responses:
                 body = json.dumps(responses[path]).encode()
@@ -102,7 +105,7 @@ def playback(fragments):
     try:
         with pw_api.sync_playwright() as pw:
             browser = pw.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'),
-                headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
+                headless=os.environ.get('CHROMIUM_HEADED') != '1', args=['--no-sandbox', '--disable-dev-shm-usage'])
             context = browser.new_context(viewport={'width': 1500, 'height': 1000})
             context.add_init_script("localStorage.setItem('rk3588-auth', JSON.stringify({state:{token:'isolated',username:'tester'},version:0})); URL.parse ??= (url, base) => { try { return new URL(url, base) } catch { return null } }")
             page = context.new_page()
@@ -224,6 +227,10 @@ def test_buffer_operation_that_never_finishes_recovers(playback):
     assert state['queries'][-1]['retry_cause'] == ['buffer-timeout']
 
 
+# The production remuxer now emits at frame boundaries. At this fixture's
+# 10 FPS that means 100 ms. Keep the other tests' coarse 200 ms batches to
+# exercise jitter, but require an actually steady source for backoff reset.
+@pytest.mark.parametrize('fragments', [100000], indirect=True)
 def test_short_recoveries_keep_backoff_until_frames_are_stable(playback):
     page, _, state = playback
     for attempt in range(1, 4):

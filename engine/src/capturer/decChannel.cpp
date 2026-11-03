@@ -758,7 +758,7 @@ int DecChannel::createVideoDecChannel(bool start_thread)
                  nullptr);
     g_object_set(mGstChn.vSink, "sync", FALSE, NULL);
     g_object_set(mGstChn.vSink, "emit-signals", TRUE, NULL);
-    g_object_set(mGstChn.vSink, "max-buffers", 2, "drop", TRUE, NULL);
+    g_object_set(mGstChn.vSink, "max-buffers", 1, "drop", TRUE, NULL);
     g_signal_connect(mGstChn.vSink, "new-sample", G_CALLBACK(new_sample), &mGstChn);
 
     gst_bin_add_many(GST_BIN(mGstChn.pipeline), mGstChn.source, mGstChn.h26xRTPDepay, mGstChn.h26xParse, mGstChn.vDec,
@@ -772,8 +772,8 @@ int DecChannel::createVideoDecChannel(bool start_thread)
         return -1;
     }
 
-    /* 80ms 在保留少量网络抖动余量的同时，比原来的 100ms 更贴近实时画面。 */
-    g_object_set(mGstChn.source, "location", mCfg.location.c_str(), "latency", 80, "protocols", 0x04, "drop-on-latency",
+    /* 一帧左右的抖动余量；只在实时 RTSP 输入上缩短缓冲，本地文件仍按 PTS 播放。 */
+    g_object_set(mGstChn.source, "location", mCfg.location.c_str(), "latency", 40, "protocols", 0x04, "drop-on-latency",
                  TRUE, NULL);
     g_signal_connect(mGstChn.source, "pad-added", G_CALLBACK(rtsp_pad_added), &mGstChn);
 

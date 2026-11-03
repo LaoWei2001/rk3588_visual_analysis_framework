@@ -19,11 +19,12 @@ playwright-report/
 /dist/
 /web_console/frontend/dist/
 /engine/tests/**/build/
-/engine/bench/build/
 /services/framework/gpio_state/build/
 /tools/device/gpio_test/build/
 /tools/device/first_net_config/build/
 /tools/device/first_net_config/first_net_config
+/tools/device/npu_bench/npu_bench
+/tools/device/rknn_profile/rknn_profile
 *.tsbuildinfo
 *.rknn
 # 同时忽略依赖目录和指向项目外离线缓存的链接。

@@ -78,7 +78,7 @@ OpenCV 图像处理函数和标准库函数也应包含各自的头文件。
 NPU 队列和运行快照实现不由 SDK 导出。上下文中的取帧、绘图、输出及全局输入绑定，
 以及快照中的媒体引用，均为私有字段，由内部 `context_access.h` 绑定。
 
-注册表查找/枚举位于 `src/logic/core/logic_registry.h`；内部 `RenderParams` 和文字缓存入口
+注册表查找/枚举位于 `src/logic/logic_registry.h`；内部 `RenderParams` 和文字缓存入口
 位于 `src/display/display.h`；GPIO 全局初始化、释放和启动恢复位于 `src/gpio/gpio_runtime.h`。
 业务使用 `REGISTER_*`、`draw_*` 和 GPIO 控制/查询接口，不负责这些全局生命周期。
 

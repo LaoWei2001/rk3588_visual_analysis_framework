@@ -5,8 +5,9 @@
 
 namespace npu
 {
-// Keep this object alive from run through output release. All model adapters
-// use this same gate, including CPU-input and DMA-input inference paths.
+// Keep this object alive through get/release for SDK-owned outputs. With bound
+// native outputs, a blocking run completes all device writes before unlocking.
+// CPU-input and DMA-input adapters share the same gate.
 class Execution
 {
   public:

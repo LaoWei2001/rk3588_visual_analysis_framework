@@ -52,6 +52,17 @@ Bearer header 时也接受 `?token=`，供原生 `<img>/<video>` 资源使用；
 7. 在项目根目录用 `sudo ./install.sh online` 更新已安装控制台，不要只改源码后期待
    板端实例自动变化；已经预构建前端时可用 `upgrade offline`。
 
+## 实时画面单路放大
+
+实时画面的单路放大位于 `LiveViewPage.tsx` / `.css`，沿用 `videoTimelineLayout.ts` 中
+与引擎一致的通道排序及 tile 对齐规则。选择只保存在页面状态，利用裁剪容器定位同一个 video；
+不要将所选通道放进视频连接 effect 的依赖或 video 的 key，否则切换会中断 MSE。
+重连快照使用相同裁剪；文件时间轴在单路模式映射到整个可见区域。应用、配置文件或 PID 改变时清除选择。
+
+`tests/test_live_view_focus.py` 使用四种颜色的真实 H264 视频核对各通道的可见像素、稀疏通道 ID、
+缩放、空白格、键盘操作、独立观众、文件时间轴和重连。原生全屏验证需
+`CHROMIUM_HEADED=1` 以及有效的 `DISPLAY` / `XAUTHORITY`；无界面模式仍覆盖其余交互。
+
 ## 编辑器开发边界
 
 配置编辑器的双向真源是：

@@ -1,6 +1,6 @@
 #include "model_status.h"
 
-#include "yolo/composite_model.h"
+#include "model/yolo/composite_model.h"
 #include <coordinates.h>
 #include <json.h>
 #include <map>

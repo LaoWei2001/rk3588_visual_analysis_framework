@@ -1,5 +1,5 @@
 #include "app_ctrl.h"
-#include "logic/core/context_access.h"
+#include "logic/context_access.h"
 #include "pipeline/frame_transform.h"
 
 int app_ctrl_materialize_channel_frame_snapshot(const ChannelLogicSnapshot &snapshot, ChannelFrameSnapshot *out)
