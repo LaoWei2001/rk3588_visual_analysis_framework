@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import signal
+import secrets
 import sqlite3
 import sys
 import threading
@@ -122,6 +123,247 @@ class InventoryScanner:
         # Directory I/O on an unavailable network drive must not delay exit.
 
 
+class ControlConnection:
+    """A warm, bounded control connection, independent of JPEG downloads."""
+    def __init__(self, url, client, key):
+        import http.client
+        parsed = urlparse(url)
+        connection = http.client.HTTPSConnection if parsed.scheme == 'https' else http.client.HTTPConnection
+        self.connection = connection(parsed.hostname, parsed.port, timeout=2)
+        self.path = parsed.path.rstrip('/') + '/api/dataset-receiver/control'
+        self.client, self.key = client, key
+
+    def request(self, action, binding_id='', request_id=None, *, task_id=''):
+        body = json.dumps({'client': self.client, 'action': action, 'binding_id': binding_id,
+                           'request_id': request_id or uuid.uuid4().hex, 'task_id': task_id}).encode()
+        try:
+            # Uvicorn can close an idle keep-alive connection. Detect that before
+            # sending a side-effecting command, never replay an ambiguous POST.
+            import select
+            if self.connection.sock and select.select([self.connection.sock], [], [], 0)[0]:
+                self.connection.close()
+            self.connection.request('POST', self.path, body, {'Content-Type': 'application/json',
+                                    'X-Receiver-Control': self.key})
+            response = self.connection.getresponse()
+            data = response.read(65537)
+            if len(data) > 65536:
+                raise ValueError('快捷键响应过大')
+            result = json.loads(data)
+            if response.status != 200:
+                raise RuntimeError(result.get('detail', f'HTTP {response.status}'))
+            return result
+        except Exception:
+            self.connection.close()
+            # Do not replay a key press after network recovery.
+            raise
+
+    def close(self):
+        self.connection.close()
+
+
+class GlobalCaptureKeys:
+    """Win32 global keys, no keyboard hook, focus requirement or download lock."""
+    def __init__(self, url, client, key):
+        import queue
+        self.url, self.client, self.key = url, client, key
+        self.binding = None
+        self.targets = []
+        self._state_lock = threading.Lock()
+        self._target_generation = 0
+        self.available = False
+        self._stop = threading.Event()
+        self._ready = threading.Event()
+        self._busy = threading.Lock()
+        self._queue = queue.Queue(maxsize=1)
+        self._thread_id = None
+        self._worker = None
+        self._last_result = None
+        self._last_seen = 0.0
+
+    def trigger(self, action, pressed_at=None):
+        # The listener does no HTTP or file work; reject overlap instead of
+        # queueing stale "current frame" captures while a request is in flight.
+        with self._state_lock:
+            binding = dict(self.binding) if self.binding else None
+            targets = list(self.targets)
+            fresh = time.monotonic() - self._last_seen <= 5
+        if not fresh or (not binding and action != 'select'):
+            print('快捷键等待目标：请先创建并运行采集任务；多个任务时按 F7 选择。', flush=True)
+            return False
+        if action == 'select':
+            if not targets:
+                print('没有可用的采集任务，请先在网页创建任务并启动视觉程序。', flush=True)
+                return False
+            index = next((i for i, target in enumerate(targets)
+                          if target['task_id'] == (binding or {}).get('task_id')), -1)
+            binding = dict(targets[(index + 1) % len(targets)], id='')
+        if not self._busy.acquire(blocking=False):
+            print('上一条快捷键指令仍在处理，本次未排队。', flush=True)
+            return False
+        self._queue.put_nowait((action, binding, pressed_at or time.perf_counter()))
+        return True
+
+    def _commands(self):
+        import queue
+        connection = ControlConnection(self.url, self.client, self.key)
+        try:
+            while not self._stop.is_set():
+                try: action, binding, started = self._queue.get(timeout=.5)
+                except queue.Empty:
+                    # Keep this command lane warm without putting status polling
+                    # in front of keys. The status lane handles target discovery.
+                    continue
+                try:
+                    if time.perf_counter() - started > .25:
+                        print('按键已过期，本次未抓图，请重新按键。', flush=True)
+                        continue
+                    request_id = uuid.uuid4().hex
+                    if action == 'select':
+                        result = connection.request(action, request_id=request_id, task_id=binding['task_id'])
+                        with self._state_lock:
+                            self._target_generation += 1
+                            self.binding = result.get('binding')
+                            self.targets = result.get('targets', [])
+                            self._last_seen = time.monotonic()
+                        print(f"快捷键目标已切换：{binding['app']} / 视频通道 {binding['channel_id']}。", flush=True)
+                        continue
+                    result = connection.request(action, binding['id'], request_id)
+                    elapsed = round((time.perf_counter() - started) * 1000)
+                    label = f"{binding['app']} / 视频通道 {binding['channel_id']}"
+                    if action == 'toggle':
+                        print(f"{label}：自动采集{'已恢复' if result['enabled'] else '已暂停 · F8 手动抓图仍可用'}（{elapsed} 毫秒）。", flush=True)
+                    else:
+                        self._last_result = (binding['id'], request_id)
+                        task = result.get('task', {})
+                        print(f'{label}：抓图请求已响应（往返 {elapsed} 毫秒），等待取帧结果。', flush=True)
+                        if task.get('manual_state') == 'failed':
+                            print('抓图失败：' + task.get('manual_error', ''), flush=True)
+                except Exception as exc:
+                    print(f'快捷键请求未确认：{exc}；不会自动补发，请检查采集结果。', flush=True)
+                finally:
+                    self._busy.release()
+        finally:
+            connection.close()
+
+    def _status(self):
+        connection = ControlConnection(self.url, self.client, self.key)
+        previous = None
+        last_error = ''
+        try:
+            while not self._stop.is_set():
+                try:
+                    with self._state_lock:
+                        generation = self._target_generation
+                    state = connection.request('status')
+                    with self._state_lock:
+                        # A status response started before F7 must not undo the
+                        # newly selected target on the separate command lane.
+                        if generation != self._target_generation:
+                            continue
+                        self.binding = state.get('binding')
+                        self.targets = state.get('targets', [])
+                        self._last_seen = time.monotonic()
+                        binding, targets = self.binding, list(self.targets)
+                    last_error = ''
+                    current = (binding or {}).get('id'), state.get('enabled'), tuple(t['task_id'] for t in targets)
+                    if current != previous:
+                        if binding:
+                            print(f"电脑快捷键已就绪：{binding['app']} / 视频通道 {binding['channel_id']}；"
+                                  f"自动采集{'运行中' if state.get('enabled') else '已暂停 · F8 手动抓图可用'}。F8 抓一张，F9 暂停／恢复。", flush=True)
+                        elif not targets:
+                            print('快捷键已开启，等待采集任务：请在网页创建任务并启动视觉程序。', flush=True)
+                        if len(targets) > 1:
+                            print('可选任务：' + '；'.join(f"{t['app']} / 视频通道 {t['channel_id']}" for t in targets)
+                                  + '。按 F7 依次选择目标，F8/F9 只操作当前目标。', flush=True)
+                        previous = current
+                    pending = self._last_result
+                    if pending and pending[0] == (self.binding or {}).get('id'):
+                        task = connection.request('result', pending[0]).get('task', {})
+                        if task.get('manual_id') == pending[1] and task.get('manual_state') in ('captured', 'failed'):
+                            if task['manual_state'] == 'captured':
+                                print(f"已抓取第 {task.get('manual_frame')} 帧，设备收到请求到取帧 {task.get('manual_wait_ms')} 毫秒；保存完成后会显示文件路径。", flush=True)
+                            else:
+                                print('抓图失败：' + task.get('manual_error', ''), flush=True)
+                            if self._last_result == pending: self._last_result = None
+                    elif pending:
+                        self._last_result = None
+                except Exception as exc:
+                    with self._state_lock:
+                        if generation == self._target_generation:
+                            self.binding = None
+                            self.targets = []
+                    message = str(exc)
+                    if message != last_error:
+                        print('电脑快捷键等待连接：' + message, flush=True)
+                        last_error = message
+                self._stop.wait(.5 if self._last_result else 1)
+        finally:
+            connection.close()
+
+    def _listen(self):
+        import ctypes
+        from ctypes import wintypes
+        user = ctypes.WinDLL('user32', use_last_error=True)
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        user.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+        user.RegisterHotKey.restype = wintypes.BOOL
+        user.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
+        user.UnregisterHotKey.restype = wintypes.BOOL
+        user.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
+        user.GetMessageW.restype = ctypes.c_int
+        kernel.GetCurrentThreadId.restype = wintypes.DWORD
+        registered = []
+        try:
+            self._thread_id = kernel.GetCurrentThreadId()
+            # MOD_NOREPEAT avoids auto-repeat while the user holds a key down.
+            for identifier, key in ((1, 0x77), (2, 0x78), (3, 0x76)): # F8, F9, F7
+                if not user.RegisterHotKey(None, identifier, 0x4000, key):
+                    raise RuntimeError(f'F{key - 0x6F} 被其他程序占用或无法注册（Windows {ctypes.get_last_error()}），请关闭冲突程序后重启接收端')
+                registered.append(identifier)
+            self.available = True
+            self._ready.set()
+            message = wintypes.MSG()
+            while not self._stop.is_set():
+                result = user.GetMessageW(ctypes.byref(message), None, 0, 0)
+                if result == -1: raise ctypes.WinError(ctypes.get_last_error())
+                if result == 0: break
+                if message.message == 0x0312 and message.wParam in (1, 2, 3): # WM_HOTKEY
+                    # A suspended machine must not replay an old WM_HOTKEY.
+                    kernel.GetTickCount.restype = wintypes.DWORD
+                    if (kernel.GetTickCount() - message.time) & 0xFFFFFFFF > 250:
+                        continue
+                    self.trigger({1: 'capture', 2: 'toggle', 3: 'select'}[message.wParam])
+        except Exception as exc:
+            print('全局快捷键未启用：' + str(exc) + '。图片接收仍可继续。', flush=True)
+        finally:
+            self.available = False
+            for identifier in registered: user.UnregisterHotKey(None, identifier)
+            self._ready.set()
+
+    def start(self):
+        if os.name != 'nt':
+            print('当前系统只启用图片接收；全局 F8/F9 快捷键需要 Windows 接收程序。', flush=True)
+            return
+        self._worker = threading.Thread(target=self._listen, daemon=True)
+        self._worker.start()
+        self._ready.wait(3)
+        if self.available:
+            threading.Thread(target=self._commands, daemon=True).start()
+            threading.Thread(target=self._status, daemon=True).start()
+            print('全局快捷键默认开启：F8 抓一张，F9 暂停／恢复自动采集，F7 切换任务。观看浏览器或播放器时无需切回接收程序。', flush=True)
+
+    def stop(self):
+        self._stop.set()
+        if os.name == 'nt' and self._thread_id:
+            import ctypes
+            from ctypes import wintypes
+            post = ctypes.WinDLL('user32', use_last_error=True).PostThreadMessageW
+            post.argtypes = [wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+            post.restype = wintypes.BOOL
+            post(self._thread_id, 0x0012, 0, 0) # WM_QUIT; unregister on owner thread.
+        if self._worker: self._worker.join(timeout=1)
+
+
 class Receiver:
     def __init__(self, url: str, directory: Path):
         self.url = normalize_url(url)
@@ -138,6 +380,7 @@ class Receiver:
             complete INTEGER NOT NULL DEFAULT 0, acknowledged INTEGER NOT NULL DEFAULT 0);
           CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, next INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS receivers (device TEXT PRIMARY KEY, client TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS control_keys (device TEXT PRIMARY KEY, secret TEXT NOT NULL);
           CREATE INDEX IF NOT EXISTS pending_image_paths ON images(path) WHERE complete=0;
         ''')
         # Persist the local receiver identity: reopening the same directory must
@@ -145,6 +388,11 @@ class Receiver:
         with self.db:
             self.db.execute('INSERT OR IGNORE INTO receivers VALUES (?,?)',(self.device,uuid.uuid4().hex))
         self.client = self.db.execute('SELECT client FROM receivers WHERE device=?',(self.device,)).fetchone()[0]
+        with self.db:
+            self.db.execute('INSERT OR IGNORE INTO control_keys VALUES (?,?)', (self.device, secrets.token_hex(32)))
+        self.control_key = self.db.execute('SELECT secret FROM control_keys WHERE device=?', (self.device,)).fetchone()[0]
+        if os.name == 'posix': (self.directory/'.dataset_receiver.sqlite').chmod(0o600)
+        self.hotkeys = GlobalCaptureKeys(self.url, self.client, self.control_key)
 
     def request(self, path: str, body=None, binary=False, *, timeout=20):
         data = json.dumps(body,ensure_ascii=False).encode() if body is not None else None
@@ -278,7 +526,8 @@ class Receiver:
 
     def poll_body(self, error='') -> dict:
         return {'client':self.client, 'directory':str(self.directory), 'error':error,
-                'inventory':self.inventory.snapshot()}
+                'inventory':self.inventory.snapshot(),
+                'control_hash':hashlib.sha256(self.control_key.encode()).hexdigest() if self.hotkeys.available else ''}
 
     def cycle(self, error='') -> int:
         self._poll_started = True
@@ -306,8 +555,10 @@ class Receiver:
     def run(self):
         with console_close_notification(self):
             self.inventory.start()
+            self.hotkeys.start()
             try: self._run()
             finally:
+                self.hotkeys.stop()
                 self.inventory.stop()
                 self.disconnect()
 

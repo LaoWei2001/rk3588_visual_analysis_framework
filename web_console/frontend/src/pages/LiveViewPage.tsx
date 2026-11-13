@@ -53,6 +53,13 @@ function saveSidePanelWidth(value: number) {
   }
 }
 
+function storedPreview(key: string, fallback: string): string {
+  try { return localStorage.getItem(`rk3588.liveView.${key}`) ?? fallback } catch { return fallback }
+}
+function savePreview(key: string, value: string) {
+  try { localStorage.setItem(`rk3588.liveView.${key}`, value) } catch { /* Optional browser preference. */ }
+}
+
 class FatalStreamError extends Error {}
 
 function concatBytes(parts: Uint8Array[], total: number): Uint8Array {
@@ -139,6 +146,14 @@ export default function LiveViewPage() {
   const [seekBusy, setSeekBusy] = useState<Record<number, boolean>>({})
   const [activeTimelineChannel, setActiveTimelineChannel] = useState<number | null>(null)
   const [videoLayout, setVideoLayout] = useState<VideoLayout | null>(null)
+  const [channelPreview, setChannelPreview] = useState(false)
+  const [previewMode, setPreviewMode] = useState(() => storedPreview('previewMode', 'independent') === 'zoom' ? 'zoom' : 'independent')
+  const [previewHeight, setPreviewHeight] = useState(() => {
+    const height = Number(storedPreview('previewHeight', '1080'))
+    return [480, 720, 1080].includes(height) ? height : 1080
+  })
+  const [previewResolutions, setPreviewResolutions] = useState<number[]>([1080])
+  const [videoSize, setVideoSize] = useState({ width: 0, height: 0 })
   const [focusedChannel, setFocusedChannel] = useState<number | null>(null)
   const [pictureBounds, setPictureBounds] = useState({ left: 0, top: 0, width: 0, height: 0 })
   const [actionBusy, setActionBusy] = useState<Record<string, boolean>>({})
@@ -244,11 +259,14 @@ export default function LiveViewPage() {
   const runningConfig = runningApp?.config ?? ''
   const rtspEnabled = rtspState === 'enabled'
   const fileTimelineEnabled = !!appName && rtspEnabled && !streamLoading && !streamErr
+  const independentPreview = channelPreview && previewMode === 'independent'
+  const streamChannel = independentPreview ? focusedChannel : null
+  const streamResolution = streamChannel === null ? 0 : previewResolutions.includes(previewHeight) ? previewHeight : 1080
   const focusedTile = videoLayout?.tiles.find(tile => tile.channelId === focusedChannel) ?? null
   const viewTiles = useMemo(() => focusedTile
     ? [{ ...focusedTile, left: 0, top: 0, width: 1, height: 1 }]
     : videoLayout?.tiles ?? [], [videoLayout, focusedTile])
-  const cropStyle: React.CSSProperties | undefined = focusedTile ? {
+  const cropStyle: React.CSSProperties | undefined = focusedTile && !independentPreview ? {
     position: 'absolute', objectFit: 'fill',
     width: `${100 / focusedTile.width}%`, height: `${100 / focusedTile.height}%`,
     left: `${-100 * focusedTile.left / focusedTile.width}%`,
@@ -256,6 +274,34 @@ export default function LiveViewPage() {
   } : undefined
 
   useEffect(() => { setFocusedChannel(null) }, [appName, runningConfig, runningApp?.pid])
+
+  useEffect(() => {
+    let disposed = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let attempts = 0
+    setChannelPreview(false)
+    const check = async () => {
+      attempts += 1
+      let supported = false
+      try {
+        const token = useAuthStore.getState().token ?? ''
+        const response = await fetch(`${streamUrl(appName)}/capabilities`, {
+          cache: 'no-store', headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        })
+        if (response.ok) {
+          const capabilities = await response.json()
+          supported = capabilities.channel_preview === true
+          if (!disposed) setPreviewResolutions(Array.isArray(capabilities.preview_resolutions)
+            ? capabilities.preview_resolutions.filter((height: number) => [480, 720, 1080].includes(height)) : [1080])
+        }
+      } catch { /* The control socket may still be starting. */ }
+      if (disposed) return
+      setChannelPreview(supported)
+      if (!supported && attempts < 6) timer = setTimeout(check, 3000)
+    }
+    if (appName) void check()
+    return () => { disposed = true; clearTimeout(timer) }
+  }, [appName, runningApp?.pid])
 
 
   const timelineTiles = useMemo(() => fileTimelineEnabled ? viewTiles.flatMap(tile => {
@@ -319,8 +365,8 @@ export default function LiveViewPage() {
     if (!frame || !video || !stage || !videoLayout) return null
     const frameBox = frame.getBoundingClientRect()
     const box = stage.getBoundingClientRect()
-    const width = (video.videoWidth || videoLayout.width) * (focusedTile?.width ?? 1)
-    const height = (video.videoHeight || videoLayout.height) * (focusedTile?.height ?? 1)
+    const width = (video.videoWidth || videoLayout.width) * (independentPreview ? 1 : focusedTile?.width ?? 1)
+    const height = (video.videoHeight || videoLayout.height) * (independentPreview ? 1 : focusedTile?.height ?? 1)
     const scale = Math.min(box.width / width, box.height / height)
     return {
       left: box.left - frameBox.left + (box.width - width * scale) / 2,
@@ -328,7 +374,7 @@ export default function LiveViewPage() {
       width: width * scale,
       height: height * scale,
     }
-  }, [videoLayout, focusedTile])
+  }, [videoLayout, focusedTile, independentPreview])
 
   useLayoutEffect(() => {
     const measure = () => {
@@ -755,6 +801,7 @@ export default function LiveViewPage() {
     let sourceBuffer: SourceBuffer | null = null
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
 
+    setStreamLoading(true)
     video.src = objectUrl
     video.muted = true
     let playbackStarted = false
@@ -811,6 +858,10 @@ export default function LiveViewPage() {
       await waitForSourceOpen(mediaSource, abortController.signal)
       const token = useAuthStore.getState().token ?? ''
       const query = new URLSearchParams({ t: String(streamNonce), client_id: streamClientId, ...streamRetryDiagnosticsRef.current })
+      if (streamChannel !== null) {
+        query.set('channel_id', String(streamChannel))
+        query.set('preview_height', String(streamResolution))
+      }
       const response = await fetch(`${streamUrl(appName)}?${query}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         cache: 'no-store',
@@ -968,7 +1019,7 @@ export default function LiveViewPage() {
       video.load()
       URL.revokeObjectURL(objectUrl)
     }
-  }, [appName, rtspEnabled, streamNonce, streamErr]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [appName, rtspEnabled, streamNonce, streamErr, streamChannel, streamResolution]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => () => {
     clearStreamRetry()
@@ -1030,6 +1081,22 @@ export default function LiveViewPage() {
           style={{ '--live-view-side-width': `${sidePanelWidth}px` } as React.CSSProperties}
         >
           <section className={`live-view-visual-panel${videoFullscreen ? ' fullscreen-active' : ''}`}>
+            <div className="live-view-preview-settings">
+              <label>点击画面后<select aria-label="点击画面后的显示方式" value={previewMode}
+                onChange={event => {setPreviewMode(event.target.value); savePreview('previewMode', event.target.value); setStreamErr(false); setStreamErrorDetail('')}}>
+                <option value="zoom">直接放大</option>
+                <option value="independent">独立显示</option>
+              </select></label>
+              {previewMode === 'independent' && <label>预览分辨率<select aria-label="独立预览分辨率" value={previewResolutions.includes(previewHeight) ? previewHeight : 1080}
+                disabled={!channelPreview} onChange={event => {setPreviewHeight(Number(event.target.value)); savePreview('previewHeight', event.target.value); setStreamErr(false); setStreamErrorDetail('')}}>
+                {[480, 720, 1080].map(height => <option key={height} value={height} disabled={!previewResolutions.includes(height)}>{height}p</option>)}
+              </select></label>}
+              <span>{previewMode === 'independent' && !channelPreview ? '当前程序暂不支持独立预览，点击画面将直接放大。'
+                : focusedTile ? `正在查看视频通道 ${focusedTile.channelId}${independentPreview && videoSize.width ? ` · ${videoSize.width}×${videoSize.height}` : ''}，再次点击画面返回。`
+                : '点击任意视频画面查看，再次点击返回拼接。'}
+                {previewMode === 'independent' && channelPreview ? ' 保持原始比例，不超过源视频清晰度。' : ''}
+                {previewMode === 'independent' && channelPreview && previewResolutions.length === 1 ? ' 重启更新后的视觉程序可启用更多分辨率。' : ''}</span>
+            </div>
             <div
               className="live-view-video-frame"
               ref={videoFrameRef}
@@ -1054,13 +1121,17 @@ export default function LiveViewPage() {
                           width: pictureBounds.width, height: pictureBounds.height } : undefined}>
                       <video
                         ref={videoRef}
-                        key={`${appName}-${streamNonce}`}
+                        key={`${appName}-${streamNonce}-${streamChannel ?? "grid"}-${streamResolution}`}
                         className="live-view-video"
                         style={{ ...cropStyle, visibility: streamLoading && !snapshotReady ? 'hidden' : undefined }}
                         muted
                         autoPlay
                         playsInline
                         onPlaying={handleStreamLoad}
+                        onResize={() => {
+                          const video = videoRef.current
+                          if (video) setVideoSize({ width: video.videoWidth, height: video.videoHeight })
+                        }}
                       />
                       <canvas ref={videoSnapshotRef} className="live-view-video-snapshot" style={cropStyle} hidden={!streamLoading || !snapshotReady} />
                       </div>
@@ -1102,7 +1173,7 @@ export default function LiveViewPage() {
                   </div>
                 )}
               </div>
-              {videoLayout && videoLayout.tiles.length > 1 && fileTimelineEnabled && (
+              {videoLayout && videoLayout.tiles.length > 1 && !!appName && rtspEnabled && (
                 <div className="live-view-tile-targets" style={{ left: pictureBounds.left, top: pictureBounds.top,
                   width: pictureBounds.width, height: pictureBounds.height }}>
                   {viewTiles.map(tile => <button key={tile.channelId}
@@ -1110,8 +1181,20 @@ export default function LiveViewPage() {
                     aria-label={focusedTile ? '点击画面返回拼接' : `单独查看通道 ${tile.channelId}`}
                     style={{ left: `${tile.left * 100}%`, top: `${tile.top * 100}%`,
                       width: `${tile.width * 100}%`, height: `${tile.height * 100}%` }}
-                    onClick={() => setFocusedChannel(focusedTile ? null : tile.channelId)}>
-                    <span>{focusedTile ? '点击画面返回拼接' : `通道 ${tile.channelId} · 单独查看`}</span>
+                    onClick={() => {
+                      clearStreamRetry()
+                      streamRetryRef.current = 0
+                      setStreamErr(false)
+                      setStreamErrorDetail('')
+                      setStreamRetryWaitMs(0)
+                      setSnapshotReady(false)
+                      setVideoSize({ width: 0, height: 0 })
+                      if (independentPreview) setStreamLoading(true)
+                      setFocusedChannel(focusedTile ? null : tile.channelId)
+                    }}>
+                    <span>{focusedTile
+                      ? `${independentPreview ? `高清 ${videoSize.width || '—'}×${videoSize.height || '—'} · ` : ''}点击画面返回拼接`
+                      : `通道 ${tile.channelId} · ${independentPreview ? '高清查看' : '单独查看'}`}</span>
                   </button>)}
                 </div>
               )}

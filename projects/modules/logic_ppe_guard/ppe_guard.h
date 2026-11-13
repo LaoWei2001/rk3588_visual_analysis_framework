@@ -54,8 +54,9 @@ struct Config
     float helmet_area_min_ratio = 0.01f; /* 安全帽框 / 人员框 面积比下限 */
     float helmet_area_max_ratio = 0.12f; /* 面积比上限 */
     float helmet_head_ratio = 0.35f;
-    float helmet_search_up_ratio = 0.6f;   /* 安全帽框允许高出人体框顶的比例 */
-    float helmet_search_side_ratio = 0.15f; /* 安全帽框允许左右外扩的比例 */     /* 框中心到鼻/眼关键点的距离上限（占人员框高） */
+    float helmet_search_up_ratio = 0.6f; /* 安全帽框允许高出人体框顶的比例 */
+    float helmet_search_side_ratio = 0.15f;
+    /* 安全帽框允许左右外扩的比例 */     /* 框中心到鼻/眼关键点的距离上限（占人员框高） */
     float workwear_top_ratio = 0.25f;    /* 工作服框中心允许的垂直区间起点 */
     float workwear_bottom_ratio = 0.75f; /* 区间终点 */
     float glove_wrist_ratio = 0.2f;      /* 手套框中心到对应腕点的距离上限（占人员框高） */

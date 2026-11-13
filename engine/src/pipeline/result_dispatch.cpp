@@ -20,11 +20,11 @@
 #include <utility>
 #include <vector>
 
+#include "application/runtime/service_watchdog.h"
 #include "common/logging.h"
 #include "frame_transform.h"
-#include "inference/inference_engine.h"
 #include "pipeline_internal.h"
-#include "runtime/service_watchdog.h"
+#include "vision/inference/inference_engine.h"
 
 /* 帧匹配诊断日志节流（每通道约 2 秒一次，由 performance_display 开关控制）*/
 static uint64_t g_sync_dbg_last_ms[MAX_CHANNEL_NUM] = {0};

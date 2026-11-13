@@ -1,3 +1,4 @@
+#include "application/control/remote_dataset.h"
 /**
  * @file frame_inlet.cpp
  * @brief 视频帧入口
@@ -22,15 +23,15 @@
 #include <pthread.h>
 #include <utility>
 
+#include "application/runtime/pause_ctrl.h"
 #include "common/logging.h"
 #include "frame_source_owner.h"
 #include "frame_transform.h"
-#include "inference/inference_engine.h"
+#include "media/recorder/event_video_recorder.h"
+#include "media/rtsp/rtsp_streamer.h"
 #include "pipeline_internal.h"
 #include "pipeline_runtime.h"
-#include "recorder/event_video_recorder.h"
-#include "rtsp/rtsp_streamer.h"
-#include "runtime/pause_ctrl.h"
+#include "vision/inference/inference_engine.h"
 
 /*======================== 送帧统计（每通道，仅 pipeline_submit_frame 访问）========================*/
 
@@ -181,7 +182,8 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
     raw_frame.height = imgDesc.height;
     raw_frame.frame_steady_ms = frame_steady_ms;
     raw_frame.frame_unix_ms = frame_unix_ms;
-    if (!infer_enabled && will_process)
+    const bool manual_capture = remote_dataset_manual_active(ch);
+    if ((!infer_enabled && will_process) || manual_capture)
     {
         auto source_owner = retain_frame_source_buffer(imgDesc.source_buffer);
         auto imported = source_owner ? rga_import_src_fd(imgDesc.fd, imgDesc.width, imgDesc.height, imgDesc.horStride,
@@ -204,6 +206,16 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
             if (!raw_frame.lazy_frame->retain_borrowed_source(source_bytes))
                 raw_frame.lazy_frame.reset();
         }
+    }
+
+    if (manual_capture && raw_frame.lazy_frame)
+    {
+        auto frame = raw_frame.lazy_frame;
+        remote_dataset_manual_frame(ch, current_frame_seq, frame_unix_ms,
+                                    static_cast<size_t>(imgDesc.width) * imgDesc.height * 3, [frame]() {
+                                        const auto image = frame->source_frame();
+                                        return image ? image->clone() : cv::Mat{};
+                                    });
     }
 
     /* ---- 分析任务优先入队 ----
@@ -233,7 +245,8 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
     /* ---- 推入显示队列（单槽覆盖，始终展示最新解码帧）----
      * HDMI 常开；纯 RTSP 模式只在存在实际客户端时合成，空闲期间不做整帧复制、缩放和叠加绘制。 */
     const bool preview_consumer_active =
-        app_ctrl_get_enable_disp() || (app_ctrl_get_enable_rtsp() && rtsp_streamer_has_active_client());
+        app_ctrl_get_enable_disp() ||
+        (app_ctrl_get_enable_rtsp() && (rtsp_streamer_has_active_client() || rtsp_streamer_has_channel_client(ch)));
     bool preview_due = false;
     if (preview_consumer_active)
     {

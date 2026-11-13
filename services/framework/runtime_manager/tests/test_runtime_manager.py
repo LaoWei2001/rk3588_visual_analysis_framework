@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 import sys
 
 import pytest
@@ -264,11 +265,23 @@ print('independent runtime import passed')
     assert (tmp_path / 'lib/systemd/system/rk3588-console.service.d/90-bounded-dumps.conf').read_text().endswith('LimitCORE=16M\n')
 
 
+def _write_application_package(source):
+    source.mkdir()
+    header = bytearray(120)
+    header[:7] = b'\x7fELF\x02\x01\x01'
+    struct.pack_into('<HH', header, 16, 2, 183)
+    struct.pack_into('<Q', header, 32, 64)
+    struct.pack_into('<HHH', header, 52, 64, 56, 1)
+    (source / pm.BINARY_NAME).write_bytes(header)
+    (source / 'logics.json').write_text('{"channel_logics": [], "global_logics": []}')
+    (source / 'assets').mkdir()
+    (source / 'assets/config.json').write_text('{"channels": [], "global": {}}')
+
+
 def test_package_copy_failure_does_not_stop_running_application(isolated, tmp_path, monkeypatch):
     from rk3588_runtime import package_install
     source = tmp_path / 'package'
-    source.mkdir()
-    (source / pm.BINARY_NAME).write_bytes(b'binary')
+    _write_application_package(source)
     stopped = []
     monkeypatch.setattr(pm, 'stop_all_apps_for_install_unlocked', lambda: stopped.append(True))
     def fail(*args, **kwargs):
@@ -283,8 +296,7 @@ def test_package_install_stops_under_runtime_lock_and_preserves_external_data(is
     from rk3588_runtime import package_install
     from contextlib import contextmanager
     source = tmp_path / 'package'
-    source.mkdir()
-    (source / pm.BINARY_NAME).write_bytes(b'new')
+    _write_application_package(source)
     destination = pm.APPS_ROOT / 'demo'
     destination.mkdir(parents=True)
     (destination / pm.BINARY_NAME).write_bytes(b'old')
@@ -299,8 +311,10 @@ def test_package_install_stops_under_runtime_lock_and_preserves_external_data(is
         held.pop()
     def stop():
         assert held and (destination / pm.BINARY_NAME).read_bytes() == b'old'
+        return ['demo']
     monkeypatch.setattr(pm, 'runtime_lock', lock)
     monkeypatch.setattr(pm, 'stop_all_apps_for_install_unlocked', stop)
-    package_install.install(source, 'demo')
-    assert (destination / pm.BINARY_NAME).read_bytes() == b'new'
+    result = package_install.install(source, 'demo')
+    assert result['stopped_apps'] == ['demo']
+    assert (destination / pm.BINARY_NAME).read_bytes() == (source / pm.BINARY_NAME).read_bytes()
     assert (external / 'keep').read_bytes() == b'event'

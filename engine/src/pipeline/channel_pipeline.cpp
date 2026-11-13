@@ -22,13 +22,13 @@
 #include <unordered_map>
 #include <vector>
 
-#include "control/logic_control.h"
-#include "control/remote_dataset.h"
+#include "application/control/logic_control.h"
+#include "application/control/remote_dataset.h"
 #include "frame_transform.h"
 #include "pipeline_internal.h"
 #include "pipeline_runtime.h"
-#include "tracking/bytetrack.h"
-#include "tracking/tracker.h"
+#include "vision/tracking/bytetrack.h"
+#include "vision/tracking/tracker.h"
 #include <channel.h>
 
 /*======================== 跟踪器 (每通道一个实例) ========================*/
@@ -89,7 +89,8 @@ static void update_tracking_results(int chnId, const ChannelConfig *config, std:
             (r.is_depth() ? depth : detections).push_back(std::move(r));
         update_tracking_results(chnId, config, detections);
         results = std::move(detections);
-        for (auto &r : depth) results.push_back(std::move(r));
+        for (auto &r : depth)
+            results.push_back(std::move(r));
         return;
     }
     if (config->tracker_type == "bytetrack")

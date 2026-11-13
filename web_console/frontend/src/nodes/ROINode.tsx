@@ -15,7 +15,7 @@ import {
   polygonArea,
   polygonIsSimple,
   type InferenceRoiValue,
-} from '../components/InferenceROIEditor'
+} from '../models/inferenceRoi'
 import './nodeStyles.css'
 import './ROINode.css'
 

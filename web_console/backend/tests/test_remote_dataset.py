@@ -725,7 +725,8 @@ def test_disconnect_is_idempotent_and_preserves_current_receiver(tmp_path,monkey
     manager.heartbeat('first','D:/samples','disk error')
     seen=manager.receiver_status()['last_seen']
     assert manager.disconnect('first') and manager.disconnect('first')
-    assert manager.receiver_status()=={'online':False,'directory':'D:/samples','error':'','last_seen':seen}
+    assert manager.receiver_status()=={'online':False,'directory':'D:/samples','error':'','last_seen':seen,
+                                       'hotkeys_available':False,'control_task':None}
     manager.heartbeat('second','D:/other','')
     state=manager.settings('receiver')
     assert not manager.disconnect('first')
@@ -772,3 +773,30 @@ def test_disconnect_failure_does_not_mask_normal_exit(tmp_path,monkeypatch,code)
     try:
         with pytest.raises(KeyboardInterrupt): receiver.run()
     finally: receiver.db.close()
+
+
+def test_manual_capture_paused_bypasses_rules_and_reuses_transfer(environment):
+    manager, _, _ = environment
+    settings = config(limit=1)
+    settings['rules'][0]['condition']['class'] = 'helmet'  # Synthetic detector only has person.
+    task = manager.save('demo', 3, settings)['tasks'][0]
+    started = time.monotonic()
+    result = manager.capture_once('demo', task['id'], 'keyboard-one')
+    assert result['manual_id'] == 'keyboard-one'
+    deadline = started + 3
+    while time.monotonic() < deadline:
+        live = manager.list('demo')['tasks'][0]
+        if live['manual_state'] == 'captured': break
+        time.sleep(.02)
+    assert live['manual_state'] == 'captured', live
+    assert not live['enabled'] and live['pending'] == 1 and live['manual_wait_ms'] <= 750
+    response, _ = manager.rpc('demo', {'op': 'status'})
+    sample = response['tasks'][0]['next']
+    _, image = manager.rpc('demo', {'op': 'image', 'task_id': task['id'], 'sample_id': sample['sample_id']})
+    assert image[:2] == b'\xff\xd8' and len(image) == sample['bytes']
+    # Repeat delivery of the same key event is idempotent; a new request observes the cap.
+    manager.capture_once('demo', task['id'], 'keyboard-one')
+    with pytest.raises(HTTPException) as error:
+        manager.capture_once('demo', task['id'], 'keyboard-two')
+    assert error.value.status_code == 409
+    assert manager.list('demo')['tasks'][0]['pending'] == 1

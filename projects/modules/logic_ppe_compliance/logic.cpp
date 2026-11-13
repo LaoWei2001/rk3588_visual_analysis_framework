@@ -113,14 +113,11 @@ static void logic_ppe_compliance(ChannelContext *ctx)
     }
 
     const std::string person_labels = ctx->param_string("person_labels");
-    const std::array<std::string, VIOLATION_TYPE_COUNT> violation_labels = {
-        ctx->param_string("no_helmet_labels"),
-        ctx->param_string("no_workwear_labels"),
-        ctx->param_string("no_gloves_labels")};
+    const std::array<std::string, VIOLATION_TYPE_COUNT> violation_labels = {ctx->param_string("no_helmet_labels"),
+                                                                            ctx->param_string("no_workwear_labels"),
+                                                                            ctx->param_string("no_gloves_labels")};
     const std::array<bool, VIOLATION_TYPE_COUNT> enabled = {
-        ctx->param_bool("check_helmet"),
-        ctx->param_bool("check_workwear"),
-        ctx->param_bool("check_gloves")};
+        ctx->param_bool("check_helmet"), ctx->param_bool("check_workwear"), ctx->param_bool("check_gloves")};
     const float min_person_score = static_cast<float>(ctx->param_float("person_min_score"));
     const float min_violation_score = static_cast<float>(ctx->param_float("violation_min_score"));
     const uint64_t evidence_window_ms = static_cast<uint64_t>(ctx->param_int("evidence_window_sec")) * 1000U;
@@ -132,8 +129,7 @@ static void logic_ppe_compliance(ChannelContext *ctx)
     std::vector<TrackedPerson> people;
     for (const AlgoResult &result : *ctx->results)
     {
-        if (result.track_id < 0 || result.score < min_person_score ||
-            !matches_label(result.label, person_labels))
+        if (result.track_id < 0 || result.score < min_person_score || !matches_label(result.label, person_labels))
             continue;
         PersonEvidence &evidence = state.people[result.track_id];
         evidence.last_seen_ms = now_ms;
@@ -197,10 +193,9 @@ static void logic_ppe_compliance(ChannelContext *ctx)
                 EventRequest request;
                 request.event_type = "logic_ppe_violation";
                 request.message = "人员安全穿戴违规: " + violations;
-                request.fields = {
-                    event_field("track_id", person.detection->track_id),
-                    event_field("violation_types", violations),
-                    event_field("person_score", person.detection->score)};
+                request.fields = {event_field("track_id", person.detection->track_id),
+                                  event_field("violation_types", violations),
+                                  event_field("person_score", person.detection->score)};
                 if (report_event(ctx, request).accepted())
                     person.evidence->reported = true;
             }
@@ -209,8 +204,8 @@ static void logic_ppe_compliance(ChannelContext *ctx)
 
     char status[192];
     std::snprintf(status, sizeof(status), "PPE违规候选: %d  已确认人员: %d", observed_violations, confirmed_people);
-    draw_text(ctx, status, cv::Point(18, 32), confirmed_people ? cv::Scalar(0, 0, 255) : cv::Scalar(240, 240, 240),
-              0.7, 1, DrawCommand::ALL, true);
+    draw_text(ctx, status, cv::Point(18, 32), confirmed_people ? cv::Scalar(0, 0, 255) : cv::Scalar(240, 240, 240), 0.7,
+              1, DrawCommand::ALL, true);
     ctx->publish_bool("ppe_alarm", confirmed_people > 0);
     ctx->publish_int("ppe_confirmed_people", confirmed_people);
     ctx->publish_int("ppe_violation_observations", observed_violations);

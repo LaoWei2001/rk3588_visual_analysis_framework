@@ -22,8 +22,8 @@ const AlgoResult *HookGuard::select_target(const std::vector<AlgoResult> &result
 
     for (const AlgoResult &result : results)
     {
-        if (result.class_id != config.class_id || result.score < config.min_score ||
-            result.box.width <= 0 || result.box.height <= 0)
+        if (result.class_id != config.class_id || result.score < config.min_score || result.box.width <= 0 ||
+            result.box.height <= 0)
             continue;
         if (last_track_id_ >= 0 && result.track_id == last_track_id_)
             best_track = &result;
@@ -53,8 +53,8 @@ void HookGuard::clear_detection_state(bool report_clear, HookResult *out)
     safe_since_ms_ = 0;
 }
 
-HookResult HookGuard::update(const std::vector<AlgoResult> &results, const cv::Size &frame_size,
-                             uint64_t now_ms, const HookConfig &config)
+HookResult HookGuard::update(const std::vector<AlgoResult> &results, const cv::Size &frame_size, uint64_t now_ms,
+                             const HookConfig &config)
 {
     HookObservation observation;
     const AlgoResult *target = select_target(results, config);
@@ -68,8 +68,8 @@ HookResult HookGuard::update(const std::vector<AlgoResult> &results, const cv::S
     return update(observation, frame_size, now_ms, config);
 }
 
-HookResult HookGuard::update(const HookObservation &observation, const cv::Size &frame_size,
-                             uint64_t now_ms, const HookConfig &config)
+HookResult HookGuard::update(const HookObservation &observation, const cv::Size &frame_size, uint64_t now_ms,
+                             const HookConfig &config)
 {
     HookResult out;
     if (!config.enabled || frame_size.width <= 0 || frame_size.height <= 0)
@@ -114,9 +114,11 @@ HookResult HookGuard::update(const HookObservation &observation, const cv::Size 
         else
         {
             have_center_ = false;
-            if (!observation.visible) last_track_id_ = -1;
+            if (!observation.visible)
+                last_track_id_ = -1;
         }
-        if (!alarm_) outside_state_ = false;
+        if (!alarm_)
+            outside_state_ = false;
         out.outside = outside_state_;
         out.alarm = alarm_;
         return out;

@@ -116,7 +116,7 @@ REGISTER_GLOBAL_LOGIC(sdk_global);
     compile_case('selected target is read-only',
                  '#include <channel.h>\nvoid test(ChannelContext &ctx) { ctx.query_targets().best->score = 0; }\n',
                  accepted=False)
-    compile_case('internal headers unavailable', '#include <runtime/app_ctrl.h>\n', accepted=False)
+    compile_case('internal headers unavailable', '#include <application/runtime/app_ctrl.h>\n', accepted=False)
     for symbol in ('channel_logic_get', 'channel_logic_action_get', 'channel_logic_names',
                    'global_logic_get', 'global_logic_action_get', 'global_logic_names',
                    'draw_text_unicode_cached', 'gpio_init', 'gpio_deinit', 'gpio_restore_outputs'):

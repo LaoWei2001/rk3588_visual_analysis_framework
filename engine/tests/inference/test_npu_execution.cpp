@@ -1,6 +1,6 @@
-#include "inference/npu_execution.h"
-#include <cassert>
+#include "vision/inference/npu_execution.h"
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <string>
 #include <thread>
@@ -11,7 +11,7 @@ namespace
 {
 std::atomic<int> active{0}, calls{0};
 std::string failure;
-}
+} // namespace
 
 extern "C" int rknn_inputs_set(rknn_context, uint32_t, rknn_input *)
 {
@@ -25,7 +25,8 @@ extern "C" int rknn_run(rknn_context, rknn_run_extend *options)
 {
     ++calls;
     assert(options && options->timeout_ms == 5000 && options->fence_fd == -1);
-    if (failure == "run") return -22;
+    if (failure == "run")
+        return -22;
     assert(active.fetch_add(1) == 0);
     std::this_thread::sleep_for(std::chrono::microseconds(100));
     return 0;
@@ -53,8 +54,15 @@ int main(int argc, char **argv)
         for (int mask : {0, 1, 2, 4, 7})
         {
             bool rejected = false;
-            try { npu::Execution next(mask); next.run(1); }
-            catch (const std::runtime_error &) { rejected = true; }
+            try
+            {
+                npu::Execution next(mask);
+                next.run(1);
+            }
+            catch (const std::runtime_error &)
+            {
+                rejected = true;
+            }
             assert(rejected && calls == submitted);
         }
         return 0;
@@ -68,7 +76,9 @@ int main(int argc, char **argv)
         assert(execution.run(1) == 0 && outputs.get() == 0);
         throw std::runtime_error("decoder failure");
     }
-    catch (const std::runtime_error &) {}
+    catch (const std::runtime_error &)
+    {
+    }
     assert(active == 0);
     calls = 0;
     std::vector<std::thread> workers;
@@ -76,7 +86,11 @@ int main(int argc, char **argv)
         workers.emplace_back([i] {
             for (int frame = 0; frame < 80; ++frame)
             {
-                if (i % 2) { assert(peer_infer(1) == 0); continue; }
+                if (i % 2)
+                {
+                    assert(peer_infer(1) == 0);
+                    continue;
+                }
                 npu::Execution execution(1);
                 rknn_output output{};
                 assert(execution.run(1) == 0);
@@ -84,6 +98,7 @@ int main(int argc, char **argv)
                 assert(execution.outputs_release(1, 1, &output) == 0);
             }
         });
-    for (auto &worker : workers) worker.join();
+    for (auto &worker : workers)
+        worker.join();
     assert(active == 0 && calls == 480);
 }

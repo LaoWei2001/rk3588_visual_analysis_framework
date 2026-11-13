@@ -104,4 +104,4 @@ if (selected.best)
 
 完整边界、构建方式和参考设计见 [SDK 说明](../../docs/sdk/README.md)。
 
-模型尺寸、推理 ROI 及多模型结果访问的统一契约见 [模型结果调用指南](../../docs/model-result-contract.md)。
+模型尺寸、推理 ROI 及多模型结果访问的统一契约见 [模型结果调用指南](../../docs/reference/model-result-contract.md)。

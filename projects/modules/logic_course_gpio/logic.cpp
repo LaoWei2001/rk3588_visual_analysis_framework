@@ -2,7 +2,7 @@
 // 实现效果: 画面中检测到指定类别目标时, 驱动输出引脚(继电器吸合/指示灯点亮), 目标消失后恢复
 // 难度: ★★☆☆☆
 // 知识点:
-//   1. 底层能力封装 src/gpio/gpio.h 的懒加载用法 —— 无需预注册, 逻辑里直接调用
+//   1. 公开接口 engine/include/gpio.h 的懒加载用法 —— 无需预注册, 逻辑里直接调用
 //   2. ctx->state 跨帧持久化 —— 只在电平需要变化时写引脚, 避免逐帧重复操作
 //   3. 参数从 logic.json 读取 —— ctx->param_string / ctx->param_int
 //
@@ -10,8 +10,8 @@
 //           该引脚与控制板共地(GND)即可。
 
 #include <channel.h>
-#include <drawing.h>
 #include <cstdio>
+#include <drawing.h>
 #include <gpio.h>
 
 struct GpioDemoState
@@ -34,7 +34,8 @@ static void logic_course_gpio(ChannelContext *ctx)
     std::string target_label = ctx->param_string("target_label");
     int active_level = (int)ctx->param_int("active_level");
 
-    if (pin_name.empty()) {
+    if (pin_name.empty())
+    {
         draw_text(ctx, "GPIO演示: 未配置输出引脚(out_pin)", cv::Point(30, 50), cv::Scalar(0, 0, 255));
         return;
     }
@@ -44,7 +45,8 @@ static void logic_course_gpio(ChannelContext *ctx)
     int want_level = has_target ? active_level : 1 - active_level;
 
     // 只在电平需要变化时写引脚; 写失败保持旧值, 下一帧自动重试(错误只打印一次)
-    if (want_level != state->last_level) {
+    if (want_level != state->last_level)
+    {
         if (pin_out_val(pin_name.c_str(), want_level) == 0)
             state->last_level = want_level;
     }
@@ -53,10 +55,9 @@ static void logic_course_gpio(ChannelContext *ctx)
     const char *level_text = (state->last_level < 0) ? "未知" : (state->last_level ? "高" : "低");
     char status[128];
     snprintf(status, sizeof(status), "GPIO %s = %s电平", pin_name.c_str(), level_text);
-    draw_text(ctx, status, cv::Point(30, 50),
-              has_target ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 165, 255));
-    draw_text(ctx, has_target ? "检测到目标, 输出有效电平" : "无目标, 输出无效电平",
-              cv::Point(30, 80), cv::Scalar(200, 200, 200));
+    draw_text(ctx, status, cv::Point(30, 50), has_target ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 165, 255));
+    draw_text(ctx, has_target ? "检测到目标, 输出有效电平" : "无目标, 输出无效电平", cv::Point(30, 80),
+              cv::Scalar(200, 200, 200));
 }
 
 REGISTER_LOGIC(logic_course_gpio);

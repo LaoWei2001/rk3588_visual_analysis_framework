@@ -20,7 +20,7 @@ from zoneinfo import TZPATH, ZoneInfo, available_timezones
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, StrictInt
 from services.data_dir import APPS_ROOT
-from routers.network_settings import require_network_admin
+from dependencies import require_system_admin
 from services.runtime_loader import load_runtime
 
 
@@ -305,7 +305,7 @@ def _set_system_time(req: SystemTimeRequest) -> Dict[str, Any]:
 
 
 @router.put("/system/time")
-async def set_system_time(req: SystemTimeRequest, _admin: None = Depends(require_network_admin)):
+async def set_system_time(req: SystemTimeRequest, _admin: None = Depends(require_system_admin)):
     return await asyncio.to_thread(_set_system_time, req)
 
 

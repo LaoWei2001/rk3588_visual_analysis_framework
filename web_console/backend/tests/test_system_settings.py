@@ -211,10 +211,10 @@ def test_unknown_ntp_state_prevents_time_writes(clock):
 def test_time_write_requires_admin_account(clock):
     from fastapi import Request
     route = next(route for route in ss.router.routes if route.path == '/system/time')
-    assert any(dep.call is ss.require_network_admin for dep in route.dependant.dependencies)
+    assert any(dep.call is ss.require_system_admin for dep in route.dependant.dependencies)
     request = Request({'type': 'http', 'state': {
         'session': {'username': 'nonexistent-clock-test-account'},
     }})
     with pytest.raises(HTTPException) as error:
-        ss.require_network_admin(request)
+        ss.require_system_admin(request)
     assert error.value.status_code == 403 and not clock[1]

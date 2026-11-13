@@ -7,14 +7,14 @@
  */
 
 #include "global_logic.h"
+#include "application/control/logic_control.h"
+#include "application/runtime/app_ctrl.h"
+#include "application/runtime/pause_ctrl.h"
+#include "application/runtime/publication_signal.h"
+#include "application/runtime/service_watchdog.h"
 #include "context_access.h"
-#include "control/logic_control.h"
 #include "logic/logic_registry.h"
 #include "logic_parameters.h"
-#include "runtime/app_ctrl.h"
-#include "runtime/pause_ctrl.h"
-#include "runtime/publication_signal.h"
-#include "runtime/service_watchdog.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>

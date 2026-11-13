@@ -1,9 +1,9 @@
 {
   "global": {
     "enable_display": 0,
-    "disp_width": 1920,
+    "disp_width": 1280,
     "disp_height": 1280,
-    "tile_rows": 1,
+    "tile_rows": 2,
     "tile_cols": 2,
     "max_fps": 25,
     "queue_size": 1,
@@ -77,9 +77,6 @@
   "channels": [
     {
       "id": 0,
-      "enable": true,
-      "infer_enable": true,
-      "swap_rb": false,
       "stream": {
         "src_type": "rtsp",
         "url": "rtsp://admin:weifu147258@10.205.30.34/Streaming/Channels/101",
@@ -110,7 +107,7 @@
         "motion_roi_name": "detect_area",
         "hook_class_id": 0,
         "hook_min_score": 0.3,
-        "hook_motion_threshold_px": 6,
+        "hook_motion_threshold_px": 5,
         "hook_motion_window_sec": 0.2,
         "hook_still_reset_sec": 10,
         "diff_threshold": 10,
@@ -160,9 +157,6 @@
     },
     {
       "id": 1,
-      "enable": true,
-      "infer_enable": true,
-      "swap_rb": false,
       "stream": {
         "src_type": "rtsp",
         "url": "rtsp://admin:weifu147258@10.205.30.34/Streaming/Channels/101",
@@ -197,18 +191,37 @@
         "dynamic_center_enabled": true,
         "center_calibration_path": "assets/hook_height_calibration_samples.csv",
         "calibration_scale_bin": 5,
-        "safe_radius": 150,
+        "safe_radius": 120,
         "confirm_sec": 0.3,
         "clear_sec": 3,
         "lost_tolerance_sec": 0.5
+      },
+      "inference_roi": {
+        "mode": "full_frame_roi_filter",
+        "resize_mode": "stretch",
+        "polygon": [
+          [
+            0.058333,
+            0
+          ],
+          [
+            0.987281,
+            0
+          ],
+          [
+            0.987281,
+            0.876558
+          ],
+          [
+            0.058333,
+            0.876558
+          ]
+        ]
       },
       "roi_zones": []
     },
     {
       "id": 2,
-      "enable": true,
-      "infer_enable": true,
-      "swap_rb": false,
       "stream": {
         "src_type": "rtsp",
         "url": "rtsp://admin:weifu147258@10.205.30.34/Streaming/Channels/101",
@@ -219,10 +232,10 @@
           "id": "model_0",
           "enable": true,
           "model_type": "yolov8_det",
-          "model_path": "assets/helmet_n960_109.rknn",
+          "model_path": "assets/helmet_n1088_1012.rknn",
           "label_path": "assets/labels_helmet.txt",
           "version": "",
-          "obj_thresh": 0.3,
+          "obj_thresh": 0.4,
           "nms_thresh": 0.45,
           "detect_classes": [],
           "npu_core": -1
@@ -241,9 +254,7 @@
         "person_labels": "person",
         "helmet_labels": "helmet",
         "bare_head_labels": "bare_head",
-        "person_min_score": 0.3,
-        "person_min_width": 40,
-        "person_min_height": 40,
+        "person_min_score": 0.4,
         "helmet_min_score": 0.3,
         "bare_head_min_score": 0.3,
         "confirm_sec": 0.5,
@@ -254,52 +265,52 @@
           "name": "loading_zone",
           "polygon": [
             [
-              0.4779,
-              0.0046
+              0.47520254662713785,
+              0.043002459219983746
             ],
             [
-              0.43586,
-              0.06723
+              0.4331625466271379,
+              0.10563245921998377
             ],
             [
-              0.4154,
-              0.1541
+              0.41270254662713785,
+              0.19250245921998377
             ],
             [
-              0.41086,
-              0.24501
+              0.40816254662713786,
+              0.2834124592199838
             ],
             [
-              0.4404,
-              0.32581
+              0.43770254662713787,
+              0.3642124592199838
             ],
             [
-              0.49609,
-              0.37026
+              0.49339254662713783,
+              0.4086624592199838
             ],
             [
-              0.56086,
-              0.3743
+              0.5581625466271378,
+              0.41270245921998383
             ],
             [
-              0.61086,
-              0.31773
+              0.6081625466271378,
+              0.3561324592199838
             ],
             [
-              0.63586,
-              0.22682
+              0.6331625466271378,
+              0.26522245921998383
             ],
             [
-              0.63699,
-              0.11773
+              0.6342925466271377,
+              0.15613245921998375
             ],
             [
-              0.61427,
-              0.05713
+              0.6115725466271378,
+              0.09553245921998377
             ],
             [
-              0.58131,
-              0.00662
+              0.5786125466271378,
+              0.04502245921998375
             ]
           ]
         }
@@ -307,9 +318,6 @@
     },
     {
       "id": 3,
-      "enable": true,
-      "infer_enable": true,
-      "swap_rb": false,
       "stream": {
         "src_type": "rtsp",
         "url": "rtsp://admin:weifu147258@10.205.30.34/Streaming/Channels/101",
@@ -320,10 +328,10 @@
           "id": "model_0",
           "enable": true,
           "model_type": "yolov8_det",
-          "model_path": "assets/helmet_n960_109.rknn",
+          "model_path": "assets/helmet_n1088_1012.rknn",
           "label_path": "assets/labels_helmet.txt",
           "version": "",
-          "obj_thresh": 0.3,
+          "obj_thresh": 0.4,
           "nms_thresh": 0.45,
           "detect_classes": [],
           "npu_core": -1
@@ -348,52 +356,52 @@
           "name": "projection_zone",
           "polygon": [
             [
-              0.4779,
-              0.0046
+              0.48194618005929324,
+              0.05260307402497969
             ],
             [
-              0.43586,
-              0.06723
+              0.4399061800592933,
+              0.1152330740249797
             ],
             [
-              0.4154,
-              0.1541
+              0.41944618005929324,
+              0.2021030740249797
             ],
             [
-              0.41086,
-              0.24501
+              0.41490618005929325,
+              0.2930130740249797
             ],
             [
-              0.4404,
-              0.32581
+              0.44444618005929326,
+              0.3738130740249797
             ],
             [
-              0.49609,
-              0.37026
+              0.5001361800592932,
+              0.4182630740249797
             ],
             [
-              0.56086,
-              0.3743
+              0.5649061800592933,
+              0.42230307402497974
             ],
             [
-              0.61086,
-              0.31773
+              0.6149061800592932,
+              0.36573307402497973
             ],
             [
-              0.63586,
-              0.22682
+              0.6399061800592932,
+              0.2748230740249797
             ],
             [
-              0.63699,
-              0.11773
+              0.6410361800592932,
+              0.16573307402497972
             ],
             [
-              0.61427,
-              0.05713
+              0.6183161800592932,
+              0.1051330740249797
             ],
             [
-              0.58131,
-              0.00662
+              0.5853561800592932,
+              0.054623074024979686
             ]
           ]
         }

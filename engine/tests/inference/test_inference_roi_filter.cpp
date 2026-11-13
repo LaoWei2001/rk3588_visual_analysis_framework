@@ -1,6 +1,6 @@
-#include "config/config.h"
-#include "inference/inference_roi_filter.h"
-#include "inference/inference_roi_geometry.h"
+#include "application/config/config.h"
+#include "vision/inference/inference_roi_filter.h"
+#include "vision/inference/inference_roi_geometry.h"
 
 #include <algorithm>
 #include <cassert>

@@ -1,9 +1,9 @@
 // RK3588 板端绘制微基准：使用真实 RGA 和显示代码，不运行采集、推理或 RTSP。
 // 配置/推理 FPS 查询为固定桩；输出 JSON 行，耗时不代表完整视频管线。
-#include "display/display_pipeline.h"
+#include "application/runtime/app_ctrl.h"
+#include "application/runtime/pause_ctrl.h"
+#include "media/display/display_render.h"
 #include "pipeline/frame_transform.h"
-#include "runtime/app_ctrl.h"
-#include "runtime/pause_ctrl.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>

@@ -41,15 +41,15 @@ description: >-
 | `vision_analysis` | 平台共享运行库通过 `systemd-run` 创建每 App 的 transient service；全系统单实例 |
 | 设备运行管理 | `rk3588-runtime-manager.service`，独立恢复应用及后台服务，不依赖 Web |
 | Web 控制台 | `rk3588-console.service` |
-| 统一上传 | `unified_upload.service`，由 Web 绑定当前运行 App |
-| 模型 OTA | `ota_agent.service`，由 Web 绑定当前运行 App 和配置文件 |
+| 统一上传 | `unified_upload.service`，由共享运行管理绑定当前运行 App |
+| 模型 OTA | `ota_agent.service`，由共享运行管理绑定当前运行 App 和配置文件 |
 | 内核阻塞恢复 | `rk3588-recovery.timer/service`，需策略允许并确认应用恢复失败，默认不升级整机重启 |
 | 网络失联恢复 | `rk3588-network-recovery.service`，平台标准库实现，策略默认关闭，Web 设置管理网卡与用户 ping/TCP 检测目标 |
 
-无人值守恢复的默认阈值、开机自启条件和验收边界见[恢复说明](../../unattended-recovery.md)。
-网络失联分级、用户探测目标和与网络配置事务的互斥见[网络恢复](../../network-recovery.md)。
+无人值守恢复的默认阈值、开机自启条件和验收边界见[恢复说明](../../operations/unattended-recovery.md)。
+网络失联分级、用户探测目标和与网络配置事务的互斥见[网络恢复](../../operations/network-recovery.md)。
 视觉 transient service 默认不因退出重启，也不启用业务服务看门狗；用户可在“程序故障恢复”中
-按需开启，见[程序恢复说明](../../application-recovery.md)。保存不重启，立即应用需明确操作。
+按需开启，见[程序恢复说明](../../operations/application-recovery.md)。保存不重启，立即应用需明确操作。
 日志由 journald 跟随，程序管理页仍单独选择开机自启。
 Web 管理入口为侧边栏“故障恢复”，内分系统、网络与程序故障恢复。平台代码位于
 `services/framework/runtime_manager/python/rk3588_runtime/`，只依赖标准库；Web 目录中的旧运行
@@ -83,10 +83,13 @@ Web 管理入口为侧边栏“故障恢复”，内分系统、网络与程序�
 - 全部 delivery 成功后事件目录会删除；“事件投递”页是 outbox，不是成功历史库。
 - Web 启动时尊重所选配置的 `global.enable_display`，不会改写该配置。
 - 实时画面要求运行配置启用 RTSP 且 codec 为 H264/AVC；它不是逐通道 MJPEG。
-- 小窗单独查看是浏览器本地裁剪已有拼接流；不改变引擎布局、业务推理或其他观众的选择，也不提供额外原始分辨率。
+- 单路查看支持独立通道预览和浏览器裁剪；旧程序回退裁剪。独立预览会按需使用编码资源，两者均不改算法或持久配置。
+- Web 停止以当前进程的清理检查点确认退出；SIGKILL、断电和驱动阻塞无法保证完整清理，详见程序恢复说明。
 - Web 只允许从当前 App 的 Logic 清单选择已注册模块。
 
 ## 修改后的验证
+
+按改动范围选择已有检查，以下命令列出各模块入口；执行成功才可报告通过。
 
 Web 后端：
 
@@ -115,7 +118,7 @@ python3 -m pytest
 python3 tools/build/generate_logics_catalog.py --check
 ```
 
-仓库当前没有提交预编译二进制；仅在已经用当前源码得到二进制后再运行：
+仓库不跟踪生成的 `vision_analysis` 主程序；仅在已经用当前源码得到二进制后再运行：
 
 ```bash
 cd projects
@@ -124,5 +127,5 @@ cd projects
 
 `config_global.json` 只是仓库现存示例；验收具体应用时应换成实际运行配置。
 
-测试环境缺少板端 systemd、GStreamer、摄像头或 RKNN 时，应明确区分“静态/单元测试通过”和“板端
+测试环境缺少板端 systemd、FFmpeg/GStreamer、摄像头或 RKNN 时，应明确区分“静态/单元测试通过”和“板端
 实机链路通过”，不能用前者替代后者。

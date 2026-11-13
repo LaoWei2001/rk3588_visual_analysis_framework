@@ -1,7 +1,9 @@
 """Real PTYs: reconnect identity, bounded output, lifecycle and auth isolation."""
 import asyncio
 import json
+import logging
 import os
+import pwd
 import re
 import struct
 import time
@@ -83,10 +85,14 @@ def run(pool, scenario):
 @pytest.fixture
 def setup_terminal(monkeypatch, tmp_path):
     monkeypatch.setenv("HISTFILE", "/dev/null")
+    # Other tests start Uvicorn, whose log configuration disables propagation.
+    # Keep caplog assertions independent of that process-wide configuration.
+    monkeypatch.setattr(logging.getLogger("uvicorn"), "propagate", True)
+    monkeypatch.setattr(service.log, "propagate", True)
     monkeypatch.setattr(service, "APPS_ROOT", tmp_path)
     pool = service.TerminalSessionPool()
     monkeypatch.setattr(terminal, "terminal_sessions", pool)
-    token = auth.create_session("terminal-test")
+    token = auth.create_session(pwd.getpwuid(os.geteuid()).pw_name)
     yield pool, token
     auth.revoke_session(token)
 

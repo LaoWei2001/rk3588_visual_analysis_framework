@@ -2,8 +2,8 @@
 // 实现效果:在画面上显示自定义的文字(注意与课程1的区别),在控制台显示自定义的数字
 // 难度:★★☆☆☆
 #include <channel.h>
-#include <drawing.h>
 #include <cstdio>
+#include <drawing.h>
 
 static void logic_course_02(ChannelContext *ctx)
 {

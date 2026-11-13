@@ -12,12 +12,13 @@ from services import process_manager as pm, runtime_state, service_watchdog
 def test_web_stop_records_operation_and_storage_failure_does_not_block_stop(monkeypatch):
     from routers import process
     calls = []
-    monkeypatch.setattr(process.pm, 'stop_app', lambda name: calls.append(name))
-    assert asyncio.run(process.stop_app('demo')) == {'ok': True}
+    result = {'stopped': True, 'graceful': True, 'exit_code': 0, 'warnings': [], 'message': '程序已正常退出'}
+    monkeypatch.setattr(process.pm, 'stop_app_detailed', lambda name: calls.append(name) or result)
+    assert asyncio.run(process.stop_app('demo')) == {'ok': True, **result}
     row = process.recovery_history.snapshot()['events'][0]
     assert row['kind'] == 'manual_stop' and row['result'] == 'performed' and not row['fault_recovery']
     monkeypatch.setattr(process.recovery_history, 'record', lambda *args, **kwargs: (_ for _ in ()).throw(OSError('disk full')))
-    assert asyncio.run(process.stop_app('demo')) == {'ok': True}
+    assert asyncio.run(process.stop_app('demo')) == {'ok': True, **result}
     assert calls == ['demo', 'demo']
 
 

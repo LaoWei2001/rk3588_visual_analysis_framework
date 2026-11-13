@@ -16,6 +16,7 @@ def _prepare_app(tmp_path, name: str = "demo"):
 
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(apps, "APPS_ROOT", tmp_path)
+    monkeypatch.setattr(apps.pm, "APPS_ROOT", tmp_path)
     monkeypatch.setattr(apps.pm, "stop_app", lambda _name: None)
     monkeypatch.setattr(apps.runtime_state, "remove_vision_app", lambda _name: None)
 

@@ -28,6 +28,7 @@
 | `time_str()` | 按本地时区返回 `YYYY-MM-DD HH:MM:SS` |
 | `datetime()` | 返回拆分后的 `FrameTime` |
 | `infer_enabled` | 当前通道是否开启推理 |
+| `inference_valid` | 当前批次是否有有效推理结果；多模型时不等于每个子模型都成功 |
 | `infer_fps` / `disp_fps` | 当前推理/显示速率 |
 
 ### 两种帧接口
@@ -41,7 +42,7 @@
 
 ## 推理结果
 
-`results` 是当前帧的 `std::vector<AlgoResult>*`。当前 `AlgoResult` 字段如下：
+`results` 是当前帧的 `std::vector<AlgoResult>*`。常用 `AlgoResult` 字段如下，完整定义以 `engine/include/types.h` 为准：
 
 | 字段 | 含义 |
 |---|---|
@@ -53,12 +54,19 @@
 | `box_color` | 框颜色 |
 | `keypoints`, `keypoint_scores`, `pose_schema` | 姿态关键点、分数和稳定的关键点语义 |
 | `text_result` | 文本类结果 |
-| `boxMask` | 分割掩码 |
+| `boxMask` | 整帧类别分割掩码，不是每个目标的独立实例掩码 |
+| `has_obb`, `obb_corners` | 旋转框标识和业务坐标系四角 |
+| `depth_map`, `depth_kind` | 深度平面和米制/相对逆深度语义 |
 
 跟踪在 logic 之前执行，因此 logic 看到的是已更新跟踪字段的结果。`has_target(label)` 和
 `target_count(label)` 是整帧快捷查询；必须先确认业务标签与模型 labels 完全一致。
 姿态业务应使用 `is_pose()` 或 `is_coco17_pose()` 判断统一能力，不要通过 `model_type`
-枚举 YOLO 版本；`model_type` 仅用于诊断和追踪具体模型来源。
+枚举 YOLO 版本；确实需要限定模型来源时，可用 `TargetQuery.model_id` / `model_type`。
+
+组合标签、模型、置信度和 ROI 条件时，优先使用 `query_targets()`，见
+[通用目标查询](../../../sdk/target-query.md)。该接口同时返回有效性、数量和最佳目标。
+读取整帧载荷使用 `segmentation_result(model_id)`、`depth_result(model_id)`；业务推理无效时返回空指针，
+相对逆深度不能当作米制距离。完整语义见[模型结果契约](../../../reference/model-result-contract.md)。
 
 ## 参数和配置
 

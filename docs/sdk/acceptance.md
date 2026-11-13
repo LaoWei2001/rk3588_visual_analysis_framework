@@ -2,6 +2,9 @@
 
 验收日期：2026-10-10。目标：用公开接口实现一个完整业务模块，确认开发者不必引用引擎内部头文件。
 
+本文保留该日期的验收记录，不表示当前工作区已经重新执行全部录像与硬件验证。
+当前接口以[公共 SDK](README.md)和源码为准；下述生成产物需重新运行验收才能获得。
+
 ## 被测业务
 
 [区域持续占用示例](../../projects/modules/logic_roi_dwell_demo/README.md)：读取 Web 参数契约，
@@ -48,7 +51,7 @@
 | 第 5 秒 | 目标再次出现 | 重新计时 |
 | 第 7 秒 | 再次持续达到 2 秒 | 第二次事件，帧 210 |
 
-产物位于 `build/engine/sdk-acceptance/`：`alarm.png`、`replay_alarm.png`、`replay.avi`、
+当时的产物输出到 `build/engine/sdk-acceptance/`：`alarm.png`、`replay_alarm.png`、`replay.avi`、
 `replay.csv`。已检查报警画面，给状态文字增加半透明底板以改善复杂背景下的可读性。
 复现命令见模块 README。
 

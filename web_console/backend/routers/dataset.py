@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Response, Header
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from services import receiver_package as package_service
@@ -16,6 +16,8 @@ PUBLIC_RECEIVER_REQUESTS = frozenset({
     ('GET', '/api/dataset-receiver/image'),
     ('POST', '/api/dataset-receiver/ack'),
     ('POST', '/api/dataset-receiver/disconnect'),
+    # Own pinned secret for the active receiver's default keyboard controls.
+    ('POST', '/api/dataset-receiver/control'),
 })
 
 
@@ -43,6 +45,10 @@ class TaskConfig(BaseModel):
             value = dict(value)
             value.pop('jpeg_quality', None)
         return value
+
+
+class ManualCapture(BaseModel):
+    request_id: str = Field(min_length=1, max_length=80, pattern=r'^[A-Za-z0-9_-]+$')
 
 
 class Enabled(BaseModel):
@@ -74,6 +80,14 @@ class Heartbeat(ReceiverIdentity):
     directory: str = Field(default='', max_length=500)
     error: str = Field(default='', max_length=500)
     inventory: Optional[ReceiverInventory] = None
+    control_hash: str = Field(default='', pattern=r'^(?:[a-f0-9]{64})?$')
+
+
+class ReceiverControl(ReceiverIdentity):
+    action: Literal['status', 'select', 'capture', 'toggle', 'result']
+    task_id: str = Field(default='', max_length=80)
+    binding_id: str = Field(default='', max_length=64)
+    request_id: str = Field(min_length=1, max_length=80, pattern=r'^[A-Za-z0-9_-]+$')
 
 
 class Ack(BaseModel):
@@ -97,6 +111,16 @@ def save_task(name: str, channel: int, config: TaskConfig):
 @router.post('/apps/{name}/dataset/tasks/{task_id}/enabled')
 def enable_task(name: str, task_id: str, body: Enabled):
     return manager.set_enabled(name, task_id, body.enabled)
+
+
+@router.post('/apps/{name}/dataset/tasks/{task_id}/capture')
+def capture_task(name: str, task_id: str, body: ManualCapture):
+    return manager.capture_once(name, task_id, body.request_id)
+
+
+@router.post('/dataset-receiver/control')
+def receiver_control(body: ReceiverControl, x_receiver_control: str = Header(default='', max_length=64)):
+    return manager.receiver_control(body.client, x_receiver_control, body.action, body.binding_id, body.request_id, body.task_id)
 
 
 @router.delete('/apps/{name}/dataset/tasks/{task_id}')
@@ -127,12 +151,12 @@ def receiver_package(body: ReceiverPackage):
                              'Cache-Control': 'no-store'})
 
 
-# Only transfer endpoints are public. Task configuration/downloads still use
-# normal console authentication in main.py; the receiver needs no login.
+# Transfers need no login; the control route validates the active PC session secret.
+# Task configuration and downloads still require console authentication.
 @router.post('/dataset-receiver/poll')
 def poll(body: Heartbeat):
     manager.heartbeat(body.client, body.directory, body.error,
-                      body.inventory.model_dump() if body.inventory is not None else None)
+                      body.inventory.model_dump() if body.inventory is not None else None, body.control_hash)
     return {'samples': manager.pending() if not body.error else []}
 
 

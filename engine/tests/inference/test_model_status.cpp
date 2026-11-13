@@ -1,5 +1,5 @@
-#include "inference/model_status.h"
-#include "model/yolo/composite_model.h"
+#include "vision/inference/model_status.h"
+#include "vision/models/composite_model.h"
 #include <cassert>
 #include <iostream>
 #include <json.h>
@@ -13,7 +13,7 @@ class FakeModel : public ModelBase
     explicit FakeModel(int dimension) : dimension_(dimension)
     {
     }
-    bool infer(cv::Mat &, std::vector<AlgoResult> &, YoloPerfStat *) override
+    bool infer(cv::Mat &, std::vector<AlgoResult> &, ModelPerfStat *) override
     {
         return true;
     }
@@ -41,13 +41,15 @@ class FakeModel : public ModelBase
 class FakeDepth : public FakeModel
 {
   public:
-    FakeDepth() : FakeModel(640) {}
-    bool infer(cv::Mat &, std::vector<AlgoResult> &out, YoloPerfStat *) override
+    FakeDepth() : FakeModel(640)
+    {
+    }
+    bool infer(cv::Mat &, std::vector<AlgoResult> &out, ModelPerfStat *) override
     {
         AlgoResult depth;
         depth.score = 1;
-        depth.depth_map = cv::Mat(640,640,CV_32FC1,cv::Scalar(2));
-        depth.box = cv::Rect(0,0,640,640);
+        depth.depth_map = cv::Mat(640, 640, CV_32FC1, cv::Scalar(2));
+        depth.box = cv::Rect(0, 0, 640, 640);
         out = {depth};
         return true;
     }
@@ -56,8 +58,10 @@ class FakeDepth : public FakeModel
 class FailingModel : public FakeModel
 {
   public:
-    FailingModel() : FakeModel(640) {}
-    bool infer(cv::Mat &, std::vector<AlgoResult> &, YoloPerfStat *) override
+    FailingModel() : FakeModel(640)
+    {
+    }
+    bool infer(cv::Mat &, std::vector<AlgoResult> &, ModelPerfStat *) override
     {
         throw std::runtime_error("simulated NPU submission failure");
     }
@@ -86,8 +90,14 @@ int main()
         cv::Mat frame(640, 640, CV_8UC3);
         std::vector<AlgoResult> results;
         bool failed = false;
-        try { composite.infer(frame, results, nullptr); }
-        catch (const std::runtime_error &) { failed = true; }
+        try
+        {
+            composite.infer(frame, results, nullptr);
+        }
+        catch (const std::runtime_error &)
+        {
+            failed = true;
+        }
         assert(failed);
         assert(pthread_mutex_trylock(&child.model->infer_mtx) == 0);
         pthread_mutex_unlock(&child.model->infer_mtx);
@@ -143,21 +153,23 @@ int main()
     first.type = "yolov8_det";
     second.type = "yolov5";
     second.model = std::make_shared<FakeModel>(640);
-    { CompositeModel different_detector_sizes({first, second}); }
+    {
+        CompositeModel different_detector_sizes({first, second});
+    }
     second.type = "yolo26_depth";
     second.model = std::make_shared<FakeDepth>();
     second.allowed_classes = {123}; // object class filters must not discard depth
     for (const std::string type : {"yolo26_depth", "zip_depth"})
-    for (bool depth_first : {false,true})
-    {
-        second.type = type;
-        CompositeModel composite(depth_first ? std::vector<CompositeModel::Entry>{second,first}
-                                             : std::vector<CompositeModel::Entry>{first,second});
-        cv::Mat frame(composite.input_height(),composite.input_width(),CV_8UC3,cv::Scalar(0));
-        std::vector<AlgoResult> out;
-        assert(composite.infer(frame,out));
-        assert(out.size() == 1 && out[0].is_depth());
-        assert(out[0].depth_map.size() == frame.size() && out[0].depth_at(320,320) == 2);
-        assert(out[0].model_id == second.id && out[0].model_type == type);
-    }
+        for (bool depth_first : {false, true})
+        {
+            second.type = type;
+            CompositeModel composite(depth_first ? std::vector<CompositeModel::Entry>{second, first}
+                                                 : std::vector<CompositeModel::Entry>{first, second});
+            cv::Mat frame(composite.input_height(), composite.input_width(), CV_8UC3, cv::Scalar(0));
+            std::vector<AlgoResult> out;
+            assert(composite.infer(frame, out));
+            assert(out.size() == 1 && out[0].is_depth());
+            assert(out[0].depth_map.size() == frame.size() && out[0].depth_at(320, 320) == 2);
+            assert(out[0].model_id == second.id && out[0].model_type == type);
+        }
 }

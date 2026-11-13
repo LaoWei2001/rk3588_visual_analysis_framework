@@ -1,0 +1,785 @@
+/**
+ * @file inference_executor.cpp
+ * @brief 推理引擎核心 — 全局状态 + worker 线程 + 私有辅助函数
+ *
+ * 职责（仅此文件）:
+ *   - g_inference / g_fps / g_perf 的唯一定义
+ *   - nms_inplace / get_queue_idx_for_chn — 引擎私有辅助（static，不对外）
+ *   - names_to_class_ids / create_inference_model   — 跨文件辅助（声明在 inference_internal.h）
+ *   - inference_worker_thread                  — NPU 推理 worker（声明在 inference_internal.h）
+ *
+ * 公有 API（inference_init / inference_process_source / …）在 inference_engine.cpp。
+ */
+
+#include "vision/models/result_masks.h"
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <exception>
+#include <fstream>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <opencv2/opencv.hpp>
+#include <pthread.h>
+#include <queue>
+#include <set>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "application/runtime/app_ctrl.h"
+#include "application/runtime/pause_ctrl.h"
+#include "application/runtime/service_watchdog.h"
+#include "common/logging.h"
+#include "inference_engine.h"
+#include "inference_internal.h"
+#include "inference_result_mapping.h"
+#include "inference_roi_filter.h"
+#include "inference_roi_geometry.h"
+#include "npu_core_gate.h"
+#include "pipeline/frame_transform.h"
+#include "vision/models/composite_model.h"
+#include "vision/models/yolo/yolo.h"
+#include "vision/models/yolo/yolo26depth.h"
+#include "vision/models/yolo/yolo26pose.h"
+#include "vision/models/yolo/yolopose.h"
+#include "vision/models/yolo/yoloseg.h"
+#include "vision/models/yolo/yolov8det.h"
+#include "vision/models/zip-depth/zip_depth.h"
+
+/* compute_iou 声明在 inference_engine.h / yolo.h 全局命名空间，此处显式引入供 nms_inplace 使用 */
+using ::compute_iou;
+
+/*======================== 全局状态定义（唯一定义，其余文件通过 extern 访问）========================*/
+
+InferenceRuntime g_inference;
+FpsTracker g_fps[MAX_CHANNEL_NUM];
+InferencePerfCounters g_perf[MAX_CHANNEL_NUM];
+
+/*======================== 私有辅助（仅本文件可见）========================*/
+
+// ROI merging must compare the transformed quadrilaterals, not their envelopes.
+static float result_iou(const AlgoResult &a, const AlgoResult &b)
+{
+    if (!a.has_obb || !b.has_obb)
+        return compute_iou(a.box, b.box);
+    std::vector<cv::Point2f> pa(a.obb_corners.begin(), a.obb_corners.end());
+    std::vector<cv::Point2f> pb(b.obb_corners.begin(), b.obb_corners.end()), intersection;
+    const float area = cv::intersectConvexConvex(pa, pb, intersection);
+    const double total = std::abs(cv::contourArea(pa)) + std::abs(cv::contourArea(pb)) - area;
+    return total > 0 ? area / total : 0;
+}
+
+/** @brief 跳过已被 NMS 抑制的候选框，就地过滤。*/
+static void nms_inplace(std::vector<AlgoResult> &dets, float nms_thresh)
+{
+    std::sort(dets.begin(), dets.end(), [](const AlgoResult &a, const AlgoResult &b) { return a.score > b.score; });
+    std::vector<AlgoResult> out;
+    std::vector<char> removed(dets.size(), 0);
+    for (size_t i = 0; i < dets.size(); ++i)
+    {
+        if (removed[i])
+            continue;
+        out.push_back(dets[i]);
+        for (size_t j = i + 1; j < dets.size(); ++j)
+        {
+            if (removed[j])
+                continue;
+            if (dets[i].is_depth() || dets[j].is_depth() || dets[i].class_id != dets[j].class_id)
+                continue;
+            if (result_iou(dets[i], dets[j]) > nms_thresh)
+                removed[j] = 1;
+        }
+    }
+    dets.swap(out);
+}
+
+/** CompositeModel 串行兜底时，class_id 只在各自标签表内有意义；必须按 model_index 分组去重。 */
+static void nms_per_model_inplace(std::vector<AlgoResult> &dets, const std::vector<float> &thresholds)
+{
+    std::sort(dets.begin(), dets.end(), [](const AlgoResult &a, const AlgoResult &b) { return a.score > b.score; });
+    std::vector<AlgoResult> out;
+    std::vector<char> removed(dets.size(), 0);
+    for (size_t i = 0; i < dets.size(); ++i)
+    {
+        if (removed[i])
+            continue;
+        out.push_back(dets[i]);
+        const int model_index = dets[i].model_index;
+        const float threshold = model_index >= 0 && static_cast<size_t>(model_index) < thresholds.size()
+                                    ? thresholds[static_cast<size_t>(model_index)]
+                                    : 1.0f;
+        for (size_t j = i + 1; j < dets.size(); ++j)
+        {
+            if (!dets[i].is_depth() && !dets[j].is_depth() && !removed[j] && dets[j].model_index == model_index &&
+                dets[j].class_id == dets[i].class_id && result_iou(dets[i], dets[j]) > threshold)
+                removed[j] = 1;
+        }
+    }
+    dets.swap(out);
+}
+
+/** @brief 返回 chnId 对应的任务队列下标；找不到返回 -1。*/
+int get_queue_idx_for_chn(int chnId)
+{
+    int q_idx = 0;
+    for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
+    {
+        if (!g_inference.models_per_chn[i].empty())
+        {
+            if (i == chnId)
+                return q_idx;
+            q_idx++;
+        }
+    }
+    return -1;
+}
+
+/*======================== 跨文件辅助函数实现 ========================*/
+
+std::set<int> names_to_class_ids(const std::vector<std::string> &names, const std::string &label_path)
+{
+    std::set<int> ids;
+    if (names.empty() || label_path.empty())
+        return ids;
+
+    std::vector<std::string> local_labels;
+    std::ifstream ifs(label_path);
+    if (!ifs.is_open())
+    {
+        log_printf_threadsafe("[Inference] Warning: cannot open label_path %s for class filtering\n",
+                              label_path.c_str());
+        return ids;
+    }
+    std::string line;
+    while (std::getline(ifs, line))
+    {
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' '))
+            line.pop_back();
+        if (!line.empty())
+            local_labels.push_back(line);
+    }
+
+    for (const auto &name : names)
+        for (size_t i = 0; i < local_labels.size(); ++i)
+            if (local_labels[i] == name)
+            {
+                ids.insert((int)i);
+                break;
+            }
+    return ids;
+}
+
+std::shared_ptr<ModelBase> create_inference_model(const std::string &type, const std::string &model_path,
+                                                  const std::string &label_path, int core_mask, float obj_thresh,
+                                                  float nms_thresh)
+{
+    if (type == "zip_depth")
+        return std::make_shared<ZipDepth>(model_path, core_mask);
+    if (type == "yolo26_depth")
+        return std::make_shared<Yolo26Depth>(model_path, core_mask);
+    if (type == "yolo26_pose")
+        return std::make_shared<Yolo26Pose>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
+    if (type == "yolov8_pose")
+        return std::make_shared<YoloPose>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
+    if (type == "yolov5_seg")
+        return std::make_shared<YoloSeg>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
+    if (type == "yolov5")
+        return std::make_shared<YOLO>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
+    if (type == "yolov8_obb")
+        return std::make_shared<YoloV8Det>(model_path, label_path, core_mask, obj_thresh, nms_thresh, true);
+    if (type == "yolov8_det")
+        return std::make_shared<YoloV8Det>(model_path, label_path, core_mask, obj_thresh, nms_thresh);
+    return nullptr;
+}
+
+/*======================== NPU 推理 Worker 线程 ========================*/
+
+/**
+ * @brief 对一个实际模型执行一帧推理。
+ *
+ * 单模型 worker 与多模型子线程共用此函数，保证两条路径都优先使用
+ * DMA-BUF -> RGA -> RKNN input memory 的零拷贝路径；失败时才回退 CPU Mat。
+ */
+static cv::Mat ensure_cpu_frame(const InferenceTask &task, int model_width, int model_height, bool use_roi,
+                                const InferenceRoiTransform &roi_transform, bool mask_polygon, cv::Mat &input_cache)
+{
+    if (!task.frame || model_width <= 0 || model_height <= 0)
+        return {};
+    if (use_roi)
+    {
+        if (!roi_transform.valid())
+            return {};
+        const cv::Mat *source = task.frame->source_frame();
+        if (!source || source->empty())
+            return {};
+        const auto *polygon = mask_polygon ? &task.roi_config.polygon : nullptr;
+        return make_inference_roi_input(*source, roi_transform, model_width, model_height, polygon);
+    }
+
+    /* model_frame() 是框架统一业务坐标尺寸，不一定等于当前通道/子模型的输入尺寸。
+     * 两者不同时必须从源图生成当前模型实际尺寸，否则 CPU 回退和 RGA 零拷贝会输出
+     * 不同坐标域的检测结果。尺寸相同则继续复用惰性缓存。 */
+    if (model_width == g_inference.input_w && model_height == g_inference.input_h)
+    {
+        const cv::Mat *frame = task.frame->model_frame();
+        return frame ? *frame : cv::Mat();
+    }
+    // 大模型回退也直接从原始缓冲缩放，避免先生成完整原图 BGR 再缩放。
+    // worker 私有 input_cache 复用跨帧像素内存；零拷贝成功时此路径完全不执行。
+    return task.frame->resized_frame(model_width, model_height, input_cache) ? input_cache : cv::Mat();
+}
+
+static bool run_model_task(int chnId, const InferenceTask &task, const std::shared_ptr<ModelBase> &model,
+                           std::vector<AlgoResult> &results, ModelPerfStat &perf, float &lock_wait_ms,
+                           cv::Mat &input_cache)
+{
+    if (!model)
+        return false;
+
+    auto lock_before = std::chrono::steady_clock::now();
+    pthread_mutex_lock(&model->infer_mtx);
+    auto lock_after = std::chrono::steady_clock::now();
+    lock_wait_ms = std::chrono::duration<float, std::milli>(lock_after - lock_before).count();
+
+    bool ret = false;
+    try
+    {
+        /* ROI 几何始终按 YUV420 的偶数像素边界规范化。即使某次 CPU 回退拿到
+         * BGR 帧也沿用同一取景框，避免 RGA/CPU 两条路径和 Web 预览相差 1 像素。 */
+        const bool align_yuv420 = true;
+        const InferenceRoiTransform roi_transform =
+            make_inference_roi_transform(task.source_roi, task.srcW, task.srcH, model->input_width(),
+                                         model->input_height(), task.roi_config.resize_mode, align_yuv420);
+        const InferenceRoiTransform full_transform{cv::Rect(0, 0, task.srcW, task.srcH),
+                                                   cv::Rect(0, 0, model->input_width(), model->input_height())};
+        auto run_pass = [&](bool use_roi, std::vector<AlgoResult> &pass_results, ModelPerfStat &pass_perf) {
+            bool ok = false;
+            float input_prepare_ms = 0.0f;
+            const int model_fd = model->get_input_fd();
+            /* 直接拉伸/补黑边的多边形是真正的多边形输入：外部填黑。
+             * expand 的定义是扩展周边上下文，因此保留扩展框内的真实画面。 */
+            const bool mask_polygon =
+                use_roi && !task.roi_config.is_axis_aligned_rectangle() && task.roi_config.resize_mode != "expand";
+            if (task.src_buf && task.src_buf->handle != 0 && model_fd >= 0 && !mask_polygon &&
+                (!use_roi ||
+                 (roi_transform.valid() && !roi_transform.needs_padding(model->input_width(), model->input_height()))))
+            {
+                const auto pre_begin = std::chrono::steady_clock::now();
+                const int cached_handle = model->get_input_rga_handle();
+                const bool rga_ok =
+                    use_roi ? rga_crop_resize_handle(chnId, *task.src_buf, roi_transform.source_rect, model_fd,
+                                                     model->input_width(), model->input_height(), model->input_width(),
+                                                     model->input_height(), RK_FORMAT_RGB_888, cached_handle)
+                            : rga_convert_resize_handle(chnId, *task.src_buf, model_fd, model->input_width(),
+                                                        model->input_height(), model->input_width(),
+                                                        model->input_height(), RK_FORMAT_RGB_888, cached_handle);
+                const auto pre_end = std::chrono::steady_clock::now();
+                input_prepare_ms += std::chrono::duration<float, std::milli>(pre_end - pre_begin).count();
+                if (rga_ok)
+                    ok = model->infer_zero_copy(pass_results, &pass_perf);
+            }
+            if (!ok)
+            {
+                /* 只有零拷贝失败才生成 CPU BGR；两种路径都严格使用当前模型的输入尺寸。 */
+                const auto cpu_pre_begin = std::chrono::steady_clock::now();
+                cv::Mat cpu_frame = ensure_cpu_frame(task, model->input_width(), model->input_height(), use_roi,
+                                                     roi_transform, mask_polygon, input_cache);
+                input_prepare_ms +=
+                    std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - cpu_pre_begin).count();
+                pass_perf = ModelPerfStat{};
+                if (!cpu_frame.empty())
+                    ok = model->infer(cpu_frame, pass_results, &pass_perf);
+            }
+            pass_perf.preprocess_ms += input_prepare_ms;
+            return ok;
+        };
+
+        std::vector<AlgoResult> full_results;
+        std::vector<AlgoResult> roi_results;
+        ModelPerfStat full_perf;
+        ModelPerfStat roi_perf;
+        const bool run_full = task.roi_mode != InferenceRoiMode::RoiOnly;
+        const bool run_roi = task.roi_mode == InferenceRoiMode::RoiOnly ||
+                             (task.roi_mode == InferenceRoiMode::FullPlusRoi && model->supports_roi_refinement());
+        const bool full_ok = run_full && run_pass(false, full_results, full_perf);
+        const bool roi_ok = run_roi && run_pass(true, roi_results, roi_perf);
+
+        const auto mapping_begin = std::chrono::steady_clock::now();
+        if (full_ok)
+        {
+            map_results_to_business_frame(task.srcW, task.srcH, full_transform, model->input_width(),
+                                          model->input_height(), full_results);
+            model->annotate_results(full_results);
+            if (task.roi_mode == InferenceRoiMode::FullFrameRoiFilter)
+                filter_results_to_inference_roi(full_results, task.roi_config, g_inference.input_w,
+                                                g_inference.input_h);
+        }
+        if (roi_ok)
+        {
+            map_results_to_business_frame(task.srcW, task.srcH, roi_transform, model->input_width(),
+                                          model->input_height(), roi_results);
+            model->annotate_results(roi_results);
+            /* 补边区域也可能产生候选框；局部推理批次必须始终按用户区域门控。
+             * full_plus_roi 的整帧批次仍完整保留，不改变增强模式语义。 */
+            filter_results_to_inference_roi(roi_results, task.roi_config, g_inference.input_w, g_inference.input_h);
+        }
+
+        perf.preprocess_ms = full_perf.preprocess_ms + roi_perf.preprocess_ms;
+        perf.infer_ms = full_perf.infer_ms + roi_perf.infer_ms;
+        perf.postprocess_ms =
+            full_perf.postprocess_ms + roi_perf.postprocess_ms +
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - mapping_begin).count();
+        ret = full_ok || roi_ok;
+        if (ret)
+        {
+            cv::Mat merged_mask;
+            auto merge_mask = [&](const std::vector<AlgoResult> &source) {
+                const auto found = std::find_if(source.begin(), source.end(),
+                                                [](const AlgoResult &item) { return !item.boxMask.empty(); });
+                if (found == source.end())
+                    return;
+                if (merged_mask.empty())
+                    merged_mask = found->boxMask; // 单次推理仅转移引用，不复制整张掩码。
+                else if (merged_mask.size() == found->boxMask.size() && merged_mask.type() == found->boxMask.type())
+                {
+                    merged_mask = merged_mask.clone(); // 只有真正合并整帧/ROI 两张掩码才创建可写副本。
+                    cv::Mat foreground;
+                    cv::compare(found->boxMask, 0, foreground, cv::CMP_NE);
+                    found->boxMask.copyTo(merged_mask, foreground);
+                }
+            };
+            merge_mask(full_results);
+            merge_mask(roi_results); /* 局部高分辨率 mask 覆盖重叠的全图 mask。 */
+
+            results.clear();
+            results.reserve(full_results.size() + roi_results.size());
+            std::move(full_results.begin(), full_results.end(), std::back_inserter(results));
+            std::move(roi_results.begin(), roi_results.end(), std::back_inserter(results));
+            merge_depth_results(results);
+            if (task.roi_mode == InferenceRoiMode::FullPlusRoi)
+            {
+                if (const auto composite = std::dynamic_pointer_cast<CompositeModel>(model))
+                {
+                    std::vector<float> thresholds;
+                    thresholds.reserve(composite->entries().size());
+                    for (const auto &entry : composite->entries())
+                        thresholds.push_back(entry.nms_thresh);
+                    nms_per_model_inplace(results, thresholds);
+                }
+                else if (model->get_nms_thresh() < 1.0f)
+                {
+                    nms_inplace(results, model->get_nms_thresh());
+                }
+            }
+
+            if (!merged_mask.empty() && !results.empty())
+            {
+                for (AlgoResult &result : results)
+                    result.boxMask.release();
+                results.front().boxMask = std::move(merged_mask);
+            }
+        }
+    }
+    catch (const npu::Cancelled &)
+    {
+        ret = false; // shutdown cancels queued work; it is not a driver failure
+    }
+    catch (const std::exception &e)
+    {
+        static std::atomic<unsigned int> error_count{0};
+        const unsigned int count = ++error_count;
+        if (count <= 10 || (count % 100) == 0)
+            log_printf_threadsafe("[Inference] ch%d model inference exception (%u): %s\n", chnId, count, e.what());
+        ret = false;
+    }
+    catch (...)
+    {
+        static std::atomic<unsigned int> unknown_error_count{0};
+        const unsigned int count = ++unknown_error_count;
+        if (count <= 10 || (count % 100) == 0)
+            log_printf_threadsafe("[Inference] ch%d unknown model inference exception (%u)\n", chnId, count);
+        ret = false;
+    }
+
+    pthread_mutex_unlock(&model->infer_mtx);
+    return ret;
+}
+
+/*
+ * 一个 CompositeModel 对应一个持久并行执行器。子线程只属于推理引擎，
+ * 不暴露给 ChannelContext/业务逻辑；每次 run() 必须等同一 frame_seq 的全部
+ * 子模型完成后才合并，因此上层继续看到一批严格同帧的 AlgoResult。
+ */
+class ParallelCompositeExecutor
+{
+  public:
+    ParallelCompositeExecutor(int chnId, std::shared_ptr<CompositeModel> composite)
+        : chnId_(chnId), composite_(std::move(composite))
+    {
+        const size_t count = composite_ ? composite_->entries().size() : 0;
+        slots_.reserve(count);
+        for (size_t i = 0; i < count; ++i)
+            slots_.push_back(std::unique_ptr<Slot>(new Slot()));
+        child_results_.resize(count);
+        child_perf_.resize(count);
+        child_lock_wait_ms_.resize(count, 0.0f);
+        child_succeeded_.resize(count, 0);
+    }
+
+    ~ParallelCompositeExecutor()
+    {
+        shutdown();
+    }
+
+    bool start()
+    {
+        if (!composite_ || slots_.size() < 2)
+            return false;
+        try
+        {
+            for (size_t i = 0; i < slots_.size(); ++i)
+                slots_[i]->thread = std::thread(&ParallelCompositeExecutor::child_loop, this, i);
+            started_ = true;
+            return true;
+        }
+        catch (const std::exception &e)
+        {
+            log_printf_threadsafe("[Inference] ch%d cannot start parallel model workers: %s\n", chnId_, e.what());
+            shutdown();
+            return false;
+        }
+    }
+
+    bool run(const InferenceTask &task, std::vector<AlgoResult> &results, ModelPerfStat &perf, float &lock_wait_ms)
+    {
+        for (size_t i = 0; i < slots_.size(); ++i)
+        {
+            child_results_[i].clear(); // 保留上一帧容量，避免热路径重复分配
+            child_perf_[i] = ModelPerfStat{};
+            child_lock_wait_ms_[i] = 0.0f;
+            child_succeeded_[i] = 0;
+        }
+        // Thread creation can fail under memory pressure. Still prepare each
+        // child from the original video with its own dimensions and ROI policy;
+        // resizing a composite canvas would lose ZipDepth input detail/semantics.
+        if (!started_)
+        {
+            lock_wait_ms = 0.0f;
+            for (size_t i = 0; i < slots_.size(); ++i)
+            {
+                child_succeeded_[i] = run_model_task(chnId_, task, composite_->entries()[i].model, child_results_[i],
+                                                     child_perf_[i], child_lock_wait_ms_[i], slots_[i]->input_cache);
+                lock_wait_ms += child_lock_wait_ms_[i];
+            }
+            return composite_->merge_child_results(child_results_, child_succeeded_, child_perf_, results, &perf);
+        }
+        {
+            std::lock_guard<std::mutex> lock(done_mtx_);
+            remaining_ = slots_.size();
+        }
+
+        for (size_t i = 0; i < slots_.size(); ++i)
+        {
+            Slot &slot = *slots_[i];
+            {
+                std::lock_guard<std::mutex> lock(slot.mtx);
+                slot.task = &task;
+                slot.has_job = true;
+            }
+            slot.cv.notify_one();
+        }
+
+        {
+            std::unique_lock<std::mutex> lock(done_mtx_);
+            done_cv_.wait(lock, [&] { return remaining_ == 0; });
+        }
+
+        lock_wait_ms = 0.0f;
+        for (float child_wait : child_lock_wait_ms_)
+            lock_wait_ms += child_wait;
+        return composite_->merge_child_results(child_results_, child_succeeded_, child_perf_, results, &perf);
+    }
+
+    bool is_parallel() const
+    {
+        return started_;
+    }
+
+  private:
+    struct Slot
+    {
+        std::mutex mtx;
+        std::condition_variable cv;
+        bool stop = false;
+        bool has_job = false;
+        const InferenceTask *task = nullptr;
+        std::thread thread;
+        cv::Mat input_cache;
+    };
+
+    void child_loop(size_t index)
+    {
+        Slot &slot = *slots_[index];
+        cv::Mat &input_cache = slot.input_cache; // 每个子模型独立复用，串行回退同样保留原始分辨率。
+        while (true)
+        {
+            const InferenceTask *task = nullptr;
+            {
+                std::unique_lock<std::mutex> lock(slot.mtx);
+                slot.cv.wait(lock, [&] { return slot.stop || slot.has_job; });
+                if (slot.stop)
+                    return;
+                task = slot.task;
+                slot.has_job = false;
+            }
+
+            if (task)
+            {
+                child_succeeded_[index] =
+                    run_model_task(chnId_, *task, composite_->entries()[index].model, child_results_[index],
+                                   child_perf_[index], child_lock_wait_ms_[index], input_cache)
+                        ? 1
+                        : 0;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(done_mtx_);
+                if (remaining_ > 0)
+                    --remaining_;
+                if (remaining_ == 0)
+                    done_cv_.notify_one();
+            }
+        }
+    }
+
+    void shutdown()
+    {
+        for (auto &slot_ptr : slots_)
+        {
+            Slot &slot = *slot_ptr;
+            {
+                std::lock_guard<std::mutex> lock(slot.mtx);
+                slot.stop = true;
+            }
+            slot.cv.notify_one();
+        }
+        for (auto &slot_ptr : slots_)
+            if (slot_ptr->thread.joinable())
+                slot_ptr->thread.join();
+        started_ = false;
+    }
+
+    int chnId_ = -1;
+    std::shared_ptr<CompositeModel> composite_;
+    std::vector<std::unique_ptr<Slot>> slots_;
+    std::vector<std::vector<AlgoResult>> child_results_;
+    std::vector<ModelPerfStat> child_perf_;
+    std::vector<float> child_lock_wait_ms_;
+    std::vector<unsigned char> child_succeeded_;
+    std::mutex done_mtx_;
+    std::condition_variable done_cv_;
+    size_t remaining_ = 0;
+    bool started_ = false;
+};
+
+void *inference_worker_thread(void *arg)
+{
+    InferenceWorkerArgs *wa = (InferenceWorkerArgs *)arg;
+    int chnId = wa->chnId;
+    InferenceTaskQueue *tq_ptr = wa->tq;
+    std::shared_ptr<ModelBase> model_ptr = wa->model;
+    delete wa;
+
+    std::unique_ptr<ParallelCompositeExecutor> parallel_executor;
+    size_t model_group_size = 1;
+    if (auto composite = std::dynamic_pointer_cast<CompositeModel>(model_ptr))
+    {
+        model_group_size = composite->entries().size();
+        parallel_executor.reset(new ParallelCompositeExecutor(chnId, composite));
+        if (parallel_executor->start())
+            log_printf_threadsafe("[Inference] ch%d parallel multi-model executor started (%zu models)\n", chnId,
+                                  composite->entries().size());
+    }
+
+    cv::Mat input_cache;
+    service_watchdog::Progress watchdog_progress("inference", chnId);
+    while (g_inference.running && !g_inference.chn_reload_stop[chnId])
+    {
+        InferenceTask task;
+        {
+            pthread_mutex_lock(&tq_ptr->mtx);
+            while (tq_ptr->q.empty() && g_inference.running && !g_inference.chn_reload_stop[chnId])
+                pthread_cond_wait(&tq_ptr->cv, &tq_ptr->mtx);
+            if ((!g_inference.running || g_inference.chn_reload_stop[chnId]) && tq_ptr->q.empty())
+            {
+                pthread_mutex_unlock(&tq_ptr->mtx);
+                break;
+            }
+            task = tq_ptr->q.front();
+            tq_ptr->q.pop();
+            pthread_mutex_unlock(&tq_ptr->mtx);
+        }
+
+        if (pause_ctrl::is_paused())
+            continue;
+        if (!g_inference.running || g_inference.chn_reload_stop[chnId])
+            break;
+
+        ModelBase *model = model_ptr.get();
+        if (!model)
+            continue;
+
+        auto work_begin = std::chrono::steady_clock::now();
+        service_watchdog::Scope watchdog_scope(watchdog_progress);
+        float queue_wait_ms = std::chrono::duration<float, std::milli>(work_begin - task.enqueue_tp).count();
+
+        std::vector<AlgoResult> results;
+        ModelPerfStat perf;
+        bool ret = false;
+
+        float lock_wait_ms = 0.0f;
+        if (parallel_executor)
+            ret = parallel_executor->run(task, results, perf, lock_wait_ms);
+        else
+            ret = run_model_task(task.chnId, task, model_ptr, results, perf, lock_wait_ms, input_cache);
+
+        if (ret)
+        {
+            ResultMasks masks(results);
+            auto filter_begin = std::chrono::steady_clock::now();
+            float obj_thresh_v = g_inference.obj_thresh[task.chnId].load(std::memory_order_relaxed);
+            float nms_thresh_v = g_inference.nms_thresh[task.chnId].load(std::memory_order_relaxed);
+
+            std::vector<AlgoResult> filtered;
+            if (obj_thresh_v > model->get_obj_thresh())
+            {
+                filtered.reserve(results.size());
+                for (const auto &d : results)
+                    if (d.is_depth() || d.score >= obj_thresh_v)
+                        filtered.push_back(d);
+            }
+            else
+                filtered = std::move(results);
+
+            std::shared_ptr<const std::set<int>> allowed_classes;
+            {
+                pthread_mutex_lock(&g_inference.detect_classes_mtx);
+                allowed_classes = g_inference.detect_classes[task.chnId];
+                pthread_mutex_unlock(&g_inference.detect_classes_mtx);
+            }
+            if (allowed_classes && !allowed_classes->empty())
+            {
+                std::vector<AlgoResult> class_filtered;
+                class_filtered.reserve(filtered.size());
+                for (const auto &d : filtered)
+                    if (d.is_depth() || allowed_classes->count(d.class_id))
+                        class_filtered.push_back(d);
+                filtered.swap(class_filtered);
+            }
+
+            if (!model->nms_done())
+                nms_inplace(filtered, nms_thresh_v);
+
+            /* 多模型通道的每个子模型最多保留20个结果；合并后不能仍截断为20，
+             * 否则排在后面的姿态模型结果可能被第一个检测模型完全挤掉。 */
+            size_t MAX_DET_PER_FRAME = 100;
+            if (const auto composite = dynamic_cast<CompositeModel *>(model))
+            {
+                MAX_DET_PER_FRAME = 0;
+                for (const auto &entry : composite->entries())
+                    MAX_DET_PER_FRAME += entry.type == "yolov8_obb" ? 128 : 20;
+                MAX_DET_PER_FRAME = std::max(size_t(100), MAX_DET_PER_FRAME);
+            }
+            else if (!filtered.empty() && filtered.front().has_obb)
+                MAX_DET_PER_FRAME = 128;
+            if (filtered.size() > MAX_DET_PER_FRAME)
+                filtered.resize(MAX_DET_PER_FRAME);
+            masks.restore(filtered);
+            auto filter_end = std::chrono::steady_clock::now();
+
+            const uint64_t ts_ms = task.frame_steady_ms != 0 ? task.frame_steady_ms : inference_steady_now_ms();
+            int64_t seq = task.frame_seq;
+            for (auto &r : filtered)
+            {
+                r.track_id = -1;
+                r.chn_id = task.chnId;
+                r.frame_id = seq;
+                r.timestamp_ms = ts_ms;
+            }
+
+            int wrote_new = 0;
+            {
+                pthread_mutex_lock(&g_inference.channel_results[task.chnId].mtx);
+                if (seq > g_inference.channel_results[task.chnId].latest_seq)
+                {
+                    g_inference.channel_results[task.chnId].data = std::move(filtered);
+                    g_inference.channel_results[task.chnId].frame = task.frame;
+                    g_inference.channel_results[task.chnId].frame_steady_ms = ts_ms;
+                    g_inference.channel_results[task.chnId].frame_unix_ms = task.frame_unix_ms;
+                    g_inference.channel_results[task.chnId].latest_seq = seq;
+                    g_inference.channel_results[task.chnId].has_new = 1;
+                    wrote_new = 1;
+                }
+                pthread_mutex_unlock(&g_inference.channel_results[task.chnId].mtx);
+            }
+
+            if (wrote_new)
+            {
+                pthread_mutex_lock(&g_inference.result_ready_mtx[task.chnId]);
+                g_inference.result_dispatch_pending[task.chnId] = 1;
+                pthread_cond_signal(&g_inference.result_ready_cv[task.chnId]);
+                pthread_mutex_unlock(&g_inference.result_ready_mtx[task.chnId]);
+            }
+
+            g_fps[task.chnId].tick();
+
+            float filter_nms_ms = std::chrono::duration<float, std::milli>(filter_end - filter_begin).count();
+            float total_ms =
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - work_begin).count();
+            g_perf[task.chnId].accumulate((uint64_t)(std::max(0.0f, queue_wait_ms) * 1000.0f),
+                                          (uint64_t)(std::max(0.0f, lock_wait_ms) * 1000.0f),
+                                          (uint64_t)(std::max(0.0f, perf.preprocess_ms) * 1000.0f),
+                                          (uint64_t)(std::max(0.0f, perf.infer_ms) * 1000.0f),
+                                          (uint64_t)(std::max(0.0f, perf.postprocess_ms) * 1000.0f),
+                                          (uint64_t)(std::max(0.0f, filter_nms_ms) * 1000.0f),
+                                          (uint64_t)(std::max(0.0f, total_ms) * 1000.0f), wrote_new != 0);
+        }
+        else
+            g_perf[task.chnId].record_failure();
+
+        /* 同一实际窗口中的任务吞吐和成功任务平均耗时。失败也会触发周期日志。 */
+        const uint64_t now_ms = inference_steady_now_ms();
+        InferencePerfCounters::Snapshot snap{};
+        if (g_perf[task.chnId].reset_if_due(now_ms, PERF_LOG_WINDOW_MS, snap) && app_ctrl_get_performance_display())
+        {
+            const double seconds = static_cast<double>(snap.elapsed_ms) / 1000.0;
+            if (snap.samples == 0)
+            {
+                log_printf_threadsafe("[Perf][ch%02d] window=%.3fs completed=0 published=0 failed=%llu "
+                                      "infer_fps=0.00 publish_fps=0.00 avg_success_ms=unavailable\n",
+                                      task.chnId, seconds, (unsigned long long)snap.failures);
+                continue;
+            }
+            const double div = static_cast<double>(snap.samples) * 1000.0;
+            /* parallel 模式下各阶段为模型工作量之和，worker 是同帧实际墙钟耗时。 */
+            log_printf_threadsafe(
+                "[Perf][ch%02d] window=%.3fs completed=%llu published=%llu failed=%llu "
+                "infer_fps=%.2f publish_fps=%.2f mode=%s models=%zu | avg_success_ms "
+                "wait_q=%.2f lock=%.2f pre=%.2f rknn=%.2f post=%.2f filter=%.2f "
+                "worker=%.2f queue+worker=%.2f\n",
+                task.chnId, seconds, (unsigned long long)snap.samples, (unsigned long long)snap.published,
+                (unsigned long long)snap.failures, snap.samples / seconds, snap.published / seconds,
+                parallel_executor ? (parallel_executor->is_parallel() ? "parallel" : "serial") : "single",
+                model_group_size, snap.wait / div, snap.lock / div, snap.pre / div, snap.npu / div, snap.post / div,
+                snap.filter_nms / div, snap.total / div, (static_cast<double>(snap.wait) + snap.total) / div);
+        }
+    }
+    return nullptr;
+}

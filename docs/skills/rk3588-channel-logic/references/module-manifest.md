@@ -42,17 +42,19 @@
 
 ## outputs
 
-通道向全局 logic 发布的数据写在 `outputs[]`：
+通道向全局 logic 发布的数据写在 `outputs[]`。将下面的属性合并入模块完整的 `logic.json`：
 
 ```json
-"outputs": [
-  {
-    "key": "person_count",
-    "type": "integer",
-    "label": "当前人数",
-    "help": "本业务帧内的完整人数"
-  }
-]
+{
+  "outputs": [
+    {
+      "key": "person_count",
+      "type": "integer",
+      "label": "当前人数",
+      "help": "本业务帧内的完整人数"
+    }
+  ]
+}
 ```
 
 类型仅为 `string`、`number`、`integer`、`boolean`、`json`。生成器会检查字面量

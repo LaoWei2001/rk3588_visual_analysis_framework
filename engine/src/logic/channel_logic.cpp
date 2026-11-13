@@ -16,11 +16,11 @@
  * 删除逻辑: 删掉对应模块目录即可, 不牵连其它模块。
  */
 
+#include "application/runtime/app_ctrl.h"
 #include "context_access.h"
-#include "inference/inference_engine.h"
 #include "logic/logic_registry.h"
 #include "logic_parameters.h"
-#include "runtime/app_ctrl.h"
+#include "vision/inference/inference_engine.h"
 #include <algorithm>
 #include <channel.h>
 #include <cstring>
@@ -253,11 +253,16 @@ const char *target_query_status_name(TargetQueryStatus status)
 {
     switch (status)
     {
-    case TargetQueryStatus::OK: return "ok";
-    case TargetQueryStatus::INFERENCE_UNAVAILABLE: return "inference_unavailable";
-    case TargetQueryStatus::ROI_NOT_FOUND: return "roi_not_found";
-    case TargetQueryStatus::INVALID_ROI: return "invalid_roi";
-    case TargetQueryStatus::INVALID_QUERY: return "invalid_query";
+    case TargetQueryStatus::OK:
+        return "ok";
+    case TargetQueryStatus::INFERENCE_UNAVAILABLE:
+        return "inference_unavailable";
+    case TargetQueryStatus::ROI_NOT_FOUND:
+        return "roi_not_found";
+    case TargetQueryStatus::INVALID_ROI:
+        return "invalid_roi";
+    case TargetQueryStatus::INVALID_QUERY:
+        return "invalid_query";
     }
     return "unknown";
 }
@@ -303,9 +308,10 @@ TargetQueryResult ChannelContext::query_targets(const TargetQuery &query) const
     for (const auto &target : *results)
     {
         if ((!query.model_id.empty() && target.model_id != query.model_id) ||
-            (!query.model_type.empty() && target.model_type != query.model_type)) continue;
-        if (target.is_depth() || !finite_confidence(target.score) || target.score < query.min_score || target.score > 1.0f ||
-            target.box.width <= 0 || target.box.height <= 0)
+            (!query.model_type.empty() && target.model_type != query.model_type))
+            continue;
+        if (target.is_depth() || !finite_confidence(target.score) || target.score < query.min_score ||
+            target.score > 1.0f || target.box.width <= 0 || target.box.height <= 0)
             continue;
         if (!query.labels.empty() &&
             std::find(query.labels.begin(), query.labels.end(), target.label) == query.labels.end())

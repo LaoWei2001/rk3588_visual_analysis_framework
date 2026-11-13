@@ -79,8 +79,8 @@ int main()
         assert(!reverse.matches({a, hat_a})); // 正常戴帽，不采集。
         assert(!reverse.matches({a, b, hat_a, hat_b}));
         assert(reverse.matches({a, hat_a, hat_b})); // 第二人的帽子在，但对应人框漏检。
-        assert(reverse.matches({hat_a})); // 所有人框都漏检。
-        assert(!reverse.matches({a})); // 无帽子主体，不触发。
+        assert(reverse.matches({hat_a}));           // 所有人框都漏检。
+        assert(!reverse.matches({a}));              // 无帽子主体，不触发。
         assert(!reverse.matches({a, Detection("y", .29, 30, 10, 20, 20)}));
         assert(reverse.matches({Detection("x", .49, 0, 0, 100, 200), hat_a}));
         assert(!reverse.matches({Detection("x", .9, 0, 0, 100, 200, false), hat_a}));
@@ -159,8 +159,8 @@ int main()
     multi_all.state = "matched";
     assert(multi_all.matches({a, b, hat_a, head_b}));
     assert(!multi_all.matches({a, b, head_a}));
-    auto single_array = parse_rules(rule(multi_json(R"([{"class":"y","min_confidence":0.5}])")),
-                                    {"x", "y"}, {}, .3)[0].condition;
+    auto single_array =
+        parse_rules(rule(multi_json(R"([{"class":"y","min_confidence":0.5}])")), {"x", "y"}, {}, .3)[0].condition;
     assert(single_array.matches({a, b, hat_a}) == linked.matches({a, b, hat_a}));
     assert(rejected(rule(multi_json("[]"))));
     assert(rejected(rule(multi_json("null"))));
@@ -177,11 +177,12 @@ int main()
         too_many += (i ? "," : "") + std::string(R"({"class":"y"})");
     assert(rejected(rule(multi_json(too_many + "]"))));
     const auto count_json = [](const std::string &criteria = R"({"op":">","value":1})", const std::string &extra = "") {
-        return R"({"association":{"subject":{"class":"x","min_confidence":0.3},"object":{"class":"y","min_confidence":0.5},"relation":"center_inside","state":"count","object_count":)" + criteria + extra + "}}";
+        return R"({"association":{"subject":{"class":"x","min_confidence":0.3},"object":{"class":"y","min_confidence":0.5},"relation":"center_inside","state":"count","object_count":)" +
+               criteria + extra + "}}";
     };
     auto excess = parse_rules(rule(count_json()), {"x", "y"}, {}, .3)[0].condition;
     const Detection pants_a("y", .9, 30, 150, 20, 20), pants_b("y", .9, 230, 150, 20, 20);
-    assert(excess.matches({a, hat_a, pants_a})); // 头部真帽 + 裤子误报。
+    assert(excess.matches({a, hat_a, pants_a}));    // 头部真帽 + 裤子误报。
     assert(excess.matches({a, b, hat_a, pants_a})); // 总人数与帽子数相等，也能找出同一个人的异常。
     assert(!excess.matches({a, b, hat_a, hat_b}));
     assert(!excess.matches({a, hat_a, Detection("y", .9, 900, 150, 20, 20)}));
@@ -197,7 +198,9 @@ int main()
     assert(all_excess.matches({a, b, hat_a, pants_a, hat_b, pants_b}));
     assert(!all_excess.matches({}));
     auto two_excess = parse_rules(rule(count_json(R"({"op":">","value":1})",
-        R"(,"quantifier":"count","count":{"op":">=","value":2})")), {"x", "y"}, {}, .3)[0].condition;
+                                                  R"(,"quantifier":"count","count":{"op":">=","value":2})")),
+                                  {"x", "y"}, {}, .3)[0]
+                          .condition;
     assert(two_excess.matches({a, b, hat_a, pants_a, hat_b, pants_b}));
     assert(!two_excess.matches({a, b, hat_a, pants_a, hat_b}));
     auto missing_count = parse_rules(rule(count_json(R"({"op":"==","value":0})")), {"x", "y"}, {}, .3)[0].condition;
@@ -212,12 +215,13 @@ int main()
     assert(overlap_count.matches({a, hat_a, Detection("y", .9, 90, 150, 20, 20)}));
     assert(!overlap_count.matches({a, hat_a, Detection("y", .9, 91, 150, 20, 20)}));
     for (const auto &invalid_count : {"null", R"({"op":">","value":-1})", R"({"op":">","value":1.5})",
-                                   R"({"op":">","value":true})", R"({"op":"bad","value":1})"})
+                                      R"({"op":">","value":true})", R"({"op":"bad","value":1})"})
         assert(rejected(rule(count_json(invalid_count))));
     assert(rejected(rule(count_json(R"({"op":">","value":1})", R"(,"one_to_one":true)"))));
     assert(rejected(rule(count_json(R"({"op":">","value":1})", R"(,"one_to_one":false)"))));
     assert(rejected(rule(association_json(R"(,"object_count":{"op":">","value":1})"))));
-    assert(rejected(rule(R"({"association":{"subject":{"class":"x"},"object":{"class":"y"},"relation":"near","state":"count"}})")));
+    assert(rejected(
+        rule(R"({"association":{"subject":{"class":"x"},"object":{"class":"y"},"relation":"near","state":"count"}})")));
     const std::string comparison_json = "{\"compare_counts\":{\"left\":{\"class\":\"x\",\"min_confidence\":0.3},"
                                         "\"right\":{\"class\":\"y\",\"min_confidence\":0.5},\"op\":\">\"}}";
     auto compare = parse_rules(rule(comparison_json), {"x", "y"}, {}, 0.3)[0].condition;

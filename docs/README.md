@@ -1,170 +1,66 @@
-# RK3588 视觉分析框架文档入口
+# 项目文档
 
-本目录同时服务两类读者：
+首次使用从[项目首页快速开始](../README.md#快速开始)进入。本文只维护导航；
+具体能力、接口和操作步骤在对应主题文档中维护，避免多处复制后产生冲突。
 
-- 大模型：按任务加载 `skills/<skill-name>/SKILL.md`，再按其中路由读取必要参考页；
-- 二次开发者：从本页选择任务，再阅读同一套 Skill 与 `references/`。
+## 按任务选择
 
-首次使用先看[首页快速开始](../README.md#快速开始)。原首页的架构、部署、离线交付、配置和业务扩展细节已整理为[项目指南](project-guide.md)；实测条件、基线记录与复现入口见 [Benchmark](benchmark.md)，可复制的无推理配置见[最小示例](examples/quickstart.json)。
+| 你要做什么 | 阅读入口 |
+| --- | --- |
+| 编译、部署、理解配置、接入业务 | [项目指南](guides/project-guide.md) |
+| 采集图片或把录像保存到电脑 | [采集指南](guides/dataset-collection.md)、[电脑保存媒体](guides/local-media-saving.md) |
+| 停止程序、配置恢复、排查设备问题 | [运维文档](operations/README.md) |
+| 理解代码分工和依赖 | [整体架构](architecture/overview.md)、[C++ 源码导航](../engine/README.md) |
+| 编写通道/全局 Logic | [公共 SDK](sdk/README.md)、[现有业务示例](skills/rk3588-channel-logic/references/current-examples.md) |
+| 查询模型结果、坐标、采集规则 | [技术参考](reference/README.md) |
+| 查看性能数据及复现条件 | [性能实测](performance/README.md) |
+| 使用开发向导或给代码代理指定任务 | [开发 Skill 索引](skills/README.md) |
+| 查看过去的整改和开发记录 | [历史记录](history/README.md) |
 
-Web 画面在卡顿后持续落后于本地显示的修复、播放缓冲策略与实测范围见 [Web 实时延迟](web-live-latency.md)。
-最新的 HDMI、直接 RTSP、Web 三路延迟对照，以及真实摄像头减少推理排队的结果见 [实时低延迟实测](live-low-latency.md)。
+最小配置是 [examples/quickstart.json](examples/quickstart.json)，其中视频路径需要替换为实际资源。
+不熟悉业务开发时，可从仓库根目录执行 `./develop_feature`；原生 Windows 使用
+`develop_feature.cmd` 或 `py .\develop_feature`。支持范围和写入边界见[开发向导](skills/rk3588-feature-wizard/SKILL.md)。
 
-自动核心拖慢其他模型的问题、全局分配规则、RTSP / USB 逐路对照与复现见 [NPU 核心实测](npu-core-placement.md)。
-真实摄像头 15 路推理、原生输出优化及不同模型/路数组合见 [实时多路推理实测](npu-live-performance.md)。
-更多混合模型、同帧多模型、AUTO 分核局限及 worker 数量对照见 [多路组合扩展验证](npu-live-performance-extended.md)。
+## 目录
 
-现场部署与故障恢复见[无人值守恢复说明](unattended-recovery.md)。
-有线/Wi-Fi 管理网络自愈见[网络失联自动恢复](network-recovery.md)。
-视觉程序退出和卡住恢复的网页设置见[程序故障恢复](application-recovery.md)。
-Web 配置与系统底层状态的自动同步范围及排查结果见[配置同步排查](web-config-sync-audit.md)。
-故障恢复协同修复及上传前复核见[故障恢复协同排查](recovery-conflict-audit.md)。
-
-不熟悉框架时，直接从仓库根目录运行交互式开发向导：
-
-```bash
-./develop_feature
+```text
+docs/
+├── README.md          文档总入口
+├── guides/            使用、构建与部署指南
+├── operations/        停止、恢复、日志和设备诊断
+├── reference/         坐标、模型结果与配置语义
+├── architecture/      代码职责和数据集架构
+├── sdk/               公共业务 API 与验收说明
+├── performance/       按条件记录的性能实测
+│   └── data/          原始 JSON 数据，保留当时路径、哈希和时间
+├── history/           历史审查、整改与开发记录
+├── skills/            面向开发任务的流程、细分参考与辅助脚本
+└── examples/          可复制的配置示例
 ```
 
-原生 Windows 可运行 `develop_feature.cmd` 或 `py .\develop_feature`。启动器只正式适配 Codex CLI 与
-Claude Code；支持普通目录和 GitHub ZIP 解压目录，不要求 `.git` 或 Git 命令。自动探测后选择唯一可用
-代理，或在两者都可用时请用户选择；也可用 `--agent codex`、
-`--agent claude` 显式指定。选定代理后检测 Windows、WSL2、macOS、Linux、CPU 架构、RK3588 设备树和
-关键工具；第一题只需用“是”或“否 + 简短纠正”确认检测结果和默认 RK3588 部署目标。业务需求通常
-只问 2–3 轮、最多 4 轮；向导先核对源码，再给出合并后的具体方案让用户简短确认，不会要求逐项填写
-硬件和内部合同字段。需求合同完整后，只在通道/全局 Logic 模块中实现并按平台能力验证。需要先确认或
-只生成计划时，分别使用 `--confirm-before-code`、`--plan-only`。自动实现采用硬写入边界：
-代理在一次性副本中无提示执行，启动器通过文件快照和哈希比较，仅回写 `projects/modules/**` 和
-`projects/global_modules/**`，发现其他改动便整批拒绝；选择和权限差异见
-[`agent-adapters.md`](skills/rk3588-feature-wizard/references/agent-adapters.md)。
-
-本文档最初按仓库提交 `6bd2b94dbbdd8787753b90d1527a6882e3a70aa2`（2026-08-23）整理；
-2026-09-15 又按当前工作区源码复核了全局调度、逻辑模块清单和全局事件媒体规则。
+`skills/` 的目录和脚本入口保持稳定；它既供代码代理使用，也可供开发者查阅细分契约。
+`performance/` 的历史测量不能直接当成当前版本成绩，`history/` 不作为现行操作手册。
 
 ## 事实来源与冲突处理
 
-文档不是运行时真值。遇到冲突时按下面顺序判断，并同步修正文档：
+遇到文档与实现不一致时，依次核对：
 
-1. 当前可执行实现的控制流、公共头文件和对应测试；
-2. 模块 `logic.json`、适配器 `catalog.json` 等声明式契约；若其帮助文字与实际控制流冲突，以实现为准并记录缺口；
-3. 生成器和配置校验器的实际校验行为；
-4. 本目录中的 Skill 与参考页；
-5. 示例配置、历史提交和注释。
+1. 当前控制流、公共头文件及相关测试；
+2. 模块 `logic.json`、模型/适配器 `catalog.json` 的声明；
+3. 实际生成器、配置校验器和同版构建的查询结果；
+4. 文档中的说明和示例；历史记录只用于追溯。
 
-关键真源：
+公共 API 以 `engine/include/` 为准；配置以 `engine/src/application/config/` 为准；
+运行管理以 `services/framework/runtime_manager/python/rk3588_runtime/` 为准。
+模块清单和测试结果随版本变化，不在总入口重复维护。
 
-二次开发公共接口与迁移说明见 [公共 SDK](sdk/README.md)。
+## 维护约定
 
-| 主题 | 真源 |
-|---|---|
-| 通道 API | `engine/include/channel.h`、`engine/include/actions.h` |
-| 全局 API | `engine/include/global.h`、`engine/src/logic/global_logic.cpp` |
-| 逻辑清单 | `projects/modules/*/logic.json`、`projects/global_modules/*/logic.json` |
-| 配置与热重载 | `engine/src/config/`、`src/runtime/app_ctrl.cpp` |
-| 事件与媒体 | `engine/include/events.h`、`engine/src/event/event_report.cpp`、`src/recorder/` |
-| 网络投递 | `services/framework/upload/` |
-| 独立设备守护、恢复策略与运行协调 | `services/framework/runtime_manager/python/rk3588_runtime/`、`services/framework/system_watchdog/` |
-| Web 行为 | `web_console/backend/`、`web_console/frontend/src/` |
-| 打包产物 | 根目录 `build.sh`、`tools/build/` 下的两个生成器 |
+- 新增主题放入对应目录，并更新该目录的 `README.md`；不要再把专题平铺到 `docs/` 根目录。
+- 文件名使用小写短横线；`README.md`、`SKILL.md` 等约定入口名除外。
+- 修改接口、配置或生命周期时同步正文；移动文档时同步仓库内链接、代码块路径和锚点。
+- 指南说明当前行为；性能报告写明日期、输入、平台和测量口径；历史记录保留当时条件。
+- 原始测量 JSON 不随源码重命名改写其历史路径/哈希，不把历史日志中的“通过”当成当前复验。
+- 缺少源码或实测依据的结论应注明边界；不通过改文档来掩盖已知代码问题。
 
-## 按任务进入
-
-| 任务 | 首选 Skill |
-|---|---|
-| 从模糊想法开始，只在 Logic 白名单内自动开发 | [`rk3588-feature-wizard`](skills/rk3588-feature-wizard/SKILL.md) |
-| 从需求完成一个端到端视觉应用改动 | [`build-rk3588-vision-app`](skills/build-rk3588-vision-app/SKILL.md) |
-| 新增/修改逐通道逻辑、参数、ROI、绘制或按钮 | [`rk3588-channel-logic`](skills/rk3588-channel-logic/SKILL.md) |
-| 开发多通道聚合、事件驱动/周期兜底任务、全局按钮或全局上报 | [`rk3588-global-logic`](skills/rk3588-global-logic/SKILL.md) |
-| 使用或扩展 Web、投递、OTA、服务和排障 | [`rk3588-console-ops`](skills/rk3588-console-ops/SKILL.md) |
-| 理解/修改引擎模块、配置、线程与生命周期 | [`rk3588-src-modules`](skills/rk3588-src-modules/SKILL.md) |
-
-完整索引见 [`skills/README.md`](skills/README.md)。
-
-数据集采集相关文档：[使用、构建与部署](computer-dataset-collection.md)、[条件语义](dataset-capture-rules.md)、[代码职责与依赖边界](dataset-collection-architecture.md)。
-
-## 当前实现快照
-
-### C++ 模块
-
-`engine/src/` 当前包含：
-
-```text
-capturer  common  config  control  dataset  display  event  gpio  inference
-logic     pipeline  recorder  rtsp  runtime  third_party  tracking  yolo
-```
-
-旧目录 `analyzer/`、`core/`、`player/` 已不存在。对应能力分别迁移到 `pipeline/`、`inference/`、`tracking/`、`runtime/`、`display/` 和 `rtsp/`。
-
-### 当前可注册逻辑(若目录与以下列举的不一致则说明开发者删掉了一部分)
-
-通道逻辑：
-
-```text
-logic_course_01 ... logic_course_10
-logic_course_gpio
-logic_default
-logic_dify
-logic_crane_helmet
-logic_crane_hook
-logic_crane_intrusion
-logic_crane_motion
-logic_relay
-logic_roi_person_count_demo
-```
-
-全局逻辑：
-
-```text
-global_crane_safety_controller
-global_person_count_alarm_demo
-```
-
-仓库当前没有提交预编译二进制。仅在完成当前源码的同版构建后核对：
-
-```bash
-build/engine/vision_analysis --list-logics
-build/engine/vision_analysis --list-global-logics
-```
-
-### 当前上报模型
-
-业务 Logic 只调用 `report_event()`。C++ 把事件异步排入本地 `event_store`，媒体在后台生成；独立 Python 服务读取 `connections.yaml`、版本化接口契约和事件目录，再通过 `http` 或 `dify_workflow` Adapter 投递。`EventReportResult::accepted()` 只表示事件已进入本地持久化队列，不表示已经落盘或远端成功。
-
-### 当前 Web 页面
-
-登录后的侧边栏包含程序管理、实时画面、系统服务、系统设置和终端。配置编辑、日志和待上报记录从具体程序进入。实时画面跟随当前唯一运行的视觉程序；浏览器预览依赖开启内置 RTSP，并要求 `global.rtsp_codec` 为 `h264`/`avc`（Web 编辑器当前固定生成 `h264`）。
-
-## 必须知道的当前边界
-
-1. `logic_periodic_snapshot_demo`、`logic_upload_teach`、`logic_path_sop`、`logic_global_input_demo`、`global_channel_aggregate_demo`、`global_default` 和 `global_two_channel_demo` 均不在当前源码中。周期事件可参考 `logic_course_08`/`logic_dify`；当前跨通道人数闭环由 `logic_roi_person_count_demo` 与 `global_person_count_alarm_demo` 组成。
-2. 全局实例的 `channels` 非空时按连接列表取输入；为空时，当前调度实现会取应用全部通道。普通业务应使用 `gctx->inputs()`，它会过滤未发布、离线或过期输入。
-3. 全局实例由通道新发布立即唤醒，`poll_interval_ms` 只是无更新兜底周期。回调不是固定频率，计时必须使用 `timestamp_ms`/`dt_ms`，快速连续发布可能只读取一次最新状态。
-4. 全局聚合事件没有主通道。`evidence_channel_ids` 描述事件涉及通道，Web policy 决定图片通道；`source_channel_id` 只用于确有单路来源的元数据，事件视频固定使用明确配置的 `media_source_channel_id`。
-5. 待上报记录页是本地发件箱视图，不是成功历史。全部 delivery 成功后，投递服务会删除事件目录。
-6. `config.h` 对 `swap_rb` 的行内注释仍写“不影响上报”，但当前录像实现会在 `video_overlay` 为 `custom`/`all` 时把它应用到事件视频；事件图片仍不受影响。以 recorder 实际分支为准。
-7. OTA Agent 当前不单独校验下载 `url` 的格式，也只检查 `type` 非空而不检查它是否属于 C++ 支持的模型类型。下载/写配置成功后仍必须以 MD5、配置监控和模型热加载日志确认最终结果。
-
-项目其他位置仍保留少量重构前 README，本轮因“以 `docs/` 为交付入口、且不改辅助代码”的边界未
-整篇重写；不要把它们覆盖本目录契约。逐项冲突见[项目内旧 README 边界](skills/build-rk3588-vision-app/references/known-document-drift.md)。
-
-## 文档目录约定
-
-- 每个 Skill 的 `SKILL.md` 只保留执行流程和参考路由；详细 API、Schema、示例和操作手册放在其 `references/`。
-- `development_log.md` 只记录可由 Git 和源码核对的架构节点，不作为当前 API 说明。
-- `build-rk3588-vision-app/scripts/` 中的三个辅助脚本创建于 2026-08-14，本轮因“不修改代码”的约束未改；其中 `validate_logic.py` 会错误拒绝当前已支持的全局 Action，另外两个也不覆盖完整的当前契约。限制详见 [`legacy-scripts.md`](skills/build-rk3588-vision-app/references/legacy-scripts.md)；权威验证入口仍是各 Skill 列出的源码生成器和项目测试。
-- `rk3588-feature-wizard/scripts/start_wizard.py` 是模型无关的交互入口，`scripts/agent_adapters.py` 封装
-  Codex/Claude 的无提示权限差异，`scripts/write_guard.py` 机械执行隔离副本和 Logic 白名单回写；框架
-  业务契约仍只来自对应源码与参考页。
-- 平台差异和验证边界统一维护在 [`platform-matrix.md`](skills/rk3588-feature-wizard/references/platform-matrix.md)，不得根据操作系统名称臆测硬件可用。
-
-## 文档维护规则
-
-修改下列内容时必须同步更新对应 Skill：
-
-- 移动源码目录或公共头文件；
-- 增删逻辑模块、参数、输出、动作、事件或上报模板；
-- 改变配置字段或热重载边界；
-- 改变事件 Schema、投递状态、持久目录或 Adapter；
-- 改变 Web 路由、页面入口、鉴权例外或操作语义。
-
-文档示例只能使用当前源码中存在的名称。无法从源码确认的行为应标成“待验证”，不得补写推测结论。
+本地验证、工作区清理和提交约定见[贡献指南](../CONTRIBUTING.md)。

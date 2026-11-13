@@ -10,8 +10,8 @@
 #include "pipeline_internal.h"
 #include "pipeline_runtime.h"
 
-#include "runtime/pause_ctrl.h"
-#include "runtime/service_watchdog.h"
+#include "application/runtime/pause_ctrl.h"
+#include "application/runtime/service_watchdog.h"
 
 #include <utility>
 

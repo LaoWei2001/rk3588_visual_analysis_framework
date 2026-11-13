@@ -41,7 +41,7 @@ def real_manager(monkeypatch):
 def test_recording_streams_playable_mp4_without_creating_board_file(real_manager):
     result = real_manager.start_recording({}, 64 * 1024**2)
     assert result['destination'] == 'computer' and result['storage'] is None
-    assert real_manager._working_path is None and real_manager._save_directory is None
+    assert result['file_size_bytes'] == 0
     filename = result['output_path']
     assert '/' not in filename and not Path(filename).exists()
     content = io.BytesIO()

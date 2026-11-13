@@ -11,6 +11,7 @@ process_manager.py — App 进程生命周期管理
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import re
 import signal
@@ -47,6 +48,8 @@ class ManagedProcess:
 before_stop: Optional[Callable[[str], None]] = None
 
 _processes: Dict[str, ManagedProcess] = {}
+_stopping: Dict[str, dict] = {}
+GRACEFUL_STOP_DROPIN = "90-rk-graceful-stop.conf"
 _start_thread_lock = threading.RLock()
 _start_lock_local = threading.local()
 _start_lock_path = APPS_ROOT / ".app_start.lock"
@@ -392,7 +395,7 @@ def _systemd_unit_status(unit_name: str) -> dict:
     try:
         result = subprocess.run(
             ["systemctl", "show", unit_name,
-             "--property=MainPID,ActiveState,SubState,NRestarts,ExecMainStartTimestampMonotonic,WatchdogUSec,Restart"],
+             "--property=MainPID,ActiveState,SubState,NRestarts,ExecMainStartTimestampMonotonic,WatchdogUSec,Restart,TimeoutStopUSec,SendSIGKILL,LoadState,Result,ExecMainCode,ExecMainStatus"],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode == 0:
@@ -466,37 +469,53 @@ def _list_running_app_units() -> list[str]:
     return sorted(set(units))
 
 
+def _ensure_graceful_stop_policy(unit_name: str) -> None:
+    # Existing packages may still have TimeoutStopSec=10. Replace that policy
+    # before sending a stop request; never silently fall back to forced killing.
+    state = _systemd_unit_status(unit_name)
+    if state.get('TimeoutStopUSec') == 'infinity' and state.get('SendSIGKILL') == 'no':
+        return
+    directory = SYSTEMD_RUNTIME_UNIT_DIR / (unit_name + '.d')
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / GRACEFUL_STOP_DROPIN
+    temporary = target.with_suffix('.tmp')
+    temporary.write_text('[Service]\nTimeoutStopSec=infinity\nSendSIGKILL=no\n')
+    temporary.replace(target)
+    subprocess.run(['systemctl', 'daemon-reload'], capture_output=True, text=True, timeout=15, check=True)
+    state = _systemd_unit_status(unit_name)
+    if state.get('TimeoutStopUSec') != 'infinity' or state.get('SendSIGKILL') != 'no':
+        raise RuntimeError('无法确认安全停止策略，尚未发送停止信号：' + unit_name)
+
+
 def _stop_systemd_unit(unit_name: str) -> bool:
+    state = _systemd_unit_status(unit_name)
+    if state.get('LoadState') == 'not-found':
+        return True
+    _ensure_graceful_stop_policy(unit_name)
+    # This runs in a Web worker thread. Wait for the entire stop transaction;
+    # do not turn an arbitrary timeout into SIGKILL or a false success.
+    result = subprocess.run(['systemctl', 'stop', unit_name], capture_output=True, text=True)
+    return result.returncode == 0
+
+
+def _process_start_ticks(pid: int) -> Optional[str]:
     try:
-        result = subprocess.run(
-            ["systemctl", "stop", unit_name],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        return result.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+        fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+        return None if fields[0] in ('Z', 'X') else fields[19]
+    except (OSError, IndexError):
+        return None
 
 
 def _terminate_pid(pid: int) -> None:
+    identity = _process_start_ticks(pid)
+    if identity is None:
+        return
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         return
-
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.2)
-
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    while _process_start_ticks(pid) == identity:
+        time.sleep(0.1)
 
 
 def _follow_journal(unit_name: str, since: Optional[str] = None) -> subprocess.Popen:
@@ -554,8 +573,13 @@ def _clear_device_only_override(unit_name: str):
 
 def _start_systemd_app(binary: Path, config: Path, app_dir: Path, env: dict, unit_name: str) -> subprocess.Popen:
     policy = recovery_policy.read()
+    graceful_override = SYSTEMD_RUNTIME_UNIT_DIR / (unit_name + '.d') / GRACEFUL_STOP_DROPIN
+    if graceful_override.exists():
+        graceful_override.unlink()
+        subprocess.run(['systemctl', 'daemon-reload'], capture_output=True, text=True, timeout=15, check=True)
     _clear_device_only_override(unit_name)
     env = dict(env)
+    env['RK_SHUTDOWN_STATUS_FILE'] = str(app_dir / 'run.shutdown.json')
     env['RK_SERVICE_TASK_TIMEOUT_MS'] = str(policy['task_timeout_sec'] * 1000)
     env['RK_SERVICE_STARTUP_TIMEOUT_MS'] = str(policy['startup_timeout_sec'] * 1000)
     command = [
@@ -575,7 +599,8 @@ def _start_systemd_app(binary: Path, config: Path, app_dir: Path, env: dict, uni
         "--property=LogRateLimitIntervalSec=30s",
         "--property=LogRateLimitBurst=1000",
         "--property=KillMode=control-group",
-        "--property=TimeoutStopSec=10",
+        "--property=TimeoutStopSec=infinity",
+        "--property=SendSIGKILL=no",
         f"--working-directory={app_dir}",
     ]
     if policy['app_stall_enabled'] and _supports_service_watchdog(binary, app_dir, env):
@@ -705,12 +730,13 @@ def start_app(app_name: str, config_name: Optional[str] = None) -> int:
 
 # ── 停止 ─────────────────────────────────────────────────────────────────────
 
-def _stop_app_unlocked(app_name: str) -> bool:
-    if before_stop is not None:
-        before_stop(app_name)
+def _stop_process_unlocked(app_name: str, outcome: dict) -> bool:
     mp = _processes.get(app_name)
     unit_name = _app_unit_name(app_name)
     unit_state = _systemd_unit_status(unit_name)
+    pid = int(unit_state.get('MainPID') or 0) or (mp.pid if mp else _read_pid(app_name))
+    outcome['pid'] = pid
+    outcome['_start_ticks'] = _process_start_ticks(pid) if pid else None
     if unit_state.get("ActiveState") in ("active", "activating", "deactivating", "reloading"):
         # Stop the service even during RestartSec when it has no MainPID.
         # Killing just the previous PID would allow systemd to resurrect it.
@@ -746,11 +772,9 @@ def _stop_app_unlocked(app_name: str) -> bool:
             stopped = True
         elif mp.proc is not None:
             mp.proc.send_signal(signal.SIGTERM)
-            try:
-                mp.proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                mp.proc.kill()
-                mp.proc.wait()
+            outcome['exit_code'] = mp.proc.wait()
+            # Exit code alone cannot prove that all cleanup stages completed.
+            outcome['graceful'] = False if outcome['exit_code'] != 0 else None
             stopped = True
         elif not stopped:
             _terminate_pid(mp.pid)
@@ -765,6 +789,51 @@ def _stop_app_unlocked(app_name: str) -> bool:
             _clear_runtime_files_if_pid(app_name, mp.pid)
 
     return stopped
+
+
+def _shutdown_record(app_name: str, pid, start_ticks) -> dict:
+    if not pid or not start_ticks:
+        return {}
+    try:
+        record = json.loads((_app_path(app_name) / 'run.shutdown.json').read_text())
+        if record.get('pid') == pid and record.get('start_ticks') == start_ticks:
+            return record
+    except (OSError, ValueError, AttributeError):
+        pass
+    return {}
+
+
+def _stop_app_unlocked(app_name: str, outcome: Optional[dict] = None) -> bool:
+    outcome = outcome if outcome is not None else {'warnings': [], 'graceful': None, 'exit_code': None}
+    _stopping[app_name] = outcome
+    try:
+        if before_stop is not None:
+            try:
+                before_stop(app_name)
+            except Exception as exc:
+                warning = '采集暂停状态保存失败：' + str(exc)
+                outcome['warnings'].append(warning)
+                logging.getLogger(__name__).exception(warning)
+        stopped = _stop_process_unlocked(app_name, outcome)
+        record = _shutdown_record(app_name, outcome.get('pid'), outcome.get('_start_ticks'))
+        if (record.get('stage') == 'complete' and type(record.get('exit_code')) is int
+                and type(record.get('clean')) is bool):
+            errors = record.get('persistence_errors', 0)
+            if type(errors) is not int or errors < 0:
+                errors = 0
+                outcome['warnings'].append('退出记录中的数据保存状态无效')
+            outcome['cleanup_complete'] = True
+            outcome['persistence_errors'] = errors
+            outcome['graceful'] = (record['clean'] and record['exit_code'] == 0 and errors == 0
+                                   and outcome['exit_code'] in (None, 0) and not outcome['warnings'])
+            if outcome['exit_code'] in (None, 0):
+                outcome['exit_code'] = record['exit_code']
+            if errors:
+                outcome['warnings'].append(f'本次运行发生 {errors} 次告警记录或媒体保存错误，请检查日志和本地告警文件')
+        outcome['stopped'] = stopped
+        return stopped
+    finally:
+        _stopping.pop(app_name, None)
 
 
 def stop_all_apps_for_install_unlocked() -> list[str]:
@@ -810,23 +879,45 @@ def stop_all_apps_for_install_unlocked() -> list[str]:
     return sorted(stopped_labels)
 
 
-def stop_app(app_name: str) -> bool:
-    """停止视觉程序并持久化用户的“停止”意图。"""
+def stop_app_detailed(app_name: str) -> dict:
+    outcome = {'warnings': [], 'graceful': None, 'exit_code': None}
     with _exclusive_start_lock():
-        # Persist first: even an unkillable process or a failed bus connection
-        # must not turn a deliberate stop into a boot-time business restart.
-        runtime_state.mark_vision_stopped(app_name)
-        return _stop_app_unlocked(app_name)
+        try:
+            runtime_state.mark_vision_stopped(app_name)
+        except Exception as exc:
+            outcome['warnings'].append('停止意图保存失败，重启设备后可能恢复运行：' + str(exc))
+        _stop_app_unlocked(app_name, outcome)
+    outcome.pop('_start_ticks', None)
+    if not outcome['stopped']:
+        outcome['message'] = '程序当前未运行'
+    elif outcome['graceful'] is True:
+        outcome['message'] = '程序已正常退出'
+    elif outcome.get('cleanup_complete') and outcome.get('persistence_errors'):
+        outcome['message'] = '程序已完成退出清理，但告警数据保存存在错误'
+    elif outcome['graceful'] is False:
+        outcome['message'] = '程序异常退出，请检查日志和未完成的录像'
+    else:
+        outcome['message'] = '程序已退出，但未确认完整清理，请检查退出日志'
+    return outcome
+
+
+def stop_app(app_name: str) -> bool:
+    return stop_app_detailed(app_name)['stopped']
 
 
 # ── 状态查询 ─────────────────────────────────────────────────────────────────
 
 def get_process_identity(app_name: str) -> Optional[str]:
     """Stable across console restarts; changes on process/board restart or PID reuse."""
-    status = get_status(app_name)
-    if status['status'] != 'running':
+    # Observation must not take the lifecycle lock: dataset reconciliation
+    # already holds its own mutex, while stop holds lifecycle then dataset.
+    unit = _read_unit_name(app_name)
+    managed = _processes.get(app_name)
+    pid = _systemd_main_pid(unit) if unit else (_read_pid(app_name) or (managed.pid if managed else None))
+    owned_child = (managed is not None and managed.pid == pid and managed.proc is not None
+                   and managed.proc.poll() is None)
+    if not pid or (not owned_child and not _pid_belongs_to_app(app_name, pid)):
         return None
-    pid = status['pid']
     try:
         stat = Path(f'/proc/{pid}/stat').read_text()
         # comm may contain spaces or parentheses; fields after the last ')' start
@@ -838,7 +929,7 @@ def get_process_identity(app_name: str) -> Optional[str]:
     except (OSError, IndexError):
         return None
 
-def _refresh_systemd_app(app_name: str) -> Optional[dict]:
+def _refresh_systemd_app(app_name: str, *, read_only: bool = False) -> Optional[dict]:
     """Refresh PID markers after a systemd restart; retain ownership between attempts."""
     unit_name = _read_unit_name(app_name)
     if unit_name is None:
@@ -859,7 +950,7 @@ def _refresh_systemd_app(app_name: str) -> Optional[dict]:
         config = "config.json"
     if pid <= 0 or not _pid_belongs_to_app(app_name, pid):
         return {"status": "running", "pid": None, "uptime_seconds": None,
-                "config": config, "recovery_state": "restarting", "restart_count": restarts,
+                "config": config, "recovery_state": "stopping" if state.get('ActiveState') == 'deactivating' else "restarting", "restart_count": restarts,
                 "watchdog_active": state.get('WatchdogUSec') not in (None, '', '0', 'infinity'),
                 "restart_enabled": restart_enabled}
     mp = _processes.get(app_name)
@@ -869,20 +960,45 @@ def _refresh_systemd_app(app_name: str) -> Optional[dict]:
             started_at = time.time() - max(0, time.monotonic() - since_boot)
         except (KeyError, ValueError):
             started_at = time.time()
-        _processes[app_name] = ManagedProcess(
+        mp = ManagedProcess(
             app_name=app_name, pid=pid, started_at=started_at, proc=None,
             config=config, unit_name=unit_name, launcher=mp.launcher if mp else None,
         )
-        (app_dir / "run.started_at").write_text(str(started_at))
-        (app_dir / "run.pid").write_text(str(pid))
+        if not read_only:
+            _processes[app_name] = mp
+            (app_dir / "run.started_at").write_text(str(started_at))
+            (app_dir / "run.pid").write_text(str(pid))
+    shutting_down = state.get('ActiveState') == 'deactivating'
+    checkpoint = _shutdown_record(app_name, pid, _process_start_ticks(pid)) if shutting_down else {}
     return {"status": "running", "pid": pid,
-            "uptime_seconds": max(0, int(time.time() - _processes[app_name].started_at)),
-            "config": config, "recovery_state": "running", "restart_count": restarts,
+            "uptime_seconds": max(0, int(time.time() - mp.started_at)),
+            "config": config, "recovery_state": "stopping" if shutting_down else "running", "restart_count": restarts,
+            "shutdown_stage": checkpoint.get('stage') if shutting_down else None,
             "watchdog_active": state.get('WatchdogUSec') not in (None, '', '0', 'infinity'),
             "restart_enabled": restart_enabled}
 
 
 def get_status(app_name: str) -> dict:
+    stopping = _stopping.get(app_name)
+    if stopping is not None:
+        record = _shutdown_record(app_name, stopping.get('pid'), stopping.get('_start_ticks'))
+        return {'status': 'running', 'pid': stopping.get('pid'), 'uptime_seconds': None,
+                'config': None, 'recovery_state': 'stopping', 'shutdown_stage': record.get('stage', 'stop_requested')}
+    if _stopping:
+        # The app list also queries OTHER packages. Do not let those queries
+        # wait behind a long shutdown or mutate lifecycle markers without its lock.
+        managed = _refresh_systemd_app(app_name, read_only=True)
+        if managed is not None:
+            return managed
+        mp = _processes.get(app_name)
+        pid = _read_pid(app_name) or (mp.pid if mp else None)
+        owned_child = (mp is not None and mp.pid == pid and mp.proc is not None
+                       and mp.proc.poll() is None)
+        if pid and (owned_child or _pid_belongs_to_app(app_name, pid)):
+            return {'status': 'running', 'pid': pid,
+                    'uptime_seconds': max(0, int(time.time() - mp.started_at)) if mp and mp.pid == pid else None,
+                    'config': mp.config if mp and mp.pid == pid else None}
+        return {'status': 'stopped', 'pid': None, 'uptime_seconds': None, 'config': None}
     with _exclusive_start_lock():
         return _get_status_unlocked(app_name)
 

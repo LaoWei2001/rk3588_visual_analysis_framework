@@ -2,21 +2,33 @@
 
 ## 启动与退出
 
-`main.cpp` 支持三个只读命令：`--list-logics`、`--list-global-logics`、
-`--validate-config FILE`。正常启动参数是配置路径；未传参数时默认读取 `./assets/config.json`。
+`engine/src/application/main.cpp` 提供不启动视频管线的命令：`--list-logics`、
+`--list-global-logics`、`--validate-config FILE` 和 `--watchdog-protocol`。
+`--inspect-model FILE` 会加载 RKNN 模型执行元数据检查，不能归为不访问设备的静态命令。
+正常启动参数是配置路径；未传参数时默认读取 `./assets/config.json`。
 
 `--watchdog-protocol` 输出服务心跳协议版本，不初始化设备。应用退出重启和业务服务心跳默认关闭，
 设备级保护关注操作系统、整机和网络；用户可在“程序故障恢复”中另行开启应用保护。启用应用服务看门狗时才增加独立的
 `service_watchdog` 线程：主循环（HDMI 模式由 GTK timer）更新进度，在途推理/业务处理用
 `Progress/Scope` 标注执行期限；空闲和暂停不标记为挂起工作。超时后停止服务心跳，由 systemd
-终止并重启应用。启动/热加载宽限 300 秒，普通在途操作 120 秒，详见[恢复说明](../../../unattended-recovery.md)。
+终止并重启应用。启动/热加载宽限 300 秒，普通在途操作 120 秒，详见[恢复说明](../../../operations/unattended-recovery.md)。
 
 正常启动大致顺序：配置和 `APP_CTRL` → GStreamer → 显示缓冲 → pipeline/inference → logic control
 Unix socket → capturer → display/dispatch workers → RTSP → config/fd monitors → 主循环。全局 logic 在
 pipeline 初始化过程中启动；图片/录像 worker 按需创建。
 
-退出时先停止 RTSP 和接收新控制，请求配置/管线退出并 join 可能触发 logic 的线程，随后排空事件
-持久化队列、停止录像器、销毁队列和控制块。新线程必须纳入这一所有权顺序，不能依赖进程强退。
+退出由 `main.cpp` 统一编排，当前顺序是：
+
+1. 停止 NPU 排队提交、请求应用和服务心跳退出、唤醒暂停线程，关闭控制接口；
+2. 等待配置和 fd 监控线程结束，防止退出中途再重建采集器或模型；
+3. 停止 RTSP，通知管线停止，再停止并销毁采集器；
+4. join 传统 Logic、结果分发和显示线程，停止管线内部推理/全局业务；
+5. 释放业务状态和 GPIO，排空事件持久化队列，再等待录像任务结束；
+6. 释放显示队列、显示缓冲、控制块、看门狗与 NPU 占用锁，写入退出结果。
+
+Web 还会核对匹配该次进程的退出状态，不能仅凭 PID 消失认定完整清理。
+持久化错误会影响退出码与清理确认；强制 `SIGKILL` 或断电无法执行该收尾流程。
+具体协议和操作语义见[程序故障恢复](../../../operations/application-recovery.md)。
 
 ## 当前线程模型
 
@@ -27,8 +39,9 @@ pipeline 初始化过程中启动；图片/录像 worker 按需创建。
 | capture bus | 每独立源，capturer | GStreamer bus、断流与重连；相同 type/location 可共享源 |
 | display worker | HDMI 或 RTSP 开启时每有效通道一个，main | 最新帧合成、叠加、显示/RTSP 输出 |
 | dispatch worker | 每推理通道，main | 等待 NPU 结果并进入结果处理 |
+| traditional logic worker | 每有效通道，main | 从单槽最新帧队列取任务；推理关闭时执行业务，推理开启时保持等待 |
 | infer worker | inference 内部 | RKNN 推理任务 |
-| global logic | 每启用实例 | 独立周期聚合 |
+| global logic | 每启用实例 | 通道发布唤醒，poll_interval_ms 作为无更新兜底 |
 | logic control | 1 个 std::thread | Unix socket 接收 Action |
 | event image/persistence | 按需 | 本地状态和图片生成 |
 | event video | 首次收到启用录像通道的有效源帧，或首次触发录像任务时按需创建 | 环形缓冲和 MP4 编码 |
@@ -42,7 +55,7 @@ pipeline 初始化过程中启动；图片/录像 worker 按需创建。
    `max_fps` 节流；
 3. 结合配置与运行时 `infer_toggle` 计算本帧是否启用推理，再按通道 `max_fps` 做相位错开的业务节流；
 4. 递增 input seq、更新源尺寸，并为节流命中的非推理帧准备惰性帧；
-5. 非推理通道在节流命中时同步进入 `process_channel_results(..., nullptr, ...)`；
+5. 非推理通道在节流命中时把帧发布给单槽最新帧队列，由独立 `pipeline_logic_worker` 调用 `process_channel_results(..., nullptr, ...)`，不在 appsink 中执行业务；
 6. 有 HDMI 或活跃 RTSP 客户端且预览令牌命中时，把源帧放入单槽覆盖显示队列；
 7. 最后，节流命中的推理通道才把源帧送入 NPU TaskQueue。
 

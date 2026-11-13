@@ -1,13 +1,13 @@
-#include "display/display.h"
-#include "model/yolo/result_masks.h"
-#include "inference/inference_internal.h"
-#include "inference/inference_result_mapping.h"
-#include "inference/inference_roi_filter.h"
+#include "application/runtime/app_ctrl.h"
 #include "logic/context_access.h"
 #include "logic/global_logic.h"
+#include "media/display/display.h"
 #include "pipeline/frame_transform.h"
 #include "pipeline/image_convert.h"
-#include "runtime/app_ctrl.h"
+#include "vision/inference/inference_internal.h"
+#include "vision/inference/inference_result_mapping.h"
+#include "vision/inference/inference_roi_filter.h"
+#include "vision/models/result_masks.h"
 #include <channel.h>
 #include <coordinates.h>
 #include <rga/im2d.h>
@@ -230,9 +230,9 @@ void test_software_color_formats_and_output_reuse()
 void test_depth_background_and_overlay_order()
 {
     AlgoResult depth;
-    depth.box = cv::Rect(0,0,640,640);
-    depth.depth_map = cv::Mat(640,640,CV_32FC1,cv::Scalar(0));
-    depth.depth_map(cv::Rect(160,160,320,320)).setTo(2.0f);
+    depth.box = cv::Rect(0, 0, 640, 640);
+    depth.depth_map = cv::Mat(640, 640, CV_32FC1, cv::Scalar(0));
+    depth.depth_map(cv::Rect(160, 160, 320, 320)).setTo(2.0f);
     std::vector<AlgoResult> results{depth};
     RenderParams params;
     params.inputW = params.inputH = 640;
@@ -242,47 +242,47 @@ void test_depth_background_and_overlay_order()
     for (auto target : {DrawCommand::DISPLAY, DrawCommand::IMAGE, DrawCommand::VIDEO})
     {
         params.target_mask = target;
-        cv::Mat image(720,1280,CV_8UC3,cv::Scalar(10,20,30));
-        render_overlays(image,params);
-        assert(image.at<cv::Vec3b>(0,0) == cv::Vec3b(0,0,0));
-        assert(image.at<cv::Vec3b>(360,640) != cv::Vec3b(10,20,30));
+        cv::Mat image(720, 1280, CV_8UC3, cv::Scalar(10, 20, 30));
+        render_overlays(image, params);
+        assert(image.at<cv::Vec3b>(0, 0) == cv::Vec3b(0, 0, 0));
+        assert(image.at<cv::Vec3b>(360, 640) != cv::Vec3b(10, 20, 30));
         // Rendering must be independent of every source-image pixel, including
         // cached reuse across display, screenshot and recorded-video targets.
-        cv::Mat alternate(image.size(),CV_8UC3,cv::Scalar(200,130,70));
-        render_overlays(alternate,params);
-        assert(cv::norm(image,alternate,cv::NORM_INF) == 0);
+        cv::Mat alternate(image.size(), CV_8UC3, cv::Scalar(200, 130, 70));
+        render_overlays(alternate, params);
+        assert(cv::norm(image, alternate, cv::NORM_INF) == 0);
     }
 
     AlgoResult object;
-    object.box = cv::Rect(200,200,100,100);
+    object.box = cv::Rect(200, 200, 100, 100);
     results.push_back(object);
     RoiZone zone;
-    zone.polygon = {{80,80},{140,80},{140,140},{80,140}};
+    zone.polygon = {{80, 80}, {140, 80}, {140, 140}, {80, 140}};
     std::vector<RoiZone> rois{zone};
     params.roi_zones = &rois;
     DrawCommand command{};
     command.type = DrawCommand::RECT;
-    command.rect = cv::Rect(400,200,40,40);
-    command.color = cv::Scalar(255,0,255);
+    command.rect = cv::Rect(400, 200, 40, 40);
+    command.color = cv::Scalar(255, 0, 255);
     command.thickness = -1;
     std::vector<DrawCommand> commands{command};
     params.draw_cmds = &commands;
     for (auto target : {DrawCommand::DISPLAY, DrawCommand::IMAGE, DrawCommand::VIDEO})
     {
         params.target_mask = target;
-        cv::Mat image(640,640,CV_8UC3,cv::Scalar(10,20,30));
-        render_overlays(image,params);
-        assert(image.at<cv::Vec3b>(250,200) == cv::Vec3b(0,255,0)); // detection above depth
-        assert(image.at<cv::Vec3b>(80,100) == cv::Vec3b(0,255,255)); // ROI above depth
-        assert(image.at<cv::Vec3b>(220,420) == cv::Vec3b(255,0,255)); // business commands above depth
+        cv::Mat image(640, 640, CV_8UC3, cv::Scalar(10, 20, 30));
+        render_overlays(image, params);
+        assert(image.at<cv::Vec3b>(250, 200) == cv::Vec3b(0, 255, 0));   // detection above depth
+        assert(image.at<cv::Vec3b>(80, 100) == cv::Vec3b(0, 255, 255));  // ROI above depth
+        assert(image.at<cv::Vec3b>(220, 420) == cv::Vec3b(255, 0, 255)); // business commands above depth
     }
 
     params.show_system_overlays = false;
     params.show_custom_overlays = false;
-    cv::Mat image(640,640,CV_8UC3,cv::Scalar(10,20,30));
-    render_overlays(image,params);
-    assert(image.at<cv::Vec3b>(0,0) == cv::Vec3b(0,0,0));
-    assert(image.at<cv::Vec3b>(320,320) != cv::Vec3b(10,20,30)); // base is independent of overlays
+    cv::Mat image(640, 640, CV_8UC3, cv::Scalar(10, 20, 30));
+    render_overlays(image, params);
+    assert(image.at<cv::Vec3b>(0, 0) == cv::Vec3b(0, 0, 0));
+    assert(image.at<cv::Vec3b>(320, 320) != cv::Vec3b(10, 20, 30)); // base is independent of overlays
 
     ChannelConfig channel;
     ChannelModelConfig model;
@@ -300,27 +300,27 @@ void test_depth_background_and_overlay_order()
 
     AlgoResult relative;
     relative.depth_kind = DepthKind::RelativeInverse;
-    relative.depth_map = cv::Mat(640,640,CV_32FC1,cv::Scalar(-2));
-    relative.depth_map(cv::Rect(320,0,320,640)).setTo(2);
-    relative.depth_map.at<float>(0,0) = relative.invalid_depth_value();
+    relative.depth_map = cv::Mat(640, 640, CV_32FC1, cv::Scalar(-2));
+    relative.depth_map(cv::Rect(320, 0, 320, 640)).setTo(2);
+    relative.depth_map.at<float>(0, 0) = relative.invalid_depth_value();
     results = {relative};
     ++params.result_frame_id;
-    render_overlays(image,params);
-    assert(image.at<cv::Vec3b>(200,100)[0] > image.at<cv::Vec3b>(200,100)[2]); // low = blue/far
-    assert(image.at<cv::Vec3b>(200,500)[2] > image.at<cv::Vec3b>(200,500)[0]); // high = red/near
-    assert(image.at<cv::Vec3b>(0,0) == cv::Vec3b(0,0,0)); // invalid = black
+    render_overlays(image, params);
+    assert(image.at<cv::Vec3b>(200, 100)[0] > image.at<cv::Vec3b>(200, 100)[2]); // low = blue/far
+    assert(image.at<cv::Vec3b>(200, 500)[2] > image.at<cv::Vec3b>(200, 500)[0]); // high = red/near
+    assert(image.at<cv::Vec3b>(0, 0) == cv::Vec3b(0, 0, 0));                     // invalid = black
 
     // First result has not arrived, or depth inference failed for this batch.
     results.clear();
     params.depth_background = true;
-    image.setTo(cv::Scalar(10,20,30));
-    render_overlays(image,params);
+    image.setTo(cv::Scalar(10, 20, 30));
+    render_overlays(image, params);
     assert(cv::countNonZero(image.reshape(1)) == 0);
     params.depth_background = false;
-    image.setTo(cv::Scalar(10,20,30));
+    image.setTo(cv::Scalar(10, 20, 30));
     const cv::Mat original = image.clone();
-    render_overlays(image,params);
-    assert(cv::norm(image,original,cv::NORM_INF) == 0); // normal streams retain their source base
+    render_overlays(image, params);
+    assert(cv::norm(image, original, cv::NORM_INF) == 0); // normal streams retain their source base
 }
 } // namespace
 
@@ -328,25 +328,36 @@ int main()
 {
     {
         AlgoResult a, b, c;
-        a.model_id=b.model_id="seg_a"; c.model_id="seg_b";
-        a.boxMask=cv::Mat(640,640,CV_8UC1,cv::Scalar(2));
-        c.boxMask=cv::Mat(640,640,CV_8UC1,cv::Scalar(3));
-        std::vector<AlgoResult> results{a,b,c};
-        ResultMasks masks(results); results.erase(results.begin()); masks.restore(results);
-        assert(results[0].boxMask.at<unsigned char>(0,0)==2);
-        assert(results[1].boxMask.at<unsigned char>(0,0)==3);
+        a.model_id = b.model_id = "seg_a";
+        c.model_id = "seg_b";
+        a.boxMask = cv::Mat(640, 640, CV_8UC1, cv::Scalar(2));
+        c.boxMask = cv::Mat(640, 640, CV_8UC1, cv::Scalar(3));
+        std::vector<AlgoResult> results{a, b, c};
+        ResultMasks masks(results);
+        results.erase(results.begin());
+        masks.restore(results);
+        assert(results[0].boxMask.at<unsigned char>(0, 0) == 2);
+        assert(results[1].boxMask.at<unsigned char>(0, 0) == 3);
     }
-    for (auto size : {cv::Size(640,640),cv::Size(960,960),cv::Size(768,1088)})
-        for (const std::string mode : {"stretch","letterbox","expand"}) {
-            auto transform=make_inference_roi_transform({320,180,640,360},1280,720,size.width,size.height,mode,true);
-            AlgoResult r; r.has_obb=true; r.box=transform.model_content_rect;
-            auto c=transform.model_content_rect;
-            r.obb_corners={{{float(c.x),float(c.y)},{float(c.br().x),float(c.y)},
-                            {float(c.br().x),float(c.br().y)},{float(c.x),float(c.br().y)}}};
+    for (auto size : {cv::Size(640, 640), cv::Size(960, 960), cv::Size(768, 1088)})
+        for (const std::string mode : {"stretch", "letterbox", "expand"})
+        {
+            auto transform =
+                make_inference_roi_transform({320, 180, 640, 360}, 1280, 720, size.width, size.height, mode, true);
+            AlgoResult r;
+            r.has_obb = true;
+            r.box = transform.model_content_rect;
+            auto c = transform.model_content_rect;
+            r.obb_corners = {{{float(c.x), float(c.y)},
+                              {float(c.br().x), float(c.y)},
+                              {float(c.br().x), float(c.br().y)},
+                              {float(c.x), float(c.br().y)}}};
             std::vector<AlgoResult> results{r};
-            map_results_to_business_frame(1280,720,transform,size.width,size.height,results);
-            assert(cv::norm(results[0].obb_corners[0]-cv::Point2f(transform.source_rect.x*.5f,transform.source_rect.y*640.f/720))<.01);
-            assert(cv::norm(results[0].obb_corners[2]-cv::Point2f(transform.source_rect.br().x*.5f,transform.source_rect.br().y*640.f/720))<.01);
+            map_results_to_business_frame(1280, 720, transform, size.width, size.height, results);
+            assert(cv::norm(results[0].obb_corners[0] -
+                            cv::Point2f(transform.source_rect.x * .5f, transform.source_rect.y * 640.f / 720)) < .01);
+            assert(cv::norm(results[0].obb_corners[2] - cv::Point2f(transform.source_rect.br().x * .5f,
+                                                                    transform.source_rect.br().y * 640.f / 720)) < .01);
         }
 
     cv::setNumThreads(1);

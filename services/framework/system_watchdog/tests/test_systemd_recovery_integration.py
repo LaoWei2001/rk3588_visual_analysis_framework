@@ -34,7 +34,7 @@ def managed_app(tmp_path, monkeypatch):
     (app / 'assets').mkdir(parents=True)
     source = tmp_path / 'fixture.cpp'
     source.write_text(r'''
-#include "runtime/service_watchdog.h"
+#include "application/runtime/service_watchdog.h"
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -53,7 +53,7 @@ int main(int argc, char **argv) {
 }
 ''')
     subprocess.run(['g++', '-std=c++14', '-pthread', '-I', str(ROOT / 'engine/src'),
-                    str(source), str(ROOT / 'engine/src/runtime/service_watchdog.cpp'),
+                    str(source), str(ROOT / 'engine/src/application/runtime/service_watchdog.cpp'),
                     '-o', str(app / 'vision_analysis')], check=True, timeout=30)
     (app / 'assets/config.json').write_text('idle')
     monkeypatch.setattr(pm, 'APPS_ROOT', tmp_path)

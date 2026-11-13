@@ -55,10 +55,10 @@ struct HookObservation
 class HookGuard
 {
   public:
-    HookResult update(const std::vector<AlgoResult> &results, const cv::Size &frame_size,
-                      uint64_t now_ms, const HookConfig &config);
-    HookResult update(const HookObservation &observation, const cv::Size &frame_size,
-                      uint64_t now_ms, const HookConfig &config);
+    HookResult update(const std::vector<AlgoResult> &results, const cv::Size &frame_size, uint64_t now_ms,
+                      const HookConfig &config);
+    HookResult update(const HookObservation &observation, const cv::Size &frame_size, uint64_t now_ms,
+                      const HookConfig &config);
     const AlgoResult *select_target(const std::vector<AlgoResult> &results, const HookConfig &config) const;
     void reset();
 

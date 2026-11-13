@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from routers.network_settings import require_network_admin
+from dependencies import require_system_admin
 from services import camera_manager
 from services.camera_web_proxy import CameraWebProxyError, camera_web_proxy
 
@@ -54,7 +54,7 @@ async def get_camera_settings(include_status: bool = Query(default=True)):
 
 @router.post("/system/camera/discover")
 async def discover_cameras(req: CameraDiscoveryRequest,
-                           _admin: None = Depends(require_network_admin)):
+                           _admin: None = Depends(require_system_admin)):
     try:
         cameras = await asyncio.to_thread(
             camera_manager.discover_cameras, req.interface, req.timeout_ms / 1000.0,
@@ -66,7 +66,7 @@ async def discover_cameras(req: CameraDiscoveryRequest,
 
 @router.post("/system/camera/plan")
 async def plan_camera_configuration(req: CameraConfigurationRequest, request: Request,
-                                    _admin: None = Depends(require_network_admin)):
+                                    _admin: None = Depends(require_system_admin)):
     try:
         return await asyncio.to_thread(
             camera_manager.plan_configuration, req.model_dump(), _management_peer(request),
@@ -77,7 +77,7 @@ async def plan_camera_configuration(req: CameraConfigurationRequest, request: Re
 
 @router.put("/system/camera/config")
 async def apply_camera_configuration(req: CameraConfigurationRequest, request: Request,
-                                     _admin: None = Depends(require_network_admin)):
+                                     _admin: None = Depends(require_system_admin)):
     try:
         configuration = await asyncio.to_thread(
             camera_manager.apply_configuration, req.model_dump(), _management_peer(request),
@@ -99,7 +99,7 @@ async def apply_camera_configuration(req: CameraConfigurationRequest, request: R
 
 
 @router.delete("/system/camera/config")
-async def remove_camera_configuration(_admin: None = Depends(require_network_admin)):
+async def remove_camera_configuration(_admin: None = Depends(require_system_admin)):
     try:
         await asyncio.to_thread(camera_manager.remove_configuration)
         return {"ok": True}
@@ -117,7 +117,7 @@ async def get_camera_status():
 
 @router.post("/system/camera/web-session")
 async def open_camera_web_session(request: Request,
-                                  _admin: None = Depends(require_network_admin)):
+                                  _admin: None = Depends(require_system_admin)):
     """为当前 Web 管理端临时开放透明摄像头 HTTP 代理。"""
     try:
         session = await asyncio.to_thread(

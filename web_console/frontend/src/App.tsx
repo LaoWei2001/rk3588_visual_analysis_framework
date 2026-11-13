@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState, useRef } from 'react'
-import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import AppsPage    from './pages/AppsPage'
 import LoginPage   from './pages/LoginPage'
 import { destroyAllTerminals } from './features/terminal/sessionLifecycle'
@@ -72,6 +72,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 // ── Main shell (sidebar + content) ────────────────────────────────────────
 function AppShell() {
+  const {pathname} = useLocation()
   const navigate  = useNavigate()
   const username  = useAuthStore(s => s.username)
   const clearAuth = useAuthStore(s => s.clearAuth)
@@ -88,7 +89,7 @@ function AppShell() {
   const guardNav = (e: React.MouseEvent) => { if (!confirmLeaveIfDirty()) e.preventDefault() }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${pathname === '/dataset' ? ' dataset-workspace' : ''}`}>
       <nav className="sidebar">
         <SidebarLogo />
 

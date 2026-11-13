@@ -4,16 +4,20 @@
 #include <string>
 #include <vector>
 
-#include <types.h>
-#include <channel.h>
 #include "violation_latch.h"
+#include <channel.h>
+#include <types.h>
 
 namespace crane_safety
 {
 
 struct HelmetConfig
 {
-    enum AlarmMode { MissingHelmet, BareHead } alarm_mode = MissingHelmet;
+    enum AlarmMode
+    {
+        MissingHelmet,
+        BareHead
+    } alarm_mode = MissingHelmet;
     bool enabled = false;
     std::vector<std::string> person_labels;
     std::vector<std::string> helmet_labels;
@@ -48,8 +52,8 @@ struct HelmetResult
 class HelmetGuard
 {
   public:
-    HelmetResult update(std::vector<AlgoResult> &results, const RoiZone *zone,
-                        uint64_t now_ms, const HelmetConfig &config);
+    HelmetResult update(std::vector<AlgoResult> &results, const RoiZone *zone, uint64_t now_ms,
+                        const HelmetConfig &config);
     void reset();
 
   private:

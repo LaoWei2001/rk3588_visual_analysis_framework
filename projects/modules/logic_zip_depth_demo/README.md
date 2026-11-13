@@ -1,6 +1,6 @@
 # ZipDepth 视频与算法开发
 
-底层实现位于 `engine/src/model/zip-depth/`，模型类型为 `zip_depth`。
+底层实现位于 `engine/src/vision/models/zip-depth/`，模型类型为 `zip_depth`。
 使用与 YOLO 相同的模型节点、通道、多模型结果列表和业务回调。
 当前 768×768 FP16 模型及元数据已放到 `projects/assets/`，随项目一起打包。
 
@@ -56,7 +56,7 @@ REGISTER_LOGIC(logic_example);
 ## 模型尺寸选择
 
 当前输入转换的 NEON/原生 FP16 优化、加载时数值校验及实机性能边界见
-[ZipDepth 性能排查](../../../docs/zip-depth-performance.md)。RKNN 内部仍有 CPU 算子，
+[ZipDepth 性能排查](../../../docs/performance/zip-depth-performance.md)。RKNN 内部仍有 CPU 算子，
 开启三核或使用 RGA 输入不等于整个网络都由 NPU 执行。
 
 切换配置中的 `model_path` 或在 Web 选择其他尺寸的 RKNN 文件即可，模型尺寸自动读取。

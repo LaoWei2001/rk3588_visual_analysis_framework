@@ -10,8 +10,8 @@
 // 接线说明: 继电器模块 IN 脚接 relay_pin 引脚(默认 GPIO6_A2), 与控制板共地。
 
 #include <channel.h>
-#include <drawing.h>
 #include <cstdio>
+#include <drawing.h>
 #include <gpio.h>
 #include <json.h>
 

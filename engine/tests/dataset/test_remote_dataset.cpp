@@ -1,6 +1,6 @@
-#include "control/remote_dataset.h"
+#include "application/control/remote_dataset.h"
+#include "application/runtime/app_ctrl.h"
 #include "logic/context_access.h"
-#include "runtime/app_ctrl.h"
 #include <cassert>
 #include <chrono>
 #include <csignal>
@@ -146,8 +146,13 @@ int main(int argc, char **argv)
         {
             ++frame;
             for (int channel : {0, 3})
+            {
+                if (remote_dataset_manual_active(channel))
+                    remote_dataset_manual_frame(channel, frame, 1700000000000ULL + frame, 240 * 320 * 3,
+                                                [] { return cv::Mat(240, 320, CV_8UC3, cv::Scalar(10, 90, 200)); });
                 if (remote_dataset_active(channel))
                     observe(channel, frame);
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(520));
         }
         remote_dataset_deinit();
@@ -155,6 +160,39 @@ int main(int argc, char **argv)
         rmdir(dir.c_str());
         return 0;
     }
+    // Manual capture does not require automatic collection or inference results.
+    auto manual_config = command(configure(3, false));
+    assert(cJSON_IsTrue(item(manual_config.get(), "ok")));
+    const std::string manual = R"({"op":"capture_once","task_id":"task3","revision":"v1","request_id":"manual1"})";
+    auto manual_result = command(manual);
+    assert(cJSON_IsTrue(item(manual_result.get(), "ok")));
+    assert(remote_dataset_manual_active(3) && !remote_dataset_active(3));
+    cv::Mat manual_frame(240, 320, CV_8UC3, cv::Scalar(10, 90, 200));
+    const auto requested_at = now();
+    remote_dataset_manual_frame(3, 777, 1700000000777ULL, 240 * 320 * 3,
+                                [manual_frame] { return manual_frame.clone(); });
+    assert(!remote_dataset_manual_active(3));
+    manual_result = wait_pending(3, 1);
+    const auto manual_task = task(manual_result.get(), 3);
+    assert(std::string(item(manual_task, "manual_state")->valuestring) == "captured");
+    assert(item(manual_task, "manual_frame")->valueint == 777);
+    assert(cJSON_IsFalse(item(manual_task, "enabled")));
+    const std::string manual_image = item(item(manual_task, "next"), "sample_id")->valuestring;
+    std::vector<unsigned char> manual_jpeg;
+    command("{\"op\":\"image\",\"task_id\":\"task3\",\"sample_id\":\"" + manual_image + "\"}", &manual_jpeg);
+    assert(cv::imdecode(manual_jpeg, cv::IMREAD_COLOR).size() == cv::Size(320, 240));
+    command("{\"op\":\"ack\",\"task_id\":\"task3\",\"sample_id\":\"" + manual_image + "\",\"saved\":1}");
+    command(manual); // Retrying the same key request must never capture twice.
+    assert(!remote_dataset_manual_active(3));
+    command(R"({"op":"capture_once","task_id":"task3","revision":"v1","request_id":"timeout"})");
+    std::this_thread::sleep_for(std::chrono::milliseconds(800));
+    remote_dataset_manual_frame(3, 778, 1700000000778ULL, 240 * 320 * 3,
+                                [manual_frame] { return manual_frame.clone(); });
+    manual_result = command(R"({"op":"status"})");
+    assert(std::string(item(task(manual_result.get(), 3), "manual_state")->valuestring) == "failed");
+    assert(item(task(manual_result.get(), 3), "pending")->valueint == 0);
+    command(R"({"op":"remove","task_id":"task3"})");
+    (void)requested_at;
     auto below_minimum = configure(0);
     const std::string minimum_interval = "\"interval_sec\":0.3";
     below_minimum.replace(below_minimum.find(minimum_interval), minimum_interval.size(), "\"interval_sec\":0.299");
@@ -261,9 +299,8 @@ int main(int argc, char **argv)
         value.box = {x, y, w, h};
         return value;
     };
-    std::vector<AlgoResult> detections = {detection("person", 10, 10, 100, 200),
-        detection("person", 200, 10, 100, 200), detection("helmet", 30, 20, 20, 20),
-        detection("bare_head", 230, 20, 20, 20)};
+    std::vector<AlgoResult> detections = {detection("person", 10, 10, 100, 200), detection("person", 200, 10, 100, 200),
+                                          detection("helmet", 30, 20, 20, 20), detection("bare_head", 230, 20, 20, 20)};
     observe(0, 1, true, true, &detections);
     result = command("{\"op\":\"status\"}");
     assert(item(task(result.get(), 0), "pending")->valueint == 0);

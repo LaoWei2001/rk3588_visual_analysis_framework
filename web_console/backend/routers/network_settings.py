@@ -6,33 +6,17 @@
 from __future__ import annotations
 
 import asyncio
-import grp
-import os
-import pwd
 import re
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from services import network_manager
+from dependencies import require_system_admin
 
 
 router = APIRouter()
-
-
-def require_network_admin(request: Request) -> None:
-    """禁止普通 Linux 账号借助以 root 运行的控制台提升网络管理权限。"""
-    session = getattr(request.state, "session", {})
-    username = str(session.get("username", ""))
-    try:
-        account = pwd.getpwnam(username)
-        group_ids = os.getgrouplist(username, account.pw_gid)
-        group_names = {grp.getgrgid(group_id).gr_name for group_id in group_ids}
-    except (KeyError, OSError):
-        raise HTTPException(403, "无法确认当前账号的系统管理权限")
-    if account.pw_uid != 0 and not group_names.intersection({"sudo", "wheel"}):
-        raise HTTPException(403, "网络配置仅允许 root、sudo 或 wheel 管理员账号操作")
 
 
 def _http_error(exc: Exception, status_code: int = 400) -> HTTPException:
@@ -89,7 +73,7 @@ async def get_network_settings():
 
 
 @router.put("/system/network/hostname")
-async def set_hostname(req: HostnameRequest, _admin: None = Depends(require_network_admin)):
+async def set_hostname(req: HostnameRequest, _admin: None = Depends(require_system_admin)):
     hostname = req.hostname.strip().lower()
     if not _valid_hostname(hostname):
         raise HTTPException(400, "设备名只能包含字母、数字、连字符和点，且连字符不能位于段首尾")
@@ -107,7 +91,7 @@ async def set_hostname(req: HostnameRequest, _admin: None = Depends(require_netw
 
 
 @router.post("/system/network/wifi/scan")
-async def scan_wifi(device: str = Query(min_length=1, max_length=32), _admin: None = Depends(require_network_admin)):
+async def scan_wifi(device: str = Query(min_length=1, max_length=32), _admin: None = Depends(require_system_admin)):
     try:
         networks = await asyncio.to_thread(network_manager.scan_wifi, device)
         return {"device": device, "networks": networks}
@@ -117,7 +101,7 @@ async def scan_wifi(device: str = Query(min_length=1, max_length=32), _admin: No
 
 @router.post("/system/network/changes")
 async def start_network_change(req: NetworkApplyRequest, background_tasks: BackgroundTasks,
-                               _admin: None = Depends(require_network_admin)):
+                               _admin: None = Depends(require_system_admin)):
     try:
         transaction = await asyncio.to_thread(network_manager.start_network_change, req.model_dump())
     except Exception as exc:
@@ -129,7 +113,7 @@ async def start_network_change(req: NetworkApplyRequest, background_tasks: Backg
 
 @router.post("/system/network/connections/activate")
 async def activate_saved_connection(req: SavedConnectionRequest, background_tasks: BackgroundTasks,
-                                    _admin: None = Depends(require_network_admin)):
+                                    _admin: None = Depends(require_system_admin)):
     try:
         transaction = await asyncio.to_thread(
             network_manager.start_saved_connection,
@@ -150,7 +134,7 @@ async def get_network_transaction(transaction_id: str):
 
 
 @router.post("/system/network/transactions/{transaction_id}/confirm")
-async def confirm_network_transaction(transaction_id: str, _admin: None = Depends(require_network_admin)):
+async def confirm_network_transaction(transaction_id: str, _admin: None = Depends(require_system_admin)):
     try:
         return await asyncio.to_thread(network_manager.confirm_transaction, transaction_id)
     except Exception as exc:
@@ -158,7 +142,7 @@ async def confirm_network_transaction(transaction_id: str, _admin: None = Depend
 
 
 @router.delete("/system/network/connections/{connection_uuid}")
-async def delete_network_connection(connection_uuid: str, _admin: None = Depends(require_network_admin)):
+async def delete_network_connection(connection_uuid: str, _admin: None = Depends(require_system_admin)):
     try:
         await asyncio.to_thread(network_manager.delete_connection, connection_uuid)
         return {"ok": True}

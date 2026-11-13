@@ -1,6 +1,6 @@
 #!/bin/bash
-# install_app.sh — 把根 build.sh 产出的程序包复制进 Web 控制台的 APPS_ROOT，
-#                  让网页控制台识别到。重名时询问：覆盖(删旧存新) 或 改名。
+# install_app.sh — 把根 build.sh 产出的程序包安装到设备运行平台的 APPS_ROOT，
+#                  Web 读取同一目录。包校验和事务替换共用平台安装模块。
 #
 # 用法: sudo ./install_app.sh <应用名>
 #   例:  ./build.sh my_app && sudo ./install_app.sh my_app
@@ -43,7 +43,7 @@ mkdir -p "$APPS_ROOT"
 # 目标名默认 = 程序包名；重名则询问 覆盖 / 改名
 DEST="$PKG"
 while [ -e "$APPS_ROOT/$DEST" ]; do
-    read -p "$APPS_ROOT/$DEST 已存在，覆盖它吗？(覆盖会先删除旧的) [y/N] " ans
+    read -p "$APPS_ROOT/$DEST 已存在，校验新包后替换它吗？[y/N] " ans
     if [[ "$ans" =~ ^[Yy]$ ]]; then
         break
     fi

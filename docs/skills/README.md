@@ -30,7 +30,7 @@
 
 ## 关于保留的旧辅助脚本
 
-`build-rk3588-vision-app/scripts/` 下三个 Python 文件创建于 2026-08-14，本次按用户要求未修改。
+`build-rk3588-vision-app/scripts/` 下三个 Python 文件是历史启发式辅助工具。
 `validate_logic.py` 会错误拒绝当前已支持的全局 Action，另外两个也没有覆盖完整的当前契约；具体见
 [旧辅助脚本边界](build-rk3588-vision-app/references/legacy-scripts.md)。它们不得单独作为验收依据，当前
 权威校验命令写在各 `SKILL.md` 中。

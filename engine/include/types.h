@@ -4,11 +4,11 @@
  */
 #pragma once
 
-#include <coordinates.h>
-#include <array>
 #include <algorithm>
-#include <cstring>
+#include <array>
+#include <coordinates.h>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <opencv2/core.hpp>
 #include <string>
@@ -24,7 +24,7 @@ enum class PoseKeypointSchema : uint8_t
 
 enum class DepthKind : uint8_t
 {
-    Metric = 0,       // metres, smaller is nearer (YOLO26Depth)
+    Metric = 0,      // metres, smaller is nearer (YOLO26Depth)
     RelativeInverse, // unitless, larger is nearer (ZipDepth)
 };
 
@@ -87,9 +87,18 @@ struct AlgoResult
     cv::Mat depth_map;
     DepthKind depth_kind = DepthKind::Metric;
 
-    bool is_depth() const { return !depth_map.empty(); }
-    bool is_metric_depth() const { return is_depth() && depth_kind == DepthKind::Metric; }
-    bool is_relative_inverse_depth() const { return is_depth() && depth_kind == DepthKind::RelativeInverse; }
+    bool is_depth() const
+    {
+        return !depth_map.empty();
+    }
+    bool is_metric_depth() const
+    {
+        return is_depth() && depth_kind == DepthKind::Metric;
+    }
+    bool is_relative_inverse_depth() const
+    {
+        return is_depth() && depth_kind == DepthKind::RelativeInverse;
+    }
 
     float invalid_depth_value() const
     {
@@ -106,7 +115,8 @@ struct AlgoResult
 
     bool valid_depth_value(float value) const
     {
-        if (depth_kind == DepthKind::Metric) return valid_depth(value);
+        if (depth_kind == DepthKind::Metric)
+            return valid_depth(value);
         uint32_t bits;
         std::memcpy(&bits, &value, sizeof(bits));
         return (bits & 0x7fffffffU) < 0x7f800000U;
@@ -130,21 +140,26 @@ struct AlgoResult
     // 取区域内有效深度的中位数。默认每 4 像素采样；step=1 为精确中位数。
     float depth_median(const cv::Rect &region, int step = 4) const
     {
-        if (depth_map.type() != CV_32FC1 || step <= 0) return 0.0f;
+        if (depth_map.type() != CV_32FC1 || step <= 0)
+            return 0.0f;
         const cv::Rect area = region & cv::Rect(0, 0, depth_map.cols, depth_map.rows);
-        if (area.empty()) return 0.0f;
+        if (area.empty())
+            return 0.0f;
         std::vector<float> values;
         values.reserve(static_cast<size_t>((area.width - 1) / step + 1) * ((area.height - 1) / step + 1));
         for (int y = area.y; y < area.y + area.height; y += step)
         {
             const float *row = depth_map.ptr<float>(y);
             for (int x = area.x; x < area.x + area.width; x += step)
-                if (valid_depth_value(row[x])) values.push_back(row[x]);
+                if (valid_depth_value(row[x]))
+                    values.push_back(row[x]);
         }
-        if (values.empty()) return 0.0f;
+        if (values.empty())
+            return 0.0f;
         const auto middle = values.begin() + values.size() / 2;
         std::nth_element(values.begin(), middle, values.end());
-        if (values.size() % 2) return *middle;
+        if (values.size() % 2)
+            return *middle;
         return (*middle + *std::max_element(values.begin(), middle)) * 0.5f;
     }
 };

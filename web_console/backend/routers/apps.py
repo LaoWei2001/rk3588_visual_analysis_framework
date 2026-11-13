@@ -11,6 +11,7 @@ apps.py — 程序(App)列表 + 网页上传/删除程序包。
   - 解压/删除在线程池里做，不阻塞事件循环；临时目录用 . 开头，scan 不会误列。
 """
 import os
+import stat
 import shutil
 import tarfile
 import tempfile
@@ -24,6 +25,9 @@ from starlette.concurrency import run_in_threadpool
 from services import process_manager as pm
 from services import runtime_state
 from services.app_scanner import scan_apps
+from services.runtime_loader import load_runtime
+
+package_install = load_runtime("package_install")
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 BINARY_NAME = os.environ.get("BINARY_NAME", "vision_analysis")
@@ -35,7 +39,7 @@ router = APIRouter()
 async def list_apps(response: Response):
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     response.headers["Pragma"] = "no-cache"
-    return scan_apps()
+    return await run_in_threadpool(scan_apps)
 
 
 # ── 上传 / 删除程序包 ──────────────────────────────────────────────────────────
@@ -71,16 +75,18 @@ def _extract(archive: Path, staging: Path) -> None:
 
     if kind == "zip":
         with zipfile.ZipFile(archive) as z:
-            for m in z.namelist():
-                _check_member(m)
+            for m in z.infolist():
+                _check_member(m.filename)
+                if stat.S_ISLNK(m.external_attr >> 16):
+                    raise ValueError("归档包含链接文件，已拒绝")
             z.extractall(staging)
     else:
         mode = "r:gz" if kind == "targz" else "r:"
         with tarfile.open(archive, mode) as t:
             for m in t.getmembers():
                 _check_member(m.name)
-                if m.issym() or m.islnk():
-                    raise ValueError("归档包含链接文件，已拒绝")
+                if not (m.isfile() or m.isdir()):
+                    raise ValueError("归档包含链接或特殊文件，已拒绝")
             t.extractall(staging)
 
 
@@ -93,42 +99,17 @@ def _resolve_root(staging: Path) -> Path:
 
 
 def _install_pkg(tmp_archive: Path, name: str) -> Dict[str, Any]:
-    dest = APPS_ROOT / name
+    name = _safe_name(name)
     staging = Path(tempfile.mkdtemp(prefix=f".staging_{name}_", dir=str(APPS_ROOT)))
-    dest_new = APPS_ROOT / f".{name}.new"
     try:
         _extract(tmp_archive, staging)
-        root = _resolve_root(staging)
-
-        # 二进制补可执行权限(zip 不保留 Unix 权限)
-        binp = root / BINARY_NAME
-        if binp.exists():
-            binp.chmod(0o755)
-
-        # 先就位到 .new，再 swap，缩短 dest 缺失窗口
-        if dest_new.exists():
-            shutil.rmtree(dest_new, ignore_errors=True)
-        shutil.move(str(root), str(dest_new))
-
-        # 本系统全局只允许一个视觉程序运行。无论上传包与当前运行 App 是否同名，
-        # 都先停止全部视觉进程，再在同一把运行锁内替换目录，避免上传期间另一请求
-        # 恰好启动程序，也避免覆盖仍被旧进程占用的可执行文件/工作目录。
-        with pm.runtime_lock():
-            stopped_apps = pm.stop_all_apps_for_install_unlocked()
-            if dest.exists():
-                shutil.rmtree(dest)
-            shutil.move(str(dest_new), str(dest))
-
-        return {
-            "name": name,
-            "has_binary": (dest / BINARY_NAME).exists(),
-            "has_config": (dest / "assets" / "config.json").exists(),
-            "stopped_apps": stopped_apps,
-        }
+        return package_install.install(
+            _resolve_root(staging), name, apps_root=APPS_ROOT,
+            binary_name=BINARY_NAME, consume_source=True,
+        )
     finally:
+        # The runtime installer owns any rollback backup in its own staging dir.
         shutil.rmtree(staging, ignore_errors=True)
-        if dest_new.exists():
-            shutil.rmtree(dest_new, ignore_errors=True)
         tmp_archive.unlink(missing_ok=True)
 
 
@@ -143,48 +124,59 @@ async def upload_app(file: UploadFile = File(...), name: str = Form("")):
     app_name = _safe_name(raw)
 
     APPS_ROOT.mkdir(parents=True, exist_ok=True)
-    tmp = APPS_ROOT / f".upload_{app_name}.tmp"
-
-    def _save() -> None:
+    def _save() -> Path:
         file.file.seek(0)                       # 多段解析后指针可能在末尾，先回到开头
-        with open(tmp, "wb") as out:
-            shutil.copyfileobj(file.file, out)
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=APPS_ROOT, prefix=f'.upload_{app_name}_', suffix='.tmp', delete=False) as out:
+                tmp = Path(out.name)
+                shutil.copyfileobj(file.file, out)
+            return tmp
+        except BaseException:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
+            raise
 
-    await run_in_threadpool(_save)
-
+    tmp = None
     try:
+        tmp = await run_in_threadpool(_save)
         info = await run_in_threadpool(_install_pkg, tmp, app_name)
     except HTTPException:
         raise
     except Exception as e:
-        tmp.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"安装失败: {e}")
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
     return {"ok": True, **info}
 
 
 @router.delete("/apps/{name}")
 async def delete_app(name: str, delete_data: bool = False):
     app_name = _safe_name(name)
-    dest = APPS_ROOT / app_name
-    if not dest.is_dir():
-        raise HTTPException(status_code=404, detail=f"程序不存在: {app_name}")
-    pm.stop_app(app_name)                       # 删除前先停进程
-
     def _delete() -> bool:
-        shutil.rmtree(dest)
-        if not delete_data:
-            return False
-        # 运行数据与程序包分开存放。全删严格限定到该程序名对应的目录；若目录被
-        # 异常替换成符号链接，只删除链接本身，绝不跟随到 APPS_ROOT 外部。
-        app_data = APPS_ROOT / ".data" / app_name
-        if app_data.is_symlink():
-            app_data.unlink()
-            return True
-        if app_data.exists():
-            shutil.rmtree(app_data)
-            return True
-        return False
+        # Keep inspection, stop, deletion and intent cleanup in one transaction.
+        # stop_app re-enters the same thread's runtime lock without releasing it.
+        with pm.runtime_lock():
+            dest = APPS_ROOT / app_name
+            if dest.is_symlink():
+                raise HTTPException(status_code=400, detail="程序目录不能是符号链接")
+            if not dest.is_dir():
+                raise HTTPException(status_code=404, detail=f"程序不存在: {app_name}")
+            pm.stop_app(app_name)
+            shutil.rmtree(dest)
+            data_deleted = False
+            if delete_data:
+                # Never follow an external link when removing app-owned data.
+                app_data = APPS_ROOT / ".data" / app_name
+                if app_data.is_symlink():
+                    app_data.unlink()
+                    data_deleted = True
+                elif app_data.exists():
+                    shutil.rmtree(app_data)
+                    data_deleted = True
+            runtime_state.remove_vision_app(app_name)
+            return data_deleted
 
     data_deleted = await run_in_threadpool(_delete)
-    runtime_state.remove_vision_app(app_name)
     return {"ok": True, "data_deleted": data_deleted}

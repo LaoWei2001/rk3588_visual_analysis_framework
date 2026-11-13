@@ -4,7 +4,7 @@
 
 - [构建一个完整视觉 App](#构建一个完整视觉-app)
 - [安装 App 与控制台](#安装-app-与控制台)
-- [运行模式](#运行模式)
+- [程序启动](#程序启动)
 - [两个后台服务](#两个后台服务)
 - [上传服务运行数据](#上传服务运行数据)
 - [OTA 当前契约](#ota-当前契约)
@@ -37,8 +37,10 @@ Python 服务、生成的 `logics.json` 和 `report_templates/` 放到 `dist/my_
 sudo ./install_app.sh my_app
 ```
 
-目标默认 `/opt/ai_apps/my_app`。同名覆盖会删除旧 App 目录后复制新包，但不会清理包外的
-`/opt/ai_apps/.data/my_app`。
+目标默认 `/opt/ai_apps/my_app`。CLI 与 Web 共用平台库 `rk3588_runtime/package_install.py`：
+先检查 AArch64 ELF、`logics.json` 和有效配置，在临时目录准备完成后才停止托管视觉应用；
+同一运行锁内保留旧目录、切换新包，切换失败时尝试回滚。回滚失败会保留备份并报告路径。
+同名更新保留包外 `/opt/ai_apps/.data/my_app`；包内手工修改随新包替换。
 
 部署或升级控制台统一从项目根目录执行：
 
@@ -52,8 +54,9 @@ sudo ./install.sh online
 `offline` 只使用完整离线包已经安装的依赖和预构建前端。`web_console/deploy.sh` 是不接受参数、
 不访问网络的内部部署器，不作为用户安装入口。
 
-Web“上传程序”与根目录 `install_app.sh` 写入同一 App 根，但 Web 接受归档并做路径安全检查。Web 上传时
-会停止全部托管视觉 App，避免替换正在执行的文件。
+Web“上传程序”接受归档并先校验解包路径，之后委托同一安装事务。两个入口都会在校验和准备
+成功后停止全部托管视觉 App；无效包不会先停止正在运行的程序。
+删除接口同样在运行锁内完成停止、目录删除和运行意图清理；`delete_data=true` 会额外删除该应用的 `.data`。
 
 根安装器先安装独立平台，再部署 Web。离线包中 `vision-analysis-platform` 拥有运行库、设备
 守护及恢复 timer；`vision-analysis` 控制台包依赖平台包，移除控制台不会停止平台服务。
@@ -64,7 +67,7 @@ Web“上传程序”与根目录 `install_app.sh` 写入同一 App 根，但 We
 Web 是管理客户端；开机恢复和失败重试由独立的 `rk3588-runtime-manager.service` 执行。
 服务默认 `Restart=no`，不启用应用服务看门狗；可在“程序故障恢复”中按需开启退出/卡住恢复。
 开机自启仍按用户意图执行，日志从 journald 跟随。保存程序恢复设置不重启，立即应用需用户明确操作。
-保持单实例约束，详见[无人值守恢复](../../../unattended-recovery.md)。
+保持单实例约束，详见[无人值守恢复](../../../operations/unattended-recovery.md)。
 它设置：
 
 - `RK_LOGIC_CONTROL_SOCKET=<App>/run.control.sock`；
@@ -75,11 +78,12 @@ Web 是管理客户端；开机恢复和失败重试由独立的 `rk3588-runtime
 
 启动过程不会改写所选配置。配置中的 `global.enable_display` 启用时，后端会补 `DISPLAY=:0` 与可能的
 Xauthority；关闭时按无界面方式运行。`run.pid/run.config/run.started_at/run.systemd_unit` 是运行标记，
-不是源码配置。
+不是源码配置。`run.shutdown.json` 记录与 PID/进程启动时刻绑定的退出阶段与清理结果。
+主动停止的等待及判定边界见[程序恢复与停止](../../../operations/application-recovery.md)。
 
 ## 两个后台服务
 
-Web 服务页只管理：
+系统服务页的“应用服务”管理：
 
 | key | unit | 包内工作目录 |
 |---|---|---|

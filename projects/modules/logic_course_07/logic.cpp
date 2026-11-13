@@ -4,8 +4,8 @@
 // 难度:★★★☆☆
 
 #include <channel.h>
-#include <drawing.h>
 #include <cstdio>
+#include <drawing.h>
 
 // 跨帧状态
 struct ButtonDemoState
@@ -98,7 +98,8 @@ REGISTER_LOGIC_ACTION(logic_course_07, logic_course_07_action);
 
     Linux、macOS Bash、Windows PowerShell：
 
-    1. curl -X POST "http://设备IP:8080/api/apps/App名称/channels/通道ID/actions/increment" -H "Content-Type: application/json" -d '{"payload":{}}'
+    1. curl -X POST "http://设备IP:8080/api/apps/App名称/channels/通道ID/actions/increment" -H "Content-Type:
+   application/json" -d '{"payload":{}}'
 
     2. curl -X POST "http://设备IP:8080/api/apps/App名称/channels/通道ID/actions/decrement" -H "Content-Type:
    application/json" -d '{"payload":{}}'

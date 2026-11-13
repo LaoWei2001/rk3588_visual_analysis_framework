@@ -5,11 +5,11 @@
  * 线程模型:
  *   pipeline_dispatch_worker — 每推理通道一个, NPU 结果分发 + channel_logic
  *   pipeline_logic_worker    — 每启用通道一个, 异步执行非 NPU 视觉逻辑
- *   显示线程接口由 display/display_pipeline.h 提供。
+ *   显示线程接口由 pipeline/display_worker.h 提供。
  */
 #pragma once
 
-#include "config/config.h"
+#include "application/config/config.h"
 #include <cstdint>
 #include <vector>
 

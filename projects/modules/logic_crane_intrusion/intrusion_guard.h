@@ -4,9 +4,9 @@
 #include <string>
 #include <vector>
 
-#include <types.h>
-#include <channel.h>
 #include "violation_latch.h"
+#include <channel.h>
+#include <types.h>
 
 namespace crane_safety
 {
@@ -35,8 +35,8 @@ struct IntrusionResult
 class IntrusionGuard
 {
   public:
-    IntrusionResult update(const std::vector<AlgoResult> &results, const RoiZone *zone,
-                           uint64_t now_ms, const IntrusionConfig &config);
+    IntrusionResult update(const std::vector<AlgoResult> &results, const RoiZone *zone, uint64_t now_ms,
+                           const IntrusionConfig &config);
     void reset();
 
   private:

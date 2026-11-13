@@ -1,8 +1,8 @@
 // Per-layer CPU/NPU diagnosis using the pinned RKNN SDK. Profiling changes
 // execution time: use npu_bench / full video A/B runs for throughput claims.
 #include <rknn_api.h>
-#include "inference/npu_device_owner.h"
-#include "inference/npu_execution.h"
+#include "vision/inference/npu_device_owner.h"
+#include "vision/inference/npu_execution.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>

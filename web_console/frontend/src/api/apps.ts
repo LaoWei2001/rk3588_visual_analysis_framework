@@ -17,7 +17,8 @@ export interface AppInfo {
   status: 'running' | 'stopped' | 'unknown'
   pid: number | null
   uptime_seconds: number | null
-  recovery_state?: 'running' | 'restarting'
+  recovery_state?: 'running' | 'restarting' | 'stopping'
+  shutdown_stage?: string
   restart_count?: number
   config?: string | null        // 运行中时实际加载的配置文件名
 }
@@ -80,8 +81,17 @@ export const fetchApps = () => api.get<AppInfo[]>('/apps', {
 export const startApp = (name: string, config?: string) =>
   api.post(`/apps/${name}/start`, { config }).then(r => r.data)
 
+export interface StopResult {
+  ok: boolean
+  stopped: boolean
+  graceful: boolean | null
+  exit_code: number | null
+  message: string
+  warnings: string[]
+}
+
 export const stopApp = (name: string) =>
-  api.post(`/apps/${name}/stop`).then(r => r.data)
+  api.post<StopResult>(`/apps/${name}/stop`).then(r => r.data)
 
 export const setAppAutostart = (name: string, enabled: boolean) =>
   api.post(`/apps/${name}/autostart`, { enabled }).then(r => r.data)

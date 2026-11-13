@@ -29,8 +29,7 @@ CellRange cell_range(const cv::Rect &box, int cell, int cols, int rows)
 
 // 把人员框登记进均匀网格，安全帽只需查询自身覆盖的少数格子，
 // 使匹配复杂度从 O(P×H) 降为近似 O(P+H)。
-std::vector<std::vector<int>> build_person_grid(const std::vector<AlgoResult *> &persons,
-                                                int cols, int rows, int cell)
+std::vector<std::vector<int>> build_person_grid(const std::vector<AlgoResult *> &persons, int cols, int rows, int cell)
 {
     std::vector<std::vector<int>> grid(static_cast<size_t>(cols) * rows);
     for (size_t index = 0; index < persons.size(); ++index)
@@ -45,8 +44,8 @@ std::vector<std::vector<int>> build_person_grid(const std::vector<AlgoResult *> 
 
 } // namespace
 
-HelmetResult HelmetGuard::update(std::vector<AlgoResult> &results, const RoiZone *zone,
-                                 uint64_t now_ms, const HelmetConfig &config)
+HelmetResult HelmetGuard::update(std::vector<AlgoResult> &results, const RoiZone *zone, uint64_t now_ms,
+                                 const HelmetConfig &config)
 {
     HelmetResult out;
     if (mode_ != config.alarm_mode || person_min_width_ != config.person_min_width ||
@@ -127,10 +126,13 @@ HelmetResult HelmetGuard::update(std::vector<AlgoResult> &results, const RoiZone
                         const int area = person->box.area();
                         if (best < 0 || overlap > best_overlap || (overlap == best_overlap && area < best_person_area))
                         {
-                            best = index; best_overlap = overlap; best_person_area = area;
+                            best = index;
+                            best_overlap = overlap;
+                            best_person_area = area;
                         }
                     }
-            if (best >= 0) unhelmeted[best] = 1;
+            if (best >= 0)
+                unhelmeted[best] = 1;
         }
     }
 
@@ -140,11 +142,11 @@ HelmetResult HelmetGuard::update(std::vector<AlgoResult> &results, const RoiZone
         out.max_person_width = std::max(out.max_person_width, person->box.width);
         out.max_person_height = std::max(out.max_person_height, person->box.height);
         // 先逐人匹配，再按证据选择分支。不能预先丢弃小人员框，否则裸头也会被漏掉。
-        const bool small_without_evidence = !unhelmeted[index] && !helmeted[index] &&
-            config.alarm_mode == HelmetConfig::MissingHelmet &&
+        const bool small_without_evidence =
+            !unhelmeted[index] && !helmeted[index] && config.alarm_mode == HelmetConfig::MissingHelmet &&
             (person->box.width < config.person_min_width || person->box.height < config.person_min_height);
-        const bool violation = unhelmeted[index] ||
-            (config.alarm_mode == HelmetConfig::MissingHelmet && !helmeted[index] && !small_without_evidence);
+        const bool violation = unhelmeted[index] || (config.alarm_mode == HelmetConfig::MissingHelmet &&
+                                                     !helmeted[index] && !small_without_evidence);
         if (small_without_evidence)
             ++out.small_person_count;
         if (violation)
@@ -154,7 +156,8 @@ HelmetResult HelmetGuard::update(std::vector<AlgoResult> &results, const RoiZone
             if (person->track_id >= 0)
                 out.unhelmeted_track_ids.push_back(person->track_id);
         }
-        else if (helmeted[index]) person->box_color = cv::Scalar(0, 200, 0);
+        else if (helmeted[index])
+            person->box_color = cv::Scalar(0, 200, 0);
         else
         {
             // 未检测到帽子或裸头属于未知，不画成“未戴”或“已戴”。

@@ -22,7 +22,7 @@ import ConfigSyncNotice from '../components/ConfigSyncNotice'
 
 
 const MIB = 1024 * 1024
-const DEFAULT_RTSP_URL = 'rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101'
+const DEFAULT_RTSP_URL = ''
 
 const formatBytes = (value: number): string => {
   if (!Number.isFinite(value) || value <= 0) return '0 B'

@@ -6,6 +6,7 @@ import fcntl
 import logging
 import os
 import pty
+import pwd
 import shutil
 import signal
 import struct
@@ -25,8 +26,30 @@ MAX_PER_OWNER = 8
 MAX_TOTAL = 32
 
 
+def _shell_command(owner):
+    session = get_session(owner)
+    if not session:
+        raise PermissionError('terminal login expired')
+    try:
+        account = pwd.getpwnam(session['username'])
+    except (KeyError, TypeError):
+        raise PermissionError('terminal system account unavailable')
+    shell = account.pw_shell or '/bin/sh'
+    if os.path.basename(shell) in ('nologin', 'false'):
+        raise PermissionError('terminal shell is disabled for this account')
+    if account.pw_uid == os.geteuid():
+        return [shell, '-l']
+    su = shutil.which('su')
+    if os.geteuid() != 0 or not su:
+        raise PermissionError('cannot launch terminal as the authenticated user')
+    # Login was already verified. Here su is ONLY a privilege/session switch,
+    # never a password verifier: it initializes groups and the user's environment.
+    return [su, '--login', '--shell', shell, '--', account.pw_name]
+
+
 class PtySession:
     def __init__(self, owner, session_id, on_close):
+        command = _shell_command(owner)  # Validate the identity before forking.
         self.owner, self.id, self.on_close = owner, session_id, on_close
         self.loop = asyncio.get_running_loop()
         self.created = time.monotonic()
@@ -49,9 +72,11 @@ class PtySession:
             os.environ["PROMPT_COMMAND"] = f"{alias};{existing}" if existing else alias
             with suppress(OSError):
                 os.chdir(APPS_ROOT)
-            shell = shutil.which("bash") or "/bin/sh"
-            os.execlp(shell, shell, "-l")
-            os._exit(1)
+            try:
+                os.execlp(command[0], *command)
+            except OSError:
+                os._exit(127)  # Never return into the inherited Web event loop.
+            os._exit(127)
         os.set_blocking(self.fd, False)
         self.resize(40, 120)
         self._resume_reading()

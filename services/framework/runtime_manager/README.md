@@ -9,7 +9,7 @@ Web 管理入口为侧边栏“故障恢复”，内分系统、网络与程序�
 - systemd 管理器：独立持有硬件看门狗。
 
 应用退出重启与业务心跳检测默认关闭，可在“程序故障恢复”分类分别开启，见
-[程序恢复说明](../../../docs/application-recovery.md)。保存不自动重启程序，立即应用由用户明确操作。
+[程序恢复说明](../../../docs/operations/application-recovery.md)。保存不自动重启程序，立即应用由用户明确操作。
 开机自启仍在程序管理页单独选择，系统和网络恢复与程序恢复分别设置。
 
 这里的“底层运行”指系统级用户态服务，不是在 Web 内建立定时线程。平台使用 Python 标准库，
@@ -32,5 +32,5 @@ sudo python3 services/framework/runtime_manager/install_runtime.py
 不自动重新开启，也不在线切换硬件。硬件开关正常重启后生效，panic 开关保存后立即生效。
 开关持久配置由系统读取，不依赖 Web 存活。Web 将接管状态与实机复位验收结果分开显示。
 
-系统配置、参数生效方式、恢复边界和验证命令见[无人值守恢复说明](../../../docs/unattended-recovery.md)。
-网卡选择、用户探测目标、持久限频和网络事务协调见[网络失联自动恢复](../../../docs/network-recovery.md)。
+系统配置、参数生效方式、恢复边界和验证命令见[无人值守恢复说明](../../../docs/operations/unattended-recovery.md)。
+网卡选择、用户探测目标、持久限频和网络事务协调见[网络失联自动恢复](../../../docs/operations/network-recovery.md)。

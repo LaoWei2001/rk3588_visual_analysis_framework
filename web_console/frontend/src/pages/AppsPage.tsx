@@ -21,6 +21,15 @@ function fmtUptime(s: number | null): string {
 // 下拉框只显示配置文件名，并与 active_config/运行配置保持一致。
 const cfgName = (p: string): string => p.split('/').pop() ?? p
 
+const shutdownLabels: Record<string, string> = {
+  running: '等待程序响应', stop_requested: '等待收尾',
+  control_connections: '关闭控制连接', configuration_threads: '完成配置操作',
+  rtsp_streamer: '结束视频预览', capture_threads: '结束视频采集',
+  business_threads: '结束分析', event_persistence: '保存告警记录和图片',
+  event_video_recordings: '完成告警录像', release_resources: '释放设备资源',
+  complete: '等待进程退出',
+}
+
 export default function AppsPage() {
   const [apps, setApps]       = useState<AppInfo[]>([])
   const [loading, setLoading] = useState(true)
@@ -64,7 +73,7 @@ export default function AppsPage() {
 
       // Update previous running set
       prevRunningRef.current = new Set(
-        data.filter(a => a.status === 'running').map(a => a.name)
+        data.filter(a => a.status === 'running' && a.recovery_state !== 'stopping').map(a => a.name)
       )
 
       setApps(data)
@@ -76,7 +85,7 @@ export default function AppsPage() {
     finally { setLoading(false) }
   }
   const syncError = useAutoSync(fetchApps, applyApps, {
-    enabled: !uploading && !Object.values(busy).some(Boolean) && !Object.values(autostartBusy).some(Boolean),
+    enabled: !uploading && !Object.values(autostartBusy).some(Boolean),
   })
 
   const dismissToast = () => {
@@ -112,8 +121,10 @@ export default function AppsPage() {
   const handleStop = async (name: string) => {
     setBusy(b => ({ ...b, [name]: true }))
     try {
-      await stopApp(name)
-      showToast(`${name} 已停止`)
+      const result = await stopApp(name)
+      const warnings = result.warnings?.length ? `；${result.warnings.join('；')}` : ''
+      showToast(`${name}：${result.message}${warnings}`,
+        (result.stopped && result.graceful !== true) || warnings ? 'err' : 'ok')
       await load()
     } catch (e: unknown) {
       showToast(`停止失败：${errMsg(e)}`, 'err')
@@ -287,7 +298,7 @@ export default function AppsPage() {
               <div className="card-top">
                 <div className="app-name">{app.name}</div>
                 <span className={`status-badge ${app.status}`}>
-                  {app.recovery_state === 'restarting' ? '自动恢复中' : app.status === 'running' ? '运行中' : '已停止'}
+                  {app.recovery_state === 'stopping' ? `正在停止：${shutdownLabels[app.shutdown_stage || ''] || '等待收尾'}` : app.recovery_state === 'restarting' ? '自动恢复中' : app.status === 'running' ? '运行中' : '已停止'}
                 </span>
               </div>
 
@@ -347,10 +358,10 @@ export default function AppsPage() {
                   ) : (
                     <button
                       className="action-btn stop"
-                      disabled={!!busy[app.name]}
+                      disabled={!!busy[app.name] || app.recovery_state === 'stopping'}
                       onClick={() => handleStop(app.name)}
                     >
-                      {busy[app.name] ? '...' : '停止'}
+                      {busy[app.name] || app.recovery_state === 'stopping' ? '正在停止…' : '停止'}
                     </button>
                   )}
 

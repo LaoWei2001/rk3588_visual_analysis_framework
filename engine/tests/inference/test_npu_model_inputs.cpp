@@ -1,29 +1,37 @@
-#include "inference/npu_device_owner.h"
-#include "inference/inference_roi_geometry.h"
-#include "inference/inference_result_mapping.h"
-#include "model/yolo/yolo.h"
-#include "model/yolo/yolov8det.h"
-#include "model/yolo/yolopose.h"
-#include "model/yolo/yoloseg.h"
-#include "model/yolo/yolo26pose.h"
-#include "model/yolo/yolo26depth.h"
-#include "model/zip-depth/zip_depth.h"
-#include <cassert>
+#include "vision/inference/inference_result_mapping.h"
+#include "vision/inference/inference_roi_geometry.h"
+#include "vision/inference/npu_device_owner.h"
+#include "vision/models/yolo/yolo.h"
+#include "vision/models/yolo/yolo26depth.h"
+#include "vision/models/yolo/yolo26pose.h"
+#include "vision/models/yolo/yolopose.h"
+#include "vision/models/yolo/yoloseg.h"
+#include "vision/models/yolo/yolov8det.h"
+#include "vision/models/zip-depth/zip_depth.h"
 #include <atomic>
+#include <cassert>
 #include <iostream>
 #include <thread>
 
 static std::unique_ptr<ModelBase> make_model(const std::string &type, const char *model, const char *labels)
 {
     const int mask = 1; // all three contexts intentionally share core 0
-    if (type == "yolov5") return std::unique_ptr<ModelBase>(new YOLO(model, labels, mask));
-    if (type == "yolov8_obb") return std::unique_ptr<ModelBase>(new YoloV8Det(model, labels, mask, .5f, .4f, true));
-    if (type == "yolov8_det") return std::unique_ptr<ModelBase>(new YoloV8Det(model, labels, mask));
-    if (type == "yolov8_pose") return std::unique_ptr<ModelBase>(new YoloPose(model, labels, mask));
-    if (type == "yolov5_seg") return std::unique_ptr<ModelBase>(new YoloSeg(model, labels, mask));
-    if (type == "yolo26_pose") return std::unique_ptr<ModelBase>(new Yolo26Pose(model, labels, mask));
-    if (type == "yolo26_depth") return std::unique_ptr<ModelBase>(new Yolo26Depth(model, mask));
-    if (type == "zip_depth") return std::unique_ptr<ModelBase>(new ZipDepth(model, mask));
+    if (type == "yolov5")
+        return std::unique_ptr<ModelBase>(new YOLO(model, labels, mask));
+    if (type == "yolov8_obb")
+        return std::unique_ptr<ModelBase>(new YoloV8Det(model, labels, mask, .5f, .4f, true));
+    if (type == "yolov8_det")
+        return std::unique_ptr<ModelBase>(new YoloV8Det(model, labels, mask));
+    if (type == "yolov8_pose")
+        return std::unique_ptr<ModelBase>(new YoloPose(model, labels, mask));
+    if (type == "yolov5_seg")
+        return std::unique_ptr<ModelBase>(new YoloSeg(model, labels, mask));
+    if (type == "yolo26_pose")
+        return std::unique_ptr<ModelBase>(new Yolo26Pose(model, labels, mask));
+    if (type == "yolo26_depth")
+        return std::unique_ptr<ModelBase>(new Yolo26Depth(model, mask));
+    if (type == "zip_depth")
+        return std::unique_ptr<ModelBase>(new ZipDepth(model, mask));
     throw std::runtime_error("unknown test model type");
 }
 
@@ -35,7 +43,8 @@ int main(int argc, char **argv)
     const cv::Mat image = cv::imread(argv[4]);
     assert(!image.empty());
     std::vector<std::unique_ptr<ModelBase>> models;
-    for (int i = 0; i < 3; ++i) models.push_back(make_model(argv[1], argv[2], argv[3]));
+    for (int i = 0; i < 3; ++i)
+        models.push_back(make_model(argv[1], argv[2], argv[3]));
     std::vector<std::thread> workers;
     std::atomic<int> ordinary_calls{0}, dma_calls{0};
     for (auto &model : models)
@@ -50,7 +59,8 @@ int main(int argc, char **argv)
             {
                 assert(instance->infer(frame, results));
                 assert(results.size() == baseline.size());
-                for (size_t i=0;i<results.size();++i) {
+                for (size_t i = 0; i < results.size(); ++i)
+                {
                     assert(results[i].class_id == baseline[i].class_id);
                     assert(results[i].box == baseline[i].box);
                     assert(std::abs(results[i].score - baseline[i].score) < 1e-5);
@@ -64,22 +74,29 @@ int main(int argc, char **argv)
                     ++dma_calls;
                 }
             }
-            for (const std::string mode : {"stretch", "letterbox", "expand"}) {
-                const int w=instance->input_width(), h=instance->input_height();
-                auto transform=make_inference_roi_transform({100,100,300,200},frame.cols,frame.rows,w,h,mode,true);
-                cv::Mat roi=make_inference_roi_input(frame,transform,w,h);
-                assert(roi.cols==w && roi.rows==h);
-                assert(instance->infer(roi,results));
-                map_results_to_business_frame(frame.cols,frame.rows,transform,w,h,results);
-                for (const auto &r : results) {
-                    if (!r.box.empty()) assert((r.box & cv::Rect(0,0,640,640)) == r.box);
-                    if (!r.boxMask.empty()) assert(r.boxMask.size()==cv::Size(640,640));
-                    if (r.is_depth()) assert(r.depth_map.size()==cv::Size(640,640));
+            for (const std::string mode : {"stretch", "letterbox", "expand"})
+            {
+                const int w = instance->input_width(), h = instance->input_height();
+                auto transform =
+                    make_inference_roi_transform({100, 100, 300, 200}, frame.cols, frame.rows, w, h, mode, true);
+                cv::Mat roi = make_inference_roi_input(frame, transform, w, h);
+                assert(roi.cols == w && roi.rows == h);
+                assert(instance->infer(roi, results));
+                map_results_to_business_frame(frame.cols, frame.rows, transform, w, h, results);
+                for (const auto &r : results)
+                {
+                    if (!r.box.empty())
+                        assert((r.box & cv::Rect(0, 0, 640, 640)) == r.box);
+                    if (!r.boxMask.empty())
+                        assert(r.boxMask.size() == cv::Size(640, 640));
+                    if (r.is_depth())
+                        assert(r.depth_map.size() == cv::Size(640, 640));
                 }
             }
         });
     }
-    for (auto &worker : workers) worker.join();
+    for (auto &worker : workers)
+        worker.join();
     assert(ordinary_calls == 24);
     std::cout << argv[1] << ": three same-core contexts: ordinary_calls=" << ordinary_calls.load()
               << " dma_calls=" << dma_calls.load() << " PASS\n";

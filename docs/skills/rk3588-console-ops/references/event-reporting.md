@@ -186,6 +186,13 @@ delivery 状态包括 `pending`、`uploading`、`delivered`、`retry`、`invalid
 - Web“重试”会把所有非 delivered delivery 重置为 pending；
 - 同一事件全部 delivery 为 delivered 后删除整个事件目录。
 
+## 停止与保存结果
+
+正常停止会等待已接收事件和媒体任务收尾；异步写入失败会记录持久化错误，不能仅凭
+`accepted()` 或进程退出判定数据完整。Web 根据当前进程的清理检查点区分结果，见
+[程序停止与退出结果](../../../operations/application-recovery.md#用户主动停止与退出结果)。
+强杀或掉电不会执行完整收尾流程，已落盘数据与尚在内存中的任务需要分别判断。
+
 ## 分层验收
 
 1. 检查 C++ 返回状态和 `event_id`。

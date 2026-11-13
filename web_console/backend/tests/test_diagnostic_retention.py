@@ -50,7 +50,7 @@ def test_user_restart_saves_success_and_failure_without_restarting_real_app(monk
     from fastapi import HTTPException
     from routers import process
     history = load_runtime('recovery_history')
-    monkeypatch.setattr(process, '_sync_background_services', lambda: {})
+    monkeypatch.setattr(process.background_services, 'sync_services_for_running_app', lambda: {})
     monkeypatch.setattr(process.pm, 'start_app', lambda *args: 123)
     asyncio.run(process.restart_app('demo', process.StartRequest()))
     row = history.snapshot('application')['events'][0]

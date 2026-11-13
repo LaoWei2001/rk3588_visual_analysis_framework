@@ -10,7 +10,7 @@ endif()
 
 add_executable(gpio_api_test
     main.cpp
-    ../../src/gpio/gpio.cpp
+    ../../src/platform/gpio/gpio.cpp
 )
 
 target_compile_features(gpio_api_test PRIVATE cxx_std_14)

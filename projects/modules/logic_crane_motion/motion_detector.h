@@ -44,18 +44,16 @@ struct MotionResult
 class MotionDetector
 {
   public:
-    MotionResult update(const cv::Mat &frame, const RoiZone *motion_zone, uint64_t now_ms,
-                        const MotionConfig &config, const cv::Point *hook_center = nullptr,
-                        int hook_track_id = -1);
+    MotionResult update(const cv::Mat &frame, const RoiZone *motion_zone, uint64_t now_ms, const MotionConfig &config,
+                        const cv::Point *hook_center = nullptr, int hook_track_id = -1);
     void suppress_after_lighting_change(uint64_t now_ms, uint64_t duration_ms);
     void reset();
 
   private:
     cv::Mat prepare_gray(const cv::Mat &frame, const MotionConfig &config) const;
-    cv::Mat build_mask(const cv::Size &prepared_size, const cv::Size &source_size,
-                       const RoiZone *motion_zone) const;
-    void update_hook_motion(const cv::Point *hook_center, int hook_track_id,
-                            uint64_t now_ms, const MotionConfig &config, MotionResult *out);
+    cv::Mat build_mask(const cv::Size &prepared_size, const cv::Size &source_size, const RoiZone *motion_zone) const;
+    void update_hook_motion(const cv::Point *hook_center, int hook_track_id, uint64_t now_ms,
+                            const MotionConfig &config, MotionResult *out);
 
     struct HookPositionSample
     {

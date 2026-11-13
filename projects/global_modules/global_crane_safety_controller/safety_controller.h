@@ -37,8 +37,8 @@ class SafetyController
 
     // The minimum starts on a successful inactive-to-active GPIO write.
     // Manual cancellation bypasses it; repeated requests do not restart it.
-    HardwareStatus apply(const HardwareConfig &config, bool lamp_on, bool horn_on,
-                         uint64_t now_ms, bool force_horn_off = false);
+    HardwareStatus apply(const HardwareConfig &config, bool lamp_on, bool horn_on, uint64_t now_ms,
+                         bool force_horn_off = false);
     void shutdown();
 
   private:

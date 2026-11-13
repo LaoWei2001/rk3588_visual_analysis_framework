@@ -43,8 +43,7 @@ float box_iou(const cv::Rect &lhs, const cv::Rect &rhs)
     if (right <= left || bottom <= top)
         return 0.0f;
     const float intersection = static_cast<float>((right - left) * (bottom - top));
-    const float union_area =
-        static_cast<float>(lhs.area()) + static_cast<float>(rhs.area()) - intersection;
+    const float union_area = static_cast<float>(lhs.area()) + static_cast<float>(rhs.area()) - intersection;
     return union_area > 0.0f ? intersection / union_area : 0.0f;
 }
 
@@ -131,8 +130,7 @@ bool geometry_ok(int part, const cv::Rect &box, const TrackedFramePerson &person
         if (relative_y > config.helmet_top_ratio || relative_y < -config.helmet_top_ratio)
             return false;
 
-        const float area_ratio =
-            static_cast<float>(box.area()) / static_cast<float>(std::max(1, person_box.area()));
+        const float area_ratio = static_cast<float>(box.area()) / static_cast<float>(std::max(1, person_box.area()));
         if (area_ratio < config.helmet_area_min_ratio || area_ratio > config.helmet_area_max_ratio)
             return false;
 
@@ -171,13 +169,11 @@ cv::Rect helmet_search_region(const cv::Rect &person_box, const Config &config)
     const float side = config.helmet_search_side_ratio >= 0.0f ? config.helmet_search_side_ratio : 0.15f;
     const int lift = static_cast<int>(static_cast<float>(person_box.height) * up);
     const int pad = static_cast<int>(static_cast<float>(person_box.width) * side);
-    return cv::Rect(person_box.x - pad, person_box.y - lift, person_box.width + pad * 2,
-                    person_box.height + lift);
+    return cv::Rect(person_box.x - pad, person_box.y - lift, person_box.width + pad * 2, person_box.height + lift);
 }
 
 /* 安全帽只归给“搜索区包含其中心、且头部中心离它最近”的那个人；并列时算归属不明。 */
-int nearest_person_for_helmet(const cv::Rect &box, const std::vector<TrackedFramePerson> &people,
-                              const Config &config)
+int nearest_person_for_helmet(const cv::Rect &box, const std::vector<TrackedFramePerson> &people, const Config &config)
 {
     const cv::Point center(box.x + box.width / 2, box.y + box.height / 2);
     const float head_ratio = config.helmet_top_ratio > 0.0f ? config.helmet_top_ratio : 0.35f;
@@ -447,18 +443,17 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
                 continue; /* 头顶贴画面边缘，头部可能被裁掉，看不见不等于没戴 */
             if (people[i].detection->score < config.violation_min_score)
                 continue; /* 人框本身不可信，不拿它推断“没戴” */
-            const cv::Rect head(box.x, box.y, box.width,
-                                std::max(1, static_cast<int>(box.height * head_ratio)));
+            const cv::Rect head(box.x, box.y, box.width, std::max(1, static_cast<int>(box.height * head_ratio)));
             bool covered = false;
             for (size_t j = 0; j < people.size() && !covered; ++j)
             {
                 if (j == i)
                     continue;
                 const cv::Rect &other = people[j].detection->box;
-                const int overlap_x = std::max(0, std::min(head.x + head.width, other.x + other.width) -
-                                                      std::max(head.x, other.x));
-                const int overlap_y = std::max(0, std::min(head.y + head.height, other.y + other.height) -
-                                                      std::max(head.y, other.y));
+                const int overlap_x =
+                    std::max(0, std::min(head.x + head.width, other.x + other.width) - std::max(head.x, other.x));
+                const int overlap_y =
+                    std::max(0, std::min(head.y + head.height, other.y + other.height) - std::max(head.y, other.y));
                 if (static_cast<float>(overlap_x * overlap_y) > 0.4f * static_cast<float>(head.area()))
                     covered = true;
             }
@@ -491,8 +486,7 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
             bool duplicate = false;
             for (const AlgoResult *existing : kept)
             {
-                if (existing->label == candidate->label &&
-                    box_iou(existing->box, candidate->box) >= config.dedupe_iou)
+                if (existing->label == candidate->label && box_iou(existing->box, candidate->box) >= config.dedupe_iou)
                 {
                     duplicate = true;
                     break;

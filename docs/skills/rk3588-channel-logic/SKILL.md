@@ -19,7 +19,7 @@ description: >-
 - 事件接口：`engine/include/events.h`。
 
 不要从旧文档推断接口。当前 `ChannelContext` 没有 `frame` 成员；需要像素时调用
-`model_frame()` 或 `source_frame()`。
+`business_frame()`（兼容名称 `model_frame()`）或 `source_frame()`。
 
 ## 何时使用
 
@@ -96,7 +96,8 @@ REGISTER_LOGIC(logic_xxx);
 ## 运行语义
 
 - 同一通道的业务回调由框架串行化；跟踪器先于 logic 执行。
-- 推理通道收到当帧推理/跟踪结果；未开启推理的通道仍按业务节拍调用 logic，但 `results` 为空。
+- 推理通道收到当帧推理/跟踪结果；未开启推理的通道仍按业务节拍调用 logic，但没有有效推理结果。
+  不要只通过 `results` 指针是否非空判断有效性，应检查 `infer_enabled` / `inference_valid` 或 `query_targets()` 的状态。
 - 未配置 logic 时，框架仍发布帧和结果，只是不执行业务模块。
 - 每次回调重新创建 outputs 和绘制指令，logic 返回后与帧、结果一起提交。
 - Action 在目标通道下一次业务帧、logic 回调之前执行；若排队后切换了 logic，旧 Action 会被丢弃。
@@ -135,7 +136,7 @@ cd projects
 
 ## 完成标准
 
-- 注册 ID、目录、配置中的 `channels[].logic` 和 Web 清单一致；
+- 注册 ID、配置中的 `channels[].logic` 和 Web 清单一致；新模块目录建议与 ID 同名，已有异名目录以注册宏为准；
 - 参数/outputs/事件/字段/Action 均在同模块 `logic.json` 声明并通过生成器静态检查；
 - 像素指针生命周期、模型/源坐标、状态归属和 Action 时序处理正确；
 - 每帧行为有限时，告警有闩锁、冷却或业务去重；

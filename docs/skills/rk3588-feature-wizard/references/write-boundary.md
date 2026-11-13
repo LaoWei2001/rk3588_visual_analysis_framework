@@ -22,7 +22,7 @@ projects/global_modules/**
 
 除上述两个根目录外一律禁止，包括但不限于：
 
-- `engine/src/config/`、`runtime/`、`event/` 和其他引擎目录；
+- `engine/src/application/config/`、`engine/src/application/runtime/`、`engine/src/events/` 和其他引擎目录；
 - `web_console/`、`services/framework/`、测试、示例配置和构建脚本；
 - `docs/`、根目录说明、Skill、代理设置和启动器自身；
 - 生成的 catalog、应用包、构建产物及仓库中的其他现有文件。

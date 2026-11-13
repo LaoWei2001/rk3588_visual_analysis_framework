@@ -15,7 +15,7 @@
 - [ ] 通过 `develop_feature` 实施时，全部变更只位于 `projects/modules/**` 或
       `projects/global_modules/**`；出现任何其他路径时整批拒绝回写。
 - [ ] 白名单内没有符号链接、子模块或特殊文件。
-- [ ] `git status --short` 中没有意外文件；没有覆盖用户已有改动。
+- [ ] Git 工作区用 `git status --short` 核对意外文件；无 Git 的向导目录用写回守卫快照核对，没有覆盖用户已有改动。
 - [ ] 新名称可在当前源码、配置或需求中找到依据。
 - [ ] 没有引用 `src/analyzer`、`src/core`、`src/player` 等已删除目录。
 - [ ] 没有引用当前未注册的 Logic。
@@ -76,7 +76,7 @@ rm -rf -- "$tmp_dir"
 
 ## Web
 
-- [ ] API 调用集中在 `web_console/frontend/src/api/client.ts`。
+- [ ] API 请求实现放在 `web_console/frontend/src/api/` 对应领域模块，统一复用 `http.ts`；`client.ts` 仅为兼容导出入口。
 - [ ] 新 HTTP 路由在 `backend/main.py` 注册；鉴权例外是明确设计而非遗漏。
 - [ ] WebSocket 自行校验查询参数中的 token。
 - [ ] 配置编辑同时维护 `configToGraph.ts` 与 `graphToConfig.ts` 的往返一致性。

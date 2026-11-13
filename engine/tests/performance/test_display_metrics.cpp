@@ -1,6 +1,6 @@
-#include "display/display_pipeline.h"
-#include "runtime/app_ctrl.h"
-#include "runtime/pause_ctrl.h"
+#include "application/runtime/app_ctrl.h"
+#include "application/runtime/pause_ctrl.h"
+#include "media/display/display_render.h"
 
 #include <cassert>
 #include <iostream>

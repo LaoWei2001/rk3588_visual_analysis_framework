@@ -32,7 +32,7 @@ the missing capability and stop instead of asking for wider access. Read the wiz
 3. Inspect the target module's C++ and `logic.json` together.
 4. Inspect the public header that owns the API being used.
 5. For Web behavior, inspect both the FastAPI route and the React caller.
-6. For reporting, inspect `engine/include/events.h` and `engine/src/event/event_report.cpp`, the module template, Adapter catalog,
+6. For reporting, inspect `engine/include/events.h` and `engine/src/events/event_report.cpp`, the module template, Adapter catalog,
    and delivery service.
 7. Compare any referenced example name against actual `REGISTER_*` macros or run the built binary's list command.
 
@@ -45,13 +45,13 @@ Current registered source modules do not include `logic_path_sop`, `logic_period
 | One channel, each business frame | `projects/modules/<logic>/` |
 | Cross-channel or periodic aggregation | `projects/global_modules/<logic>/` |
 | Logic-specific user parameter | Module `logic.json.parameters` plus `param_*()` |
-| Shared engine configuration | `src/config/` plus runtime/Web propagation |
+| Shared engine configuration | `src/application/config/` plus runtime/Web propagation |
 | Button for one Logic | Module `actions` plus `REGISTER_LOGIC_ACTION` or `REGISTER_GLOBAL_LOGIC_ACTION` |
 | Event creation | `report_event()` plus module `event_types`/`report_fields` |
 | Remote request shape | Logic-owned/app report template |
 | Address, token, timeout | Application `connections.yaml` through Web “应用集成” |
 | HTTP/Dify transport mechanics | `services/framework/upload/adapters/` |
-| Web-only workflow | FastAPI route + `api/client.ts` + React component |
+| Web-only workflow | FastAPI router/service + the matching `frontend/src/api/` domain module + React component |
 
 Do not hardcode endpoints or credentials in a Logic. Do not add a central config field for a parameter that belongs to one module. Do not add transport branches to the event outbox for ordinary business mappings.
 

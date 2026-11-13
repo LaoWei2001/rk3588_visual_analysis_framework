@@ -1,7 +1,7 @@
 # 系统硬件看门狗与定时重启
 
 本目录还提供独立的内核 D 状态故障升级监测。完整的应用重启、业务超时、自启条件、
-限频与验收说明见[无人值守恢复](../../../docs/unattended-recovery.md)。正常通过根安装器集成；
+限频与验收说明见[无人值守恢复](../../../docs/operations/unattended-recovery.md)。正常通过根安装器集成；
 独立平台安装入口是 `sudo python3 services/framework/runtime_manager/install_runtime.py`。
 硬件接管仍使用本目录的 `status/apply/ensure`；运行策略由平台库和 Web 管理入口共享。
 

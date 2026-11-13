@@ -23,7 +23,7 @@ namespace
 struct GuardState
 {
     ppe_guard::Guard guard;
-    int unmatched_frames = 0; /* 有检测结果却没有一个人命中 person_labels 的连续帧数 */
+    int unmatched_frames = 0;    /* 有检测结果却没有一个人命中 person_labels 的连续帧数 */
     float score_override = 0.0f; /* 现场按钮调过的灵敏度；0 表示跟随配置 */
     bool debug_visible = true;   /* 画面左上角调试信息是否显示 */
 };
@@ -51,8 +51,8 @@ ppe_guard::Config load_config(ChannelContext *ctx)
     config.violation_labels[ppe_guard::PART_HAND_RIGHT] = ppe_guard::split_labels(glove_labels);
 
     const bool gloves_enabled = ctx->param_bool("check_gloves");
-    config.enabled = {{ctx->param_bool("check_helmet"), ctx->param_bool("check_workwear"), gloves_enabled,
-                       gloves_enabled}};
+    config.enabled = {
+        {ctx->param_bool("check_helmet"), ctx->param_bool("check_workwear"), gloves_enabled, gloves_enabled}};
 
     config.person_min_score = static_cast<float>(ctx->param_float("person_min_score"));
     config.violation_min_score = static_cast<float>(ctx->param_float("violation_min_score"));
@@ -82,8 +82,7 @@ ppe_guard::Config load_config(ChannelContext *ctx)
         ppe_guard::split_labels(ctx->param_string("helmet_positive_labels"));
     config.positive_labels[ppe_guard::PART_WORKWEAR] =
         ppe_guard::split_labels(ctx->param_string("workwear_positive_labels"));
-    const std::vector<std::string> glove_positive =
-        ppe_guard::split_labels(ctx->param_string("glove_positive_labels"));
+    const std::vector<std::string> glove_positive = ppe_guard::split_labels(ctx->param_string("glove_positive_labels"));
     config.positive_labels[ppe_guard::PART_HAND_LEFT] = glove_positive;
     config.positive_labels[ppe_guard::PART_HAND_RIGHT] = glove_positive;
     return config;
@@ -155,8 +154,8 @@ static void logic_ppe_guard(ChannelContext *ctx)
             any_candidate = any_candidate || person.status[static_cast<size_t>(part)] == ppe_guard::PART_CANDIDATE;
 
         const cv::Scalar color = person.violation ? cv::Scalar(0, 0, 255)
-                                   : any_candidate  ? cv::Scalar(0, 165, 255)
-                                                    : cv::Scalar(0, 220, 0);
+                                 : any_candidate  ? cv::Scalar(0, 165, 255)
+                                                  : cv::Scalar(0, 220, 0);
         draw_rect(ctx, person.box, color, 2);
         /* 徽标画在框的下边缘外侧：引擎在框顶画了 "ID x 类别"，不能被徽标压住。 */
         draw_text(ctx, badge, cv::Point(person.box.x, person.box.y + person.box.height + 13), color, 0.4, 1,
@@ -174,8 +173,7 @@ static void logic_ppe_guard(ChannelContext *ctx)
         request.message = "人员安全穿戴违规: " + person.violation_types;
         request.fields = {event_field("track_id", person.track_id),
                           event_field("violation_types", person.violation_types),
-                          event_field("part_states", person.part_states),
-                          event_field("person_score", person.score)};
+                          event_field("part_states", person.part_states), event_field("person_score", person.score)};
         if (report_event(ctx, request).accepted())
             state.guard.mark_reported(person.track_id);
     }
@@ -218,7 +216,7 @@ static void logic_ppe_guard(ChannelContext *ctx)
 
     /* 本帧实际出现的类别名与数量：判断类名是否和权重对得上。 */
     {
-        std::vector<std::pair<std::string, int> > counts;
+        std::vector<std::pair<std::string, int>> counts;
         for (const AlgoResult &result : *ctx->results)
         {
             bool found = false;
@@ -233,8 +231,9 @@ static void logic_ppe_guard(ChannelContext *ctx)
                 counts.push_back(std::make_pair(result.label, 1));
         }
         std::stable_sort(counts.begin(), counts.end(),
-                         [](const std::pair<std::string, int> &lhs, const std::pair<std::string, int> &rhs)
-                         { return lhs.second > rhs.second; });
+                         [](const std::pair<std::string, int> &lhs, const std::pair<std::string, int> &rhs) {
+                             return lhs.second > rhs.second;
+                         });
         std::string tally = "标签:";
         char item[96];
         for (size_t i = 0; i < counts.size() && i < 4; ++i)
@@ -244,8 +243,8 @@ static void logic_ppe_guard(ChannelContext *ctx)
         }
         const cv::Mat *frame = ctx->business_frame();
         const int tally_y = (frame != nullptr && !frame->empty()) ? frame->rows - 10 : 620;
-        draw_text(ctx, tally.c_str(), cv::Point(12, tally_y), cv::Scalar(200, 255, 200), 0.4, 1,
-                  DrawCommand::ALL, true);
+        draw_text(ctx, tally.c_str(), cv::Point(12, tally_y), cv::Scalar(200, 255, 200), 0.4, 1, DrawCommand::ALL,
+                  true);
     }
 
     ctx->publish_bool("ppe_alarm", confirmed_people > 0);

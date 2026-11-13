@@ -135,13 +135,13 @@ def test_application_apply_checks_saved_revision_and_current_program(policy_file
 def test_network_recovery_write_requires_network_administrator():
     route = next(route for route in recovery.router.routes
                  if route.path == '/system/recovery/network' and 'PUT' in route.methods)
-    assert any(dependency.call is recovery.require_network_admin for dependency in route.dependant.dependencies)
+    assert any(dependency.call is recovery.require_system_admin for dependency in route.dependant.dependencies)
 
 
 def test_system_switch_write_requires_administrator():
     route = next(route for route in recovery.router.routes
                  if route.path == '/system/recovery/system' and 'PUT' in route.methods)
-    assert any(dependency.call is recovery.require_network_admin for dependency in route.dependant.dependencies)
+    assert any(dependency.call is recovery.require_system_admin for dependency in route.dependant.dependencies)
 
 
 def test_system_switch_endpoint_forwards_only_narrow_policy_and_revision(monkeypatch):
@@ -181,7 +181,7 @@ def test_network_policy_http_validation_and_cas(tmp_path, monkeypatch, target):
 def test_performance_mutations_require_admin_and_map_errors(monkeypatch):
     for path in ('/system/device-info/performance', '/system/device-info/performance/reset'):
         route = next(route for route in recovery.router.routes if route.path == path)
-        assert any(dep.call is recovery.require_network_admin for dep in route.dependant.dependencies)
+        assert any(dep.call is recovery.require_system_admin for dep in route.dependant.dependencies)
     calls = []
     monkeypatch.setattr(recovery.performance, 'save', lambda *args: calls.append(args) or {'applied': True})
     payload = {'revision': 'example', 'limits': {'CPU:0': 408}}

@@ -20,6 +20,7 @@ from pydantic import BaseModel
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 
 from services.data_dir import data_dir, initialize_app_data
+from services.app_paths import application_directory
 
 router = APIRouter()
 
@@ -29,9 +30,7 @@ class OtaConfigBody(BaseModel):
 
 
 def _config_path(name: str) -> Path:
-    app_dir = APPS_ROOT / name
-    if not app_dir.exists():
-        raise HTTPException(status_code=404, detail=f"App '{name}' not found")
+    app_dir = application_directory(APPS_ROOT, name)
     initialize_app_data(name, app_dir)
     return data_dir(name) / "ota_config.json"
 

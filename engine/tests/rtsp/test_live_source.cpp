@@ -1,5 +1,5 @@
-#include "rtsp/live_source.h"
-#include "rtsp/media_source.h"
+#include "media/rtsp/live_source.h"
+#include "media/rtsp/media_source.h"
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
@@ -135,9 +135,9 @@ static void retired_media_cannot_clear_current_source_test()
     auto *new_source = gst_element_factory_make("appsrc", nullptr);
     assert(old_media && new_media && old_source && new_source);
     bool old_source_destroyed = false;
-    g_object_weak_ref(G_OBJECT(old_source), [](gpointer data, GObject *) {
-        *static_cast<bool *>(data) = true;
-    }, &old_source_destroyed);
+    g_object_weak_ref(
+        G_OBJECT(old_source), [](gpointer data, GObject *) { *static_cast<bool *>(data) = true; },
+        &old_source_destroyed);
     RtspMediaSource source;
     source.replace(old_media, old_source);
     GstElement *reader = source.acquire();

@@ -1,14 +1,14 @@
-"""Fail configuration if a model/tool bypasses the shared RKNN submission layer."""
+"""Reject engine submissions that bypass the shared RKNN execution layer."""
 from pathlib import Path
 import re
 import sys
 
 root = Path(__file__).resolve().parents[2]
-allowed = root / 'src/inference/npu_execution.h'
+allowed = root / 'src/vision/inference/npu_execution.h'
 calls = re.compile(r'\brknn_(?:run|inputs_set|outputs_get|outputs_release)\s*\(')
 comments_strings = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', re.S)
 errors = []
-for tree in (root / 'src', root / 'bench'):
+for tree in (root / 'src',):
     for path in tree.rglob('*'):
         if path.suffix not in {'.h', '.hpp', '.c', '.cc', '.cpp'} or path == allowed:
             continue
@@ -16,5 +16,5 @@ for tree in (root / 'src', root / 'bench'):
         for match in calls.finditer(code):
             errors.append(f'{path.relative_to(root)}:{code[:match.start()].count(chr(10)) + 1}: {match[0]}')
 if errors:
-    sys.exit('RKNN calls must use inference/npu_execution.h:\n' + '\n'.join(errors))
-print('All engine and benchmark RKNN submissions use the shared execution layer.')
+    sys.exit('RKNN calls must use vision/inference/npu_execution.h:\n' + '\n'.join(errors))
+print('All engine RKNN submissions use the shared execution layer.')

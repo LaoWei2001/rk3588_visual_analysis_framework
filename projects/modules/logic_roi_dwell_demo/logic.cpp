@@ -18,9 +18,11 @@ struct DwellState
 
 void logic_roi_dwell_demo(ChannelContext *ctx)
 {
-    if (!ctx) return;
+    if (!ctx)
+        return;
     auto *state = ctx->get_state<DwellState>();
-    if (!state) return;
+    if (!state)
+        return;
 
     // 默认值、类型、取值范围和参数修改时重置状态，都在 logic.json 声明。
     const std::string label = ctx->param_string("target_label");
@@ -40,8 +42,7 @@ void logic_roi_dwell_demo(ChannelContext *ctx)
 
     // “持续出现”是区域始终有人，不要求同一个 track_id。
     // 任一帧未检出、推理无效、时间倒退或帧间隔过大，都重新计时。
-    if (!valid || count == 0 || (state->present &&
-        (now < state->previous_ms || now - state->previous_ms > max_gap_ms)))
+    if (!valid || count == 0 || (state->present && (now < state->previous_ms || now - state->previous_ms > max_gap_ms)))
         *state = DwellState{};
     if (count > 0 && !state->present)
     {
@@ -51,21 +52,23 @@ void logic_roi_dwell_demo(ChannelContext *ctx)
     state->previous_ms = now;
     const uint64_t dwell_ms = state->present ? now - state->since_ms : 0;
     const bool alarm = state->present && dwell_ms >= hold_ms;
-    const char *status = !roi_valid ? "roi_missing" : !valid ? "inference_unavailable" :
-                         count == 0 ? "waiting" : alarm ? "alarm" : "timing";
+    const char *status = !roi_valid   ? "roi_missing"
+                         : !valid     ? "inference_unavailable"
+                         : count == 0 ? "waiting"
+                         : alarm      ? "alarm"
+                                      : "timing";
 
     // 先画再提交事件，让同帧截图也能包含报警区域和文字。
     const cv::Scalar color = alarm ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 220, 0);
     if (roi_valid)
         draw_polyline(ctx, *polygon, color, 2, 1.0, true);
-    const std::string text = std::string(status) + " count=" + std::to_string(count) +
-                             " dwell=" + std::to_string(dwell_ms) + "ms";
+    const std::string text =
+        std::string(status) + " count=" + std::to_string(count) + " dwell=" + std::to_string(dwell_ms) + "ms";
     draw_rect(ctx, {12, 12, 530, 35}, {0, 0, 0}, -1, 0.75);
     draw_text(ctx, text.c_str(), {20, 35}, color);
 
     // 一次连续占用只提交一个已接受事件；失败最多每秒重试一次。
-    if (alarm && !state->reported &&
-        (!state->attempted || now - state->last_attempt_ms >= 1000))
+    if (alarm && !state->reported && (!state->attempted || now - state->last_attempt_ms >= 1000))
     {
         state->attempted = true;
         state->last_attempt_ms = now;

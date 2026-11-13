@@ -54,7 +54,7 @@ AlgoResult violation_box(const char *label, cv::Rect box, float score = 0.9f)
 }
 
 /* 只给需要的关键点打分，其余置为不可见，用于构造遮挡与可见性场景。 */
-AlgoResult pose_box(int track_id, const std::vector<std::pair<int, cv::Point2f> > &points)
+AlgoResult pose_box(int track_id, const std::vector<std::pair<int, cv::Point2f>> &points)
 {
     AlgoResult result;
     result.label = "pose";
@@ -76,7 +76,7 @@ AlgoResult pose_box(int track_id, const std::vector<std::pair<int, cv::Point2f> 
 
 AlgoResult fully_visible_pose(int track_id, cv::Point2f left_wrist, cv::Point2f right_wrist)
 {
-    std::vector<std::pair<int, cv::Point2f> > points;
+    std::vector<std::pair<int, cv::Point2f>> points;
     points.push_back(std::make_pair(0, cv::Point2f(50.0f, 20.0f)));
     points.push_back(std::make_pair(1, cv::Point2f(45.0f, 15.0f)));
     points.push_back(std::make_pair(2, cv::Point2f(55.0f, 15.0f)));
@@ -230,7 +230,7 @@ void test_partial_visibility()
 {
     Guard guard;
     const Config config = base_config();
-    std::vector<std::pair<int, cv::Point2f> > points;
+    std::vector<std::pair<int, cv::Point2f>> points;
     points.push_back(std::make_pair(5, cv::Point2f(30.0f, 60.0f)));
     points.push_back(std::make_pair(6, cv::Point2f(70.0f, 60.0f)));
     points.push_back(std::make_pair(11, cv::Point2f(35.0f, 150.0f)));

@@ -120,7 +120,8 @@ Action：<id/行为；不需要则无>
 状态与失败提示：<要求>
 配置往返：<是否影响 configToGraph/graphToConfig>
 
-先检查当前路由、api/client.ts 和 React 调用方。完成后运行后端相关测试与 frontend npm run build。
+先检查当前路由、api/ 对应领域模块、http.ts 和 React 调用方；client.ts 只作兼容导出。
+完成后运行后端相关测试与前端构建。
 ```
 
 ## 引擎公共能力改动

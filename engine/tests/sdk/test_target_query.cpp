@@ -1,6 +1,6 @@
 // 外部业务消费者：只包含公开 SDK，执行引擎的真实查询实现。
-#include <channel.h>
 #include <cassert>
+#include <channel.h>
 #include <iostream>
 #include <limits>
 
@@ -47,8 +47,8 @@ void expect_failure(const TargetQueryResult &result, TargetQueryStatus status)
 void filters_and_best()
 {
     Fixture f;
-    f.results = {detection("person", .8f), detection("person", .95f, {200, 10, 20, 20}),
-                 detection("car", .9f), detection("dog", .1f), detection("person", .7f)};
+    f.results = {detection("person", .8f), detection("person", .95f, {200, 10, 20, 20}), detection("car", .9f),
+                 detection("dog", .1f), detection("person", .7f)};
     auto result = f.ctx.query_targets();
     assert(result.valid() && result.count == 5 && result.best == &f.results[1]);
     TargetQuery q;
@@ -76,8 +76,7 @@ void regions_and_union()
 {
     Fixture f;
     f.rois.push_back(square("overlap", 50));
-    f.results = {detection("person", .8f, {65, 10, 20, 20}),
-                 detection("person", .9f, {200, 10, 20, 20})};
+    f.results = {detection("person", .8f, {65, 10, 20, 20}), detection("person", .9f, {200, 10, 20, 20})};
     TargetQuery q;
     q.roi = ROI_ALL;
     auto result = f.ctx.query_targets(q);
@@ -107,8 +106,7 @@ void regions_and_union()
 void anchor_and_boundary()
 {
     Fixture f;
-    f.results = {detection("person", .8f, {20, 70, 20, 60}),
-                 detection("person", .9f, {20, -40, 20, 60})};
+    f.results = {detection("person", .8f, {20, 70, 20, 60}), detection("person", .9f, {20, -40, 20, 60})};
     TargetQuery q;
     q.roi = 0;
     auto result = f.ctx.query_targets(q);
@@ -117,13 +115,11 @@ void anchor_and_boundary()
     result = f.ctx.query_targets(q);
     assert(result.count == 1 && result.best == &f.results[1]);
     q.anchor = TargetAnchor::Center;
-    f.results = {detection("person", .9f, {-10, 0, 20, 20}),
-                 detection("person", .8f, {20, 90, 21, 21})};
+    f.results = {detection("person", .9f, {-10, 0, 20, 20}), detection("person", .8f, {20, 90, 21, 21})};
     result = f.ctx.query_targets(q);
     assert(result.count == 2); // 左边界、奇数宽高的整数中心与旧接口一致。
     assert(result.count == roi_count_target(&f.ctx, "person", 0));
-    f.results = {detection("person", .9f,
-                           {std::numeric_limits<int>::max(), std::numeric_limits<int>::max(), 50, 50})};
+    f.results = {detection("person", .9f, {std::numeric_limits<int>::max(), std::numeric_limits<int>::max(), 50, 50})};
     assert(f.ctx.query_targets(q).count == 0); // 坐标加法不能整数溢出。
 }
 
@@ -152,8 +148,8 @@ void invalid_values()
 {
     Fixture f;
     TargetQuery q;
-    for (float score : {-0.01f, 1.01f, std::numeric_limits<float>::quiet_NaN(),
-                        std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity()})
+    for (float score : {-0.01f, 1.01f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+                        -std::numeric_limits<float>::infinity()})
     {
         q.min_score = score;
         expect_failure(f.ctx.query_targets(q), TargetQueryStatus::INVALID_QUERY);
@@ -168,9 +164,11 @@ void invalid_values()
     f.results = {detection("person", std::numeric_limits<float>::quiet_NaN()),
                  detection("person", std::numeric_limits<float>::infinity()),
                  detection("person", -std::numeric_limits<float>::infinity()),
-                 detection("person", 1.1f), detection("person", -.1f),
+                 detection("person", 1.1f),
+                 detection("person", -.1f),
                  detection("person", .9f, {10, 10, 0, 20}),
-                 detection("person", .9f, {10, 10, 20, -1}), detection("person", 0)};
+                 detection("person", .9f, {10, 10, 20, -1}),
+                 detection("person", 0)};
     const auto result = f.ctx.query_targets(q);
     assert(result.valid() && result.count == 1 && result.best == &f.results.back());
 }
@@ -205,16 +203,21 @@ int main()
 {
     Fixture scoped;
     scoped.results = {detection("person", .8f), detection("person", .9f)};
-    scoped.results[0].model_id="a"; scoped.results[0].model_type="yolov8_det";
-    scoped.results[1].model_id="b"; scoped.results[1].model_type="yolov8_obb";
-    TargetQuery query; query.model_id="a";
+    scoped.results[0].model_id = "a";
+    scoped.results[0].model_type = "yolov8_det";
+    scoped.results[1].model_id = "b";
+    scoped.results[1].model_type = "yolov8_obb";
+    TargetQuery query;
+    query.model_id = "a";
     assert(scoped.ctx.query_targets(query).best == &scoped.results[0]);
-    query.model_type="yolov8_obb"; assert(scoped.ctx.query_targets(query).count == 0);
-    query.model_id="b"; assert(scoped.ctx.query_targets(query).best == &scoped.results[1]);
-    scoped.results[1].boxMask=cv::Mat::ones(640,640,CV_8UC1);
+    query.model_type = "yolov8_obb";
+    assert(scoped.ctx.query_targets(query).count == 0);
+    query.model_id = "b";
+    assert(scoped.ctx.query_targets(query).best == &scoped.results[1]);
+    scoped.results[1].boxMask = cv::Mat::ones(640, 640, CV_8UC1);
     assert(scoped.ctx.segmentation_result("b") == &scoped.results[1]);
     assert(!scoped.ctx.segmentation_result("a"));
-    scoped.ctx.inference_valid=false;
+    scoped.ctx.inference_valid = false;
     assert(!scoped.ctx.segmentation_result("b"));
     filters_and_best();
     regions_and_union();

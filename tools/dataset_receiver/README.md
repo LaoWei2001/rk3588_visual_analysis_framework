@@ -2,7 +2,7 @@
 
 `build_windows.py` 将现有 `dataset_receiver.py`、官方 Windows 嵌入式 Python 和 Go 启动器
 构建为一个 Windows 10/11 x64 EXE。用户电脑无需安装 Python、Go、Tkinter 或额外包。
-使用及部署说明见 [电脑采集文档](../../docs/computer-dataset-collection.md)。
+使用及部署说明见 [电脑采集文档](../../docs/guides/dataset-collection.md)。
 
 ```bash
 python3 tools/dataset_receiver/build_windows.py
@@ -51,3 +51,10 @@ Ctrl+C 由启动器转发为接收子进程的 CTRL_BREAK，Python 将其作为 
 ```
 
 `--licenses` 显示内置 Python 和 Go 组件许可证。
+
+全局快捷键由内嵌 Python 接收器启动时默认注册：F8 手动抓图，F9 暂停／恢复自动采集，F7 依次选择任务。
+只有一个运行中视觉程序的采集任务时自动选中；多个任务时等待电脑端选择，已选目标仍可用时保留。网页无需确认，也不改变自动采集启用状态。
+使用 [RegisterHotKey / MOD_NOREPEAT](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey)，
+独立消息线程处理 WM_HOTKEY，退出通过 PostThreadMessageW(WM_QUIT) 回收注册。
+控制与传图分开连接，凭据和授权范围见[电脑采集文档](../../docs/guides/dataset-collection.md#电脑全局快捷键与手动抓图)。
+Linux 上测试消息分发、冲突回收、认证和真实 HTTP 抓图；实际 Windows 全局键注册仍需 Windows 桌面验收。

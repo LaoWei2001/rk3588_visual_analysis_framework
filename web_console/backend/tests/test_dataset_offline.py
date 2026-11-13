@@ -285,3 +285,21 @@ def test_association_requires_exactly_one_related_target_field(offline, ambiguou
     with pytest.raises(HTTPException) as error:
         manager.save('demo', 3, task_config(condition))
     assert error.value.status_code == 409 and manager.rows() == []
+
+
+def test_manual_capture_uses_single_rpc_and_validates_app_task(offline, monkeypatch):
+    manager, _, _ = offline
+    task = manager.save('demo', 3, task_config())['tasks'][0]
+    calls = []
+    def rpc(app, command):
+        calls.append((app, command))
+        return {'tasks': [{'task_id': task['id'], 'manual_state': 'waiting'}]}, b''
+    monkeypatch.setattr(manager, 'rpc', rpc)
+    result = manager.capture_once('demo', task['id'], 'key-1')
+    assert result['manual_state'] == 'waiting'
+    assert len(calls) == 1 and calls[0][1]['op'] == 'capture_once'
+    assert calls[0][1]['revision'] == manager.rows('demo')[0]['revision']
+    assert not manager.rows('demo')[0]['enabled']
+    with pytest.raises(HTTPException) as error:
+        manager.capture_once('demo', 'another-task', 'key-2')
+    assert error.value.status_code == 404 and len(calls) == 1

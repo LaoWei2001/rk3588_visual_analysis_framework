@@ -36,8 +36,8 @@ struct CalibrationSample
     double box_scale = 0.0;
 };
 
-const AlgoResult *select_hook(const std::vector<AlgoResult> *results, int class_id,
-                              float min_score, int preferred_track_id)
+const AlgoResult *select_hook(const std::vector<AlgoResult> *results, int class_id, float min_score,
+                              int preferred_track_id)
 {
     if (!results)
         return nullptr;
@@ -45,8 +45,7 @@ const AlgoResult *select_hook(const std::vector<AlgoResult> *results, int class_
     const AlgoResult *highest_score = nullptr;
     for (const AlgoResult &result : *results)
     {
-        if (result.class_id != class_id || result.score < min_score ||
-            result.box.width <= 0 || result.box.height <= 0)
+        if (result.class_id != class_id || result.score < min_score || result.box.width <= 0 || result.box.height <= 0)
             continue;
         if (preferred_track_id >= 0 && result.track_id == preferred_track_id)
             same_track = &result;
@@ -91,12 +90,10 @@ bool append_sample_csv(const std::string &path, const CalibrationSample &sample)
         output << "unix_ms,steady_ms,frame_id,channel_id,track_id,class_id,score,"
                   "box_x,box_y,box_width,box_height,center_x,center_y,box_scale\n";
     }
-    output << sample.unix_ms << ',' << sample.steady_ms << ',' << sample.frame_id << ','
-           << sample.channel_id << ',' << sample.track_id << ',' << sample.class_id << ','
-           << std::fixed << std::setprecision(4) << sample.score << ','
-           << sample.box.x << ',' << sample.box.y << ',' << sample.box.width << ','
-           << sample.box.height << ',' << sample.center.x << ',' << sample.center.y << ','
-           << std::setprecision(3) << sample.box_scale << '\n';
+    output << sample.unix_ms << ',' << sample.steady_ms << ',' << sample.frame_id << ',' << sample.channel_id << ','
+           << sample.track_id << ',' << sample.class_id << ',' << std::fixed << std::setprecision(4) << sample.score
+           << ',' << sample.box.x << ',' << sample.box.y << ',' << sample.box.width << ',' << sample.box.height << ','
+           << sample.center.x << ',' << sample.center.y << ',' << std::setprecision(3) << sample.box_scale << '\n';
     output.flush();
     return output.good();
 }
@@ -117,8 +114,7 @@ CalibrationState &calibration_state(ChannelContext *ctx)
 
 } // namespace
 
-static LogicActionResult logic_crane_hook_calibration_action(ChannelContext *ctx,
-                                                             const LogicAction *action)
+static LogicActionResult logic_crane_hook_calibration_action(ChannelContext *ctx, const LogicAction *action)
 {
     if (!ctx || !ctx->state || !ctx->results || !action)
         return {false, "ctx, results or action is null"};
@@ -126,14 +122,13 @@ static LogicActionResult logic_crane_hook_calibration_action(ChannelContext *ctx
         return {false, "unsupported action: " + action->name};
 
     CalibrationState &state = calibration_state(ctx);
-    const AlgoResult *hook = select_hook(ctx->results,
-                                         static_cast<int>(ctx->param_int("hook_class_id")),
+    const AlgoResult *hook = select_hook(ctx->results, static_cast<int>(ctx->param_int("hook_class_id")),
                                          ctx->param_float("min_score"), state.last_track_id);
     if (!hook)
         return {false, "当前帧未检测到满足置信度要求的吊钩，未保存"};
 
-    if (!crane_safety::hook_edges(hook->box, ctx->business_size(),
-            static_cast<int>(ctx->param_int("edge_margin_px"))).complete())
+    if (!crane_safety::hook_edges(hook->box, ctx->business_size(), static_cast<int>(ctx->param_int("edge_margin_px")))
+             .complete())
         return {false, "吊钩贴边或出画，无法保存完整标定；请让吊钩完整进入画面后再保存"};
 
     const CalibrationSample sample = make_sample(ctx, *hook);
@@ -155,14 +150,14 @@ static void logic_crane_hook_calibration(ChannelContext *ctx)
     if (!ctx || !ctx->state || !ctx->results)
         return;
     CalibrationState &state = calibration_state(ctx);
-    const AlgoResult *hook = select_hook(ctx->results,
-                                         static_cast<int>(ctx->param_int("hook_class_id")),
+    const AlgoResult *hook = select_hook(ctx->results, static_cast<int>(ctx->param_int("hook_class_id")),
                                          ctx->param_float("min_score"), state.last_track_id);
 
     const bool sample_valid = hook && crane_safety::hook_edges(hook->box, ctx->business_size(),
-        static_cast<int>(ctx->param_int("edge_margin_px"))).complete();
-    const std::string status = !hook ? "未检测到吊钩" :
-        (sample_valid ? "完整可见，正常铅垂且稳定时可保存" : "贴边或出画，禁止保存标定");
+                                                               static_cast<int>(ctx->param_int("edge_margin_px")))
+                                          .complete();
+    const std::string status =
+        !hook ? "未检测到吊钩" : (sample_valid ? "完整可见，正常铅垂且稳定时可保存" : "贴边或出画，禁止保存标定");
     ctx->publish_bool("calibration_sample_valid", sample_valid);
     ctx->publish_string("calibration_status", status);
     ctx->publish_bool("calibration_hook_visible", hook != nullptr);
@@ -181,10 +176,8 @@ static void logic_crane_hook_calibration(ChannelContext *ctx)
         ctx->publish_int("calibration_box_height", 0);
         std::snprintf(line1, sizeof(line1), "吊钩标定采集: 未检测到吊钩");
         std::snprintf(line2, sizeof(line2), "类别: %lld  最低置信度: %.2f",
-                      static_cast<long long>(ctx->param_int("hook_class_id")),
-                      ctx->param_float("min_score"));
-        std::snprintf(line3, sizeof(line3), "已保存: %llu 条",
-                      static_cast<unsigned long long>(state.saved_count));
+                      static_cast<long long>(ctx->param_int("hook_class_id")), ctx->param_float("min_score"));
+        std::snprintf(line3, sizeof(line3), "已保存: %llu 条", static_cast<unsigned long long>(state.saved_count));
         std::snprintf(line4, sizeof(line4), "文件: %s", ctx->param_string("output_path").c_str());
         draw_status(ctx, line1, cv::Point(18, 32), cv::Scalar(0, 165, 255));
     }
@@ -200,15 +193,12 @@ static void logic_crane_hook_calibration(ChannelContext *ctx)
         draw_rect(ctx, sample.box, cv::Scalar(0, 255, 255), 3);
         draw_circle(ctx, sample.center, 5, cv::Scalar(0, 255, 255), -1);
         std::snprintf(line1, sizeof(line1), "动态圆心标定: %s", status.c_str());
-        std::snprintf(line2, sizeof(line2), "框: %dx%dpx  中心: (%d,%d)",
-                      sample.box.width, sample.box.height, sample.center.x, sample.center.y);
-        std::snprintf(line3, sizeof(line3), "标定依据:完整框高 %dpx  已保存:%llu条",
-                      sample.box.height,
+        std::snprintf(line2, sizeof(line2), "框: %dx%dpx  中心: (%d,%d)", sample.box.width, sample.box.height,
+                      sample.center.x, sample.center.y);
+        std::snprintf(line3, sizeof(line3), "标定依据:完整框高 %dpx  已保存:%llu条", sample.box.height,
                       static_cast<unsigned long long>(state.saved_count));
-        std::snprintf(line4, sizeof(line4), "点击“保存正常铅垂圆心” -> %s",
-                      ctx->param_string("output_path").c_str());
-        draw_status(ctx, line1, cv::Point(18, 32),
-                    sample_valid ? cv::Scalar(0, 220, 0) : cv::Scalar(0, 165, 255));
+        std::snprintf(line4, sizeof(line4), "点击“保存正常铅垂圆心” -> %s", ctx->param_string("output_path").c_str());
+        draw_status(ctx, line1, cv::Point(18, 32), sample_valid ? cv::Scalar(0, 220, 0) : cv::Scalar(0, 165, 255));
     }
     draw_status(ctx, line2, cv::Point(18, 62));
     draw_status(ctx, line3, cv::Point(18, 92));

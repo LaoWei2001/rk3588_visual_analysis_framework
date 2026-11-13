@@ -4,7 +4,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException
 from starlette.concurrency import run_in_threadpool
 from services.runtime_loader import load_runtime
-from routers.network_settings import require_network_admin
+from dependencies import require_system_admin
 
 management = load_runtime('management')
 policy = load_runtime('recovery_policy')
@@ -62,7 +62,7 @@ async def save_application_recovery(payload: Dict[str, Any]):
 
 
 @router.put('/system/recovery/system')
-async def save_system_recovery(payload: Dict[str, Any], _admin: None = Depends(require_network_admin)):
+async def save_system_recovery(payload: Dict[str, Any], _admin: None = Depends(require_system_admin)):
     if set(payload) != {'policy', 'revision'} or not isinstance(payload['revision'], str):
         raise HTTPException(status_code=400, detail='请同时提交系统恢复设置和读取时的版本号')
     return await call(management.save_system_policy, payload['policy'], payload['revision'])
@@ -87,17 +87,17 @@ async def get_network_recovery():
 
 
 @router.put('/system/recovery/network')
-async def save_network_recovery(payload: Dict[str, Any], _admin: None = Depends(require_network_admin)):
+async def save_network_recovery(payload: Dict[str, Any], _admin: None = Depends(require_system_admin)):
     if set(payload) != {'policy', 'revision'} or not isinstance(payload['revision'], str):
         raise HTTPException(status_code=400, detail='必须提交网络恢复策略及读取时的版本号')
     return await call(management.save_network_policy, payload['policy'], payload['revision'])
 
 
 @router.put('/system/device-info/performance')
-async def save_performance(payload: Dict[str, Any], _admin: None = Depends(require_network_admin)):
+async def save_performance(payload: Dict[str, Any], _admin: None = Depends(require_system_admin)):
     return await call(performance.save, payload)
 
 
 @router.post('/system/device-info/performance/reset')
-async def reset_performance(payload: Dict[str, Any], _admin: None = Depends(require_network_admin)):
+async def reset_performance(payload: Dict[str, Any], _admin: None = Depends(require_system_admin)):
     return await call(performance.save, payload, True)

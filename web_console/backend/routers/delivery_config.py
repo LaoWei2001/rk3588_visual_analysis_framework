@@ -13,6 +13,7 @@ import yaml
 from fastapi import APIRouter, HTTPException
 
 from services.data_dir import data_dir, ensure_data_dir
+from services.app_paths import application_directory
 
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
@@ -42,10 +43,7 @@ def _atomic_write_text(path: Path, content: str) -> None:
 
 
 def _app_dir(name: str) -> Path:
-    app_dir = APPS_ROOT / name
-    if not app_dir.exists():
-        raise HTTPException(status_code=404, detail=f"App '{name}' not found")
-    return app_dir
+    return application_directory(APPS_ROOT, name)
 
 
 def _connections_path(name: str) -> Path:

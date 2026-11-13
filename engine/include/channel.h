@@ -36,8 +36,8 @@ enum
 
 enum class TargetAnchor
 {
-    Center,       /* 框中心，整数宽/高的一半，与既有 ROI 查询一致。 */
-    BottomCenter  /* 框底边中点，常用于判断脚点是否进入区域。 */
+    Center,      /* 框中心，整数宽/高的一半，与既有 ROI 查询一致。 */
+    BottomCenter /* 框底边中点，常用于判断脚点是否进入区域。 */
 };
 
 /** 所有条件同时满足；labels 中任意一个标签命中即可，空列表表示不限类别。
@@ -59,8 +59,8 @@ enum class TargetQueryStatus
     OK,
     INFERENCE_UNAVAILABLE,
     ROI_NOT_FOUND,
-    INVALID_ROI,   /* 指定区域不足三个顶点；ROI_ALL 要求所有已配置区域均满足此条件。 */
-    INVALID_QUERY  /* 非法置信度、区域选择值或判断点枚举。 */
+    INVALID_ROI,  /* 指定区域不足三个顶点；ROI_ALL 要求所有已配置区域均满足此条件。 */
+    INVALID_QUERY /* 非法置信度、区域选择值或判断点枚举。 */
 };
 
 struct TargetQueryResult
@@ -71,7 +71,10 @@ struct TargetQueryResult
      * 不复制目标/图像，不得缓存指针跨帧使用或在使用前修改 results 容器。 */
     const AlgoResult *best = nullptr;
 
-    bool valid() const { return status == TargetQueryStatus::OK; }
+    bool valid() const
+    {
+        return status == TargetQueryStatus::OK;
+    }
 };
 
 const char *target_query_status_name(TargetQueryStatus status);
@@ -142,19 +145,24 @@ struct ChannelContext
     /* 查询当前帧分割掩码；空 model_id 取首个分割模型。返回指针仅在当前回调有效。 */
     const AlgoResult *segmentation_result(const std::string &model_id = "") const
     {
-        if (!inference_valid || !infer_enabled) return nullptr;
-        if (results) for (const auto &result : *results)
-            if (!result.boxMask.empty() && (model_id.empty() || result.model_id == model_id)) return &result;
+        if (!inference_valid || !infer_enabled)
+            return nullptr;
+        if (results)
+            for (const auto &result : *results)
+                if (!result.boxMask.empty() && (model_id.empty() || result.model_id == model_id))
+                    return &result;
         return nullptr;
     }
 
     /* 深度结果：Metric 为米，RelativeInverse 为相对逆深度；指针仅在当前回调有效。 */
     const AlgoResult *depth_result(const std::string &model_id = "") const
     {
-        if (!inference_valid || !infer_enabled) return nullptr;
+        if (!inference_valid || !infer_enabled)
+            return nullptr;
         if (results)
             for (const auto &result : *results)
-                if (result.is_depth() && (model_id.empty() || result.model_id == model_id)) return &result;
+                if (result.is_depth() && (model_id.empty() || result.model_id == model_id))
+                    return &result;
         return nullptr;
     }
 

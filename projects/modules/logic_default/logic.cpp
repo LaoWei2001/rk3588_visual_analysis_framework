@@ -3,7 +3,7 @@
 /* Default channel logic: intentionally does nothing. */
 static void logic_default(ChannelContext *ctx)
 {
-    printf("1234545\n");
+    (void)ctx;
 }
 
 REGISTER_LOGIC(logic_default);

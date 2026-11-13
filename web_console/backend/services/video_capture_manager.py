@@ -203,24 +203,6 @@ def validate_recording_capacity(snapshot: Dict[str, Any], max_file_size_bytes: i
         )
 
 
-def _write_probe(directory: Path) -> None:
-    probe = directory / f".video_capture_write_probe_{os.getpid()}_{time.time_ns()}"
-    descriptor: Optional[int] = None
-    try:
-        descriptor = os.open(str(probe), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        os.write(descriptor, b"ok")
-        os.fsync(descriptor)
-    except OSError as exc:
-        raise VideoCaptureInputError(f"录像保存路径写入测试失败：{exc}") from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        try:
-            probe.unlink()
-        except OSError:
-            pass
-
-
 def _is_usb_capture_device(path: Path) -> bool:
     sys_device = Path("/sys/class/video4linux") / path.name / "device"
     try:
@@ -777,9 +759,7 @@ class VideoCaptureManager:
         self._probe: Optional[Dict[str, Any]] = None
         self._started_unix_ms: Optional[int] = None
         self._record_started_monotonic: Optional[float] = None
-        self._working_path: Optional[Path] = None
         self._output_path: Optional[Path] = None
-        self._save_directory: Optional[Path] = None
         self._max_file_size_bytes = 0
         self._stop_reason: Optional[str] = None
         self._error: Optional[str] = None
@@ -807,9 +787,7 @@ class VideoCaptureManager:
         with self._lock:
             process = self._process
             state = self._state
-            working_path = self._working_path
             output_path = self._output_path
-            save_directory = self._save_directory
             started_unix_ms = self._started_unix_ms
             record_started = self._record_started_monotonic
             result: Dict[str, Any] = {
@@ -822,31 +800,17 @@ class VideoCaptureManager:
                 "elapsed_seconds": round(max(0.0, time.monotonic() - record_started), 1)
                 if record_started is not None and state in ("recording", "stopping") else 0.0,
                 "output_path": str(output_path) if output_path else None,
-                "file_size_bytes": 0,
+                "file_size_bytes": self._record_bytes if self._download_id else 0,
                 "max_file_size_bytes": self._max_file_size_bytes,
                 "stop_reason": self._stop_reason,
                 "error": self._error,
                 "process_alive": process is not None and process.poll() is None,
                 "destination": "computer",
                 "download_id": self._download_id,
+                # Recording streams directly to the browser; keep the public
+                # storage field for existing clients without board-file state.
+                "storage": None,
             }
-        if self._download_id:
-            result["file_size_bytes"] = self._record_bytes
-            result["storage"] = None
-            return result
-        file_path = working_path if working_path and working_path.exists() else output_path
-        if file_path:
-            try:
-                result["file_size_bytes"] = file_path.stat().st_size
-            except OSError:
-                pass
-        if save_directory:
-            try:
-                result["storage"] = storage_snapshot(str(save_directory))
-            except VideoCaptureError:
-                result["storage"] = None
-        else:
-            result["storage"] = None
         return result
 
     def _reset_process_state(self) -> None:
@@ -984,9 +948,7 @@ class VideoCaptureManager:
                 self._probe = probe
                 self._started_unix_ms = None
                 self._record_started_monotonic = None
-                self._working_path = None
                 self._output_path = None
-                self._save_directory = None
                 self._download_id = None
                 self._record_bytes = 0
                 self._max_file_size_bytes = 0
@@ -1152,9 +1114,7 @@ class VideoCaptureManager:
                 self._probe = probe
                 self._started_unix_ms = now_ms
                 self._record_started_monotonic = time.monotonic()
-                self._working_path = None
                 self._output_path = Path(f"{_timestamp_stem()}.mp4")
-                self._save_directory = None
                 self._max_file_size_bytes = max_file_size_bytes
                 self._stop_reason = None
                 self._error = None

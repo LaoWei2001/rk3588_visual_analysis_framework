@@ -3,8 +3,8 @@
 // 难度:★★★☆☆
 
 #include <channel.h>
-#include <drawing.h>
 #include <cstdio>
+#include <drawing.h>
 
 // 为什么要把变量保存在这个结构体中而不是保存在logic_course_06这个函数中?
 // 如果我把call_count这个变量直接定义在logic_course_06中进行运算会发生什么?（提示：变量生命周期）

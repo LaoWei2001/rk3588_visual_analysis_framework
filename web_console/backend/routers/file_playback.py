@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from services import process_manager as pm
+from services.app_paths import application_directory
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 router = APIRouter()
@@ -23,10 +24,7 @@ class SeekRequest(BaseModel):
 
 
 def _app_dir(name: str) -> Path:
-    app_dir = APPS_ROOT / name
-    if not app_dir.exists():
-        raise HTTPException(status_code=404, detail=f"App '{name}' not found")
-    return app_dir
+    return application_directory(APPS_ROOT, name)
 
 
 def _socket_request(socket_path: Path, message: Dict[str, Any]) -> Dict[str, Any]:

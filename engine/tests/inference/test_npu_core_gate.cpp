@@ -1,7 +1,7 @@
-#include "inference/npu_core_gate.h"
-#include "inference/npu_core_assignment.h"
-#include <cassert>
+#include "vision/inference/npu_core_assignment.h"
+#include "vision/inference/npu_core_gate.h"
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <future>
 #include <string>
@@ -26,12 +26,13 @@ struct Channel
 void global_core_planning()
 {
     std::vector<Channel> channels(3);
-    for (int i = 0; i < 3; ++i) channels[i].id = i;
+    for (int i = 0; i < 3; ++i)
+        channels[i].id = i;
     channels[1].models[0].npu_core = 1;
     channels[2].models[0].npu_core = 2;
     // The exact reported workload, then every other adapter in the AUTO slot.
-    for (const char *type : {"zip_depth", "yolo26_depth", "yolov5", "yolov8_det",
-                             "yolov8_pose", "yolo26_pose", "yolov5_seg"})
+    for (const char *type :
+         {"zip_depth", "yolo26_depth", "yolov5", "yolov8_det", "yolov8_pose", "yolo26_pose", "yolov5_seg"})
     {
         channels[0].models[0].model_type = type;
         assert(npu::explicitly_assigned_cores(channels) == 6);
@@ -69,7 +70,8 @@ void global_core_planning()
     channels[1].models[0].model_path.clear();
     assert(npu::preferred_auto_core_pool(channels) == 7); // Invalid/inactive entry does not reserve.
     std::vector<Channel> all_auto(6);
-    for (int i = 0; i < 6; ++i) all_auto[i].id = i * 2; // Sparse IDs must not collide when isolated.
+    for (int i = 0; i < 6; ++i)
+        all_auto[i].id = i * 2; // Sparse IDs must not collide when isolated.
     assert(npu::preferred_auto_core_pool(all_auto) == 7);
     for (int channel = 0; channel < 15; ++channel)
         for (int worker = 0; worker < 9; ++worker)
@@ -92,11 +94,11 @@ void global_core_planning()
         const auto plan = npu::channel_auto_placement(all_auto, all_auto[i].id);
         assert(plan.pool == 7); // Two channels keep symmetric three-core queues.
         for (int w = 0; w < 3; ++w)
-            assert(npu::assigned_core_mask(-1, all_auto[i].id, w, 0, plan.pool) ==
-                   (1 << ((all_auto[i].id + w) % 3)));
+            assert(npu::assigned_core_mask(-1, all_auto[i].id, w, 0, plan.pool) == (1 << ((all_auto[i].id + w) % 3)));
     }
     all_auto.resize(1);
-    for (int i = 0; i < 6; ++i) all_auto[0].models.push_back(Model{});
+    for (int i = 0; i < 6; ++i)
+        all_auto[0].models.push_back(Model{});
     assert(npu::channel_auto_placement(all_auto, all_auto[0].id).pool == 7); // One composite keeps all cores.
 
     // Two AUTO channels plus a pinned model have disjoint remaining cores.
@@ -150,7 +152,8 @@ int main()
                 ++completed;
             }
         });
-    for (auto &worker : workers) worker.join();
+    for (auto &worker : workers)
+        worker.join();
     assert(completed == 240);
 
     using namespace std::chrono;
@@ -174,12 +177,29 @@ int main()
     automatic.get();
 
     // An exception releases every held lock. A failed device is not resubmitted from any core.
-    try { npu::CoreLease lease(3); throw 1; } catch (int) {}
-    { npu::CoreLease lease(1); lease.mark_failed(); }
+    try
+    {
+        npu::CoreLease lease(3);
+        throw 1;
+    }
+    catch (int)
+    {
+    }
+    {
+        npu::CoreLease lease(1);
+        lease.mark_failed();
+    }
     for (const int mask : {1, 2, 3, 4, 7, 0})
     {
         bool rejected = false;
-        try { npu::CoreLease lease(mask); } catch (const std::runtime_error &) { rejected = true; }
+        try
+        {
+            npu::CoreLease lease(mask);
+        }
+        catch (const std::runtime_error &)
+        {
+            rejected = true;
+        }
         assert(rejected);
     }
 }

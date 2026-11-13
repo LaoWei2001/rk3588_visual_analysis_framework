@@ -4,15 +4,26 @@ from pathlib import Path
 from fastapi import HTTPException
 
 
-def application_directory(root: Path, name: str) -> Path:
+def resolve_application_directory(root: Path, name: str) -> Path:
+    """Resolve an existing app without coupling service callers to HTTP errors."""
     if not name or Path(name).name != name or name in (".", ".."):
-        raise HTTPException(400, "非法程序名称")
+        raise ValueError("非法程序名称")
     app = (root / name).resolve()
     if app.parent != root.resolve():
-        raise HTTPException(400, "程序路径越界")
+        raise ValueError("程序路径越界")
     if not app.is_dir():
-        raise HTTPException(404, f"App '{name}' not found")
+        raise FileNotFoundError(f"App '{name}' not found")
     return app
+
+
+def application_directory(root: Path, name: str) -> Path:
+    """HTTP adapter for the shared application directory boundary."""
+    try:
+        return resolve_application_directory(root, name)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 def config_target(app: Path, path: str) -> Path:

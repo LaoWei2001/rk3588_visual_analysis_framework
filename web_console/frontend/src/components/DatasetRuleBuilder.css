@@ -9,8 +9,8 @@
 .dataset-basic-row > input, .dataset-basic-row > select { width: 100%; min-width: 0; box-sizing: border-box; }
 @media (max-width: 600px) {
   .dataset-basic-row { grid-template-columns: minmax(0, 1fr) 28px; }
-  .dataset-basic-row > select { grid-column: 1 / -1; }
-  .dataset-basic-row > input { grid-column: 1; grid-row: 2; }
+  .dataset-basic-row > select:first-child { grid-column: 1 / -1; }
+  .dataset-basic-row > select:nth-child(2) { grid-column: 1; grid-row: 2; }
   .dataset-basic-row > .dataset-remove { grid-column: 2; grid-row: 2; }
 }
 .dataset-rule-builder .dataset-remove { padding: 3px; font-size: 18px; color: #c5cdd8; background: transparent; }

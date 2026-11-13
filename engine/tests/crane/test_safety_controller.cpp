@@ -19,14 +19,19 @@ int fail_count = 0;
 uint64_t fake_now_ms = 0;
 uint64_t next_write_delay_ms = 0;
 
-uint64_t fake_clock() { return fake_now_ms; }
+uint64_t fake_clock()
+{
+    return fake_now_ms;
+}
 
 class TestController : public SafetyController
 {
   public:
-    TestController() : SafetyController(fake_clock) {}
-    HardwareStatus apply(const HardwareConfig &config, bool lamp_on, bool horn_on,
-                         uint64_t now_ms, bool force_horn_off = false)
+    TestController() : SafetyController(fake_clock)
+    {
+    }
+    HardwareStatus apply(const HardwareConfig &config, bool lamp_on, bool horn_on, uint64_t now_ms,
+                         bool force_horn_off = false)
     {
         fake_now_ms = now_ms;
         return SafetyController::apply(config, lamp_on, horn_on, now_ms, force_horn_off);
@@ -47,7 +52,8 @@ std::vector<int> horn_writes(const std::string &pin)
 {
     std::vector<int> values;
     for (const auto &write : writes)
-        if (write.first == pin) values.push_back(write.second);
+        if (write.first == pin)
+            values.push_back(write.second);
     return values;
 }
 
@@ -140,7 +146,8 @@ void gpio_failures_start_timer_only_after_success_and_retry_off()
     config.horn_min_alarm_ms = 5000;
     TestController controller;
     controller.apply(config, false, false, 0);
-    fail_pin = config.horn_pin; fail_count = 1;
+    fail_pin = config.horn_pin;
+    fail_count = 1;
     auto failed = controller.apply(config, false, true, 1000);
     assert(!failed.horn_ok && !failed.horn_on && levels[config.horn_pin] == 0);
     assert(controller.apply(config, false, true, 1500).horn_on);

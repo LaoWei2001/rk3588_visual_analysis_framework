@@ -44,16 +44,14 @@ cv::Mat MotionDetector::build_mask(const cv::Size &prepared_size, const cv::Size
     const float sx = static_cast<float>(prepared_size.width) / source_size.width;
     const float sy = static_cast<float>(prepared_size.height) / source_size.height;
     for (const cv::Point &point : motion_zone->polygon)
-        scaled.emplace_back(static_cast<int>(std::lround(point.x * sx)),
-                            static_cast<int>(std::lround(point.y * sy)));
+        scaled.emplace_back(static_cast<int>(std::lround(point.x * sx)), static_cast<int>(std::lround(point.y * sy)));
     const std::vector<std::vector<cv::Point>> polygons{scaled};
     cv::fillPoly(mask, polygons, cv::Scalar(255));
     return mask;
 }
 
 MotionResult MotionDetector::update(const cv::Mat &frame, const RoiZone *motion_zone, uint64_t now_ms,
-                                    const MotionConfig &config, const cv::Point *hook_center,
-                                    int hook_track_id)
+                                    const MotionConfig &config, const cv::Point *hook_center, int hook_track_id)
 {
     MotionResult out;
     out.moving = moving_;
@@ -73,8 +71,7 @@ MotionResult MotionDetector::update(const cv::Mat &frame, const RoiZone *motion_
     {
         if (hook_still_since_ms_ == 0)
             hook_still_since_ms_ = now_ms;
-        if (config.hook_still_reset_ms == 0 ||
-            now_ms - hook_still_since_ms_ >= config.hook_still_reset_ms)
+        if (config.hook_still_reset_ms == 0 || now_ms - hook_still_since_ms_ >= config.hook_still_reset_ms)
         {
             hook_motion_latched_ = false;
             hook_still_since_ms_ = 0;
@@ -178,9 +175,8 @@ MotionResult MotionDetector::update(const cv::Mat &frame, const RoiZone *motion_
     return out;
 }
 
-void MotionDetector::update_hook_motion(const cv::Point *hook_center, int hook_track_id,
-                                        uint64_t now_ms, const MotionConfig &config,
-                                        MotionResult *out)
+void MotionDetector::update_hook_motion(const cv::Point *hook_center, int hook_track_id, uint64_t now_ms,
+                                        const MotionConfig &config, MotionResult *out)
 {
     if (!out)
         return;

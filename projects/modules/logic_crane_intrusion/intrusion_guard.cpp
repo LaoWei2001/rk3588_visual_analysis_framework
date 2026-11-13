@@ -5,8 +5,8 @@
 namespace crane_safety
 {
 
-IntrusionResult IntrusionGuard::update(const std::vector<AlgoResult> &results, const RoiZone *zone,
-                                       uint64_t now_ms, const IntrusionConfig &config)
+IntrusionResult IntrusionGuard::update(const std::vector<AlgoResult> &results, const RoiZone *zone, uint64_t now_ms,
+                                       const IntrusionConfig &config)
 {
     IntrusionResult out;
     out.roi_available = zone && zone->polygon.size() >= 3;

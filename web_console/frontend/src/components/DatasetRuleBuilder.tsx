@@ -1,7 +1,19 @@
+import {createContext, useContext, type SelectHTMLAttributes} from 'react'
 import NumberField from './NumberField'
 import './DatasetRuleBuilder.css'
 
 import { association, associationTargets, basicCondition, combine, comparison, kindOf, leaf, relationNames, relationDescription, summary, targetsFrom, validCondition, type Association, type Comparison, type Condition, type Leaf, type Rule, type Target } from './datasetRules'
+
+const CategoryList = createContext<string[]>([])
+function CategorySelect({placeholder: _placeholder, value, ...props}: SelectHTMLAttributes<HTMLSelectElement> & {placeholder?: string}) {
+  const labels = useContext(CategoryList)
+  const current = String(value ?? '')
+  return <select {...props} value={current}>
+    <option value="" disabled>请选择类别</option>
+    {current && !labels.includes(current) && <option value={current} disabled>{current}（不在当前类别表中）</option>}
+    {labels.map(label => <option key={label} value={label}>{label}</option>)}
+  </select>
+}
 
 function TargetConfidence({ label, value, onChange }: { label: string; value: Target; onChange: (v: Target) => void }) {
   return <label>{label}最低置信度（%）<NumberField value={Number((value.min_confidence * 100).toFixed(10))}
@@ -12,11 +24,11 @@ function ComparisonEditor({ value, onChange }: { value: Comparison; onChange: (v
   const v = value.compare_counts
   const set = (patch: Partial<Comparison['compare_counts']>) => onChange({ compare_counts: { ...v, ...patch } })
   return <>
-    <label>类别 A<input aria-label="数量比较类别 A" value={v.left.class} placeholder="模型中的类别名" onChange={e => set({ left: { ...v.left, class: e.target.value } })} /></label>
+    <label>类别 A<CategorySelect aria-label="数量比较类别 A" value={v.left.class} placeholder="模型中的类别名" onChange={e => set({ left: { ...v.left, class: e.target.value } })} /></label>
     <label>A 的数量满足<select aria-label="两类数量关系" value={v.op} onChange={e => set({ op: e.target.value })}>
       {[['>', '大于 B 的数量'], ['>=', '不少于 B 的数量'], ['<', '小于 B 的数量'], ['<=', '不多于 B 的数量'], ['==', '等于 B 的数量'], ['!=', '不等于 B 的数量']].map(([op, label]) => <option key={op} value={op}>{label}</option>)}
     </select></label>
-    <label>类别 B<input aria-label="数量比较类别 B" value={v.right.class} placeholder="模型中的另一类别名" onChange={e => set({ right: { ...v.right, class: e.target.value } })} /></label>
+    <label>类别 B<CategorySelect aria-label="数量比较类别 B" value={v.right.class} placeholder="模型中的另一类别名" onChange={e => set({ right: { ...v.right, class: e.target.value } })} /></label>
     <details className="dataset-nesting-tools"><summary>数量比较的高级设置</summary>
       <TargetConfidence label="类别 A" value={v.left} onChange={left => set({ left })} />
       <TargetConfidence label="类别 B" value={v.right} onChange={right => set({ right })} />
@@ -39,7 +51,7 @@ function AssociationEditor({ value, onChange }: { value: Association; onChange: 
   }
   const updateObject = (index: number, next: Target) => setObjects(objects.map((t, i) => i === index ? next : t))
   return <>
-    <label>逐个检查的主体类别<input aria-label="主体类别" value={v.subject.class} placeholder="模型中的类别名" onChange={e => set({ subject: { ...v.subject, class: e.target.value } })} /></label>
+    <label>逐个检查的主体类别<CategorySelect aria-label="主体类别" value={v.subject.class} placeholder="模型中的类别名" onChange={e => set({ subject: { ...v.subject, class: e.target.value } })} /></label>
     <div className="dataset-count-fields">
       <label>有多少主体满足<select aria-label="关联主体数量要求" value={v.quantifier ?? 'any'} onChange={e => set({ quantifier: e.target.value as 'any' | 'all' | 'count', ...(e.target.value === 'count' ? { count } : {}) })}>
         <option value="any">至少一个</option><option value="all">全部主体</option><option value="count">按数量判断…</option>
@@ -50,7 +62,7 @@ function AssociationEditor({ value, onChange }: { value: Association; onChange: 
       </select></label>
     </div>
     {objects.map((object, index) => <div className="dataset-association-target" key={index}>
-      <label>{objects.length === 1 ? '要匹配的关联类别' : `关联类别 ${index + 1}`}<input aria-label={index === 0 ? '关联类别' : `关联类别 ${index + 1}`} value={object.class} placeholder="模型中的另一类别名" onChange={e => updateObject(index, { ...object, class: e.target.value })} /></label>
+      <label>{objects.length === 1 ? '要匹配的关联类别' : `关联类别 ${index + 1}`}<CategorySelect aria-label={index === 0 ? '关联类别' : `关联类别 ${index + 1}`} value={object.class} placeholder="模型中的另一类别名" onChange={e => updateObject(index, { ...object, class: e.target.value })} /></label>
       {objects.length > 1 && <button type="button" className="dataset-remove" aria-label={`删除关联类别 ${index + 1}`} onClick={() => setObjects(objects.filter((_, i) => i !== index))}>×</button>}
     </div>)}
     <button type="button" className="dataset-add" disabled={objects.length >= 32} onClick={() => setObjects([...objects, { class: '', min_confidence: v.subject.min_confidence }])}>＋ 添加关联类别</button>
@@ -130,7 +142,7 @@ function ConditionEditor({ value, onChange, depth = 0 }: { value: Condition; onC
       : value.count.op === '>=' && value.count.value === 1 ? 'present' : 'count'
     return <div className="dataset-condition dataset-detection">
       {typeSelector}
-      <label>要判断的类别<input aria-label="类别名称" value={value.class} placeholder="模型标签，如 person" onChange={e => onChange({ ...value, class: e.target.value })} /></label>
+      <label>要判断的类别<CategorySelect aria-label="类别名称" value={value.class} placeholder="模型标签，如 person" onChange={e => onChange({ ...value, class: e.target.value })} /></label>
       <label>什么情况下满足<select aria-label="检测条件" value={mode} onChange={e => onChange({ ...value, count:
         e.target.value === 'absent' ? { op: '==', value: 0 } : e.target.value === 'present' ? { op: '>=', value: 1 } : { op: '>=', value: 2 } })}>
         <option value="present">检测到这个类别（至少 1 个）</option>
@@ -209,7 +221,7 @@ function BasicRule({ rule, onChange }: { rule: Rule; onChange: (rule: Rule) => v
         }}>
           <option value="present">检测到</option><option value="absent">没检测到</option>
         </select>
-        <input aria-label={`条件 ${index + 1} 类别`} placeholder="类别名，如 person" value={item.class}
+        <CategorySelect aria-label={`条件 ${index + 1} 类别`} placeholder="类别名，如 person" value={item.class}
           onChange={e => change(combine(basic.mode, basic.leaves.map((old, i) => i === index ? { ...old, class: e.target.value } : old)))} />
         <button type="button" className="dataset-remove" aria-label={`删除条件 ${index + 1}`} disabled={basic.leaves.length === 1}
           onClick={() => change(combine(basic.mode, basic.leaves.filter((_, i) => i !== index)))}>×</button>
@@ -230,12 +242,12 @@ function BasicRule({ rule, onChange }: { rule: Rule; onChange: (rule: Rule) => v
     </details>}
   </>
 }
-export default function DatasetRuleBuilder({ value, onChange }: { value: unknown; onChange: (value: unknown) => void }) {
+export default function DatasetRuleBuilder({ value, onChange, labels = [] }: { value: unknown; onChange: (value: unknown) => void; labels?: string[] }) {
   const valid = Array.isArray(value) && value.length > 0 && value.every(rule => rule && typeof rule === 'object' &&
     typeof rule.id === 'string' && typeof rule.name === 'string' && validCondition(rule.condition))
   if (!valid) return <div className="ncp-hint">当前条件格式无法编辑。<button type="button" onClick={() => onChange([{ id: 'rule_1', name: '采集条件', condition: { all: [leaf('person'), leaf('helmet', true)] } }])}>创建采集条件</button></div>
   const rules = value as Rule[]
-  return <div className="dataset-rule-builder">
+  return <CategoryList.Provider value={labels}><div className="dataset-rule-builder">
     {rules.map((rule, index) => <section className="dataset-rule" aria-label={`采集条件组 ${index + 1}`} key={rule.id}>
       {rules.length > 1 && <div className="dataset-rule-heading"><span>{index === 0 ? '条件组 1' : `或者满足条件组 ${index + 1}`}</span>
         <button type="button" aria-label={`删除条件组 ${index + 1}`} onClick={() => onChange(rules.filter((_, i) => i !== index))}>删除组</button>
@@ -246,5 +258,5 @@ export default function DatasetRuleBuilder({ value, onChange }: { value: unknown
       <button type="button" className="dataset-add" onClick={() => onChange([...rules, { id: `rule_${Date.now()}_${rules.length}`, name: `采集条件 ${rules.length + 1}`, condition: leaf() }])}>＋ 添加另一种抓图情况</button>
       <p className="dataset-field-help">满足任意一组即可抓图。</p>
     </>}
-  </div>
+  </div></CategoryList.Provider>
 }

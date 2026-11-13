@@ -3,15 +3,17 @@
 // 难度:★★★☆☆
 
 #include <channel.h>
-#include <events.h>
 #include <cstdio>
+#include <events.h>
 
 namespace
 {
 
 struct UploadDemoState
 {
-    explicit UploadDemoState(uint64_t now) : upload_time(now) {}
+    explicit UploadDemoState(uint64_t now) : upload_time(now)
+    {
+    }
     uint64_t upload_time;
 };
 

@@ -23,12 +23,14 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Annotated
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from services.live_stream import SharedSource, StreamPool, Viewer
+from services.app_paths import application_directory
+from services.logic_client import send_action
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 
@@ -62,7 +64,7 @@ _replace_locks: dict[tuple[str, str], _ReplaceLock] = {}
 def _rtsp_info(name: str) -> tuple[str, str]:
     """读取运行配置中的板内 RTSP 地址和编码格式。"""
     port, path, codec = 8554, "/live", "h264"
-    app_dir = APPS_ROOT / name
+    app_dir = application_directory(APPS_ROOT, name)
     config_name = "config.json"
     try:
         run_config = app_dir / "run.config"
@@ -168,7 +170,39 @@ def _close_session(key: tuple[str, str], session: _StreamSession) -> None:
     session.done.set()
 
 
-async def _fmp4_stream(request: Request, name: str, rtsp_url: str):
+async def _preview_command(name: str, action: str, channel_id: int = -1, lease: str = "", preview_height: int = 1080):
+    directory = application_directory(APPS_ROOT, name)
+    return await asyncio.to_thread(send_action, directory / "run.control.sock", {
+        "scope": "preview", "action": action, "channel_id": channel_id, "lease": lease, "preview_height": preview_height,
+    })
+
+
+async def _renew_preview(name: str, channel_id: int, lease: str, session: _StreamSession, preview_height: int = 1080):
+    try:
+        while not session.stop.is_set():
+            await asyncio.sleep(10)
+            if session.stop.is_set():
+                break
+            await _preview_command(name, "acquire", channel_id, lease, preview_height)
+    except HTTPException:
+        session.stop.set()
+        if session.viewer is not None:
+            session.viewer.close("preview-unavailable")
+
+
+@router.get("/apps/{name}/stream/capabilities")
+async def stream_capabilities(name: str):
+    application_directory(APPS_ROOT, name)
+    try:
+        response = await _preview_command(name, "status")
+        supported = response.get("protocol") == "channel-preview-v1" and response.get("supported") is True
+    except HTTPException:
+        supported = False
+    return {"channel_preview": supported, "preview_resolutions": response.get("preview_resolutions", [1080]) if supported else []}
+
+
+async def _fmp4_stream(request: Request, name: str, rtsp_url: str,
+                       channel_id: Optional[int] = None, lease: str = "", preview_height: int = 1080):
     requested_id = request.query_params.get("client_id", "")
     # 老版本页面没有 client_id 时，每个请求独立，避免旧标签页抢断新版预览。
     client_id = requested_id if re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", requested_id) else uuid.uuid4().hex
@@ -177,9 +211,12 @@ async def _fmp4_stream(request: Request, name: str, rtsp_url: str):
     started_at = time.monotonic()
     bytes_sent = 0
     end_reason = "client-disconnected"
+    renewal = None
 
     try:
         await _replace_session(name, client_id, session)
+        if channel_id is not None:
+            renewal = asyncio.create_task(_renew_preview(name, channel_id, lease, session, preview_height))
         session.source, session.viewer = _stream_pool.subscribe(name, rtsp_url, _build_ffmpeg_args(rtsp_url))
         log.info("[LiveStream][%s] viewer joined: viewers=%d", name, len(session.source.viewers))
         # StreamingResponse cancels this generator on disconnect. Polling the
@@ -195,15 +232,28 @@ async def _fmp4_stream(request: Request, name: str, rtsp_url: str):
         if session.stop.is_set():
             end_reason = "connection-replaced"
         _close_session(key, session)
+        if renewal is not None:
+            renewal.cancel()
+        if channel_id is not None:
+            # The response generator is cancelled on disconnect. Keep release
+            # outside its cancellation scope; engine TTL also covers Web crashes.
+            async def release():
+                try:
+                    await _preview_command(name, "release", channel_id, lease, preview_height)
+                except HTTPException:
+                    pass
+            task = asyncio.create_task(release())
+            _stream_pool.tasks.add(task)
+            task.add_done_callback(_stream_pool.tasks.discard)
         report = log.warning if end_reason in {"upstream-timeout", "upstream-eof", "slow-consumer"} else log.info
         report("[LiveStream][%s] closed: reason=%s seconds=%.1f bytes=%d", name,
                end_reason, time.monotonic() - started_at, bytes_sent)
 
 
 @router.get("/apps/{name}/stream")
-async def stream_app(name: str, request: Request):
-    if not (APPS_ROOT / name).exists():
-        raise HTTPException(404, f"App '{name}' not found")
+async def stream_app(name: str, request: Request, channel_id: Annotated[Optional[int], Query(ge=0)] = None,
+                     preview_height: Annotated[int, Query(ge=480, le=1080)] = 1080):
+    application_directory(APPS_ROOT, name)
     if shutil.which("ffmpeg") is None:
         raise HTTPException(500, "未找到 ffmpeg，无法将 RTSP 安全封装为网页实时流")
 
@@ -223,8 +273,19 @@ async def stream_app(name: str, request: Request):
         state = {key.removeprefix("retry_"): request.query_params.get(key, "")[:32] for key in fields}
         log.warning("[LiveStream][%s] client retry: cause=%s state=%r", name, cause, state)
 
+    if preview_height not in (480, 720, 1080):
+        raise HTTPException(422, "预览分辨率仅支持 480p、720p、1080p")
+    lease = ""
+    if channel_id is not None:
+        lease = uuid.uuid4().hex
+        response = await _preview_command(name, "acquire", channel_id, lease, preview_height)
+        if response.get("protocol") != "channel-preview-v1":
+            raise HTTPException(409, "当前程序尚未提供独立高清预览")
+        # Use only the local engine's validated route; never accept a client URL.
+        rtsp_url = f"rtsp://127.0.0.1:{int(response['port'])}{response['path']}"
+
     return StreamingResponse(
-        _fmp4_stream(request, name, rtsp_url),
+        _fmp4_stream(request, name, rtsp_url, channel_id, lease, preview_height),
         media_type="video/mp4",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",

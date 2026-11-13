@@ -121,4 +121,4 @@ less profile.log
 模型输入可以按“高、宽、颜色通道”或“颜色通道、高、宽”排列（NHWC/NCHW），
 但都必须满足上述单图、三通道、固定尺寸要求。移动仓库后需重新编译。
 
-使用本工具分析 ZipDepth 的例子见 [ZipDepth 性能说明](../../../docs/zip-depth-performance.md)。
+使用本工具分析 ZipDepth 的例子见 [ZipDepth 性能说明](../../../docs/performance/zip-depth-performance.md)。

@@ -39,9 +39,9 @@ Claude 由启动器通过非交互 `-p` 和 `--resume` 转发多轮问答，不�
 原生 Windows 时不自动开放写入型 Bash，只开放 Logic 路径的 `Edit(path)`（同时覆盖 Edit/Write 文件
 工具）；静态 manifest 校验由启动器自己的 Python 执行。
 
-WSL 优先使用 WSL2，并把仓库放在 Linux 文件系统而不是 `/mnt/c/`。Codex 当前不支持 WSL1；Claude Code
-虽列出 WSL1，但不支持沙箱且官方记录了原生二进制兼容问题，因此本向导不把 WSL1 当作可靠自动开发环境。
-Claude Code 原生 Windows 可以运行，但其沙箱只在 WSL2 支持；这不改变 RK3588 板端验证必须转移的事实。
+本项目以 WSL2 作为 WSL 开发环境，WSL1 未纳入当前向导的可靠验收范围。实际代理能否运行，
+仍须由安装版本的 `--version` / `--help` 和一次实际会话确认，不能从本表推断第三方 CLI 的最新平台支持。
+在原生 Windows 上，当前适配器不启用 Claude Bash 沙箱；这不改变 RK3588 板端验证必须转移的事实。
 
 代理选择与权限映射见 [`agent-adapters.md`](agent-adapters.md)。官方平台边界见
 [Codex 沙箱](https://learn.chatgpt.com/docs/sandboxing)、

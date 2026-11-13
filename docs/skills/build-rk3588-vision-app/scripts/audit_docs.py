@@ -123,8 +123,8 @@ def main() -> int:
                     if not (repo / repo_path).exists():
                         errors.append(f"{rel}:{lineno}: missing inline repository path: {repo_path}")
 
-        # development_log intentionally preserves historical snapshots.
-        if path.name == "development_log.md":
+        # development-log intentionally preserves historical snapshots.
+        if path.name == "development-log.md":
             continue
         visible_text = "\n".join(visible_lines)
         for pattern, reason in STALE_PATTERNS.items():

@@ -1,4 +1,4 @@
-#include "event/event_retention.h"
+#include "events/event_retention.h"
 #include <cassert>
 #include <string>
 

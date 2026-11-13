@@ -17,17 +17,7 @@ Web 主要用于查看网络和后续维护；摄像头搜索、笔记本直连�
 
 ## 构建与运行
 
-仓库随附的 `first_net_config` 是在 ARM64 Debian 11 基线上构建的成品。新的 RK3588
-设备即使尚未联网、没有 CMake 和编译器，也可以把整个 `tools/device/first_net_config` 目录复制过去后
-直接运行：
-
-```bash
-cd tools/device/first_net_config
-chmod +x first_net_config
-sudo ./first_net_config
-```
-
-修改源码后的开发构建方式为：
+源码仓库不跟踪生成的 `first_net_config` 二进制。在匹配目标架构和系统的开发环境中先构建：
 
 ```bash
 cd tools/device/first_net_config
@@ -68,9 +58,7 @@ sudo ./first_net_config --plain
 也不需要联网下载终端界面库。
 
 若自行重新编译再复制到新设备，CPU 架构必须一致，且制作机的 glibc 不能高于目标机；
-最稳妥的发布方式是在受支持系统中较老的 glibc 基线上构建。当前随附 ARM64 成品要求
-glibc 2.29 或更高，可用于 Debian 11、Ubuntu 20.04/22.04 等较新的 ARM64 系统。ANSI/termios
-消除的是 ncurses 依赖，
+建议在与目标机一致的系统中构建并验证所生成程序的动态库依赖。离线设备没有编译环境时，需提前携带该产物。ANSI/termios 消除的是 ncurses 依赖，
 并不意味着 ARM64 程序也能在 x86 设备上运行。
 
 ## 主要功能

@@ -1,6 +1,6 @@
+#include <algorithm>
 #include <channel.h>
 #include <drawing.h>
-#include <algorithm>
 
 #include <cstdio>
 #include <memory>
@@ -34,8 +34,8 @@ struct MotionLogicState
     MotionSetting selected_setting = DIFF_THRESHOLD;
 };
 
-const AlgoResult *select_hook_target(const std::vector<AlgoResult> *results, int class_id,
-                                     float min_score, int last_track_id)
+const AlgoResult *select_hook_target(const std::vector<AlgoResult> *results, int class_id, float min_score,
+                                     int last_track_id)
 {
     if (!results)
         return nullptr;
@@ -53,8 +53,7 @@ const AlgoResult *select_hook_target(const std::vector<AlgoResult> *results, int
     return same_track ? same_track : highest_score;
 }
 
-void draw_outlined_status(ChannelContext *ctx, const char *text, const cv::Point &pos,
-                          const cv::Scalar &foreground)
+void draw_outlined_status(ChannelContext *ctx, const char *text, const cv::Point &pos, const cv::Scalar &foreground)
 {
     draw_text(ctx, text, pos, foreground, 0.7, 1, DrawCommand::ALL,
               /*shadow_enabled=*/true, cv::Scalar(15, 45, 90), 2);
@@ -103,8 +102,7 @@ void format_selected_setting(const MotionLogicState &state, char *text, size_t s
     switch (state.selected_setting)
     {
     case DIFF_THRESHOLD:
-        std::snprintf(text, size, "参数: %s = %d", motion_setting_name(state.selected_setting),
-                      state.diff_threshold);
+        std::snprintf(text, size, "参数: %s = %d", motion_setting_name(state.selected_setting), state.diff_threshold);
         break;
     case CHANGE_RATIO:
         std::snprintf(text, size, "参数: %s = %.1f%%", motion_setting_name(state.selected_setting),
@@ -163,10 +161,8 @@ crane_safety::MotionConfig read_config(ChannelContext *ctx, MotionLogicState &st
     config.moving_confirm_ms = state.moving_confirm_ms;
     config.still_confirm_ms = state.still_confirm_ms;
     config.hook_motion_threshold_px = ctx->param_float("hook_motion_threshold_px");
-    config.hook_motion_window_ms =
-        crane_safety::seconds_to_ms(ctx->param_float("hook_motion_window_sec"));
-    config.hook_still_reset_ms =
-        crane_safety::seconds_to_ms(ctx->param_float("hook_still_reset_sec"));
+    config.hook_motion_window_ms = crane_safety::seconds_to_ms(ctx->param_float("hook_motion_window_sec"));
+    config.hook_still_reset_ms = crane_safety::seconds_to_ms(ctx->param_float("hook_still_reset_sec"));
     return config;
 }
 
@@ -182,8 +178,8 @@ static LogicActionResult logic_crane_motion_action(ChannelContext *ctx, const Lo
     initialize_controls(ctx, state);
     if (action->name == "switch_motion_setting")
     {
-        state.selected_setting = static_cast<MotionSetting>(
-            (static_cast<int>(state.selected_setting) + 1) % static_cast<int>(MOTION_SETTING_COUNT));
+        state.selected_setting = static_cast<MotionSetting>((static_cast<int>(state.selected_setting) + 1) %
+                                                            static_cast<int>(MOTION_SETTING_COUNT));
         return {true, std::string("当前参数：") + motion_setting_name(state.selected_setting)};
     }
     if (action->name == "motion_setting_decrease" || action->name == "motion_setting_increase")
@@ -209,9 +205,8 @@ static void logic_crane_motion(ChannelContext *ctx)
 
     const std::string roi_name = ctx->param_string("motion_roi_name");
     const RoiZone *zone = roi_name.empty() ? nullptr : ctx->roi_by_name(roi_name.c_str());
-    const AlgoResult *hook = select_hook_target(
-        ctx->results, static_cast<int>(ctx->param_int("hook_class_id")),
-        ctx->param_float("hook_min_score"), state.last_hook_track_id);
+    const AlgoResult *hook = select_hook_target(ctx->results, static_cast<int>(ctx->param_int("hook_class_id")),
+                                                ctx->param_float("hook_min_score"), state.last_hook_track_id);
     cv::Point hook_center;
     if (hook)
     {
@@ -219,8 +214,8 @@ static void logic_crane_motion(ChannelContext *ctx)
         state.last_hook_track_id = hook->track_id;
     }
     const crane_safety::MotionResult result =
-        state.detector.update(*frame, zone, ctx->timestamp_ms, read_config(ctx, state),
-                              hook ? &hook_center : nullptr, hook ? hook->track_id : -1);
+        state.detector.update(*frame, zone, ctx->timestamp_ms, read_config(ctx, state), hook ? &hook_center : nullptr,
+                              hook ? hook->track_id : -1);
 
     ctx->publish_bool("motion_valid", result.initialized);
     ctx->publish_bool("crane_moving", result.moving);
@@ -229,8 +224,7 @@ static void logic_crane_motion(ChannelContext *ctx)
     ctx->publish_bool("motion_hook_moving", result.hook_moving);
     ctx->publish_bool("motion_hook_motion_latched", result.hook_motion_latched);
     ctx->publish_number("motion_hook_displacement", result.hook_displacement);
-    ctx->publish_number("motion_hook_still_reset_elapsed",
-                        result.hook_still_reset_elapsed_ms / 1000.0);
+    ctx->publish_number("motion_hook_still_reset_elapsed", result.hook_still_reset_elapsed_ms / 1000.0);
     visualize_changed_pixels(ctx, result.change_mask, frame->size());
 
     char line1[192];
@@ -244,26 +238,24 @@ static void logic_crane_motion(ChannelContext *ctx)
     std::snprintf(line3, sizeof(line3), "背景变化比例: %.2f%% / %.1f%%", result.change_ratio * 100.0f,
                   state.change_ratio * 100.0f);
     if (result.background_motion_detected && !result.hook_motion_latched)
-        std::snprintf(line4, sizeof(line4), "运动确认: 等待吊钩移动 (0.0/%.1fs)",
-                      state.moving_confirm_ms / 1000.0);
+        std::snprintf(line4, sizeof(line4), "运动确认: 等待吊钩移动 (0.0/%.1fs)", state.moving_confirm_ms / 1000.0);
     else
-        std::snprintf(line4, sizeof(line4), "运动确认: %.1f/%.1fs",
-                      result.moving_candidate_elapsed_ms / 1000.0,
+        std::snprintf(line4, sizeof(line4), "运动确认: %.1f/%.1fs", result.moving_candidate_elapsed_ms / 1000.0,
                       state.moving_confirm_ms / 1000.0);
-    std::snprintf(line5, sizeof(line5), "静止确认: %.1f/%.1fs",
-                  result.still_candidate_elapsed_ms / 1000.0, state.still_confirm_ms / 1000.0);
+    std::snprintf(line5, sizeof(line5), "静止确认: %.1f/%.1fs", result.still_candidate_elapsed_ms / 1000.0,
+                  state.still_confirm_ms / 1000.0);
     const double hook_reset_sec = ctx->param_float("hook_still_reset_sec");
     if (result.hook_visible && result.hook_moving)
-        std::snprintf(line6, sizeof(line6), "吊钩门控: 已移动并放行  %.1f/%.1fpx",
-                      result.hook_displacement, ctx->param_float("hook_motion_threshold_px"));
+        std::snprintf(line6, sizeof(line6), "吊钩门控: 已移动并放行  %.1f/%.1fpx", result.hook_displacement,
+                      ctx->param_float("hook_motion_threshold_px"));
     else if (result.hook_visible && result.hook_motion_latched)
         std::snprintf(line6, sizeof(line6), "吊钩门控: 静止复位 %.1f/%.1fs",
                       result.hook_still_reset_elapsed_ms / 1000.0, hook_reset_sec);
     else if (!result.hook_visible && result.hook_motion_latched)
         std::snprintf(line6, sizeof(line6), "吊钩门控: 检测丢失，保持放行");
     else if (result.hook_visible)
-        std::snprintf(line6, sizeof(line6), "吊钩门控: 静止，禁止运动  %.1f/%.1fpx",
-                      result.hook_displacement, ctx->param_float("hook_motion_threshold_px"));
+        std::snprintf(line6, sizeof(line6), "吊钩门控: 静止，禁止运动  %.1f/%.1fpx", result.hook_displacement,
+                      ctx->param_float("hook_motion_threshold_px"));
     else
         std::snprintf(line6, sizeof(line6), "吊钩门控: 未检测到，禁止运动");
     const cv::Scalar normal_color(240, 240, 240);
@@ -279,8 +271,7 @@ static void logic_crane_motion(ChannelContext *ctx)
     draw_outlined_status(ctx, line5, cv::Point(18, 152),
                          state.selected_setting == STILL_CONFIRM_TIME ? selected_color : normal_color);
     draw_outlined_status(ctx, line6, cv::Point(18, 182),
-                         result.hook_motion_latched ? cv::Scalar(0, 165, 255)
-                                                    : cv::Scalar(0, 220, 0));
+                         result.hook_motion_latched ? cv::Scalar(0, 165, 255) : cv::Scalar(0, 220, 0));
 }
 
 REGISTER_LOGIC(logic_crane_motion);

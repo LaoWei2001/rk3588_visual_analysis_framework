@@ -60,7 +60,9 @@ def assert_color(page, expected):
 def test_focus_pixels_resize_fullscreen_and_connection(playback, tmp_path):
     page, _, state = playback
     requests = configure(page, state)
-    assert page.get_by_role('combobox').count() == 0
+    assert page.get_by_label('点击画面后的显示方式').input_value() == 'independent'
+    page.get_by_label('点击画面后的显示方式').select_option('zoom')
+    assert page.get_by_role('combobox').count() == 1
     assert page.locator('.live-view-channel-toolbar').count() == 0
     page.get_by_role('button', name='单独查看通道 9', exact=True).click()
     page.wait_for_function("document.querySelector('.live-view-video-crop').dataset.focusedChannel === '9'")
@@ -150,3 +152,33 @@ def test_file_timeline_and_recovery_preserve_focus(playback):
         document.querySelector('video').currentTime > 1 && document.querySelector('.live-view-video-snapshot').hidden''', timeout=15000)
     assert_color(page, (0,0,255))
     assert state['requests'] == requests + 1
+
+
+def test_hidden_tiles_and_preview_preferences(playback):
+    page, _, state = playback
+    page.route('**/stream/capabilities', lambda route: route.fulfill(json={
+        'channel_preview':True, 'preview_resolutions':[480,720,1080]}))
+    configure(page, state)
+    target = page.get_by_role('button', name='单独查看通道 2', exact=True)
+    target.hover()
+    style = target.evaluate('(e) => { const s = getComputedStyle(e); return [s.backgroundColor, s.boxShadow, getComputedStyle(e.querySelector("span")).opacity] }')
+    assert style == ['rgba(0, 0, 0, 0)', 'none', '0']
+    page.get_by_label('独立预览分辨率').select_option('720')
+    target.click()
+    page.wait_for_function("document.querySelector('video')?.currentTime > 1")
+    assert state['queries'][-1]['channel_id'] == ['2']
+    assert state['queries'][-1]['preview_height'] == ['720']
+    page.get_by_label('独立预览分辨率').select_option('480')
+    page.wait_for_function("document.querySelector('video')?.currentTime > 1")
+    assert state['queries'][-1]['preview_height'] == ['480']
+    # Returning to local zoom restores the mosaic stream, preserving focus.
+    page.get_by_label('点击画面后的显示方式').select_option('zoom')
+    page.wait_for_function("document.querySelector('video')?.currentTime > 1")
+    assert 'channel_id' not in state['queries'][-1]
+    assert_color(page, (255,0,0))
+    assert page.locator('.live-view-video-crop').get_attribute('data-focused-channel') == '2'
+    page.reload()
+    page.get_by_label('点击画面后的显示方式').wait_for()
+    assert page.get_by_label('点击画面后的显示方式').input_value() == 'zoom'
+    page.get_by_label('点击画面后的显示方式').select_option('independent')
+    assert page.get_by_label('独立预览分辨率').input_value() == '480'

@@ -11,8 +11,8 @@
 
 #include <opencv2/opencv.hpp>
 
-#include <types.h>
 #include <channel.h>
+#include <types.h>
 
 namespace crane_safety
 {
@@ -24,18 +24,17 @@ static inline std::vector<std::string> split_labels(const std::string &csv)
     std::string item;
     while (std::getline(input, item, ','))
     {
-        const auto first = std::find_if_not(item.begin(), item.end(),
-                                            [](unsigned char ch) { return std::isspace(ch) != 0; });
-        const auto last = std::find_if_not(item.rbegin(), item.rend(),
-                                           [](unsigned char ch) { return std::isspace(ch) != 0; }).base();
+        const auto first =
+            std::find_if_not(item.begin(), item.end(), [](unsigned char ch) { return std::isspace(ch) != 0; });
+        const auto last =
+            std::find_if_not(item.rbegin(), item.rend(), [](unsigned char ch) { return std::isspace(ch) != 0; }).base();
         if (first < last)
             labels.emplace_back(first, last);
     }
     return labels;
 }
 
-static inline bool result_matches(const AlgoResult &result, const std::vector<std::string> &labels,
-                                  float min_score)
+static inline bool result_matches(const AlgoResult &result, const std::vector<std::string> &labels, float min_score)
 {
     // -ffast-math 会优化 std::isfinite，直接检查 IEEE-754 指数位。
     uint32_t score_bits = 0;

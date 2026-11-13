@@ -1,12 +1,12 @@
+#include "safety_controller.h"
 #include <control.h>
 #include <events.h>
 #include <global.h>
-#include "safety_controller.h"
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
@@ -62,8 +62,7 @@ enum class AlgorithmDisplayState
     WAITING
 };
 
-void show_algorithm_state(GlobalContext *gctx, int channel_id, const char *algorithm,
-                          AlgorithmDisplayState state)
+void show_algorithm_state(GlobalContext *gctx, int channel_id, const char *algorithm, AlgorithmDisplayState state)
 {
     if (!gctx || !algorithm || channel_id < 0 || gctx->model_width <= 0 || gctx->model_height <= 0)
         return;
@@ -111,15 +110,14 @@ crane_safety::HardwareConfig read_hardware_config(GlobalContext *gctx)
     config.enabled = gctx->param_bool("hardware_enabled");
     config.horn_pin = gctx->param_string("horn_pin");
     config.horn_active_level = static_cast<int>(gctx->param_int("horn_active_level"));
-    config.horn_min_alarm_ms = static_cast<uint64_t>(std::ceil(
-        std::max(0.0, static_cast<double>(gctx->param_float("horn_min_alarm_sec"))) * 1000.0));
+    config.horn_min_alarm_ms = static_cast<uint64_t>(
+        std::ceil(std::max(0.0, static_cast<double>(gctx->param_float("horn_min_alarm_sec"))) * 1000.0));
     config.lamp_pin = gctx->param_string("lamp_pin");
     config.lamp_active_level = static_cast<int>(gctx->param_int("lamp_active_level"));
     return config;
 }
 
-void report_hook_alarm(GlobalContext *gctx, int channel_id, bool crane_moving,
-                       const ChannelInput *input)
+void report_hook_alarm(GlobalContext *gctx, int channel_id, bool crane_moving, const ChannelInput *input)
 {
     EventRequest request;
     request.event_type = "crane_hook_outside";
@@ -172,8 +170,7 @@ void report_helmet_alarm(GlobalContext *gctx, int channel_id, const ChannelInput
 
 } // namespace
 
-static LogicActionResult global_crane_safety_controller_action(GlobalContext *gctx,
-                                                               const LogicAction *action)
+static LogicActionResult global_crane_safety_controller_action(GlobalContext *gctx, const LogicAction *action)
 {
     if (!gctx || !gctx->state || !action)
         return {false, "gctx or action is null"};
@@ -186,8 +183,7 @@ static LogicActionResult global_crane_safety_controller_action(GlobalContext *gc
         state.horn_silenced = true;
         state.automatic_horn_on = false;
         state.horn_test_on = false;
-        const bool lamp_on = !state.outputs_forced_off &&
-                             (state.crane_moving || state.lamp_test_on);
+        const bool lamp_on = !state.outputs_forced_off && (state.crane_moving || state.lamp_test_on);
         state.hardware.apply(hardware_config, lamp_on, false, gctx->timestamp_ms, true);
         return {true, "当前告警已消音；全部有效违规解除后将自动重新布防"};
     }
@@ -201,8 +197,8 @@ static LogicActionResult global_crane_safety_controller_action(GlobalContext *gc
         const bool lamp_on = state.crane_moving || state.lamp_test_on;
         state.hardware.apply(hardware_config, lamp_on, state.automatic_horn_on || state.horn_test_on,
                              gctx->timestamp_ms, !state.automatic_horn_on && !state.horn_test_on);
-        return {true, state.horn_test_on ? "喇叭测试已开启并持续保持，再按一次关闭"
-                                         : "喇叭测试已关闭，恢复自动告警控制"};
+        return {true,
+                state.horn_test_on ? "喇叭测试已开启并持续保持，再按一次关闭" : "喇叭测试已关闭，恢复自动告警控制"};
     }
     if (action->name == "test_lamp")
     {
@@ -211,8 +207,7 @@ static LogicActionResult global_crane_safety_controller_action(GlobalContext *gc
         if (!hardware_config.enabled)
             return {true, "现场硬件输出尚未启用，未执行投影灯测试"};
         state.lamp_test_on = !state.lamp_test_on;
-        state.scene_ready_at_ms = gctx->timestamp_ms +
-                                  seconds_to_ms(gctx->param_float("lamp_settle_sec"));
+        state.scene_ready_at_ms = gctx->timestamp_ms + seconds_to_ms(gctx->param_float("lamp_settle_sec"));
         const bool lamp_on = state.crane_moving || state.lamp_test_on;
         state.hardware.apply(hardware_config, lamp_on, state.automatic_horn_on || state.horn_test_on,
                              gctx->timestamp_ms);
@@ -236,8 +231,7 @@ static LogicActionResult global_crane_safety_controller_action(GlobalContext *gc
         state.automatic_horn_on = false;
         state.horn_test_on = false;
         state.lamp_test_on = false;
-        state.scene_ready_at_ms = gctx->timestamp_ms +
-                                  seconds_to_ms(gctx->param_float("lamp_settle_sec"));
+        state.scene_ready_at_ms = gctx->timestamp_ms + seconds_to_ms(gctx->param_float("lamp_settle_sec"));
         state.hardware.apply(hardware_config, state.crane_moving, false, gctx->timestamp_ms, true);
         return {true, "已解除人工锁定，恢复行车安全自动控制"};
     }
@@ -294,8 +288,7 @@ static void global_crane_safety_controller(GlobalContext *gctx)
     bool intrusion_algorithm_enabled = crane_moving && scene_ready;
     bool helmet_alarm = helmet_algorithm_enabled && raw_helmet_alarm;
     bool intrusion_alarm = intrusion_algorithm_enabled && raw_intrusion_alarm;
-    if (state.horn_silenced && !state.outputs_forced_off &&
-        !hook_alarm && !helmet_alarm && !intrusion_alarm)
+    if (state.horn_silenced && !state.outputs_forced_off && !hook_alarm && !helmet_alarm && !intrusion_alarm)
         state.horn_silenced = false;
 
     bool lamp_on = crane_moving || lamp_test_active;
@@ -333,21 +326,20 @@ static void global_crane_safety_controller(GlobalContext *gctx)
     logic_control_set_channel_inference(intrusion_channel_id, intrusion_algorithm_enabled);
 
     show_algorithm_state(gctx, motion_channel_id, "行车运动检测",
-                         motion_valid ? AlgorithmDisplayState::ENABLED
-                                      : AlgorithmDisplayState::WAITING);
+                         motion_valid ? AlgorithmDisplayState::ENABLED : AlgorithmDisplayState::WAITING);
     show_algorithm_state(gctx, hook_channel_id, "歪拉斜吊检测",
                          hook && hook->has("hook_alarm") ? AlgorithmDisplayState::ENABLED
-                                                          : AlgorithmDisplayState::WAITING);
-    show_algorithm_state(gctx, helmet_channel_id, "安全帽告警",
-                         !helmet || !helmet->has("helmet_alarm")
-                             ? AlgorithmDisplayState::WAITING
-                             : (helmet_algorithm_enabled ? AlgorithmDisplayState::ENABLED
-                                                         : AlgorithmDisplayState::DISABLED));
-    show_algorithm_state(gctx, intrusion_channel_id, "人员入侵告警",
-                         !intrusion || !intrusion->has("intrusion_alarm")
-                             ? AlgorithmDisplayState::WAITING
-                             : (intrusion_algorithm_enabled ? AlgorithmDisplayState::ENABLED
-                                                            : AlgorithmDisplayState::DISABLED));
+                                                         : AlgorithmDisplayState::WAITING);
+    show_algorithm_state(
+        gctx, helmet_channel_id, "安全帽告警",
+        !helmet || !helmet->has("helmet_alarm")
+            ? AlgorithmDisplayState::WAITING
+            : (helmet_algorithm_enabled ? AlgorithmDisplayState::ENABLED : AlgorithmDisplayState::DISABLED));
+    show_algorithm_state(
+        gctx, intrusion_channel_id, "人员入侵告警",
+        !intrusion || !intrusion->has("intrusion_alarm")
+            ? AlgorithmDisplayState::WAITING
+            : (intrusion_algorithm_enabled ? AlgorithmDisplayState::ENABLED : AlgorithmDisplayState::DISABLED));
 
     if (hook_alarm && !state.last_hook_alarm)
         report_hook_alarm(gctx, hook_channel_id, crane_moving, hook);
@@ -362,5 +354,4 @@ static void global_crane_safety_controller(GlobalContext *gctx)
 }
 
 REGISTER_GLOBAL_LOGIC(global_crane_safety_controller);
-REGISTER_GLOBAL_LOGIC_ACTION(global_crane_safety_controller,
-                             global_crane_safety_controller_action);
+REGISTER_GLOBAL_LOGIC_ACTION(global_crane_safety_controller, global_crane_safety_controller_action);

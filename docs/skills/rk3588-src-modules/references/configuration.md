@@ -75,7 +75,7 @@
   旧样本在 1 秒后归零，文字刷新不计入合成帧数。暂停时显示 0。
   性能文字只缓存底部 64 像素背景，关闭时释放缓存；停帧刷新只更新此区域，
   数值未变化时跳过绘制和缓冲写入。板端绘制耗时与测试范围见
-  [性能显示测试报告](../../../performance-display-benchmark.md)。
+  [性能显示测试报告](../../../performance/performance-display-benchmark.md)。
 - `[Feed] window` 是实际统计秒数，`recv_fps/enq_fps` 使用该窗口；
   `throttle_skip` 是限频跳过，`pending_discard` 是已入队旧帧被淘汰，
   `enqueue_fail` 是入队失败。失败百分比仅针对入队尝试，三类不能混为总丢帧率。
@@ -131,7 +131,7 @@ file path 可相对 App 工作目录或使用绝对路径。当前初始验证�
 `version`、`obj_thresh`、`nms_thresh`、`detect_classes`、`npu_core`。
 
 所有模型项的 `id` 都必须非空且在通道内唯一。以下运行字段检查只针对 `enable=true` 的模型：支持
-类型为 `yolov5`、`yolov5_seg`、`yolov8_pose`、`yolo26_pose`、`yolov8_det`、`yolo26_depth`、`zip_depth`；检测/分割要求 label，姿态和深度可留空，配置了 label
+类型为 `yolov5`、`yolov5_seg`、`yolov8_pose`、`yolo26_pose`、`yolov8_det`、`yolov8_obb`、`yolo26_depth`、`zip_depth`；`yolov5`、`yolov5_seg`、`yolov8_det` 要求 label，OBB、姿态和深度可留空，配置了 label
 时文件必须存在；阈值在 `[0,1]`；NPU core 为 `-1`/`"auto"` 或 0、1、2。
 
 `npu_core=-1` 由框架按全部启用通道统一规划，不直接交给 RKNN Runtime AUTO。
@@ -139,12 +139,12 @@ file path 可相对 App 工作目录或使用绝对路径。当前初始验证�
 独立核心；两路全自动时保留三核均衡共享；单路可使用全部空闲核心。
 核心不足或三个核心都被显式指定时仍需共享，同核 SDK 周期串行执行。
 同帧子模型协同使用所属通道的核心池，具体分配与热更新边界见
-[NPU 调度](../../../../engine/src/inference/NPU_SCHEDULING.md)。
+[NPU 调度](../../../../engine/src/vision/inference/NPU_SCHEDULING.md)。
 
 同一帧可运行多个启用模型，结果通过 `model_id/model_type/model_index` 区分。模型 ID 也是 OTA 定位
 契约，不能随意变成数组下标。
 
-各子模型从源帧生成各自尺寸的输入，结果统一映射到 640×640 业务坐标；不要求不同模型输入尺寸相同，但每个模型必须满足对应适配器的张量契约。`yolo26_depth` 使用米制深度契约，`zip_depth` 产生相对逆深度，不能直接标为米。ZipDepth 在 `full_plus_roi` 中只做整帧推理，避免合并不同裁剪的不可比相对尺度；其他模型保留各自 ROI 行为。详见 [ZipDepth 适配](../../../../engine/src/model/zip-depth/README.md)。
+各子模型从源帧生成各自尺寸的输入，结果统一映射到 640×640 业务坐标；不要求不同模型输入尺寸相同，但每个模型必须满足对应适配器的张量契约。`yolo26_depth` 使用米制深度契约，`zip_depth` 产生相对逆深度，不能直接标为米。ZipDepth 在 `full_plus_roi` 中只做整帧推理，避免合并不同裁剪的不可比相对尺度；其他模型保留各自 ROI 行为。详见 [ZipDepth 适配](../../../../engine/src/vision/models/zip-depth/README.md)。
 
 ### ROI、logic 与事件
 

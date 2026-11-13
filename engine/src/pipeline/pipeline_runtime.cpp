@@ -1,10 +1,10 @@
 /**
- * @file pipeline.cpp
+ * @file pipeline_runtime.cpp
  * @brief 分析器模块 — 共享状态定义 + 生命周期管理
  *
  * 本文件仅负责:
  *   1. 定义跨文件共享的 extern 变量
- *        g_display_queues   — 显示单槽队列（frame_inlet + display_pipeline 共用）
+ *        g_display_queues   — 显示单槽队列（frame_inlet + display_worker 共用）
  *        g_traditional_logic_queues — 非 NPU 逻辑单槽最新帧队列
  *        g_dispatch_running — pipeline_dispatch_worker 退出信号
  *        g_process_mtx   — 同通道 process_channel_results 串行锁
@@ -19,7 +19,7 @@
  *   frame_inlet.cpp       — pipeline_submit_frame + FPS 节流 + RGA 转换 + 统计
  *   channel_pipeline.cpp  — 跟踪器 + process_channel_results + invoke_channel_logic
  *   result_dispatch.cpp   — pipeline_dispatch_worker
- *   display_pipeline.cpp  — display_worker_thread
+ *   display_worker.cpp  — display_worker_thread
  *   traditional_logic_worker.cpp — pipeline_logic_worker
  */
 
@@ -32,13 +32,13 @@
 #include <utility>
 #include <vector>
 
+#include "application/runtime/app_ctrl.h"
 #include "common/logging.h"
-#include "inference/inference_engine.h"
 #include "logic/global_logic.h"
+#include "media/recorder/event_video_recorder.h"
 #include "pipeline_internal.h" /* DisplayTask/DisplayQueue 定义、extern 声明、时间辅助 */
 #include "pipeline_runtime.h"
-#include "recorder/event_video_recorder.h"
-#include "runtime/app_ctrl.h"
+#include "vision/inference/inference_engine.h"
 #include <channel.h>
 
 /*======================== 共享 extern 变量定义 ========================*/
@@ -146,9 +146,8 @@ void pipeline_deinit(void)
     if (!g_pipeline_initialized)
         return;
     pipeline_request_stop();
-    inference_deinit();
-
     global_logic_stop_all();
+    inference_deinit();
     trackers_deinit();
     g_pipeline_initialized = false;
 }

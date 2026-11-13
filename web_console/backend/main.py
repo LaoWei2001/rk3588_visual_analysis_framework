@@ -235,10 +235,18 @@ if FRONTEND_DIST.exists():
 
     @app.get("/{full_path:path}")
     async def spa_fallback(full_path: str):
-        target = FRONTEND_DIST / full_path
+        root = FRONTEND_DIST.resolve()
+        try:
+            target = (root / full_path).resolve()
+            target.relative_to(root)
+        except (ValueError, OSError, RuntimeError):
+            raise HTTPException(status_code=404, detail="Not found")
         if target.is_file():
             return FileResponse(str(target), headers={"Cache-Control": "no-store"} if target.suffix == ".html" else None)
-        return FileResponse(str(FRONTEND_DIST / "index.html"), headers={"Cache-Control": "no-store"})
+        index = (root / "index.html").resolve()
+        if not index.is_relative_to(root):
+            raise HTTPException(status_code=404, detail="Not found")
+        return FileResponse(str(index), headers={"Cache-Control": "no-store"})
 else:
     @app.get("/")
     async def root():

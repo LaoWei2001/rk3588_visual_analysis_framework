@@ -1,7 +1,7 @@
 // Prepared native tensors -> completed outputs, using blocking RKNN calls.
 // Application pipelines and the framework's per-inference core gate are excluded.
 #include "bench_options.h"
-#include "inference/npu_device_owner.h"
+#include "vision/inference/npu_device_owner.h"
 #include <atomic>
 #include <condition_variable>
 #include <csignal>

@@ -43,7 +43,7 @@ import {
   inferenceRoiConfig,
   inferenceRoiContainsPoint,
   inferenceRoiRestrictsResults,
-} from '../components/InferenceROIEditor'
+} from '../models/inferenceRoi'
 import './EditorPage.css'
 import { configSignature, useAutoSync } from '../hooks/useAutoSync'
 import ConfigSyncNotice from '../components/ConfigSyncNotice'

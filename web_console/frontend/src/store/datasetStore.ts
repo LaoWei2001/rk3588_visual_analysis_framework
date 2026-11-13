@@ -1,7 +1,6 @@
 import {create} from 'zustand'
 import {createJSONStorage, persist} from 'zustand/middleware'
-import type {DatasetDraft} from '../components/DatasetTaskEditor'
-import {removeLegacyImageQuality, type DatasetReceiverPlatform} from '../api/dataset'
+import {removeLegacyImageQuality, type DatasetDraft, type DatasetReceiverPlatform} from '../models/dataset'
 
 interface DatasetState {
   app: string

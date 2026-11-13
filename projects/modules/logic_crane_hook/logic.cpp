@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "detection_utils.h"
-#include "hook_guard.h"
 #include "hook_geometry.h"
+#include "hook_guard.h"
 
 namespace
 {
@@ -38,8 +38,7 @@ struct HookLogicState
     cv::Point dynamic_center{-1, -1};
 };
 
-void draw_outlined_status(ChannelContext *ctx, const char *text, const cv::Point &pos,
-                          const cv::Scalar &foreground)
+void draw_outlined_status(ChannelContext *ctx, const char *text, const cv::Point &pos, const cv::Scalar &foreground)
 {
     draw_text(ctx, text, pos, foreground, 0.7, 1, DrawCommand::ALL,
               /*shadow_enabled=*/true, cv::Scalar(15, 45, 90), 2);
@@ -56,9 +55,8 @@ void initialize_controls(ChannelContext *ctx, HookLogicState &state)
     if (ctx->param_bool("dynamic_center_enabled"))
     {
         state.calibration = crane_safety::load_hook_calibration(
-            ctx->param_string("center_calibration_path"),
-            ctx->param_float("calibration_scale_bin"), ctx->business_size(),
-            static_cast<int>(ctx->param_int("edge_margin_px")));
+            ctx->param_string("center_calibration_path"), ctx->param_float("calibration_scale_bin"),
+            ctx->business_size(), static_cast<int>(ctx->param_int("edge_margin_px")));
     }
     state.controls_initialized = true;
 }
@@ -141,8 +139,8 @@ static LogicActionResult logic_crane_hook_action(ChannelContext *ctx, const Logi
         else
             value = std::min(selected_time_max_ms(state), value + 300U);
         char message[160];
-        std::snprintf(message, sizeof(message), "%s已调整为 %.1f 秒",
-                      time_setting_name(state.selected_time), value / 1000.0);
+        std::snprintf(message, sizeof(message), "%s已调整为 %.1f 秒", time_setting_name(state.selected_time),
+                      value / 1000.0);
         return {true, message};
     }
     return {false, "unsupported action: " + action->name};
@@ -167,9 +165,9 @@ static void logic_crane_hook(ChannelContext *ctx)
     crane_safety::HookObservation observation;
     if (hook)
     {
-        geometry = crane_safety::measure_hook(
-            hook->box, ctx->business_size(), static_cast<int>(ctx->param_int("edge_margin_px")),
-            state.calibration, dynamic_enabled);
+        geometry = crane_safety::measure_hook(hook->box, ctx->business_size(),
+                                              static_cast<int>(ctx->param_int("edge_margin_px")), state.calibration,
+                                              dynamic_enabled);
         if (dynamic_enabled && state.calibration.points.empty())
             geometry.status = "动态标定不可用，请检查标定文件";
         observation.visible = true;
@@ -208,22 +206,18 @@ static void logic_crane_hook(ChannelContext *ctx)
     ctx->publish_number("hook_outside_elapsed_sec", result.outside_elapsed_ms / 1000.0);
     ctx->publish_number("hook_safe_elapsed_sec", result.safe_elapsed_ms / 1000.0);
     ctx->publish_number("hook_missing_elapsed_sec", result.missing_elapsed_ms / 1000.0);
-    ctx->publish_bool("hook_dynamic_center_active",
-                      dynamic_active);
-    ctx->publish_number("hook_box_scale", hook ?
-        std::sqrt(static_cast<double>(hook->box.width) * hook->box.height) : 0.0);
-    ctx->publish_int("hook_safe_center_x",
-                     crane_safety::HookGuard::safe_center(frame->size(), config).x);
-    ctx->publish_int("hook_safe_center_y",
-                     crane_safety::HookGuard::safe_center(frame->size(), config).y);
+    ctx->publish_bool("hook_dynamic_center_active", dynamic_active);
+    ctx->publish_number("hook_box_scale",
+                        hook ? std::sqrt(static_cast<double>(hook->box.width) * hook->box.height) : 0.0);
+    ctx->publish_int("hook_safe_center_x", crane_safety::HookGuard::safe_center(frame->size(), config).x);
+    ctx->publish_int("hook_safe_center_y", crane_safety::HookGuard::safe_center(frame->size(), config).y);
 
     const cv::Point center = crane_safety::HookGuard::safe_center(frame->size(), config);
     draw_circle(ctx, center, config.safe_radius,
-                result.alarm ? cv::Scalar(0, 0, 255) :
-                    (result.measurement_valid ? cv::Scalar(0, 200, 0) : cv::Scalar(0, 165, 255)),
+                result.alarm ? cv::Scalar(0, 0, 255)
+                             : (result.measurement_valid ? cv::Scalar(0, 200, 0) : cv::Scalar(0, 165, 255)),
                 result.alarm ? 4 : 2);
-    if (result.center.x >= 0 && result.center.y >= 0 &&
-        result.center.x < frame->cols && result.center.y < frame->rows)
+    if (result.center.x >= 0 && result.center.y >= 0 && result.center.x < frame->cols && result.center.y < frame->rows)
     {
         draw_circle(ctx, result.center, 5, cv::Scalar(0, 255, 255), -1);
     }
@@ -250,31 +244,30 @@ static void logic_crane_hook(ChannelContext *ctx)
     char line8[256];
     char line9[256];
     std::snprintf(line1, sizeof(line1), "吊钩: %s  状态: %s",
-                  result.visible ? "可见" : (result.held_during_loss ? "短暂丢失" : "不可见"),
-                  state_text);
+                  result.visible ? "可见" : (result.held_during_loss ? "短暂丢失" : "不可见"), state_text);
     if (result.measurement_valid)
         std::snprintf(line2, sizeof(line2), "偏移: %.1f/%dpx%s", result.distance, config.safe_radius,
                       result.position_estimated ? " (估算，不能解除告警)" : "");
     else
         std::snprintf(line2, sizeof(line2), "偏移: 暂不可判定");
     std::snprintf(line3, sizeof(line3), "置信度: %.2f/%.2f", result.score, config.min_score);
-    std::snprintf(line4, sizeof(line4), "圆外确认: %.1f/%.1fs",
-                  result.outside_elapsed_ms / 1000.0, config.confirm_ms / 1000.0);
-    std::snprintf(line5, sizeof(line5), "安全复位: %.1f/%.1fs",
-                  result.safe_elapsed_ms / 1000.0, config.clear_ms / 1000.0);
-    std::snprintf(line6, sizeof(line6), "丢失保持: %.1f/%.1fs",
-                  result.missing_elapsed_ms / 1000.0, config.lost_tolerance_ms / 1000.0);
-    std::snprintf(line7, sizeof(line7), "安全圆: (%d,%d)  R=%dpx  圆心:%s",
-                  center.x, center.y, config.safe_radius,
+    std::snprintf(line4, sizeof(line4), "圆外确认: %.1f/%.1fs", result.outside_elapsed_ms / 1000.0,
+                  config.confirm_ms / 1000.0);
+    std::snprintf(line5, sizeof(line5), "安全复位: %.1f/%.1fs", result.safe_elapsed_ms / 1000.0,
+                  config.clear_ms / 1000.0);
+    std::snprintf(line6, sizeof(line6), "丢失保持: %.1f/%.1fs", result.missing_elapsed_ms / 1000.0,
+                  config.lost_tolerance_ms / 1000.0);
+    std::snprintf(line7, sizeof(line7), "安全圆: (%d,%d)  R=%dpx  圆心:%s", center.x, center.y, config.safe_radius,
                   dynamic_active ? "动态" : (dynamic_enabled ? "保持/待标定" : "固定"));
-    std::snprintf(line8, sizeof(line8), "框高:%dpx  有效样本:%d  跳过:%d  范围:%.1f~%.1f",
-                  hook ? hook->box.height : 0, state.calibration.accepted,
-                  state.calibration.rejected, state.calibration.min_height, state.calibration.max_height);
-    std::snprintf(line9, sizeof(line9), "%s", state.calibration.error.empty()
-                  ? geometry.status.c_str() : state.calibration.error.c_str());
-    const cv::Scalar status_color = result.alarm ? cv::Scalar(0, 0, 255)
-                                                : ((!result.measurement_valid || result.outside) ? cv::Scalar(0, 165, 255)
-                                                                  : cv::Scalar(240, 240, 240));
+    std::snprintf(line8, sizeof(line8), "框高:%dpx  有效样本:%d  跳过:%d  范围:%.1f~%.1f", hook ? hook->box.height : 0,
+                  state.calibration.accepted, state.calibration.rejected, state.calibration.min_height,
+                  state.calibration.max_height);
+    std::snprintf(line9, sizeof(line9), "%s",
+                  state.calibration.error.empty() ? geometry.status.c_str() : state.calibration.error.c_str());
+    const cv::Scalar status_color =
+        result.alarm
+            ? cv::Scalar(0, 0, 255)
+            : ((!result.measurement_valid || result.outside) ? cv::Scalar(0, 165, 255) : cv::Scalar(240, 240, 240));
     draw_outlined_status(ctx, line1, cv::Point(18, 32), status_color);
     const cv::Scalar normal_time_color(240, 240, 240);
     const cv::Scalar selected_time_color(0, 255, 255);
@@ -287,8 +280,7 @@ static void logic_crane_hook(ChannelContext *ctx)
     draw_outlined_status(ctx, line6, cv::Point(18, 182),
                          state.selected_time == LOST_HOLD_TIME ? selected_time_color : normal_time_color);
     draw_outlined_status(ctx, line7, cv::Point(18, 212), normal_time_color);
-    draw_outlined_status(ctx, line8, cv::Point(18, 242),
-                         dynamic_active ? cv::Scalar(0, 255, 255) : normal_time_color);
+    draw_outlined_status(ctx, line8, cv::Point(18, 242), dynamic_active ? cv::Scalar(0, 255, 255) : normal_time_color);
     draw_outlined_status(ctx, line9, cv::Point(18, 272),
                          result.measurement_valid ? normal_time_color : cv::Scalar(0, 165, 255));
 }

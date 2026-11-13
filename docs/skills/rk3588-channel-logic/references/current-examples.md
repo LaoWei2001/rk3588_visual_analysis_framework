@@ -1,6 +1,6 @@
 # 当前通道模块索引
 
-下表来自当前 `projects/modules/`，用于选择真实存在的参考实现。由于用户可能增加或删除某些模块，所以模块集合会变化；
+下表按 2026-11-13 的 `projects/modules/` 与注册宏核对，共 28 个通道模块，用于选择真实存在的参考实现。模块集合会变化；
 使用前仍应运行 catalog 校验并同时阅读该目录的 `logic.cpp` 与 `logic.json`。
 
 | logic ID | 当前用途 | 参考注意事项 |
@@ -22,6 +22,15 @@
 | `logic_crane_motion`、`logic_crane_hook` | 发布行车运动与吊钩状态 | 行车全局控制器输入，依赖对应模型标签和参数 |
 | `logic_crane_intrusion`、`logic_crane_helmet` | 发布入侵与安全帽状态 | 行车全局控制器输入，涉及业务 ROI/状态机 |
 | `logic_relay` | Action 切换继电器 | 有真实 GPIO 副作用 |
+| `logic_default1019` | 输出每帧编号 | 目录为 `logic_1019/`，ID 以注册宏为准；高频日志示例 |
+| `logic_roi_dwell_demo` | 命名 ROI 持续占用报警 | 公开 SDK、状态、outputs 与事件组合示例 |
+| `logic_multi_model` | 多模型配置的空业务入口 | 当前回调为空，不能当作已实现多模型业务规则的例子 |
+| `logic_depth_demo` | 米制深度和目标距离查询 | 与 `yolo26_depth` 的单位语义匹配 |
+| `logic_zip_depth_demo` | 相对逆深度查询 | 输出不表示米制距离 |
+| `logic_crane_hook_calibration` | 手动采集吊钩标定样本 | 当前引用 `logic_crane_hook` 的几何实现，不能独立删除后者 |
+| `logic_ppe_guard` | 部位级穿戴状态编排和告警 | 独立 guard 状态机、参数、Action 与事件 |
+| `logic_ppe_compliance` | 作业人员穿戴检测 | 使用自身标签、确认窗口和事件声明，不能与其他 PPE 模块混用参数 |
+| `logic_ppe_yolov8s_v2` | 三类装备的疑似缺失检查 | 只把几何推断标作疑似缺失，不声称真实身体可见性 |
 
 `logic_crane_helmet` 的默认 `missing_helmet` 模式采用裸头证据优先：匹配裸头的人员不受大小限制；
 没有匹配裸头或安全帽时，人员框宽度达到 `person_min_width` 且高度达到 `person_min_height`

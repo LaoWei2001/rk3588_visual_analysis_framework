@@ -147,7 +147,8 @@ Condition parse_condition(const cJSON *json, int depth, int &nodes, const std::v
             }
         }
         result.relation = string_value(field(association, "relation"), "relation");
-        if (!std::set<std::string>{"center_inside", "subject_center_inside", "overlap", "subject_overlap", "near"}.count(result.relation))
+        if (!std::set<std::string>{"center_inside", "subject_center_inside", "overlap", "subject_overlap", "near"}
+                 .count(result.relation))
             throw std::runtime_error("无效的空间匹配方式");
         result.state = string_value(field(association, "state"), "state");
         if (result.state != "matched" && result.state != "unmatched" && result.state != "count")
@@ -236,9 +237,8 @@ int matching_count(const std::vector<Detection> &detections, const Condition &c,
             a.push_back(i);
         // ROI 只限制主体；关联目标允许来自同帧模型输出的其他位置。
         // 多类目标构成同一个候选池，每个检测框只加入一次。
-        if (std::any_of(c.objects.begin(), c.objects.end(), [&](const Target &t) {
-                return d.label == t.label && d.score >= t.confidence;
-            }))
+        if (std::any_of(c.objects.begin(), c.objects.end(),
+                        [&](const Target &t) { return d.label == t.label && d.score >= t.confidence; }))
             b.push_back(i);
     }
     subjects = static_cast<int>(a.size());

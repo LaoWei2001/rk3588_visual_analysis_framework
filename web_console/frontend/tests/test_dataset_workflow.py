@@ -75,9 +75,9 @@ def test_create_multiple_category_task_with_default_matching_thresholds(console,
         page.get_by_role('button', name='＋ 新建采集任务', exact=True).click()
         editor = page.locator('.dataset-config-panel')
         editor.get_by_label('抓图判断方式', exact=True).select_option('association')
-        editor.get_by_label('关联类别', exact=True).fill('helmet')
+        editor.get_by_label('关联类别', exact=True).select_option('helmet')
         editor.get_by_role('button', name='＋ 添加关联类别', exact=True).click()
-        editor.get_by_label('关联类别 2', exact=True).fill('bare_head')
+        editor.get_by_label('关联类别 2', exact=True).select_option('bare_head')
         editor.get_by_label('空间匹配方式', exact=True).select_option(relation)
         if custom_values:
             editor.get_by_text('目标匹配的高级设置', exact=True).click()
@@ -209,8 +209,8 @@ def test_reverse_containment_labels_create_edit_and_task_card(console, relation)
         page.get_by_role('button', name='＋ 新建采集任务', exact=True).click()
         editor = page.locator('.dataset-config-panel')
         editor.get_by_label('抓图判断方式', exact=True).select_option('association')
-        editor.get_by_label('主体类别', exact=True).fill('helmet')
-        editor.get_by_label('关联类别', exact=True).fill('person')
+        editor.get_by_label('主体类别', exact=True).select_option('helmet')
+        editor.get_by_label('关联类别', exact=True).select_option('person')
         matching = editor.get_by_label('空间匹配方式', exact=True)
         expect(matching.locator('option[value="overlap"]')).to_have_text('person 至少 50% 的面积在 helmet 框内')
         expect(matching.locator('option[value="subject_overlap"]')).to_have_text('helmet 至少 50% 的面积在 person 框内')
@@ -309,7 +309,7 @@ def test_capture_excess_related_targets_or_missing_targets_and_edit_subject_coun
         editor = page.locator('.dataset-config-panel')
         first = editor.locator('.dataset-rule').nth(0)
         first.get_by_label('抓图判断方式', exact=True).select_option('association')
-        first.get_by_label('关联类别', exact=True).fill('helmet')
+        first.get_by_label('关联类别', exact=True).select_option('helmet')
         first.get_by_label('关联匹配状态', exact=True).select_option('count')
         expect(first.get_by_label('关联目标数量比较', exact=True)).to_have_value('>')
         expect(first.get_by_label('关联目标个数', exact=True)).to_have_value('1')
@@ -319,10 +319,10 @@ def test_capture_excess_related_targets_or_missing_targets_and_edit_subject_coun
         editor.get_by_role('button', name='＋ 添加另一种抓图情况', exact=True).click()
         second = editor.locator('.dataset-rule').nth(1)
         second.get_by_label('抓图判断方式', exact=True).select_option('association')
-        second.get_by_label('主体类别', exact=True).fill('person')
-        second.get_by_label('关联类别', exact=True).fill('helmet')
+        second.get_by_label('主体类别', exact=True).select_option('person')
+        second.get_by_label('关联类别', exact=True).select_option('helmet')
         second.get_by_role('button', name='＋ 添加关联类别', exact=True).click()
-        second.get_by_label('关联类别 2', exact=True).fill('bare_head')
+        second.get_by_label('关联类别 2', exact=True).select_option('bare_head')
         page.reload()
         expect(first.get_by_label('关联匹配状态', exact=True)).to_have_value('count')
         for width in (1366, 390):
@@ -460,7 +460,7 @@ def test_offline_create_and_drafts_survive_navigation_refresh_and_app_switch(con
         interval = page.get_by_label('抓图间隔（秒）', exact=True)
         interval.fill('7')
         page.get_by_label('每个文件夹图片张数', exact=True).fill('45')
-        page.get_by_label('条件 1 类别', exact=True).fill('helmet')
+        page.get_by_label('条件 1 类别', exact=True).select_option('helmet')
         page.get_by_label('接收程序类型', exact=True).select_option('python')
         # Navigation must not ask to discard a draft; it remains editable.
         page.locator('.sidebar a[href="/"]').click()
@@ -500,14 +500,16 @@ def test_offline_create_and_drafts_survive_navigation_refresh_and_app_switch(con
         task.get_by_role('button', name='编辑配置', exact=True).click()
         interval.fill('9')
         expect(logic).to_contain_text('至少间隔 7 秒')  # The card describes saved settings.
-        page.get_by_label('条件 1 类别', exact=True).fill('unknown')
+        # Simulate a restored draft whose label no longer exists in the model.
+        page.get_by_label('条件 1 类别', exact=True).evaluate("e => e.add(new Option('unknown', 'unknown'))")
+        page.get_by_label('条件 1 类别', exact=True).select_option('unknown')
         page.get_by_role('button', name='保存修改', exact=True).click()
         expect(editor.get_by_role('alert')).to_contain_text('模型标签一致')
         page.locator('.sidebar a[href="/"]').click()
         page.locator('.sidebar a[href="/dataset"]').click()
         expect(interval).to_have_value('9')
         expect(page.get_by_label('条件 1 类别', exact=True)).to_have_value('unknown')
-        page.get_by_label('条件 1 类别', exact=True).fill('person')
+        page.get_by_label('条件 1 类别', exact=True).select_option('person')
         page.get_by_role('button', name='保存修改', exact=True).click()
         expect(editor).to_have_count(0)
         assert json.loads(manager.rows()[0]['config'])['interval_sec'] == 9
@@ -554,7 +556,7 @@ def test_multiple_related_categories_edit_refresh_and_legacy_compatibility(conso
         page.get_by_role('button', name='＋ 新建采集任务', exact=True).click()
         editor = page.locator('.dataset-config-panel')
         editor.get_by_label('抓图判断方式', exact=True).select_option('association')
-        editor.get_by_label('关联类别', exact=True).fill('helmet')
+        editor.get_by_label('关联类别', exact=True).select_option('helmet')
         # 单类别先保存为旧格式，已有任务仍能增加、删除并分别设置阈值。
         page.get_by_role('button', name='创建任务', exact=True).click()
         expect(editor).to_have_count(0)
@@ -563,9 +565,9 @@ def test_multiple_related_categories_edit_refresh_and_legacy_compatibility(conso
         page.get_by_role('button', name='编辑配置', exact=True).click()
         editor.get_by_role('button', name='＋ 添加关联类别', exact=True).click()
         second = editor.get_by_label('关联类别 2', exact=True)
-        second.fill('helmet')
+        second.select_option('helmet')
         expect(editor.get_by_text('关联类别不能重复，请修改或删除重复项。', exact=True)).to_be_visible()
-        second.fill('bare_head')
+        second.select_option('bare_head')
         expect(editor.get_by_label('关联匹配状态', exact=True).locator('option:checked')).to_have_text('以下类别都没匹配到')
         expect(editor.locator('.dataset-rule-preview')).to_contain_text('至少一个 person 没有匹配到以下任何一类：helmet、bare_head')
         editor.get_by_text('目标匹配的高级设置', exact=True).click()
@@ -629,12 +631,12 @@ def test_plain_language_controls_preserve_actual_rule_logic(console):
         editor.get_by_role('button', name='恢复为满足下面条件时抓图', exact=True).click()
         expect(editor.locator('.dataset-rule-preview')).to_contain_text('检测到 person → 保存图片')
         editor.get_by_label('抓图判断方式', exact=True).select_option('association')
-        editor.get_by_label('关联类别', exact=True).fill('helmet')
+        editor.get_by_label('关联类别', exact=True).select_option('helmet')
         expect(editor.get_by_text('更多条件设置', exact=True)).to_have_count(0)
         editor.get_by_text('添加条件，或在条件不满足时抓图', exact=True).click()
         editor.get_by_role('button', name='再加一条必须满足的条件', exact=True).click()
         editor.get_by_text('更多条件设置', exact=True).click()
-        editor.get_by_label('类别名称', exact=True).fill('person')
+        editor.get_by_label('类别名称', exact=True).select_option('person')
         editor.get_by_label('检测条件', exact=True).select_option('count')
         editor.get_by_label('目标个数', exact=True).fill('2')
         # Expanded condition controls fit both desktop and mobile widths.
@@ -651,4 +653,207 @@ def test_plain_language_controls_preserve_actual_rule_logic(console):
         assert conditions[0]['association']['object']['class'] == 'helmet'
         assert conditions[1]['count'] == {'op': '>=', 'value': 2}
         assert not errors, errors
+        browser.close()
+
+
+def test_capture_source_suggestions_and_receiver_layout(console, monkeypatch):
+    url, manager = console
+    (manager.root / 'other/assets/labels.txt').write_text('hook\n')
+    online = {'value': False}
+    monkeypatch.setattr(manager, 'receiver_status', lambda state=None: {
+        'online': online['value'], 'directory': '/Pictures/dataset' if online['value'] else '',
+        'error': '', 'last_seen': 0,
+    })
+    expect = playwright.expect
+    with playwright.sync_playwright() as pw:
+        browser = pw.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'), headless=True,
+                                     args=['--no-sandbox', '--disable-dev-shm-usage'])
+        context = browser.new_context(viewport={'width': 1440, 'height': 1000})
+        context.add_init_script("localStorage.setItem('rk3588-auth', JSON.stringify({state:{token:'test',username:'tester'},version:0}))")
+        page = context.new_page()
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.goto(url + '/dataset')
+        source = page.get_by_role('region', name='1 选择采集来源')
+        expect(source).to_contain_text('person · helmet · bare_head')
+        expect(page.get_by_label('接收程序类型', exact=True)).to_be_visible()
+        def assert_preparation_aligned():
+            bounds = page.locator('.dataset-preparation').evaluate("""e => [...e.children].map(child => {
+                const rect = child.getBoundingClientRect(); return {top: rect.top, bottom: rect.bottom};
+            })""")
+            assert abs(bounds[0]['top'] - bounds[1]['top']) <= 1
+            assert abs(bounds[0]['bottom'] - bounds[1]['bottom']) <= 1
+        assert_preparation_aligned()
+        page.screenshot(path='/tmp/dataset-improved-overview.png')
+        page.get_by_role('button', name='＋ 新建采集任务', exact=True).click()
+        editor = page.locator('.dataset-config-panel')
+        category = editor.get_by_label('条件 1 类别', exact=True)
+        assert category.evaluate('(e) => [...e.options].filter(o => !o.disabled).map(o => o.value)') == ['person', 'helmet', 'bare_head']
+        expect(editor.get_by_label('采集哪个视频通道', exact=True).locator('option:checked')).to_have_text('视频通道 0')
+        category.select_option('helmet')
+        expect(editor.get_by_role('region', name='当前抓图逻辑', exact=True)).to_contain_text('检测到 helmet（置信度 ≥ 30%）')
+        page.get_by_label('采集程序', exact=True).select_option('other')
+        expect(source).to_contain_text('hook')
+        expect(editor).to_have_count(0)
+        page.get_by_role('button', name='＋ 新建采集任务', exact=True).click()
+        expect(category).to_have_value('hook')
+        assert category.evaluate('(e) => [...e.options].filter(o => !o.disabled).map(o => o.value)') == ['hook']
+        page.get_by_label('采集程序', exact=True).select_option('demo')
+        expect(category).to_have_value('helmet')
+        expect(editor).to_contain_text('采集程序：demo')
+        for width in (1440, 390):
+            page.set_viewport_size({'width': width, 'height': 1000})
+            editor.evaluate('(e) => e.scrollIntoView({behavior: "instant", block: "start"})')
+            assert page.locator('.dataset-page').evaluate('(e) => e.scrollWidth <= e.clientWidth + 1')
+            assert editor.evaluate('(e) => e.scrollWidth <= e.clientWidth + 1')
+            if width == 390:
+                assert page.locator('.dataset-page').evaluate('(e) => e.clientWidth') >= 380
+            page.screenshot(path=f'/tmp/dataset-improved-editor-{width}.png')
+        page.get_by_role('button', name='创建任务', exact=True).click()
+        expect(editor).to_have_count(0)
+        card = page.locator('.dataset-task')
+        expect(card.get_by_role('button', name='开始采集', exact=True)).to_be_disabled()
+        expect(card).to_contain_text('暂不能开始')
+        policy = card.locator('.dataset-task-policy')
+        expect(policy).not_to_be_visible()
+        card.get_by_text('查看范围、触发与停止设置', exact=True).click()
+        expect(policy).to_be_visible()
+        page.set_viewport_size({'width': 1440, 'height': 1000})
+        page.screenshot(path='/tmp/dataset-improved-task.png')
+        card.get_by_role('button', name='编辑配置', exact=True).click()
+        assert editor.evaluate('(e) => !!(e.compareDocumentPosition(document.querySelector(".dataset-task")) & Node.DOCUMENT_POSITION_FOLLOWING)')
+        online['value'] = True
+        expect(page.get_by_role('button', name='更换电脑 / 下载接收端', exact=True)).to_be_visible(timeout=6000)
+        expect(page.get_by_label('接收程序类型', exact=True)).to_have_count(0)
+        assert_preparation_aligned()
+        page.get_by_role('button', name='更换电脑 / 下载接收端', exact=True).click()
+        expect(page.get_by_label('接收程序类型', exact=True)).to_be_visible()
+        assert not errors, errors
+        browser.close()
+
+
+def test_restoring_capture_drafts_keeps_source_in_view(console):
+    url, _ = console
+    config = dataset.TaskConfig(rules=[{'id': 'r', 'name': '采集条件', 'condition': {
+        'class': 'person', 'min_confidence': .3, 'count': {'op': '>=', 'value': 1}}}]).model_dump()
+    state = {'state': {'app': 'demo', 'drafts': {
+        name: {'taskId': None, 'channelId': 0, 'config': config, 'original': json.dumps(config)}
+        for name in ('demo', 'other')
+    }, 'receiverPlatform': 'python'}, 'version': 0}
+    expect = playwright.expect
+    with playwright.sync_playwright() as pw:
+        browser = pw.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'),
+                                     headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
+        context = browser.new_context(viewport={'width': 1440, 'height': 800})
+        context.add_init_script("localStorage.setItem('rk3588-auth', JSON.stringify({state:{token:'test',username:'tester'},version:0}))")
+        context.add_init_script('sessionStorage.setItem("rk3588-dataset-drafts", ' + json.dumps(json.dumps(state)) + ')')
+        page = context.new_page()
+        page.goto(url + '/dataset')
+        editor = page.locator('.dataset-config-panel')
+        expect(editor).to_contain_text('采集程序：demo')
+        # Allow mount effects and any smooth scrolling to complete before checking.
+        page.wait_for_timeout(800)
+        assert page.locator('.dataset-page').evaluate('(e) => e.scrollTop') < 2
+        for app in ('other', 'demo'):
+            selector = page.get_by_label('采集程序', exact=True)
+            selector.focus()
+            selector.select_option(app)
+            expect(editor).to_contain_text('采集程序：' + app)
+            page.wait_for_timeout(800)
+            expect(selector).to_be_focused()
+            assert page.locator('.dataset-page').evaluate('(e) => e.scrollTop') < 2
+        # Opening the form deliberately still brings it into view and focuses it.
+        page.get_by_role('button', name='取消', exact=True).click()
+        page.get_by_role('button', name='＋ 新建采集任务', exact=True).click()
+        expect(editor.locator('h2')).to_be_focused()
+        page.wait_for_function('document.querySelector(".dataset-page").scrollTop > 100')
+        browser.close()
+
+
+def test_capture_footer_explains_live_conditions_and_limits(console):
+    url, manager = console
+    expect = playwright.expect
+    with playwright.sync_playwright() as pw:
+        browser = pw.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'),
+                                     headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
+        context = browser.new_context(viewport={'width': 1440, 'height': 1000})
+        context.add_init_script("localStorage.setItem('rk3588-auth', JSON.stringify({state:{token:'test',username:'tester'},version:0}))")
+        page = context.new_page()
+        page.goto(url + '/dataset')
+        page.get_by_role('button', name='＋ 新建采集任务', exact=True).click()
+        editor = page.locator('.dataset-config-panel')
+        footer = editor.get_by_role('region', name='当前抓图逻辑', exact=True)
+        category = editor.get_by_label('条件 1 类别', exact=True)
+        category.select_option('helmet')
+        styles = editor.locator('.dataset-basic-row').evaluate('''row => [...row.querySelectorAll('select')].map(e => {
+            const s = getComputedStyle(e); return [s.backgroundColor,s.color,s.borderRadius,s.fontSize];
+        })''')
+        assert styles[0] == styles[1]
+        editor.get_by_role('button', name='＋ 添加类别', exact=True).click()
+        editor.get_by_label('条件 2 类别', exact=True).select_option('bare_head')
+        editor.get_by_label('条件 2 检测状态', exact=True).select_option('absent')
+        expect(footer).to_contain_text('检测到 helmet（置信度 ≥ 30%），并且 没检测到 bare_head（置信度 ≥ 30%）')
+        editor.get_by_role('button', name='满足任意一条就抓图', exact=True).click()
+        expect(footer).to_contain_text('，或者 没检测到 bare_head')
+        editor.get_by_role('button', name='＋ 添加另一种抓图情况', exact=True).click()
+        expect(footer).to_contain_text('满足以下任意一种情况就抓图，同一帧只保存一张')
+        expect(footer.locator('li')).to_have_count(2)
+        editor.locator('.dataset-rule').nth(1).get_by_label('条件 1 类别', exact=True).select_option('person')
+        editor.get_by_label('抓图间隔（秒）', exact=True).fill('3')
+        editor.get_by_label('最多保存几张').fill('10')
+        editor.get_by_label('运行时长（小时）').fill('1')
+        editor.get_by_text('高级设置', exact=True).click()
+        editor.get_by_label('触发方式').select_option('on_enter')
+        editor.get_by_label('条件持续时间（秒）', exact=True).fill('0.5')
+        expect(footer).to_contain_text('条件持续满足 0.5 秒后')
+        expect(footer).to_contain_text('每种情况从不满足变为满足时抓一次')
+        expect(footer).to_contain_text('至少间隔 3 秒')
+        expect(footer).to_contain_text('累计保存达到 10 张，或从首次开始起经过 1 小时')
+        page.get_by_role('button', name='创建任务', exact=True).click()
+        expect(editor).to_have_count(0)
+        saved = json.loads(manager.rows()[0]['config'])
+        assert len(saved['rules']) == 2 and saved['trigger_mode'] == 'on_enter'
+        browser.close()
+
+
+def test_default_desktop_hotkeys_need_no_web_binding(console):
+    url, manager = console
+    config = dataset.TaskConfig(rules=[{'id': 'r', 'name': 'test', 'condition': {
+        'class': 'person', 'min_confidence': .3, 'count': {'op': '>=', 'value': 1}}}]).model_dump()
+    task = manager.save('demo', 0, config)['tasks'][0]
+    state = manager.list('demo')
+    state.update(engine_error='', manual_capture_supported=True)
+    state['tasks'][0]['status'] = '已暂停'
+    state['receiver'].update(online=True, hotkeys_available=True, control_task=dict(id='binding', app='demo', task_id=task['id'], channel_id=0))
+    calls = []
+    expect = playwright.expect
+    with playwright.sync_playwright() as pw:
+        browser = pw.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'),
+                                     headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
+        context = browser.new_context()
+        context.add_init_script("localStorage.setItem('rk3588-auth', JSON.stringify({state:{token:'test',username:'tester'},version:0}))")
+        page = context.new_page()
+        def route_request(route):
+            request = route.request
+            if request.method == 'GET': route.fulfill(json=state); return
+            calls.append((request.url, request.post_data_json))
+            if request.url.endswith('/enabled'):
+                state['tasks'][0]['enabled'] = request.post_data_json['enabled']
+                route.fulfill(json=state)
+            else: route.continue_()
+        page.route('**/api/apps/demo/dataset**', route_request)
+        page.goto(url + '/dataset')
+        expect(page.get_by_text('当前操作：demo / 视频通道 0。', exact=False)).to_be_visible()
+        expect(page.get_by_role('button', name='交给电脑快捷键', exact=True)).to_have_count(0)
+        expect(page.get_by_role('button', name='解除电脑快捷键', exact=True)).to_have_count(0)
+        expect(page.get_by_role('button', name='抓一张', exact=True)).to_have_count(0)
+        expect(page.get_by_label('快捷键采集任务', exact=True)).to_have_count(0)
+        page.locator('h1').click()
+        for key in ('c', 'p', 'F7', 'F8', 'F9'): page.keyboard.press(key)
+        assert not calls
+        page.get_by_role('button', name='开始采集', exact=True).click()
+        expect(page.get_by_role('button', name='暂停采集', exact=True)).to_be_visible()
+        page.get_by_role('button', name='暂停采集', exact=True).click()
+        expect(page.get_by_role('button', name='开始采集', exact=True)).to_be_visible()
+        assert [entry[1]['enabled'] for entry in calls] == [True, False]
         browser.close()

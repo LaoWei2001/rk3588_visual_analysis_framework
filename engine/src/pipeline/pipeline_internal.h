@@ -7,17 +7,17 @@
  *
  * 各文件职责速查:
  *   channel_pipeline.cpp  — 跟踪器 + invoke_channel_logic + process_channel_results
- *   display_pipeline.cpp  — display_worker_thread
+ *   display_worker.cpp  — display_worker_thread
  *   frame_inlet.cpp       — pipeline_submit_frame + FPS 节流 + RGA 转换
  *   traditional_logic_worker.cpp — 非推理逻辑异步最新帧处理
  *   result_dispatch.cpp   — pipeline_dispatch_worker
- *   pipeline.cpp          — 共享状态定义 + init/deinit + main 查询接口
+ *   pipeline_runtime.cpp          — 共享状态定义 + init/deinit + main 查询接口
  */
 #pragma once
 
-#include "config/config.h"
-#include "inference/inference_engine.h"
-#include "runtime/app_ctrl.h"
+#include "application/config/config.h"
+#include "application/runtime/app_ctrl.h"
+#include "vision/inference/inference_engine.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -76,7 +76,7 @@ static inline uint64_t system_now_ms(void)
  *      → publish()             — back↔mid 整数交换（≈20 ns）
  *      → 释放锁，signal cv
  *
- * 消费者工作流（display_pipeline.cpp）
+ * 消费者工作流（display_worker.cpp）
  * --------------------------------------
  *   1. 持 DisplayQueue::mtx
  *      → swap_front_if_dirty() — mid↔front 整数交换（≈10 ns）
@@ -192,7 +192,7 @@ struct DisplayFramePool
     }
 };
 
-/*======================== 显示任务与队列 (frame_inlet + display_pipeline 共用) ========================*/
+/*======================== 显示任务与队列 (frame_inlet + display_worker 共用) ========================*/
 
 /**
  * @brief 显示任务（仅元数据）。
@@ -230,7 +230,7 @@ struct DisplayQueue
     DisplayFramePool pool; /* 帧像素：三槽预分配缓冲 */
 };
 
-/* 定义在 pipeline.cpp，frame_inlet 和 display_pipeline 共同访问 */
+/* 定义在 pipeline_runtime.cpp，frame_inlet 和 display_worker 共同访问 */
 extern DisplayQueue g_display_queues[MAX_CHANNEL_NUM];
 
 /*======================== 传统视觉逻辑最新帧队列 ========================*/
@@ -262,11 +262,11 @@ extern TraditionalLogicQueue g_traditional_logic_queues[MAX_CHANNEL_NUM];
 /** 锁外发布最新帧；实现在 traditional_logic_worker.cpp。 */
 void traditional_logic_publish(int chn_id, ChannelRawFrame raw_frame, int64_t frame_seq);
 
-/*======================== 分发线程运行标志 (定义在 pipeline.cpp) ========================*/
+/*======================== 分发线程运行标志 (定义在 pipeline_runtime.cpp) ========================*/
 
 extern std::atomic<bool> g_dispatch_running;
 
-/*======================== 通道结果处理串行锁 (定义在 pipeline.cpp) ========================*/
+/*======================== 通道结果处理串行锁 (定义在 pipeline_runtime.cpp) ========================*/
 /*
  * 防止同一通道的 process_channel_results 被两条路径并发调用：
  *   - 非推理通道：由 pipeline_logic_worker 异步调用

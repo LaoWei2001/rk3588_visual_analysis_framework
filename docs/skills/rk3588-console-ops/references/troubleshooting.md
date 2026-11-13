@@ -34,7 +34,7 @@ curl -s http://127.0.0.1:8080/health
 
 登录使用 Linux 系统凭据；后端 session 仅在内存中，控制台重启或 8 小时过期后需重新登录。若前端
 源码已改但页面没变，在项目根目录执行 `sudo ./install.sh online`，并确认安装目录的
-`frontend/dist` 时间；已经预构建前端时可使用 `upgrade offline`。
+`frontend/dist` 时间；已经预构建前端并准备好依赖时可使用 `sudo ./install.sh offline`。
 
 ## App 启动失败或异常退出
 
@@ -50,24 +50,34 @@ cat run.config
 cat run.systemd_unit
 ```
 
-程序日志来自控制台内存缓冲，不再有 `run.log`。打开 Web“完整日志”；若进程刚异常退出，程序页会
-显示最后日志。控制台重启后无法恢复旧 pipe 日志，必要时按 `run.systemd_unit` 查询对应 systemd
-service 的 journal。
+程序日志由 journald 产生，Web 跟随读取并保留有上限的内存缓冲，不依赖 `run.log`。
+打开 Web“完整日志”；需要更早记录时，根据 `run.systemd_unit` 查询对应 service 的 journal。
+可读取的历史长度由 journald 保留策略决定，内存 tail 不是完整持久日志。
 
 常见配置边界：有效通道数量、按 ID 排序后的 id/enable 拓扑或显示/RTSP 输出拓扑改变会拒绝热更新；
 仅重排配置数组且有效 ID 集合不变不会触发该拒绝。`restart_required` 参数也会整轮拒绝。日志出现
 reject 时应重启 App，而不是反复保存。
+
+### 停止后提示“未确认完整清理”
+
+“进程已退出”和“完整清理已确认”是不同状态。运行管理器检查与该次 PID/启动时刻匹配的
+`run.shutdown.json`，并结合退出码和保存错误判断。旧包未写退出记录、记录缺失/不匹配或异常终止时，
+不能只凭进程消失宣称安全退出。记录为 `complete` 但有 `persistence_errors` 时，应检查事件和媒体保存日志。
+
+正常 Web 停止优先等待清理，不因任意等待时长升级为 SIGKILL。内核/驱动永久阻塞可能导致停止
+持续等待；`kill -9`、掉电或崩溃不能保证运行 C++ 清理代码。具体语义见[程序恢复与停止](../../../operations/application-recovery.md)。
 
 ## 实时画面黑屏/报错
 
 1. 确认唯一运行 App 和 `run.config`。
 2. 确认配置 `global.enable_rtsp != 0`、`global.rtsp_codec` 为 `h264`/`avc`。
 3. 确认 `rtsp_port/rtsp_path` 与进程日志一致。
-4. 确认 `gst-launch-1.0` 存在。
+4. 确认 `ffmpeg` 存在并支持 RTSP/fMP4。
 5. 在板端直接验证 RTSP 地址，再检查浏览器 MSE/H264 支持。
 
-Web 后端明确拒绝 H265，不会静默软件转码。刷新另一浏览器会替换同 App 的现有流会话，这是当前
-单会话设计。
+Web 后端明确拒绝 H265，不会静默软件转码。相同预览源的多个观众共享 FFmpeg 封装进程，
+各自有接收队列；同一 `client_id` 的新连接只替换该客户端的旧连接。
+独立通道预览还需引擎支持 `channel-preview-v1`；旧程序包会回退到拼接流裁剪。
 
 ## Logic 或 Action 不工作
 
@@ -146,6 +156,10 @@ C++ 支持类型，不能把 Agent 的成功反馈单独作为模型已生效的
 
 ## 终端或日志 WebSocket 断开
 
-token 过期会以 WebSocket 1008 关闭。重新登录后刷新页面。单个浏览器页面/前端实例最多打开 4 个
-终端；后端当前没有设备级会话总数限制。整页刷新会销毁该前端实例的现有 WebSocket/PTY。HTTP 下
-浏览器剪贴板 API 受限，终端前端已有原生粘贴回退；HTTPS/localhost 能使用更完整的 Clipboard API。
+token 过期或注销会关闭终端会话；重新登录后建立新会话。单个前端实例最多打开 4 个终端，
+后端每个登录 token 最多 8 个、设备总计最多 32 个 PTY 会话。短暂 WebSocket 故障可在 300 秒宽限内
+凭原 token 和 session ID 恢复，保持 shell 和未确认输出；主动关闭分屏、退出登录、非缓存整页离开会发送关闭。
+若关闭通知未送达，则由宽限超时回收，不应假定网络一断开 shell 就立即退出。
+
+shell 使用登录用户身份，不应将普通账号登录后的终端视为 root。HTTP 下浏览器剪贴板 API 受限，
+前端提供原生粘贴回退；HTTPS/localhost 能使用更完整的 Clipboard API。

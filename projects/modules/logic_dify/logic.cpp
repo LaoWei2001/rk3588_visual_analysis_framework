@@ -16,10 +16,10 @@
  *   - report_templates/dify_periodic_snapshot.json：随模块打包的默认字段映射。
  */
 
-#include <channel.h>
-#include <events.h>
 #include <algorithm>
+#include <channel.h>
 #include <cstdio>
+#include <events.h>
 #include <json.h>
 
 #include <cstdint>
@@ -164,8 +164,8 @@ static void logic_dify(ChannelContext *ctx)
     if (report.accepted())
     {
         state.accepted_sequence = next_sequence;
-        printf("[logic_dify][ch%02d] local event queued: %s, sequence=%llu\n", ctx->chnId,
-               report.event_id.c_str(), static_cast<unsigned long long>(next_sequence));
+        printf("[logic_dify][ch%02d] local event queued: %s, sequence=%llu\n", ctx->chnId, report.event_id.c_str(),
+               static_cast<unsigned long long>(next_sequence));
     }
     else
     {

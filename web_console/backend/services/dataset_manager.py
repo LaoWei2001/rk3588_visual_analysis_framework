@@ -28,6 +28,7 @@ class DatasetManager:
         self.database = database or root / '.console_dataset.sqlite'
         self.lock = threading.RLock()
         self._ack_secret: str | None = None
+        self._control_results: dict[tuple[str, str], dict] = {}
         self.engine = engine if engine is not None else DatasetEngineClient()
         self.process_identity = process_identity or self._process_identity
 
@@ -248,9 +249,12 @@ class DatasetManager:
                           'enabled': bool(row['enabled']), 'saved': row['saved'], 'deadline': row['deadline'],
                           'current_files': files.get((app, row['channel']), 0) if counts is not None else None,
                           'files_updated_at': receiver.get('inventory_seen', 0), 'files_error': inventory.get('error', ''),
+                          'manual_id': item.get('manual_id', ''), 'manual_state': item.get('manual_state', ''),
+                          'manual_error': item.get('manual_error', ''), 'manual_wait_ms': item.get('manual_wait_ms', 0),
+                          'manual_frame': item.get('manual_frame', -1),
                           'pending': item.get('pending', 0), 'matched': item.get('matched', 0), 'skipped': item.get('skipped', 0),
                           'status': (pauses.get(row['id']) if not row['enabled'] else '') or item.get('status', '配置已保存，等待视觉程序启动' if response.get('unavailable') else error or '等待同步到视觉程序')})
-        return {'tasks': items, 'channels': self.channels(app), 'receiver': self.receiver_status(receiver), 'engine_error': error}
+        return {'manual_capture_supported': response.get('manual_capture_supported', False), 'tasks': items, 'channels': self.channels(app), 'receiver': self.receiver_status(receiver), 'engine_error': error}
 
     def save(self, app: str, channel: int, config: dict) -> dict:
         config = dict(config)
@@ -291,6 +295,19 @@ class DatasetManager:
               ON CONFLICT(id) DO UPDATE SET config=excluded.config,revision=excluded.revision,deadline=excluded.deadline''',
                        (row['id'], app, channel, row['config'], row['revision'], 0, row['saved'], row['deadline']))
         return self.list(app)
+
+    def capture_once(self, app: str, task_id: str, request_id: str) -> dict:
+        # One socket round trip; do not put process reconciliation, status polling or
+        # receiver/database updates ahead of a latency-sensitive capture command.
+        self.app_dir(app)
+        with self.db() as db:
+            saved = db.execute('SELECT * FROM tasks WHERE app=? AND id=?', (app, task_id)).fetchone()
+            row = dict(saved) if saved else None
+        if row is None:
+            raise HTTPException(404, '采集任务不存在')
+        response, _ = self.rpc(app, {'op': 'capture_once', 'task_id': task_id,
+                                    'revision': row['revision'], 'request_id': request_id})
+        return next((task for task in response.get('tasks', []) if task['task_id'] == task_id), {})
 
     def set_enabled(self, app: str, task_id: str, enabled: bool) -> dict:
         with self.lock:
@@ -384,12 +401,18 @@ class DatasetManager:
             self._ack_secret = key
             return self._ack_secret
 
-    def heartbeat(self, client: str, directory: str, error: str, inventory: dict | None = None) -> dict:
+    def heartbeat(self, client: str, directory: str, error: str, inventory: dict | None = None, control_hash: str = "") -> dict:
         with self.lock:
             previous = self.settings('receiver') or {}
             if not previous.get('disconnected') and previous.get('client') != client and time.time()-previous.get('seen',0) < 30:
                 raise HTTPException(409, '已有电脑接收程序在线，请先关闭旧接收程序并等待30秒')
-            value = {'client': client, 'directory': directory[:500], 'error': error[:500], 'seen': time.time()}
+            same_lease = (not previous.get('disconnected') and previous.get('client') == client
+                          and time.time() - previous.get('seen', 0) < 30)
+            pinned_hash = previous.get('control_hash', '') if same_lease else ''
+            if pinned_hash and control_hash and not hmac.compare_digest(pinned_hash, control_hash):
+                raise HTTPException(403, '当前接收会话的快捷键凭据不匹配，请先退出原接收程序')
+            value = {'client': client, 'directory': directory[:500], 'error': error[:500], 'seen': time.time(),
+                     'control_hash': control_hash or pinned_hash, 'control_ready': bool(control_hash)}
             same_snapshot = (previous.get('client') == client and previous.get('directory') == value['directory']
                              and previous.get('inventory') == inventory)
             value.update(inventory=inventory, inventory_seen=(previous.get('inventory_seen', 0) if same_snapshot else time.time())
@@ -409,8 +432,106 @@ class DatasetManager:
     def receiver_status(self, state: dict | None = None) -> dict:
         if state is None:
             state = self.settings('receiver') or {}
+        binding = self._receiver_binding(state)
+        if binding and self.process_identity(binding['app']) is None:
+            binding = None
         return {'online': not state.get('disconnected') and time.time()-state.get('seen', 0) < 15, 'directory': state.get('directory', ''),
-                'error': state.get('error', ''), 'last_seen': state.get('seen', 0)}
+                'error': state.get('error', ''), 'last_seen': state.get('seen', 0),
+                'hotkeys_available': state.get('control_ready', bool(state.get('control_hash'))),
+                'control_task': binding}
+
+    def _receiver_binding(self, receiver: dict) -> dict | None:
+        binding = self.settings('receiver_control') or {}
+        if (not binding or binding.get('client') != receiver.get('client') or
+                binding.get('key_hash') != receiver.get('control_hash')):
+            return None
+        with self.db() as db:
+            row = db.execute('SELECT revision FROM tasks WHERE app=? AND id=?',
+                             (binding['app'], binding['task_id'])).fetchone()
+        if row is None or row['revision'] != binding.get('revision'):
+            return None
+        return {key: binding[key] for key in ('id', 'app', 'task_id', 'channel_id')}
+
+    def _receiver_targets(self) -> list[dict]:
+        rows = self.rows()
+        running = {app for app in {row['app'] for row in rows} if self.process_identity(app) is not None}
+        return [row for row in rows if row['app'] in running]
+
+    def _select_receiver_target(self, receiver: dict, task_id: str = '') -> dict:
+        # A connected PC owns its shortcuts. Single live task: select by default;
+        # multiple tasks: retain that PC's selection or let it choose explicitly.
+        # Merely selecting a task must never change automatic capture's state.
+        with self.lock:
+            rows = self._receiver_targets()
+            old = self.settings('receiver_control') or {}
+            selected = None
+            if task_id:
+                selected = next((row for row in rows if row['id'] == task_id), None)
+                if selected is None:
+                    raise HTTPException(409, '目标任务已不可用，请等待任务列表刷新后按 F7 重新选择')
+            elif (old.get('client') == receiver.get('client') and
+                  old.get('key_hash') == receiver.get('control_hash')):
+                selected = next((row for row in rows if row['id'] == old.get('task_id')), None)
+            if selected is None and len(rows) == 1:
+                selected = rows[0]
+            binding = None
+            if selected:
+                value = {'client': receiver['client'], 'key_hash': receiver['control_hash'],
+                         'app': selected['app'], 'task_id': selected['id'],
+                         'revision': selected['revision'], 'channel_id': selected['channel']}
+                if any(old.get(key) != val for key, val in value.items()):
+                    self.settings('receiver_control', dict(value, id=secrets.token_hex(16)))
+                binding = self._receiver_binding(receiver)
+            return {'binding': binding, 'enabled': bool(selected['enabled']) if selected else False,
+                    'targets': [{'task_id': row['id'], 'app': row['app'], 'channel_id': row['channel']}
+                                for row in rows]}
+
+    def receiver_control(self, client: str, key: str, action: str, binding_id: str, request_id: str, task_id: str = '') -> dict:
+        # Only the active receiver holding the session's pinned random secret
+        # can discover/select/control tasks. No web-side enable step is required.
+        if not re.fullmatch(r'[a-f0-9]{64}', key):
+            raise HTTPException(403, '电脑快捷键凭据无效')
+        key_hash = hashlib.sha256(key.encode()).hexdigest()
+        receiver = self.settings('receiver') or {}
+        if (receiver.get('client') != client or receiver.get('disconnected') or
+                time.time() - receiver.get('seen', 0) >= 30 or
+                not receiver.get('control_ready', bool(receiver.get('control_hash'))) or
+                not hmac.compare_digest(receiver.get('control_hash', ''), key_hash)):
+            raise HTTPException(403, '接收程序未连接或快捷键凭据已失效')
+        if action in ('status', 'select'):
+            if action == 'select' and not task_id:
+                raise HTTPException(400, '请选择采集任务')
+            return self._select_receiver_target(receiver, task_id if action == 'select' else '')
+        binding = self._receiver_binding(receiver)
+        if not binding or not hmac.compare_digest(binding['id'], binding_id):
+            raise HTTPException(409, '快捷键目标已变化，请等待接收程序刷新后重试；多任务可按 F7 选择')
+        if action == 'capture':
+            return {'binding': binding, 'task': self.capture_once(binding['app'], binding['task_id'], request_id)}
+        if action == 'result':
+            response, _ = self.rpc(binding['app'], {'op': 'status'})
+            task = next((t for t in response.get('tasks', []) if t['task_id'] == binding['task_id']), {})
+            return {'binding': binding, 'task': task}
+        if action != 'toggle':
+            raise HTTPException(400, '未知快捷键操作')
+        with self.lock:
+            # A network retry with the same ID must never toggle twice.
+            cache_key = (binding_id, request_id)
+            if cache_key in self._control_results:
+                return self._control_results[cache_key]
+            # Revalidate after acquiring the mutation lock, including revocation.
+            if self._receiver_binding(self.settings('receiver') or {}) != binding:
+                raise HTTPException(409, '快捷键目标已变化')
+            rows = self.rows(binding['app'])
+            row = next((r for r in rows if r['id'] == binding['task_id']), None)
+            if row is None:
+                raise HTTPException(404, '采集任务不存在')
+            result = self.set_enabled(binding['app'], binding['task_id'], not row['enabled'])
+            task = next(t for t in result['tasks'] if t['id'] == binding['task_id'])
+            response = {'binding': binding, 'enabled': task['enabled']}
+            if len(self._control_results) >= 256:
+                self._control_results.pop(next(iter(self._control_results)))
+            self._control_results[cache_key] = response
+            return response
 
     def proof(self, task_id: str, revision: str, sample_id: str) -> str:
         key = self._ack_secret or self._ack_key()

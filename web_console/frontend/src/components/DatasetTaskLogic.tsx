@@ -1,4 +1,4 @@
-import type {DatasetConfig} from '../api/dataset'
+import type {DatasetConfig} from '../models/dataset'
 import {summary, type Rule} from './datasetRules'
 
 export default function DatasetTaskLogic({config}: {config: DatasetConfig}) {
@@ -16,6 +16,7 @@ export default function DatasetTaskLogic({config}: {config: DatasetConfig}) {
         <p>{summary(rule.condition, true)}</p>
       </li>)}
     </ol>
+    <details className="dataset-policy-details"><summary>查看范围、触发与停止设置</summary>
     <dl className="dataset-task-policy">
       <div><dt>判断范围</dt><dd>{config.roi_name
         ? `采集区域“${config.roi_name}”，按${config.roi_anchor === 'foot' ? '目标脚点' : '目标中心'}判断是否在区域内`
@@ -31,6 +32,6 @@ export default function DatasetTaskLogic({config}: {config: DatasetConfig}) {
       <div><dt>停止条件</dt><dd>{limits.length
         ? `${limits.join('，或')}；达到${limits.length > 1 ? '任一' : ''}条件即停止`
         : '不限张数和时长，手动暂停'}；视觉程序停止时自动暂停，重新启动后需手动点击“开始采集”</dd></div>
-    </dl>
+    </dl></details>
   </section>
 }

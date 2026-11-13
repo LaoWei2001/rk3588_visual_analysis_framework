@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from services import process_manager as pm
+from services.app_paths import resolve_application_directory
 
 _cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
 _probe_lock = threading.Lock()
@@ -23,12 +24,10 @@ MODEL_TYPES = {"yolov8_obb", "yolov5", "yolov8_det", "yolov8_pose", "yolo26_pose
 
 
 def app_directory(root: Path, name: str) -> Path:
-    if not name or Path(name).name != name or name in {".", ".."}:
-        raise ValueError("非法程序名称")
-    app = (root / name).resolve()
-    if app.parent != root.resolve() or not app.is_dir():
-        raise ValueError("程序不存在或路径非法")
-    return app
+    try:
+        return resolve_application_directory(root, name)
+    except FileNotFoundError as exc:
+        raise ValueError("程序不存在或路径非法") from exc
 
 
 def _model_path(app: Path, path: str) -> Path:

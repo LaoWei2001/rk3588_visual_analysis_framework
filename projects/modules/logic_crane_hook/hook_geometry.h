@@ -11,8 +11,14 @@ struct HookEdges
 {
     bool left = false, right = false, top = false, bottom = false;
     bool valid = false;
-    bool truncated() const { return left || right || top || bottom; }
-    bool complete() const { return valid && !truncated(); }
+    bool truncated() const
+    {
+        return left || right || top || bottom;
+    }
+    bool complete() const
+    {
+        return valid && !truncated();
+    }
 };
 
 HookEdges hook_edges(const cv::Rect &box, const cv::Size &frame, int margin);
@@ -31,8 +37,7 @@ struct HookCalibration
     bool lookup(double height, HookCalibrationPoint *point) const;
 };
 
-HookCalibration load_hook_calibration(const std::string &path, double height_bin,
-                                     const cv::Size &frame, int margin);
+HookCalibration load_hook_calibration(const std::string &path, double height_bin, const cv::Size &frame, int margin);
 
 struct HookGeometry
 {
@@ -45,7 +50,7 @@ struct HookGeometry
     std::string status;
 };
 
-HookGeometry measure_hook(const cv::Rect &box, const cv::Size &frame, int margin,
-                          const HookCalibration &calibration, bool require_calibration);
+HookGeometry measure_hook(const cv::Rect &box, const cv::Size &frame, int margin, const HookCalibration &calibration,
+                          bool require_calibration);
 
 } // namespace crane_safety

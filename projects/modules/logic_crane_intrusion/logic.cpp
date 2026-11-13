@@ -1,6 +1,6 @@
+#include <algorithm>
 #include <channel.h>
 #include <drawing.h>
-#include <algorithm>
 
 #include <cstdio>
 #include <memory>
@@ -30,8 +30,7 @@ struct IntrusionLogicState
     IntrusionSetting selected_setting = INTRUSION_MIN_SCORE;
 };
 
-void draw_outlined_status(ChannelContext *ctx, const char *text, const cv::Point &pos,
-                          const cv::Scalar &foreground)
+void draw_outlined_status(ChannelContext *ctx, const char *text, const cv::Point &pos, const cv::Scalar &foreground)
 {
     draw_text(ctx, text, pos, foreground, 0.7, 1, DrawCommand::ALL,
               /*shadow_enabled=*/true, cv::Scalar(15, 45, 90), 2);
@@ -66,13 +65,11 @@ const char *intrusion_setting_name(IntrusionSetting setting)
 void format_selected_setting(const IntrusionLogicState &state, char *text, size_t size)
 {
     if (state.selected_setting == INTRUSION_MIN_SCORE)
-        std::snprintf(text, size, "参数: %s = %.2f", intrusion_setting_name(state.selected_setting),
-                      state.min_score);
+        std::snprintf(text, size, "参数: %s = %.2f", intrusion_setting_name(state.selected_setting), state.min_score);
     else
     {
         const uint64_t value = state.selected_setting == INTRUSION_CONFIRM_TIME ? state.confirm_ms : state.clear_ms;
-        std::snprintf(text, size, "参数: %s = %.1fs", intrusion_setting_name(state.selected_setting),
-                      value / 1000.0);
+        std::snprintf(text, size, "参数: %s = %.1fs", intrusion_setting_name(state.selected_setting), value / 1000.0);
     }
 }
 
@@ -119,8 +116,8 @@ static LogicActionResult logic_crane_intrusion_action(ChannelContext *ctx, const
     }
     if (action->name == "switch_intrusion_setting")
     {
-        state.selected_setting = static_cast<IntrusionSetting>(
-            (static_cast<int>(state.selected_setting) + 1) % static_cast<int>(INTRUSION_SETTING_COUNT));
+        state.selected_setting = static_cast<IntrusionSetting>((static_cast<int>(state.selected_setting) + 1) %
+                                                               static_cast<int>(INTRUSION_SETTING_COUNT));
         return {true, std::string("当前参数：") + intrusion_setting_name(state.selected_setting)};
     }
     if (action->name == "intrusion_setting_decrease" || action->name == "intrusion_setting_increase")
@@ -150,13 +147,11 @@ static void logic_crane_intrusion(ChannelContext *ctx)
         ctx->publish_bool("intrusion_roi_available", roi_available);
         ctx->publish_bool("intrusion_alarm", false);
         ctx->publish_int("intrusion_person_count", 0);
-        draw_outlined_status(ctx, "人员入侵检测: 已关闭", cv::Point(18, 32),
-                             cv::Scalar(180, 180, 180));
+        draw_outlined_status(ctx, "人员入侵检测: 已关闭", cv::Point(18, 32), cv::Scalar(180, 180, 180));
         return;
     }
     const crane_safety::IntrusionConfig config = read_config(ctx, state);
-    const crane_safety::IntrusionResult result =
-        state.guard.update(*ctx->results, zone, ctx->timestamp_ms, config);
+    const crane_safety::IntrusionResult result = state.guard.update(*ctx->results, zone, ctx->timestamp_ms, config);
 
     ctx->publish_bool("intrusion_roi_available", result.roi_available);
     ctx->publish_bool("intrusion_alarm", result.alarm);
@@ -169,13 +164,12 @@ static void logic_crane_intrusion(ChannelContext *ctx)
     if (!result.roi_available)
         std::snprintf(line1, sizeof(line1), "入侵检测: 未找到ROI %s", roi_name.c_str());
     else
-        std::snprintf(line1, sizeof(line1), "区域人员: %d  告警: %s",
-                      result.person_count, result.alarm ? "是" : "否");
+        std::snprintf(line1, sizeof(line1), "区域人员: %d  告警: %s", result.person_count, result.alarm ? "是" : "否");
     std::snprintf(line2, sizeof(line2), "人员置信度: %.2f", state.min_score);
-    std::snprintf(line3, sizeof(line3), "入侵确认: %.1f/%.1fs",
-                  result.confirm_elapsed_ms / 1000.0, state.confirm_ms / 1000.0);
-    std::snprintf(line4, sizeof(line4), "告警解除: %.1f/%.1fs",
-                  result.clear_elapsed_ms / 1000.0, state.clear_ms / 1000.0);
+    std::snprintf(line3, sizeof(line3), "入侵确认: %.1f/%.1fs", result.confirm_elapsed_ms / 1000.0,
+                  state.confirm_ms / 1000.0);
+    std::snprintf(line4, sizeof(line4), "告警解除: %.1f/%.1fs", result.clear_elapsed_ms / 1000.0,
+                  state.clear_ms / 1000.0);
     const cv::Scalar normal_color(240, 240, 240);
     const cv::Scalar selected_color(0, 255, 255);
     draw_outlined_status(ctx, line1, cv::Point(18, 32),

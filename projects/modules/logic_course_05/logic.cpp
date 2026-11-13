@@ -4,8 +4,8 @@
 // 难度:★★★☆☆
 
 #include <channel.h>
-#include <opencv2/imgproc.hpp>
 #include <cstdio>
+#include <opencv2/imgproc.hpp>
 
 // 函数作用:输入某个检测结果,输出该检测结果的中心点坐标
 cv::Point det_middle_point(const AlgoResult *single_result)

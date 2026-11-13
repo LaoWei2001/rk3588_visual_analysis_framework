@@ -1,5 +1,5 @@
-#include "inference/npu_device_owner.h"
-#include "model/yolo/yolo26depth.h"
+#include "vision/inference/npu_device_owner.h"
+#include "vision/models/yolo/yolo26depth.h"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -16,7 +16,7 @@ int main(int argc, char **argv)
     assert(!image.empty());
     Yolo26Depth model(argv[1]);
     std::vector<AlgoResult> results;
-    YoloPerfStat perf;
+    ModelPerfStat perf;
     assert(model.infer(image, results, &perf) && results.size() == 1);
     assert(results[0].depth_map.type() == CV_32FC1);
     cv::Mat full;
@@ -39,7 +39,7 @@ int main(int argc, char **argv)
     std::vector<cv::Mat> pinned, snapshots;
     for (int i = 0; i < 8; ++i)
     {
-        cv::Mat frame(image.size(), CV_8UC3, cv::Scalar(i*20,80,140));
+        cv::Mat frame(image.size(), CV_8UC3, cv::Scalar(i * 20, 80, 140));
         assert(model.infer(frame, results));
         pinned.push_back(results[0].depth_map);
         snapshots.push_back(results[0].depth_map.clone());
@@ -47,25 +47,28 @@ int main(int argc, char **argv)
     for (size_t i = 0; i < pinned.size(); ++i)
         assert(cv::norm(pinned[i], snapshots[i], cv::NORM_INF) == 0);
     cv::Mat padded;
-    cv::copyMakeBorder(image, padded, 0,0,2,2,cv::BORDER_CONSTANT);
-    cv::Mat roi = padded(cv::Rect(2,0,image.cols,image.rows));
+    cv::copyMakeBorder(image, padded, 0, 0, 2, 2, cv::BORDER_CONSTANT);
+    cv::Mat roi = padded(cv::Rect(2, 0, image.cols, image.rows));
     assert(!roi.isContinuous() && model.infer(roi, results));
     assert(cv::norm(before, results[0].depth_map, cv::NORM_INF) < 1e-3);
     cv::Mat invalid;
     assert(!model.infer(invalid, results) && results.empty());
-    for (int i = 0; i < 3; ++i) model.infer(image, results);
+    for (int i = 0; i < 3; ++i)
+        model.infer(image, results);
     for (int mode = 0; mode < 2; ++mode)
     {
         double total = 0, pre = 0, npu = 0, post = 0;
         for (int i = 0; i < 15; ++i)
         {
             auto start = std::chrono::steady_clock::now();
-            assert(mode ? model.infer_zero_copy(results,&perf) : model.infer(image,results,&perf));
-            total += std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
-            pre += perf.preprocess_ms; npu += perf.infer_ms; post += perf.postprocess_ms;
+            assert(mode ? model.infer_zero_copy(results, &perf) : model.infer(image, results, &perf));
+            total += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            pre += perf.preprocess_ms;
+            npu += perf.infer_ms;
+            post += perf.postprocess_ms;
         }
-        std::cout << (mode ? "DMA-ready input" : "BGR CPU fallback") << ": avg=" << total/15
-                  << " ms pre=" << pre/15 << " NPU+get=" << npu/15 << " post=" << post/15 << '\n';
+        std::cout << (mode ? "DMA-ready input" : "BGR CPU fallback") << ": avg=" << total / 15 << " ms pre=" << pre / 15
+                  << " NPU+get=" << npu / 15 << " post=" << post / 15 << '\n';
     }
     std::cout << "Native NPU, DMA input, retained outputs, strided ROI and invalid frame: PASS\n";
 }

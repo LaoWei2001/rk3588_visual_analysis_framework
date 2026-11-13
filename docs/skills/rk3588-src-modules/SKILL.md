@@ -16,14 +16,14 @@ description: >-
 
 ## 当前权威入口
 
-- 生命周期：`engine/src/main.cpp`；
-- 配置：`src/config/config.h/.cpp`、`config_init.cpp`、`config_validator.cpp`；
-- 运行状态与热更：`src/runtime/app_ctrl.h/.cpp`；
-- 服务心跳与在途处理超时：`src/runtime/service_watchdog.h/.cpp`；
+- 生命周期：`engine/src/application/main.cpp`；
+- 配置：`src/application/config/config.h/.cpp`、`config_init.cpp`、`config_validator.cpp`；
+- 运行状态与热更：`src/application/runtime/app_ctrl.h/.cpp`；
+- 服务心跳与在途处理超时：`src/application/runtime/service_watchdog.h/.cpp`；
 - 帧管线：`src/pipeline/`；
-- 推理：`src/inference/` 和 `src/model/yolo/`；
+- 推理：`src/vision/inference/` 和 `src/vision/models/`；
 - Logic 公共框架：`src/logic/`；业务扩展：仓库根 `projects/modules/` 和 `projects/global_modules/`；
-- 构建：`engine/CMakeLists.txt`、`build.sh`。
+- 构建：`engine/CMakeLists.txt`、`engine/cmake/`、`build.sh`；完整导航见 `engine/README.md`。
 
 ## 修改前的架构判断
 
@@ -71,7 +71,7 @@ channel publication（frame/results/outputs/draw/state 元信息）
 
 - `config.channels[].id` 是通道唯一身份，不是配置数组下标；显示顺序另算。
 - 当前模型配置唯一入口是每通道 `models[]`，一个通道可有多个模型。
-- ROI 配置为归一化 `roi_zones[]`，运行快照发布时转换到模型坐标。
+- ROI 配置为归一化 `roi_zones[]`，运行快照发布时转换到固定业务坐标。
 - 无 logic 仍提交帧/结果；无推理但有 logic 时以空 results 调用。
 - 当前配置快照整代不可变，callback 期间不能观察到半更新值。
 - 新增 logic 目录由 CMake 递归收集，但需要重新运行 CMake/构建并生成 catalog。
@@ -79,7 +79,7 @@ channel publication（frame/results/outputs/draw/state 元信息）
 
 ## 验证
 
-涉及无人值守恢复时，同时按[故障恢复说明](../../unattended-recovery.md)验证主动停止、暂停和旧包兼容。
+涉及无人值守恢复时，同时按[故障恢复说明](../../operations/unattended-recovery.md)验证主动停止、暂停和旧包兼容。
 
 无需二进制的静态检查：
 
@@ -87,7 +87,7 @@ channel publication（frame/results/outputs/draw/state 元信息）
 python3 tools/build/generate_logics_catalog.py --check
 ```
 
-仓库当前没有提交预编译二进制；仅在已经用当前源码得到二进制后再做运行时能力探测：
+仓库不跟踪生成的 `vision_analysis` 主程序；仅在已经用当前源码得到二进制后再做运行时能力探测：
 
 ```bash
 cd projects

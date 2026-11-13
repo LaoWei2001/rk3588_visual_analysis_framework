@@ -161,7 +161,7 @@ handler 的结果写视觉程序日志。队列当前最多 64 条，溢出会�
 python3 tools/build/generate_logics_catalog.py --check
 ```
 
-仓库当前没有提交预编译二进制。仅在已经用当前源码得到二进制后再运行：
+仓库不跟踪生成的 `vision_analysis` 主程序。仅在已经用当前源码得到二进制后再运行：
 
 ```bash
 cd projects
