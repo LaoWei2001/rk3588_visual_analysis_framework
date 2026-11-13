@@ -51,8 +51,7 @@ RK3588，锁定 Runtime 2.4.2a2、现有 driver 0.9.0；同一 `10_11_1.mp4` 循
 三 worker 按旧→新→新→旧运行；一 worker 和混合负载各运行旧→新一次。
 按窗口时间加权计算完成/发布 FPS，按成功帧数加权计算 queue+worker 耗时。
 
-原始配置、每窗口日志、频率/温度和 RTSP 解码记录当时写入 `build/zip-depth-investigation/`，临时目录未随 Git 发布且不保证仍存在；
-机器可读汇总见 [2026-10-27-zip-depth.json](data/2026-10-27-zip-depth.json)。
+原始配置、每窗口日志、频率/温度和 RTSP 解码记录当时写入 `build/zip-depth-investigation/`，临时目录未随 Git 发布且不保证仍存在。
 发布 FPS 是结果槽更新次数，RTSP 是独立的显示节拍，二者不能混用。
 CPU 百分比的 100% 表示一个 CPU 核心；NPU 利用率是离散采样，不能用一次瞬时 80% 代替全程均值。
 queue+worker 不包含摄像头到播放器的完整延迟。

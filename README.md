@@ -47,7 +47,7 @@ flowchart LR
 
 ## 快速开始
 
-以下操作在 **RK3588 板端**进行。已有验证基线为 **Debian 11 / Linux 5.10.160 / RKNPU 0.9.0**，仓库固定 RKNN Runtime `2.4.2a2`。板卡需提供匹配的 RKNPU、RGA 和 MPP 环境；其他 BSP 或发行版请先核对[平台基线](engine/vendor/rockchip/PLATFORM_COMPATIBILITY.env)。
+以下操作在 **RK3588 板端**进行。验证环境为 **Debian 11 / Linux 5.10.160 / RKNPU 0.9.0**，仓库固定 RKNN Runtime `2.4.2a2`。板端配套 RKNPU、RGA 和 MPP，驱动及视频栈版本见[平台基线](engine/vendor/rockchip/PLATFORM_COMPATIBILITY.env)。
 
 ### 1. 获取源码，安装平台
 
@@ -83,9 +83,9 @@ sudo ./install_app.sh readme_demo
 2. 打开“实时画面”，查看循环播放的视频；也可用 VLC 打开 `rtsp://<设备IP>:8554/live`。
 3. 点击红色“停止”，等待页面确认退出结果。
 
-[最小配置](docs/examples/quickstart.json)只验证视频链路，关闭 HDMI、模型推理与自定义业务。接下来将兼容的 RKNN 权重及所需标签放入已安装应用的 `assets/`，再在配置编辑器中添加模型、开启推理并选择业务模块。具体操作见 [Web 控制台手册](docs/skills/rk3588-console-ops/references/web-console-user-guide.md)。
+[最小配置](docs/examples/quickstart.json)以文件循环播放和 RTSP 输出跑通视频链路。接下来将 RK3588 RKNN 权重及所需标签放入已安装应用的 `assets/`，在配置编辑器中添加模型、开启推理并选择业务模块，即可逐步搭建自己的视觉应用。具体操作见 [Web 控制台手册](docs/skills/rk3588-console-ops/references/web-console-user-guide.md)。
 
-Web 主动停止会等待引擎清理，并核对退出记录；若提示“未确认完整清理”，请按[停止与退出结果说明](docs/operations/application-recovery.md#用户主动停止与退出结果)检查日志。
+Web 停止流程会等待引擎完成清理，核对退出记录并展示对应结果。生命周期与日志说明见[程序停止说明](docs/operations/application-recovery.md#用户主动停止与退出结果)。
 
 <details>
 <summary><strong>命令行运行与配置检查</strong></summary>
@@ -100,9 +100,9 @@ export LD_LIBRARY_PATH="$PWD/libs:$LD_LIBRARY_PATH"
 ./vision_analysis ./assets/quickstart.json
 ```
 
-日志输出到当前终端，按 `Ctrl+C` 停止。`--validate-config` 检查配置结构与资源路径，不连接视频或运行推理。无界面运行使用上述直接启动方式；包内 `run.sh` 会把所选配置的 `enable_display` 改为 `1`。
+日志输出到当前终端，按 `Ctrl+C` 停止。`--validate-config` 在启动前完成配置结构与资源路径检查。无界面运行使用上述直接启动方式；HDMI 运行可使用包内 `run.sh`，该脚本会把所选配置的 `enable_display` 改为 `1`。
 
-平台目前托管一个运行中的视觉应用，多路视频配置在该应用内部。
+平台以一个视觉应用统一托管多路视频，各通道在同一应用内独立配置模型与业务。
 
 </details>
 
@@ -121,7 +121,13 @@ export LD_LIBRARY_PATH="$PWD/libs:$LD_LIBRARY_PATH"
 
 同一通道可以组合多个模型，**每个模型独立读取输入尺寸，结果统一映射到 `640×640` 业务坐标**。业务通过 `model_id` / `model_type` 选择结果，查询目标、分割或深度数据。详见[模型结果契约](docs/reference/model-result-contract.md)与[坐标约定](docs/reference/business-coordinates.md)。
 
-权重和输入视频需自行准备，RKNN 输出布局须符合对应适配器；`yolov5`、`yolov5_seg`、`yolov8_det` 还需匹配的标签文件。ZipDepth 的相对逆深度不能直接作为米制距离。各类型硬件验证范围见[模型验证记录](docs/reference/model-result-contract.md#验证结果2026-10-29)。
+将面向 RK3588 导出的 RKNN 权重放入应用 `assets/`，按适配器契约配置输入输出；`yolov5`、`yolov5_seg`、`yolov8_det` 配套对应标签文件。各模型的结果语义与板端接入记录见[模型结果契约](docs/reference/model-result-contract.md)。
+
+### 扩展更多模型
+
+**框架已经接入 ZipDepth 深度估计。** ZipDepth 输出相对逆深度，表达画面中的远近层次；YOLO26 Depth 提供米制深度。深度模型与检测、姿态、分割共享视频管线、NPU 调度和业务结果接口，可以按场景组合使用。
+
+新增模型时，通过 [`ModelBase`](engine/src/vision/models/model_base.h) 实现前后处理与结果契约，在模型工厂中注册，并同步配置校验、能力目录和 Web 模型识别规则；重新构建后，新模型即可接入现有分析管线。具体步骤见[新增模型类型](docs/guides/project-guide.md#新增模型类型)。
 
 ### 用一个模块实现业务
 
@@ -145,13 +151,13 @@ static void logic_person_count(ChannelContext *ctx)
 REGISTER_LOGIC(logic_person_count);
 ```
 
-在同目录的 `logic.json` 中声明 `person_count` 为 `integer` 输出，重新构建后即可在通道中选择 `logic_person_count`。`person` 须与模型标签一致；查询无效时不发布新的计数。模块清单、参数表单和注册流程见[业务工作区](projects/README.md)。
+在同目录的 `logic.json` 中声明 `person_count` 为 `integer` 输出，重新构建后即可在通道中选择 `logic_person_count`。将 `person` 设置为模型实际标签，每次有效查询都会发布最新人员数量。模块清单、参数表单和注册流程见[业务工作区](projects/README.md)。
 
 进一步实现“区域中持续有人 → 绘制告警 → 保存证据 → 投递事件”，可以直接阅读[区域持续占用报警示例](projects/modules/logic_roi_dwell_demo/README.md)。跨通道联动放在 `projects/global_modules/`，通过全局 Logic 消费各通道发布的数据。
 
 **[SDK 功能索引](engine/include/README.md) · [目标查询](docs/sdk/target-query.md) · [现有业务示例](docs/skills/rk3588-channel-logic/references/current-examples.md)**
 
-SDK 提供随应用编译的源码接口；业务变更需要重新构建，配置热更新范围见[热重载说明](docs/guides/project-guide.md#配置热重载)。
+SDK 提供随应用编译的源码接口；更新业务模块后重新构建即可生成新的应用包。运行中的参数调整与状态策略见[热重载说明](docs/guides/project-guide.md#配置热重载)。
 
 ## 架构与目录
 
@@ -174,17 +180,26 @@ SDK 提供随应用编译的源码接口；业务变更需要重新构建，配�
 
 ## 性能与验证
 
-以下是 **2026-10-26 的历史实机记录**，用于展示特定配置下的整管线表现。设备为 RK3588 / 8 GB，RKNN `2.4.2a2`；三路全自动分配 NPU 核心，每路 3 worker、`queue_size=1`、`max_fps=25`，同时开启 SORT、1280×720 HDMI 和 H.264 RTSP 输出。预热 15 秒，采集 60 秒：
+**完整视频管线下，YOLOv8 检测六路总吞吐达到 150.00 FPS，九路达到 186.45 FPS。**
 
-| 同时运行的任务 | 模型输入 | 成功推理 FPS | 结果发布 FPS |
-| --- | --- | ---: | ---: |
-| RTSP → ZipDepth FP16 | 768×768 | 4.03 | 4.03 |
-| USB → YOLOv5n | 640×640 | 17.21 | 17.21 |
-| RTSP → YOLOv8 Pose | 640×640 | 24.99 | 24.99 |
+2026-11-13，在 RK3588 / 8 GB 上对四种模型分别进行 **1、3、6、9、12、15 路同模型并发实测**。每路独立解码 1280×720、25 FPS 的 H.264 文件，模型输入均为 640×640；同时开启 **SORT、本地拼接显示和 H.264 硬件 RTSP 输出**，由本机 FFmpeg 持续解码播放。
 
-两路 RTSP 共享同一视频源与解码器，USB 实际供帧约 17.2 FPS。这组数据说明当时的调度与发布吞吐；完整报告另有标签不匹配说明，识别效果需使用匹配权重、标签及现场数据验证。独立摄像头容量、端到端延迟和长期稳定性需另行测量。
+每通道 3 个 worker，NPU 自动分配，`queue_size=1`、`max_fps=30`，拼接画布 1280×720，通过 DSI 屏显示。每组预热 10 秒、采样 30 秒，15 路深度采样 60 秒，按正反顺序完成两轮。
 
-[实机对照与完整条件](docs/performance/npu-core-placement.md) · [原始测量数据](docs/performance/data/2026-10-26-npu-placement.json) · [更多性能记录](docs/performance/README.md) · [软件验证入口](CONTRIBUTING.md)
+**单元格：平均每路成功推理 FPS（总 FPS）。**
+
+| 并发路数 | YOLOv8 检测 | YOLOv8 Pose | YOLOv5 Seg | YOLO26 Depth |
+| --- | ---: | ---: | ---: | ---: |
+| 1 路 | 25.00（25.00） | 25.00（25.00） | 25.00（25.00） | 20.81（20.81） |
+| 3 路 | 25.00（75.00） | 25.00（75.00） | 25.00（75.00） | 6.56（19.69） |
+| 6 路 | 25.00（150.00） | 22.32（133.90） | 16.10（96.61） | 3.36（20.16） |
+| 9 路 | 20.72（186.45） | 14.60（131.37） | 10.62（95.58） | 2.27（20.46） |
+| 12 路 | 15.22（182.59） | 10.63（127.55） | 7.85（94.22） | 1.72（20.64） |
+| 15 路 | 11.94（179.06） | 8.28（124.25） | 6.23（93.38） | 1.38（20.77） |
+
+本轮完成 **48 组正式测量**，各组全部通道持续推理与发布，RTSP 播放持续推进，**48 组均完成正常退出清理，采样窗口推理失败数为 0**。统计由两轮完整窗口的计数与实际秒数计算；结果发布 FPS、测试配置和统计方法见完整报告。
+
+[完整测试报告](docs/performance/model-channel-fps.md) · [更多性能记录](docs/performance/README.md)
 
 ## 文档导航
 
