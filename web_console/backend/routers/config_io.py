@@ -23,18 +23,6 @@ def _app_dir(name: str) -> Path:
     return application_directory(APPS_ROOT, name)
 
 
-def _canvas_config(config: Any) -> Any:
-    """Discard retired stream-node switches, preserving model/global enable flags."""
-    if not isinstance(config, dict) or not isinstance(config.get("channels"), list):
-        return config
-    return {**config, "channels": [
-        {key: value for key, value in channel.items()
-         if key not in {"enable", "infer_enable", "swap_rb"}}
-        if isinstance(channel, dict) else channel
-        for channel in config["channels"]
-    ]}
-
-
 def _atomic_write(path: Path, data: Any) -> None:
     tmp = None
     try:
@@ -158,7 +146,7 @@ async def load_config_file(name: str, path: str):
     if not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     try:
-        return _canvas_config(json.loads(await run_in_threadpool(target.read_text, encoding="utf-8")))
+        return json.loads(await run_in_threadpool(target.read_text, encoding="utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise HTTPException(422, "配置文件不是有效的 JSON") from exc
 
@@ -169,12 +157,11 @@ async def get_config(name: str):
     config_file = _safe_config_target(app_dir, "config.json")
     if not config_file.exists():
         return JSONResponse(content=None)
-    return _canvas_config(json.loads(config_file.read_text(encoding="utf-8")))
+    return json.loads(config_file.read_text(encoding="utf-8"))
 
 
 @router.post("/apps/{name}/config")
 async def save_config(name: str, body: Dict[str, Any]):
-    body = _canvas_config(body)
     app_dir    = _app_dir(name)
     try:
         await run_in_threadpool(validate_model_config, app_dir, body)
@@ -193,7 +180,6 @@ async def save_config_file(name: str, path: str, body: Dict[str, Any]):
     path 可为 'config_test.json' 或 'assets/config_test.json'；目标不存在则新建。
     与 config.json 互不影响——这样可以在副本上改而不破坏原配置。
     """
-    body = _canvas_config(body)
     app_dir = _app_dir(name)
     target  = _safe_config_target(app_dir, path)
     try:

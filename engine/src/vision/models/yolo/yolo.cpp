@@ -287,7 +287,7 @@ void YOLO::post_process(void *feat, int out_idx, int feat_h, int feat_w, LetterB
                             max_prob_i8 = prob;
                         }
                     }
-                    if (max_prob_i8 <= thres_i8)
+                    if (max_prob_i8 < thres_i8)
                         continue;
 
                     box_confidence = deqnt_affine_to_f32(box_conf_i8, zp, scale);
@@ -336,7 +336,7 @@ void YOLO::post_process(void *feat, int out_idx, int feat_h, int feat_w, LetterB
                             maxClassProbs = prob;
                         }
                     }
-                    if (maxClassProbs <= threshold)
+                    if (maxClassProbs < threshold)
                         continue;
 
                     if (anchor_last_layout)
@@ -355,6 +355,11 @@ void YOLO::post_process(void *feat, int out_idx, int feat_h, int feat_w, LetterB
                     }
                 }
 
+                // The published confidence is the product, not either component.
+                const float score = maxClassProbs * box_confidence;
+                if (!std::isfinite(score) || score < threshold)
+                    continue;
+
                 float cx = (box_x + j) * (float)stride;
                 float cy = (box_y + i) * (float)stride;
                 float rw = box_w * box_w * ANCHORS[a_idx][a][0];
@@ -365,7 +370,7 @@ void YOLO::post_process(void *feat, int out_idx, int feat_h, int feat_w, LetterB
                 res.box.y = (int)((cy - rh / 2.0f - lb.dh) / lb.ratio);
                 res.box.width = (int)(rw / lb.ratio);
                 res.box.height = (int)(rh / lb.ratio);
-                res.score = maxClassProbs * box_confidence;
+                res.score = score;
                 res.class_id = maxClassId;
                 res.label = (maxClassId < (int)labels_.size()) ? labels_[maxClassId] : std::to_string(maxClassId);
                 results.push_back(res);

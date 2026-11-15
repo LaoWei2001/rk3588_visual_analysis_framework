@@ -398,7 +398,6 @@ int YoloPose::process_fp32(float *input, int grid_h, int grid_w, int stride, std
     int input_loc_len = 64;
     int obj_class_num = 1;
     int validCount = 0;
-    float thres_fp = unsigmoid(obj_thresh_);
 
     for (int h = 0; h < grid_h; h++)
     {
@@ -406,9 +405,9 @@ int YoloPose::process_fp32(float *input, int grid_h, int grid_w, int stride, std
         {
             for (int a = 0; a < obj_class_num; a++)
             {
-                if (input[(input_loc_len + a) * grid_w * grid_h + h * grid_w + w] >= thres_fp)
+                const float box_conf_f32 = sigmoid(input[(input_loc_len + a) * grid_w * grid_h + h * grid_w + w]);
+                if (std::isfinite(box_conf_f32) && box_conf_f32 >= obj_thresh_)
                 {
-                    float box_conf_f32 = sigmoid(input[(input_loc_len + a) * grid_w * grid_h + h * grid_w + w]);
                     float loc[64];
                     for (int i = 0; i < input_loc_len; ++i)
                     {
@@ -460,14 +459,10 @@ int YoloPose::process_quantized(const T *input, int grid_h, int grid_w, int stri
                                 std::vector<float> &boxScores, std::vector<int> &classId, int32_t zp, float scale,
                                 int index)
 {
-    if (!input || scale == 0.0f)
+    if (!input || !std::isfinite(scale) || scale <= 0.0f)
         return 0;
     constexpr int input_loc_len = 64;
     const int grid_len = grid_h * grid_w;
-    const float threshold_logit = unsigmoid(obj_thresh_);
-    const long quantized_threshold = std::lround(threshold_logit / scale + zp);
-    const T threshold = static_cast<T>(std::max<long>(
-        std::numeric_limits<T>::min(), std::min<long>(std::numeric_limits<T>::max(), quantized_threshold)));
     int valid_count = 0;
     for (int h = 0; h < grid_h; ++h)
     {
@@ -475,7 +470,11 @@ int YoloPose::process_quantized(const T *input, int grid_h, int grid_w, int stri
         {
             const int cell = h * grid_w + w;
             const T confidence_q = input[input_loc_len * grid_len + cell];
-            if (confidence_q < threshold)
+            // Compare the published probability directly. Quantized/logit thresholds
+            // can round down, saturate, or become infinite for a threshold of 0/1.
+            const float confidence_logit = (static_cast<int>(confidence_q) - zp) * scale;
+            const float confidence = sigmoid(confidence_logit);
+            if (!std::isfinite(confidence) || confidence < obj_thresh_)
                 continue;
 
             float loc[input_loc_len];
@@ -494,8 +493,7 @@ int YoloPose::process_quantized(const T *input, int grid_h, int grid_w, int stri
             const float x2 = ((w + 0.5f) + distance[2]) * stride;
             const float y2 = ((h + 0.5f) + distance[3]) * stride;
             boxes.insert(boxes.end(), {x1, y1, x2 - x1, y2 - y1, static_cast<float>(index + cell)});
-            const float confidence_logit = (static_cast<int>(confidence_q) - zp) * scale;
-            boxScores.push_back(sigmoid(confidence_logit));
+            boxScores.push_back(confidence);
             classId.push_back(0);
             ++valid_count;
         }

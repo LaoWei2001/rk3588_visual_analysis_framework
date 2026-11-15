@@ -295,7 +295,7 @@ def test_segmentation_dynamic_prototype_sizes():
 
 
 @pytest.mark.parametrize("target", ["default", "named"])
-def test_retired_stream_switches_are_discarded_on_load_and_save(app, monkeypatch, target):
+def test_engine_channel_switches_are_preserved_on_load_and_save(app, monkeypatch, target):
     monkeypatch.setattr(model_info, "_probe", lambda *args: detector())
     requested = config("small")
     channel = requested["channels"][0]
@@ -305,11 +305,11 @@ def test_retired_stream_switches_are_discarded_on_load_and_save(app, monkeypatch
     destination.write_text(json.dumps(requested))
     loaded = asyncio.run(config_io.get_config("demo") if target == "default" else
                          config_io.load_config_file("demo", "assets/legacy.json"))
-    assert not {"enable", "infer_enable", "swap_rb"} & loaded["channels"][0].keys()
+    assert loaded == requested
     if target == "default": asyncio.run(config_io.save_config("demo", requested))
     else: asyncio.run(config_io.save_config_file("demo", "assets/legacy.json", requested))
     saved = json.loads(destination.read_text())
-    assert not {"enable", "infer_enable", "swap_rb"} & saved["channels"][0].keys()
+    assert saved == requested
     assert saved["channels"][0]["models"] == channel["models"]
     assert saved["global"] == requested["global"]
     assert channel["enable"] is False  # caller's input is not mutated

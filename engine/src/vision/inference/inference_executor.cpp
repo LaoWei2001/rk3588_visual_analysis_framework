@@ -657,16 +657,16 @@ void *inference_worker_thread(void *arg)
             float obj_thresh_v = g_inference.obj_thresh[task.chnId].load(std::memory_order_relaxed);
             float nms_thresh_v = g_inference.nms_thresh[task.chnId].load(std::memory_order_relaxed);
 
-            std::vector<AlgoResult> filtered;
-            if (obj_thresh_v > model->get_obj_thresh())
-            {
-                filtered.reserve(results.size());
-                for (const auto &d : results)
-                    if (d.is_depth() || d.score >= obj_thresh_v)
-                        filtered.push_back(d);
-            }
-            else
-                filtered = std::move(results);
+            // Always enforce the effective channel threshold, even when it equals
+            // the decoder threshold. ByteTrack still uses its lower decode threshold;
+            // composite children enforce their own thresholds before this step.
+            std::vector<AlgoResult> filtered = std::move(results);
+            filtered.erase(std::remove_if(filtered.begin(), filtered.end(),
+                                           [obj_thresh_v](const AlgoResult &d) {
+                                               return !d.is_depth() &&
+                                                      (!std::isfinite(d.score) || d.score < obj_thresh_v);
+                                           }),
+                            filtered.end());
 
             std::shared_ptr<const std::set<int>> allowed_classes;
             {

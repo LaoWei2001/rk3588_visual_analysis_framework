@@ -272,7 +272,6 @@ int YoloV8Det::process_i8(int8_t *box_tensor, int32_t box_zp, float box_scale, i
 {
     int validCount = 0;
     int grid_len = grid_h * grid_w;
-    int8_t score_thres_i8 = (int8_t)((threshold / score_scale) + score_zp);
 
     // [Cache-Friendly Optimization]
     // Sequential memory access across NCHW memory layout to avoid severe L1/L2 Cache-Thrashing
@@ -284,7 +283,10 @@ int YoloV8Det::process_i8(int8_t *box_tensor, int32_t box_zp, float box_scale, i
         const int8_t *class_scores = score_tensor + c * grid_len;
         for (int k = 0; k < grid_len; k++)
         {
-            if (class_scores[k] > score_thres_i8 && class_scores[k] > max_scores[k])
+            // Compare in score space: a threshold above this tensor's INT8 range must
+            // reject every candidate, rather than overflow when narrowed to int8_t.
+            const float score = (static_cast<float>(class_scores[k]) - static_cast<float>(score_zp)) * score_scale;
+            if (score >= threshold && (max_class_ids[k] < 0 || class_scores[k] > max_scores[k]))
             {
                 max_scores[k] = class_scores[k];
                 max_class_ids[k] = c;

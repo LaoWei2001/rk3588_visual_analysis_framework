@@ -25,7 +25,7 @@ BROWSER_TESTS = [
     'test_terminal_transport_rendering.py', 'test_terminal_recess.py',
 ]
 FRONTEND_TESTS = [
-    'test_api_transport.py', 'test_terminal_transport.py',
+    'test_api_transport.py', 'test_terminal_transport.py', 'test_channel_config.py',
 ]
 CPP_OPTIONS = [
     'MODEL_METADATA', 'NPU', 'DEPTH', 'SDK', 'INFERENCE_ROI',

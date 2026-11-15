@@ -110,6 +110,15 @@ if(BUILD_NPU_TESTS)
     target_include_directories(yolov8_output_parity_tests PRIVATE ${custom_inc} ${api_inc} ${PROJECT_SOURCE_DIR}/src/vision/models/yolo)
     target_compile_options(yolov8_output_parity_tests PRIVATE -UNDEBUG)
     target_link_libraries(yolov8_output_parity_tests PRIVATE ${OpenCV_LIBS} rknnrt_vendor rga Threads::Threads)
+    add_executable(detection_threshold_runtime_tests tests/inference/test_detection_threshold_runtime.cpp
+        src/vision/models/yolo/yolov8det.cpp src/vision/models/yolo/yolo.cpp src/vision/models/yolo/yolopose.cpp
+        src/vision/models/yolo/yoloseg.cpp src/vision/models/yolo/yolo26pose.cpp)
+    target_include_directories(detection_threshold_runtime_tests PRIVATE ${custom_inc} ${api_inc})
+    target_link_libraries(detection_threshold_runtime_tests PRIVATE ${OpenCV_LIBS} rknnrt_vendor rga Threads::Threads)
+    add_executable(detection_threshold_decoder_tests tests/inference/test_detection_threshold_decoders.cpp
+        src/vision/models/yolo/yolo.cpp src/vision/models/yolo/yolopose.cpp)
+    target_include_directories(detection_threshold_decoder_tests PRIVATE ${custom_inc} ${api_inc})
+    target_link_libraries(detection_threshold_decoder_tests PRIVATE ${OpenCV_LIBS} rknnrt_vendor rga Threads::Threads)
     add_executable(obb_runtime_tests tests/inference/test_obb_runtime.cpp
         src/vision/models/yolo/yolov8det.cpp src/vision/models/yolo/yolopose.cpp src/vision/inference/inference_result_mapping.cpp)
     target_include_directories(obb_runtime_tests PRIVATE ${custom_inc} ${api_inc})

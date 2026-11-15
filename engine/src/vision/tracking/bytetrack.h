@@ -3,7 +3,7 @@
  * @brief ByteTrack 多目标跟踪器（每个视频通道独立实例）
  *
  * 高置信度检测负责创建/确认轨迹；低置信度检测只用于续接当前仍活跃的
- * 已确认轨迹，因此不会把孤立低分框暴露给业务逻辑。
+ * 已确认轨迹。对外只返回达到所属模型置信阈值的检测，低分框不进入业务结果或默认绘图。
  */
 #pragma once
 
@@ -29,7 +29,8 @@ class ByteTracker
                          int tracker_max_miss = 30, int tracker_min_hits = 3, float default_high_score_thresh = 0.3f);
     ~ByteTracker();
 
-    /** 更新一帧。未匹配的低分框和低于 low_score_thresh 的框会从 detections 中移除。 */
+    /** 更新内部轨迹后，仅向 detections 返回达到所属模型高置信度阈值的当前帧检测。
+     *  已匹配的低分框也仅供内部跟踪；未确认 ID 的高分框仍保留，track_id 为 -1。 */
     void update(std::vector<AlgoResult> &detections);
 
     /** 配置各模型的高置信度阈值；key 为 AlgoResult.model_id。 */

@@ -485,7 +485,8 @@ void render_overlays(cv::Mat &screen_roi, const RenderParams &p, PerformanceOver
             }
             else
                 cv::rectangle(screen_roi, box, color, detection_thickness);
-            std::string txt = res.label;
+            // 默认在类别名后显示置信度，固定保留两位小数。
+            std::string txt = res.label + " " + cv::format("%.2f", res.score);
             if (res.track_id >= 0)
                 txt = "ID " + std::to_string(res.track_id) + " " + txt;
             put_text_auto(screen_roi, txt, cv::Point(box.x, std::max(20, box.y - 5)), std::max(0.3, 0.6 * draw_scale),

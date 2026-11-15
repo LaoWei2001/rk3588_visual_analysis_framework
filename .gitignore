@@ -36,6 +36,7 @@ node_modules
 /tools/offline_dev_install/ubuntu/output/
 .claude/
 .vscode/
+/md/
 
 # 本机环境变量和编辑器临时文件，示例配置可以提交。
 .env

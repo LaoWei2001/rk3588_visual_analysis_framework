@@ -29,8 +29,8 @@ def environment(tmp_path, monkeypatch):
     worker.start()
     opener = build_opener(ProxyHandler({}))
 
-    def post(path, body):
-        request = Request(url + path, data=json.dumps(body).encode(),
+    def request_json(path, body=None):
+        request = Request(url + path, data=None if body is None else json.dumps(body).encode(),
                           headers={"Content-Type": "application/json"})
         try:
             response = opener.open(request, timeout=5)
@@ -44,7 +44,7 @@ def environment(tmp_path, monkeypatch):
         while not server.started and time.monotonic() < deadline:
             time.sleep(0.01)
         assert server.started
-        yield post, assets
+        yield request_json, assets
     finally:
         server.should_exit = True
         worker.join(timeout=5)
@@ -114,3 +114,25 @@ def test_other_storage_errors_have_readable_detail(environment, monkeypatch, cod
     assert phrase in response["detail"]
     assert target.read_text() == "{}"
     assert list(assets.iterdir()) == [target]
+
+
+@pytest.mark.parametrize("filename", ["config.json", "custom.json"])
+@pytest.mark.parametrize("switches", [
+    dict(enable=False, infer_enable=False, swap_rb=True),
+    dict(enable=True, infer_enable=True, swap_rb=False),
+    dict(enable=0, infer_enable=0, swap_rb=1),
+    {},
+])
+def test_channel_settings_survive_load_and_save(environment, filename, switches):
+    request, assets = environment
+    target = assets / filename
+    payload = {"global": {"enable": False}, "channels": [
+        {"id": 0, "threads": 2, **switches, "models": [{"enable": False}]},
+        {"id": 1, "threads": 4, "enable": True, "infer_enable": True, "swap_rb": False},
+    ]}
+    target.write_text(json.dumps(payload))
+    url = "/apps/demo/config" if filename == "config.json" else "/apps/demo/config-file?path=assets/custom.json"
+    assert request(url) == (200, payload)
+    assert request(url, payload)[0] == 200
+    assert json.loads(target.read_text()) == payload
+    assert request(url) == (200, payload)

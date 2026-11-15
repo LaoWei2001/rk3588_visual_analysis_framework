@@ -725,7 +725,7 @@ def test_business_roi_balances_images_and_removes_empty_space_without_resizing_d
     assert_roi_content_fits_without_scrolling(dialog)
 
 
-def test_stream_node_has_no_retired_channel_switches(console):
+def test_channel_switches_are_preserved_without_exposing_extra_controls(console):
     page, url, snapshots, _, _ = console
     snapshots['/api/apps/demo/config']['channels'] = [dict(
         id=0, enable=False, infer_enable=False, swap_rb=True, models=[],
@@ -735,3 +735,54 @@ def test_stream_node_has_no_retired_channel_switches(console):
     pw_api.expect(page.get_by_text('通道编号 (channel_id)', exact=True)).to_be_visible()
     for label in ['启用通道', '允许模型推理', '显示红蓝互换']:
         pw_api.expect(page.get_by_role('checkbox', name=label, exact=True)).to_have_count(0)
+
+
+def test_channel_threads_edit_save_reload_and_inherit_global(console):
+    page, url, snapshots, _, _ = console
+    config_url = '/api/apps/demo/config'
+    snapshots['/api/apps/demo/models/runtime'] = dict(status='stopped', config=None, channels=[])
+    snapshots[config_url] = {
+        'global': {'channel_threads': 3},
+        'channels': [dict(id=0, threads=2, enable=False, infer_enable=False, swap_rb=True,
+            stream=dict(src_type='rtsp', url='rtsp://example.invalid/cam', video_enc='h264'),
+            models=[dict(id='person', enable=False, model_type='yolov8_det')])],
+    }
+    saved = []
+
+    def config_request(route):
+        if route.request.method == 'POST':
+            snapshots[config_url] = route.request.post_data_json
+            saved.append(deepcopy(snapshots[config_url]))
+            route.fulfill(content_type='application/json', body='{"ok":true}')
+        else:
+            route.fulfill(content_type='application/json', body=json.dumps(snapshots[config_url]))
+
+    page.route('**' + config_url, config_request)
+    page.goto(url + '/editor/demo')
+    page.locator('.react-flow__node-model').click()
+    pw_api.expect(page.locator('.node-field').filter(has_text='线程数')).to_have_count(0)
+    page.locator('.react-flow__node-stream').click()
+    threads = page.locator('.node-field').filter(has_text='通道线程数').locator('input')
+    pw_api.expect(threads).to_have_value('2')
+    threads.fill('7')
+    page.get_by_role('button', name='💾 保存', exact=True).click()
+    pw_api.expect(page.get_by_text('保存成功 ✓（config.json）', exact=True)).to_be_visible()
+    assert len(saved) == 1
+    channel = saved[-1]['channels'][0]
+    assert channel['threads'] == 7
+    assert channel['enable'] is False and channel['infer_enable'] is False
+    assert channel['swap_rb'] is True
+    assert 'threads' not in channel['models'][0]
+    assert saved[-1]['global']['channel_threads'] == 3
+    page.reload()
+    page.locator('.react-flow__node-stream').click()
+    pw_api.expect(threads).to_have_value('7')
+    threads.fill('')
+    page.get_by_role('button', name='💾 保存', exact=True).click()
+    pw_api.expect(page.get_by_text('保存成功 ✓（config.json）', exact=True)).to_be_visible()
+    assert len(saved) == 2
+    assert 'threads' not in saved[-1]['channels'][0]
+    assert saved[-1]['global']['channel_threads'] == 3
+    page.reload()
+    page.locator('.react-flow__node-stream').click()
+    pw_api.expect(threads).to_have_value('')

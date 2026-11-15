@@ -318,6 +318,12 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
         <NumberField min="0" def={0} value={d.channel_id} onChange={v => set('channel_id', v ?? 0)} />
       </F>
 
+      <F label="通道线程数（空 = 使用全局）">
+        <NumberField allowEmpty integerOnly min={1} step={1} placeholder="全局"
+          value={d.threads == null || Number(d.threads) < 0 ? undefined : d.threads}
+          onChange={v => set('threads', v)} />
+      </F>
+
       <F label="推理/业务最大 FPS（空 = 继承全局）">
         <NumberField
           allowEmpty
@@ -610,10 +616,6 @@ function ModelForm({ node, onUpdate, duplicateIdError, channelId }: {
       </F>
 
       </>}
-      <F label="线程数（空 = 使用全局）">
-        <NumberField allowEmpty placeholder="全局"
-          value={d.threads} onChange={v => set('threads', v)} />
-      </F>
     </div>
   )
 }

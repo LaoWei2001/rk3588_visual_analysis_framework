@@ -120,6 +120,10 @@ export function configToGraph(
       streamData.inference_roi = ch.inference_roi
     if (ch.max_fps != null) streamData.max_fps = ch.max_fps
     if (ch.threads != null) streamData.threads = ch.threads
+    // 引擎仍支持这些通道选项；即使面板未提供入口，也不能在配置往返时丢失。
+    for (const key of ['enable', 'infer_enable', 'swap_rb']) {
+      if (ch[key] != null) streamData[key] = ch[key]
+    }
     TRACKER_KEYS.forEach(key => {
       if (ch[key] != null) streamData[key] = ch[key]
     })

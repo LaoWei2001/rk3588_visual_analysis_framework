@@ -52,6 +52,7 @@ class YOLO : public ModelBase
     }
 
   private:
+    friend struct DetectionThresholdTestAccess; // Synthetic decoder regression tests.
     void init_rknn(const std::string &model_path, int core_mask);
     void load_labels(const std::string &path);
     void query_model_info();

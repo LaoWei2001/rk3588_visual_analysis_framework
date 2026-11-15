@@ -66,6 +66,7 @@ class YoloPose : public ModelBase
     }
 
   private:
+    friend struct DetectionThresholdTestAccess; // Synthetic decoder regression tests.
     void init_rknn(const std::string &model_path, int core_mask);
     void query_model_info();
     void configure_pose_layout();

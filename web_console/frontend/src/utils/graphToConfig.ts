@@ -126,7 +126,7 @@ export function graphToConfig(
       : []
     const reportData = reportNodes.map(n => n.data as Record<string, unknown>)
 
-    // 视频流节点就是通道；是否推理由连接且启用的模型决定。
+    // 视频流节点就是通道；保留通道开关，推理还受 infer_enable 和模型开关控制。
     const ch: Record<string, unknown> = {
       id: chId,
       stream,
@@ -245,6 +245,9 @@ export function graphToConfig(
     if (trackerValue('bytetrack_low_iou_thresh') != null)
       ch.bytetrack_low_iou_thresh = trackerValue('bytetrack_low_iou_thresh')
     if (streamData.threads != null) ch.threads = streamData.threads
+    for (const key of ['enable', 'infer_enable', 'swap_rb']) {
+      if (streamData[key] != null) ch[key] = streamData[key]
+    }
 
     // ROI 唯一持久化入口；空数组明确表示本通道没有 ROI。
     ch.roi_zones = zones

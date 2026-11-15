@@ -139,7 +139,9 @@ struct ChannelContext
     uint64_t unix_ms = 0;
     // 当前一帧与上一帧的间隔(毫秒)
     float dt_ms;
-    // 推理结果
+    /* 框架交给业务回调的检测结果已按各模型 obj_thresh、类别、NMS 等条件过滤。
+     * 关闭跟踪、SORT、ByteTrack 均不向业务暴露低于模型阈值的检测框；默认绘图使用这些结果。
+     * 深度整帧数据不参与检测框置信度过滤；业务可继续筛选，但无法取回已过滤的目标。 */
     std::vector<AlgoResult> *results = nullptr;
 
     /* 查询当前帧分割掩码；空 model_id 取首个分割模型。返回指针仅在当前回调有效。 */

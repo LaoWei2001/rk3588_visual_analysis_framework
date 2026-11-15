@@ -386,8 +386,6 @@ struct ByteTracker::Impl
             }
             const bool high_match = keep_detection[static_cast<size_t>(detection_index)] != 0;
             correct_track(track_index, detections[static_cast<size_t>(detection_index)], high_match);
-            if (!high_match && tracks[track_index].confirmed)
-                keep_detection[static_cast<size_t>(detection_index)] = 1;
         }
 
         /* ByteTrack 的核心约束：低分检测永远不能创建轨迹。 */
@@ -397,6 +395,8 @@ struct ByteTracker::Impl
 
         prune();
 
+        // Low-score associations update internal tracks only. Business results and
+        // default boxes obey each model's confidence threshold, just as with SORT.
         std::vector<AlgoResult> visible;
         visible.reserve(detections.size());
         for (size_t i = 0; i < detections.size(); ++i)
