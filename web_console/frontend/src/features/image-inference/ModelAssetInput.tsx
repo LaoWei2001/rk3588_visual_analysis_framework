@@ -1,74 +1,73 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { apiErrorMessage } from '../../api/http'
-import type { UploadedImageAsset } from '../../api/imageInference'
 
-type UploadState =
-  | { phase: 'uploading'; name: string; progress: number }
-  | { phase: 'success'; asset: UploadedImageAsset }
-  | { phase: 'error'; name: string; message: string }
+export interface ModelImportResult { path: string; renamed: boolean }
 
-const filename = (path: string) => path.split('/').pop() || path
-
-export default function ModelAssetInput({ title, value, options, extension, required, onChange, onUpload }: {
+export default function ModelAssetInput({ title, value, options, extension, required, onChange, onImport }: {
   title: string; value: string; options: string[]; extension: '.rknn' | '.txt'; required?: boolean
   onChange: (value: string) => void
-  onUpload: (file: File, onProgress: (value: number) => void) => Promise<UploadedImageAsset>
+  onImport?: (file: File, onProgress: (value: number) => void) => Promise<ModelImportResult>
 }) {
-  const [upload, setUpload] = useState<UploadState | null>(null)
-  const [editingPath, setEditingPath] = useState(false)
-  const uploaded = upload?.phase === 'success' && upload.asset.path === value ? upload.asset : null
+  const inputRef = useRef<HTMLInputElement>(null)
+  const mounted = useRef(true)
+  const [progress, setProgress] = useState<number | null>(null)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+  // Keep a canvas-provided path visible even if its package was removed meanwhile.
   const paths = [...new Set([...options, ...(value ? [value] : [])])]
-  const select = (path: string) => { setUpload(null); onChange(path) }
-  const importFile = async (file: File) => {
-    setUpload({ phase: 'uploading', name: file.name, progress: 0 })
+  const importModel = async (file: File) => {
+    if (!onImport || progress !== null) return
+    setError(''); setMessage('')
+    if (!file.name.toLowerCase().endsWith('.rknn')) { setError('请选择 .rknn 模型文件'); return }
+    if (!file.size) { setError('模型文件为空，请重新选择'); return }
+    if (file.size > 1024 ** 3) { setError('单个模型不能超过 1 GiB'); return }
+    setProgress(0)
     try {
-      if (!file.name.toLowerCase().endsWith(extension)) throw new Error(`请选择 ${extension} 文件。`)
-      if (!file.size) throw new Error('文件为空，请重新选择。')
-      if (file.size > (extension === '.rknn' ? 1024 ** 3 : 4 * 1024 ** 2)) {
-        throw new Error(extension === '.rknn' ? '单个模型不能超过 1 GiB。' : '标签文件不能超过 4 MiB。')
-      }
-      const asset = await onUpload(file, progress => setUpload(current =>
-        current?.phase === 'uploading' ? { ...current, progress } : current))
-      onChange(asset.path)
-      setEditingPath(false)
-      setUpload({ phase: 'success', asset })
+      const result = await onImport(file, value => { if (mounted.current) setProgress(value) })
+      if (!mounted.current) return
+      onChange(result.path)
+      setMessage(result.renamed ? '已导入，同名文件已另存' : '已导入')
     } catch (error) {
-      setUpload({ phase: 'error', name: file.name, message: apiErrorMessage(error) })
+      if (mounted.current) setError(apiErrorMessage(error))
+    } finally {
+      if (mounted.current) setProgress(null)
     }
   }
   return <div className="image-model-asset">
-    <div className="image-asset-heading">{extension === '.rknn' ? '模型文件' : required ? '标签' : '标签（可选）'}</div>
-    <div className="image-asset-actions">
-      {editingPath ? <input aria-label={title} autoFocus value={value} required={required} maxLength={4096}
-        placeholder={`/userdata/...${extension}`} onChange={event => select(event.target.value)}
-        onBlur={() => setEditingPath(false)} onKeyDown={event => {
-          if (event.key === 'Enter' || event.key === 'Escape') { event.preventDefault(); setEditingPath(false) }
-        }} /> : <select aria-label={title} value={value} required={required} title={value || title}
+    <label>
+      {extension === '.rknn' ? '模型文件' : required ? '标签' : '标签（可选）'}
+      <select aria-label={title} value={value} required={required} title={value || title}
         onChange={event => {
-          if (event.target.value === '__path__') setEditingPath(true)
-          else select(event.target.value)
+          if (event.target.value === '__import__') {
+            // Cancelling the file chooser leaves the previous selection intact.
+            event.currentTarget.value = value
+            inputRef.current?.click()
+          } else {
+            setError(''); setMessage('')
+            onChange(event.target.value)
+          }
         }}>
-        <option value="">选择{extension === '.rknn' ? '模型' : '标签'}</option>
-        {paths.map(path => <option key={path} value={path}>{filename(path)}</option>)}
-        <option value="__path__">输入板端路径…</option>
-      </select>}
-      <label className="image-asset-upload" title={extension === '.rknn' ? '上传 .rknn，最大 1 GiB' : '上传 .txt，最大 4 MiB'}><span>上传</span>
-        <input aria-label={`上传${title}`} type="file" accept={extension} onChange={event => {
-          const file = event.target.files?.[0]
-          event.target.value = '' // Allow retrying the same file; feedback keeps its name visible.
-          if (file) void importFile(file)
-        }} />
-      </label>
-    </div>
-    {upload?.phase === 'uploading' && <div className="image-asset-feedback" role="status">
-      <span>{upload.name} · {upload.progress >= 100 ? '保存中…' : `${upload.progress}%`}</span>
-      <progress aria-label={`${title}上传进度`} max={100} value={upload.progress} />
+        <option value="">{options.length ? `选择${extension === '.rknn' ? '模型' : '标签'}`
+          : `该程序包暂无 ${extension} 文件`}</option>
+        {paths.map(path => <option key={path} value={path}>{path.split('/').pop()}</option>)}
+        {onImport && <option value="__import__">导入模型…</option>}
+      </select>
+    </label>
+    {onImport && <input ref={inputRef} type="file" accept=".rknn" hidden aria-label={`导入${title}`}
+      onChange={event => {
+        const file = event.target.files?.[0]
+        event.target.value = ''
+        if (file) void importModel(file)
+      }} />}
+    {progress !== null && <div className="image-import-feedback" role="status">
+      {progress >= 100 ? '正在保存…' : `正在上传 ${progress}%`}
+      <progress aria-label={`${title}导入进度`} max={100} value={progress} />
     </div>}
-    {upload?.phase === 'error' && <div className="image-asset-feedback image-asset-error" role="alert">
-      上传失败：{upload.message}
-    </div>}
-    {uploaded && <div className="image-asset-feedback image-asset-selected" role="status">
-      {uploaded.renamed ? `已上传 · 同名文件已保留，另存为 ${uploaded.name}` : '✓ 已上传'}
-    </div>}
+    {error && <div className="image-import-feedback image-error-text" role="alert">导入失败：{error}</div>}
+    {message && <div className="image-import-feedback" role="status">{message}</div>}
   </div>
 }

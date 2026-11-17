@@ -5,9 +5,8 @@ from pathlib import Path
 import stat
 from typing import Callable, List, Tuple
 
-from .engine import IMAGE_EXTENSIONS, JobError, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_UPLOAD_BYTES
-
-MAX_SCAN_ENTRIES = 10000
+from .engine import IMAGE_EXTENSIONS, JobError
+from .storage import require_space
 
 
 def identity(info: os.stat_result) -> Tuple[int, int, int, int]:
@@ -54,27 +53,21 @@ def scan_device_images(value: str, recursive: bool = False) -> DeviceSelection:
         directory = stat.S_ISDIR(info.st_mode)
         if not directory and not stat.S_ISREG(info.st_mode):
             raise JobError(422, '仅支持普通图片文件或文件夹')
-        images, total_bytes = [], 0
+        images = []
 
         def add(path: Path, name: str):
-            nonlocal total_bytes
             if path.suffix.lower() not in IMAGE_EXTENSIONS:
                 raise JobError(422, '支持 JPG、PNG、BMP、WebP 图片')
             resolved = path.resolve(strict=True)
             file_info = resolved.stat()
             if not stat.S_ISREG(file_info.st_mode):
                 raise JobError(422, f'不是普通图片文件：{path}')
-            if not 0 < file_info.st_size <= MAX_IMAGE_BYTES:
-                raise JobError(422, f'图片为空或超过单张 20 MiB 限制：{path}')
-            if len(images) >= MAX_IMAGES:
-                raise JobError(422, f'文件夹中的图片超过 {MAX_IMAGES} 张，请缩小范围后再试')
-            total_bytes += file_info.st_size
-            if total_bytes > MAX_UPLOAD_BYTES:
-                raise JobError(422, '本批图片总大小超过 256 MiB，请缩小文件夹范围')
+            if file_info.st_size <= 0:
+                raise JobError(422, f'图片为空：{path}')
             images.append(DeviceImage(resolved, name, identity(file_info)))
 
         if directory:
-            pending, visited, scanned = [root], set(), 0
+            pending, visited = [root], set()
             while pending:
                 folder = pending.pop()
                 folder_info = folder.stat()
@@ -84,9 +77,6 @@ def scan_device_images(value: str, recursive: bool = False) -> DeviceSelection:
                 visited.add(key)
                 with os.scandir(folder) as entries:
                     for entry in entries:
-                        scanned += 1
-                        if scanned > MAX_SCAN_ENTRIES:
-                            raise JobError(422, '文件夹内容过多，请选择更具体的图片文件夹')
                         path = Path(entry.path)
                         if entry.is_dir(follow_symlinks=False):
                             if recursive:
@@ -125,7 +115,10 @@ def snapshot_device_image(image: DeviceImage, target: Path, checkpoint: Callable
                     copied += len(chunk)
                     if copied > image.size:
                         raise JobError(409, f'图片在读取时发生了变化，请重试：{image.path}')
+                    require_space(target.parent, len(chunk))
                     output.write(chunk)
+                    output.flush()
+                    require_space(target.parent)
             if copied != image.size or identity(os.fstat(source.fileno())) != image.version:
                 raise JobError(409, f'图片在读取时发生了变化，请重试：{image.path}')
     except OSError as exc:

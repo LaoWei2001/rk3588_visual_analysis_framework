@@ -9,8 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from services.image_inference import engine, jobs, sources
-from services.image_inference.assets import ModelAssets
+from services.image_inference import engine, jobs, sources, storage
 from routers import image_inference as routes
 
 
@@ -45,7 +44,7 @@ for i, image in enumerate(job['images']):
   items[i].update(status='failed',error='Cannot decode image');failures+=1
  else:
   directory=out/f'{i:06d}';directory.mkdir()
-  (directory/'result.json').write_text(json.dumps(dict(models=job['models'],results=[])))
+  (directory/'result.json').write_text(json.dumps(dict(coordinate_width=640,coordinate_height=640,source_width=1280,source_height=720,models=[dict(m,type=m['model_type'],succeeded=True) for m in job['models']],results=[])))
   (directory/'original.jpg').write_bytes(b'original')
   (directory/'annotated.jpg').write_bytes(b'jpeg')
   items[i].update(status='success',result=f'{i:06d}/result.json')
@@ -71,7 +70,6 @@ def console(tmp_path, monkeypatch):
     manager = jobs.ImageJobs(tmp_path / 'jobs', catalog)
     monkeypatch.setattr(routes, 'catalog', catalog)
     monkeypatch.setattr(routes, 'console_root', tmp_path / 'apps/_console')
-    monkeypatch.setattr(routes, 'model_assets', ModelAssets(tmp_path / 'library'))
     monkeypatch.setattr(routes, 'image_jobs', manager)
     server = FastAPI()
     server.include_router(routes.router, prefix='/api')
@@ -89,6 +87,22 @@ def settings(catalog):
 BASE = '/api/image-inference'
 
 
+def upload_batch(client, data, files):
+    uploads = [files['files']] if isinstance(files, dict) else [item[1] for item in files]
+    response = client.post(BASE + '/jobs', content=json.dumps({
+        'settings': json.loads(data['settings']),
+        'files': [dict(name=item[0], size=len(item[1])) for item in uploads],
+    }), headers={'Content-Type': 'application/json'})
+    if response.status_code != 202:
+        return response
+    job_id = response.json()['id']
+    for index, item in enumerate(uploads):
+        response = client.put(f'{BASE}/jobs/{job_id}/inputs/{index}', content=item[1])
+        if response.status_code != 200:
+            return response
+    return client.post(f'{BASE}/jobs/{job_id}/submit')
+
+
 def wait(manager, job_id):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
@@ -102,7 +116,7 @@ def wait(manager, job_id):
 
 def test_batch_multi_model_partial_failure_and_restart(console):
     client, manager, catalog = console
-    response = client.post(BASE + '/jobs', data={'settings': json.dumps(settings(manager.catalog))}, files=[
+    response = upload_batch(client, data={'settings': json.dumps(settings(manager.catalog))}, files=[
         ('files', ('same.jpg', b'ok', 'image/jpeg')), ('files', ('same.jpg', b'bad', 'image/jpeg')),
         ('files', ('last.png', b'ok', 'image/png'))])
     assert response.status_code == 202, response.text
@@ -113,11 +127,8 @@ def test_batch_multi_model_partial_failure_and_restart(console):
     details = client.get(f'{BASE}/jobs/{job_id}/items/0').json()
     assert [m['obj_thresh'] for m in details['models']] == [.9, .2]
     assert [m['id'] for m in details['models']] == ['person', 'secondary']
-    download = client.get(f'{BASE}/jobs/{job_id}/download')
-    assert download.status_code == 200
-    with zipfile.ZipFile(BytesIO(download.content)) as archive:
-        assert set(archive.namelist()) == {'000000/original.jpg', '000000/annotated.jpg',
-                                         '000002/original.jpg', '000002/annotated.jpg'}
+    assert client.get(f'{BASE}/jobs/{job_id}/download').status_code == 404
+    assert client.post(f'{BASE}/jobs/{job_id}/labels', json={'indices': [0, 2]}).status_code == 422
     recovered = jobs.ImageJobs(manager.root, catalog)
     assert recovered.current()['status'] == 'completed_with_errors'
     assert client.get(f'{BASE}/jobs/{job_id}/files/000000/annotated.jpg').status_code == 200
@@ -141,18 +152,18 @@ def test_model_inspection_cache_type_switch_and_submission_checks(console):
     mismatch = client.get(BASE + '/models/info', params=dict(query, model_type='yolov5')).json()
     assert not mismatch['ok'] and '3 个输出张量' in mismatch['error']
     options['models'][0]['model_type'] = 'yolov5'
-    rejected = client.post(BASE + '/jobs', data={'settings': json.dumps(options)}, files={'files': ('x.jpg', b'ok')})
+    rejected = upload_batch(client, data={'settings': json.dumps(options)}, files={'files': ('x.jpg', b'ok')})
     assert rejected.status_code == 422 and '3 个输出张量' in rejected.json()['detail']
     assert manager.current() is None
     options['models'][0]['model_type'] = 'yolov8_det'
-    created = client.post(BASE + '/jobs', data={'settings': json.dumps(options)}, files={'files': ('x.jpg', b'ok')})
+    created = upload_batch(client, data={'settings': json.dumps(options)}, files={'files': ('x.jpg', b'ok')})
     assert created.status_code == 202, created.text
     assert wait(manager, created.json()['id'])['status'] == 'completed'
     assert (catalog.runtime / 'probes.log').read_text().splitlines() == ['model.rknn']
 
     # A file replaced after UI validation is probed again at submission.
     Path(path).write_bytes(b'broken model replacement')
-    rejected = client.post(BASE + '/jobs', data={'settings': json.dumps(options)}, files={'files': ('x.jpg', b'ok')})
+    rejected = upload_batch(client, data={'settings': json.dumps(options)}, files={'files': ('x.jpg', b'ok')})
     assert rejected.status_code == 422 and '无法加载' in rejected.json()['detail']
     assert manager.current()['id'] == created.json()['id']
     changed = client.get(BASE + '/models/info', params=query).json()
@@ -179,10 +190,10 @@ def test_current_batch_replaces_history_and_delete_endpoints(console):
     assert 'get' not in paths[BASE + '/jobs']
     assert BASE + '/jobs/{job_id}' not in paths
     payload = {'settings': json.dumps(settings(manager.catalog))}
-    first = client.post(BASE + '/jobs', data=payload, files={'files': ('first.jpg', b'ok')}).json()
+    first = upload_batch(client, data=payload, files={'files': ('first.jpg', b'ok')}).json()
     wait(manager, first['id'])
     assert client.get(BASE + '/jobs/current').json()['id'] == first['id']
-    second = client.post(BASE + '/jobs', data=payload, files={'files': ('slow.jpg', b'ok')}).json()
+    second = upload_batch(client, data=payload, files={'files': ('slow.jpg', b'ok')}).json()
     current = client.get(BASE + '/jobs/current').json()
     assert isinstance(current, dict) and current['id'] == second['id']
     assert current['status'] not in jobs.TERMINAL
@@ -219,14 +230,12 @@ def test_clear_finished_batches_removes_cache_and_preserves_models_and_source(co
     client, manager, catalog = console
     source = tmp_path / 'source.jpg'
     source.write_bytes(b'ok')
-    uploaded = client.post(BASE + '/assets/upload', files={'file': ('saved.rknn', b'model')}).json()
     options = settings(catalog)
-    for model in options['models']:
-        model['model_path'] = uploaded['path']
     first = client.post(BASE + '/jobs/from-device', json=dict(path=str(source), settings=options)).json()
     assert wait(manager, first['id'])['status'] == 'completed'
-    assert client.get(f"{BASE}/jobs/{first['id']}/download").status_code == 200
-    second = client.post(BASE + '/jobs', data={'settings': json.dumps(options)},
+    # Old cached bundles must also disappear when records are cleared.
+    (manager.root / first['id'] / 'results.zip').write_bytes(b'old cache')
+    second = upload_batch(client, data={'settings': json.dumps(options)},
                          files={'files': ('bad.jpg', b'bad')}).json()
     assert wait(manager, second['id'])['status'] == 'completed_with_errors'
     cancelled = manager.reserve(options, ['cancelled.jpg'])
@@ -244,9 +253,8 @@ def test_clear_finished_batches_removes_cache_and_preserves_models_and_source(co
     assert response.status_code == 200, response.text
     assert response.json() == dict(cleared=4, current=None)
     assert all(not path.exists() for path in before)
-    assert source.read_bytes() == b'ok' and Path(uploaded['path']).read_bytes() == b'model'
+    assert source.read_bytes() == b'ok' and Path(options['models'][0]['model_path']).read_bytes() == b'model'
     assert Path(options['models'][0]['label_path']).read_text() == 'person\n'
-    assert uploaded['path'] in client.get(BASE + '/assets').json()['models']
     assert client.get(BASE + '/jobs/current').json() is None
     assert jobs.ImageJobs(manager.root, catalog).current() is None
     assert client.get(f"{BASE}/jobs/{first['id']}/items/0").status_code == 404
@@ -260,7 +268,7 @@ def test_clear_finished_batches_removes_cache_and_preserves_models_and_source(co
 def test_clear_records_preserves_active_batch(console, active_status):
     client, manager, catalog = console
     options = settings(catalog)
-    completed = client.post(BASE + '/jobs', data={'settings': json.dumps(options)},
+    completed = upload_batch(client, data={'settings': json.dumps(options)},
                             files={'files': ('first.jpg', b'ok')}).json()
     wait(manager, completed['id'])
     active_id = manager.reserve(options, ['slow.jpg' if active_status == 'running' else 'next.jpg'])
@@ -289,7 +297,7 @@ def test_clear_records_preserves_active_batch(console, active_status):
 
 def test_clear_storage_failure_is_reported_and_can_be_retried(console, monkeypatch):
     client, manager, catalog = console
-    job = client.post(BASE + '/jobs', data={'settings': json.dumps(settings(catalog))},
+    job = upload_batch(client, data={'settings': json.dumps(settings(catalog))},
                       files={'files': ('first.jpg', b'ok')}).json()
     wait(manager, job['id'])
     with monkeypatch.context() as patch:
@@ -304,35 +312,7 @@ def test_clear_storage_failure_is_reported_and_can_be_retried(console, monkeypat
     assert client.delete(BASE + '/jobs/completed').json() == dict(cleared=1, current=None)
 
 
-def test_cached_export_drops_json_and_preserves_result_files(console):
-    client, manager, _ = console
-    response = client.post(BASE + '/jobs', data={'settings': json.dumps(settings(manager.catalog))},
-                           files={'files': ('x.jpg', b'ok')})
-    assert response.status_code == 202
-    job_id = response.json()['id']
-    assert wait(manager, job_id)['status'] == 'completed'
-    directory = manager.root / job_id
-    output = directory / 'output/000000'
-    (output / 'model_0.jpg').write_bytes(b'model image')
-    (output / 'model_0_mask.png').write_bytes(b'mask')
-    (output / 'model_0_depth.npy').write_bytes(b'depth')
-    target = directory / 'results.zip'
-    with zipfile.ZipFile(target, 'w') as archive:
-        archive.writestr('task.json', '{}')
-        archive.writestr('000000/result.json', '{}')
-        archive.writestr('000000/annotated.jpg', b'old jpeg')
-    response = client.get(f'{BASE}/jobs/{job_id}/download')
-    assert response.status_code == 200
-    with zipfile.ZipFile(BytesIO(response.content)) as archive:
-        assert set(archive.namelist()) == {'000000/original.jpg', '000000/annotated.jpg',
-                                         '000000/model_0.jpg', '000000/model_0_mask.png',
-                                         '000000/model_0_depth.npy'}
-        assert archive.read('000000/annotated.jpg') == b'jpeg'
-    # The structured API still drives the preview; only file exports omit JSON.
-    assert client.get(f'{BASE}/jobs/{job_id}/items/0').status_code == 200
-    modified = target.stat().st_mtime_ns
-    assert client.get(f'{BASE}/jobs/{job_id}/download').content == response.content
-    assert target.stat().st_mtime_ns == modified
+
 
 
 @pytest.mark.parametrize('change', ['duplicate', 'nan', 'outside', 'empty', 'unknown', 'bool', 'roi'])
@@ -348,7 +328,7 @@ def test_invalid_configuration_never_reserves_job(console, change, tmp_path):
     if change == 'empty':
         empty = tmp_path / 'empty.rknn'; empty.touch()
         value['models'][0]['model_path'] = str(empty)
-    response = client.post(BASE + '/jobs', data={'settings': json.dumps(value)}, files={'files': ('x.jpg', b'ok')})
+    response = upload_batch(client, data={'settings': json.dumps(value)}, files={'files': ('x.jpg', b'ok')})
     assert response.status_code == 422, response.text
     assert manager.current() is None
 
@@ -356,18 +336,18 @@ def test_invalid_configuration_never_reserves_job(console, change, tmp_path):
 def test_cancel_busy_reject_and_reuse(console):
     client, manager, _ = console
     payload = {'settings': json.dumps(settings(manager.catalog))}
-    response = client.post(BASE + '/jobs', data=payload, files={'files': ('slow.jpg', b'ok')})
+    response = upload_batch(client, data=payload, files={'files': ('slow.jpg', b'ok')})
     job_id = response.json()['id']
-    assert client.post(BASE + '/jobs', data=payload, files={'files': ('x.jpg', b'ok')}).status_code == 409
+    assert upload_batch(client, data=payload, files={'files': ('x.jpg', b'ok')}).status_code == 409
     assert client.post(f'{BASE}/jobs/{job_id}/cancel').status_code == 200
     assert wait(manager, job_id)['status'] == 'cancelled'
-    again = client.post(BASE + '/jobs', data=payload, files={'files': ('next.jpg', b'ok')})
+    again = upload_batch(client, data=payload, files={'files': ('next.jpg', b'ok')})
     assert wait(manager, again.json()['id'])['status'] == 'completed'
 
 
 def test_upload_failure_releases_slot_and_restart_interrupts_upload(console):
     client, manager, catalog = console
-    response = client.post(BASE + '/jobs', data={'settings': json.dumps(settings(manager.catalog))}, files={'files': ('x.jpg', b'')})
+    response = upload_batch(client, data={'settings': json.dumps(settings(manager.catalog))}, files={'files': ('x.jpg', b'')})
     assert response.status_code == 422
     assert manager.current() is None
     job_id = manager.reserve(settings(manager.catalog), ['x.jpg'])
@@ -383,7 +363,7 @@ def test_device_lock_is_authoritative_and_not_unlinked(console):
         inode = engine.NPU_LOCK_FILE.stat().st_ino
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         assert catalog.capabilities()['busy']
-        response = client.post(BASE + '/jobs', data={'settings': json.dumps(settings(manager.catalog))}, files={'files': ('x.jpg', b'ok')})
+        response = upload_batch(client, data={'settings': json.dumps(settings(manager.catalog))}, files={'files': ('x.jpg', b'ok')})
         assert response.status_code == 409
         assert manager.current() is None
         assert engine.NPU_LOCK_FILE.stat().st_ino == inode
@@ -489,16 +469,19 @@ def test_invalid_device_source_does_not_reserve(console, tmp_path, kind):
     assert manager.current() is None
 
 
-@pytest.mark.parametrize('limit', ['MAX_IMAGES', 'MAX_IMAGE_BYTES', 'MAX_UPLOAD_BYTES', 'MAX_SCAN_ENTRIES'])
-def test_device_limits_reject_instead_of_truncating(console, tmp_path, monkeypatch, limit):
-    client, manager, _ = console
-    folder = tmp_path / 'images'; folder.mkdir()
-    for name in ['one.jpg', 'two.png']:
-        (folder / name).write_bytes(b'ok')
-    monkeypatch.setattr(sources, limit, 1)
-    response = client.post(BASE + '/jobs/from-device', json=dict(path=str(folder), settings=settings(manager.catalog)))
-    assert response.status_code == 422, response.text
+def test_device_upload_budget_rejects_instead_of_truncating(console, tmp_path, monkeypatch):
+    client, manager, catalog = console
+    folder = tmp_path / 'pictures'
+    folder.mkdir()
+    (folder / 'one.jpg').write_bytes(b'ok')
+    (folder / 'two.jpg').write_bytes(b'ok')
+    from collections import namedtuple
+    Usage = namedtuple('Usage', 'total used free')
+    monkeypatch.setattr(storage.shutil, 'disk_usage', lambda _: Usage(0, 0, storage.MIN_FREE_BYTES + 4))
+    response = client.post(BASE + '/jobs/from-device', json=dict(path=str(folder), settings=settings(catalog)))
+    assert response.status_code == 507
     assert manager.current() is None
+    assert (folder / 'one.jpg').read_bytes() == b'ok'
 
 
 def test_changed_device_file_rejected_and_slot_released(console, tmp_path, monkeypatch):
@@ -520,34 +503,34 @@ def test_changed_device_file_rejected_and_slot_released(console, tmp_path, monke
     assert wait(manager, response.json()['id'])['status'] == 'completed'
 
 
-def test_empty_app_catalog_can_upload_models_and_infer(console, tmp_path):
+def test_shared_model_library_routes_removed(console, tmp_path):
+    client, _, _ = console
+    legacy = tmp_path / 'apps/_console/model_assets'
+    legacy.mkdir(parents=True)
+    model = legacy / 'saved.rknn'
+    model.write_bytes(b'user model')
+    assert client.get(BASE + '/assets').status_code == 404
+    assert client.post(BASE + '/assets/upload', files={'file': ('test.rknn', b'model')}).status_code == 404
+    assert model.read_bytes() == b'user model'
+
+
+def test_package_models_infer_without_copying_to_shared_library(console, tmp_path):
     client, manager, _ = console
-    assert not (tmp_path / 'apps').exists()
-    assert client.get(BASE + '/assets').json() == dict(models=[], labels=[])
-    assert client.get(BASE + '/capabilities').status_code == 200
-    model = client.post(BASE + '/assets/upload', files={'file': ('test.rknn', b'model')}).json()
-    label = client.post(BASE + '/assets/upload', files={'file': ('test.txt', b'person\n')}).json()
-    repeat = client.post(BASE + '/assets/upload', files={'file': ('test.rknn', b'other')}).json()
-    assert model['path'] != repeat['path'] and repeat['renamed']
-    assert Path(model['path']).read_bytes() == b'model'
+    assets = tmp_path / 'apps/demo/assets'
+    assets.mkdir(parents=True)
+    model, label = assets / 'test.rknn', assets / 'test.txt'
+    model.write_bytes(b'model')
+    label.write_text('person\n')
     value = settings(manager.catalog)
     for item in value['models']:
-        item.update(model_path=model['path'], label_path=label['path'])
-    response = client.post(BASE + '/jobs', data={'settings': json.dumps(value)}, files={'files': ('x.jpg', b'ok')})
+        item.update(model_path=str(model), label_path=str(label))
+    response = upload_batch(client, data={'settings': json.dumps(value)}, files={'files': ('x.jpg', b'ok')})
     assert response.status_code == 202, response.text
     result = wait(manager, response.json()['id'])
-    assert result['status'] == 'completed' and 'app' not in result
-    assert all(m['model_path'] == model['path'] for m in result['settings']['models'])
-    assert not (tmp_path / 'apps').exists()
-
-
-@pytest.mark.parametrize('name,content', [('empty.rknn', b''), ('program.sh', b'script')])
-def test_bad_model_import_leaves_library_clean(console, name, content):
-    client, _, _ = console
-    response = client.post(BASE + '/assets/upload', files={'file': (name, content)})
-    assert response.status_code == 422, response.text
-    assert client.get(BASE + '/assets').json() == dict(models=[], labels=[])
-    assert not routes.model_assets.root.exists() or list(routes.model_assets.root.iterdir()) == []
+    assert result['status'] == 'completed'
+    assert all(m['model_path'] == str(model) for m in result['settings']['models'])
+    assert model.read_bytes() == b'model' and label.read_text() == 'person\n'
+    assert not (tmp_path / 'apps/_console/model_assets').exists()
 
 
 def test_old_tasks_remain_viewable_without_the_original_program(console):
@@ -584,11 +567,210 @@ def test_canvas_preset_only_resolves_paths_and_needs_no_program_binary(console, 
     assert client.post(BASE + '/canvas-preset', json=dict(app='canvas-demo', settings=value)).status_code == 422
 
 
-@pytest.mark.parametrize('suffix,limit', [('.rknn', 'MAX_MODEL_BYTES'), ('.txt', 'MAX_LABEL_BYTES')])
-def test_model_import_size_limit_removes_partial_file(console, monkeypatch, suffix, limit):
-    from services.image_inference import assets
+def label_batch(console, names=('first.jpg', 'second.png', 'empty.jpg', 'bad.jpg')):
+    client, manager, catalog = console
+    options = settings(catalog)
+    options['models'] = options['models'][:1]
+    response = upload_batch(client, data={'settings': json.dumps(options)},
+                           files=[('files', (name, b'bad' if name == 'bad.jpg' else b'ok')) for name in names])
+    assert response.status_code == 202, response.text
+    job_id = response.json()['id']
+    wait(manager, job_id)
+    result = manager.result(job_id, 0)
+    result['results'] = [dict(model_id='person', model_type='yolov8_det', class_id=3,
+                              box=dict(x=160, y=80, width=320, height=160))]
+    jobs.write_json(manager.root / job_id / 'output/000000/result.json', result)
+    return job_id, result
+
+
+def test_selected_yolo_labels_only_and_empty_detection(console):
+    client, manager, _ = console
+    job_id, _ = label_batch(console)
+    response = client.post(f'{BASE}/jobs/{job_id}/labels', json={'indices': [2, 0]})
+    assert response.status_code == 200, response.text
+    assert response.headers['content-type'] == 'application/zip'
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        assert archive.namelist() == ['first.txt', 'empty.txt']
+        assert archive.read('first.txt').decode() == '3 0.50000000 0.25000000 0.50000000 0.25000000\n'
+        assert archive.read('empty.txt') == b''
+    # Every successful image can be selected, and subsets do not reuse a cached ZIP.
+    response = client.post(f'{BASE}/jobs/{job_id}/labels', json={'indices': [0, 1, 2]})
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        assert archive.namelist() == ['first.txt', 'second.txt', 'empty.txt']
+    assert not (manager.root / job_id / 'results.zip').exists()
+    assert client.get(f'{BASE}/jobs/{job_id}/download').status_code == 404
+    assert client.get(f'{BASE}/jobs/{job_id}/files/000000/original.jpg').status_code == 200
+    for name in ('result.json', 'model_0_mask.png', 'model_0_depth.npy'):
+        assert client.get(f'{BASE}/jobs/{job_id}/files/000000/{name}').status_code == 404
+
+
+@pytest.mark.parametrize('indices', [[], [0, 0], [-1], [4], [3], [True], ['0'], [0.5], list(range(101))])
+def test_label_selection_rejects_invalid_or_failed_images(console, indices):
     client, _, _ = console
-    monkeypatch.setattr(assets, limit, 1)
-    response = client.post(BASE + '/assets/upload', files={'file': ('large' + suffix, b'too big')})
-    assert response.status_code == 413
-    assert list(routes.model_assets.root.iterdir()) == []
+    job_id, _ = label_batch(console)
+    assert client.post(f'{BASE}/jobs/{job_id}/labels', json={'indices': indices}).status_code == 422
+
+
+def test_label_names_do_not_overwrite_or_escape_archive(console):
+    client, _, _ = console
+    job_id, _ = label_batch(console, ('same.jpg', 'same.png', '中文.jpg', '../escape.jpg'))
+    response = client.post(f'{BASE}/jobs/{job_id}/labels', json={'indices': [0, 1, 2, 3]})
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        assert archive.namelist() == ['000001/same.txt', '000002/same.txt', '中文.txt', 'escape.txt']
+    response = client.post(f'{BASE}/jobs/{job_id}/labels', json={'indices': [1]})
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        assert archive.namelist() == ['000002/same.txt']
+
+
+@pytest.mark.parametrize('model_type', ['yolov5', 'yolov8_det', 'yolov8_obb', 'yolov8_pose', 'yolo26_pose', 'yolov5_seg', 'zip_depth'])
+def test_export_checks_recorded_model_type(console, model_type):
+    client, manager, _ = console
+    job_id, result = label_batch(console)
+    manager._jobs[job_id].data['settings']['models'][0]['model_type'] = model_type
+    result['models'][0]['type'] = model_type
+    result['results'][0]['model_type'] = model_type
+    jobs.write_json(manager.root / job_id / 'output/000000/result.json', result)
+    response = client.post(f'{BASE}/jobs/{job_id}/labels', json={'indices': [0]})
+    assert response.status_code == (200 if model_type in ('yolov5', 'yolov8_det') else 422)
+
+
+def test_label_boxes_use_coordinate_size_and_clip_to_image(console):
+    client, manager, _ = console
+    job_id, result = label_batch(console)
+    result.update(coordinate_width=320, coordinate_height=160)
+    result['results'][0]['box'] = dict(x=-10, y=40, width=170, height=160)
+    jobs.write_json(manager.root / job_id / 'output/000000/result.json', result)
+    response = client.post(f'{BASE}/jobs/{job_id}/labels', json={'indices': [0]})
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        assert archive.read('first.txt').decode() == '3 0.25000000 0.62500000 0.50000000 0.75000000\n'
+
+
+@pytest.mark.parametrize('fault', ['dimensions', 'nan', 'negative_class', 'wrong_model', 'failed_model', 'missing_box'])
+def test_label_export_rejects_incomplete_results(console, fault):
+    client, manager, _ = console
+    job_id, result = label_batch(console)
+    if fault == 'dimensions': result['coordinate_width'] = 0
+    if fault == 'nan': result['results'][0]['box']['x'] = float('nan')
+    if fault == 'negative_class': result['results'][0]['class_id'] = -1
+    if fault == 'wrong_model': result['results'][0]['model_id'] = 'other'
+    if fault == 'failed_model': result['models'][0]['succeeded'] = False
+    if fault == 'missing_box': result['results'][0].pop('box')
+    jobs.write_json(manager.root / job_id / 'output/000000/result.json', result)
+    assert client.post(f'{BASE}/jobs/{job_id}/labels', json={'indices': [0]}).status_code == 422
+
+
+def test_label_export_waits_for_batch_and_survives_restart(console):
+    client, manager, catalog = console
+    job_id, _ = label_batch(console)
+    restored = jobs.ImageJobs(manager.root, catalog)
+    assert zipfile.is_zipfile(BytesIO(restored.labels_archive(job_id, [0])))
+    manager._jobs[job_id].data['status'] = 'running'
+    assert client.post(f'{BASE}/jobs/{job_id}/labels', json={'indices': [0]}).status_code == 409
+    manager._jobs[job_id].data['status'] = 'completed'
+
+
+def reserve_upload(client, catalog, files):
+    options = settings(catalog)
+    options['models'] = options['models'][:1]
+    return client.post(BASE + '/jobs', json={'settings': options, 'files': files})
+
+
+def test_upload_and_export_more_than_one_thousand_images(console):
+    client, manager, catalog = console
+    count = 1001
+    response = reserve_upload(client, catalog, [dict(name=f'{i}.jpg', size=2) for i in range(count)])
+    assert response.status_code == 202, response.text
+    job_id = response.json()['id']
+    for index in range(count):
+        assert client.put(f'{BASE}/jobs/{job_id}/inputs/{index}', content=b'ok').status_code == 200
+    assert client.post(f'{BASE}/jobs/{job_id}/submit').status_code == 202
+    deadline = time.monotonic() + 30
+    while manager.current()['status'] not in jobs.TERMINAL and time.monotonic() < deadline:
+        time.sleep(.1)
+    assert manager.current()['status'] == 'completed'
+    assert manager.current()['completed'] == count
+    response = client.post(f'{BASE}/jobs/{job_id}/labels', json={'indices': list(range(count))})
+    assert response.status_code == 200, response.text
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        assert len(archive.namelist()) == count
+
+
+def test_upload_budget_has_no_fixed_file_or_batch_bytes(console):
+    client, manager, catalog = console
+    response = reserve_upload(client, catalog, [dict(name='large.jpg', size=300 * 1024**2)])
+    assert response.status_code == 202, response.text
+    job_id = response.json()['id']
+    assert client.delete(f'{BASE}/jobs/{job_id}/upload').status_code == 200
+    assert manager.current() is None
+
+
+@pytest.mark.parametrize('remaining', [-1, 0, 10, 11])
+def test_upload_reserves_strictly_more_than_100mb(console, monkeypatch, remaining):
+    from collections import namedtuple
+    client, manager, catalog = console
+    Usage = namedtuple('Usage', 'total used free')
+    monkeypatch.setattr(storage.shutil, 'disk_usage', lambda _: Usage(0, 0, storage.MIN_FREE_BYTES + remaining))
+    caps = client.get(BASE + '/capabilities').json()
+    assert 'max_images' not in caps and 'max_upload_bytes' not in caps
+    assert caps['upload_available_bytes'] == max(0, remaining - 1)
+    response = reserve_upload(client, catalog, [dict(name='x.jpg', size=10)])
+    assert response.status_code == (202 if remaining == 11 else 507)
+    if remaining != 11:
+        assert manager.current() is None
+
+
+def test_storage_drop_during_upload_removes_entire_unsubmitted_batch(console, monkeypatch):
+    from collections import namedtuple
+    client, manager, catalog = console
+    job_id = reserve_upload(client, catalog, [dict(name='first.jpg', size=2), dict(name='second.jpg', size=2)]).json()['id']
+    assert client.put(f'{BASE}/jobs/{job_id}/inputs/0', content=b'ok').status_code == 200
+    Usage = namedtuple('Usage', 'total used free')
+    monkeypatch.setattr(storage.shutil, 'disk_usage', lambda _: Usage(0, 0, storage.MIN_FREE_BYTES + 2))
+    response = client.put(f'{BASE}/jobs/{job_id}/inputs/1', content=b'ok')
+    assert response.status_code == 507 and '100 MB' in response.text
+    assert manager.current() is None
+    assert not (manager.root / job_id).exists()
+
+
+@pytest.mark.parametrize('content', [b'', b'o', b'too long'])
+def test_incomplete_or_oversized_upload_cleans_up(console, content):
+    client, manager, catalog = console
+    job_id = reserve_upload(client, catalog, [dict(name='x.jpg', size=2)]).json()['id']
+    assert client.put(f'{BASE}/jobs/{job_id}/inputs/0', content=content).status_code == 422
+    assert manager.current() is None
+    assert not (manager.root / job_id).exists()
+
+
+def test_uploaded_files_cannot_be_overwritten_and_incomplete_batch_cannot_run(console):
+    client, manager, catalog = console
+    job_id = reserve_upload(client, catalog, [dict(name='first.jpg', size=2), dict(name='second.jpg', size=2)]).json()['id']
+    assert client.put(f'{BASE}/jobs/{job_id}/inputs/0', content=b'ok').status_code == 200
+    assert client.put(f'{BASE}/jobs/{job_id}/inputs/0', content=b'xx').status_code == 409
+    assert manager.input_path(job_id, 0).read_bytes() == b'ok'
+    assert client.put(f'{BASE}/jobs/{job_id}/inputs/9', content=b'ok').status_code == 404
+    assert client.post(f'{BASE}/jobs/{job_id}/submit').status_code == 422
+    assert client.delete(f'{BASE}/jobs/{job_id}/upload').status_code == 200
+    assert manager.current() is None
+
+
+def test_device_directory_has_no_image_count_limit(console, tmp_path):
+    client, manager, catalog = console
+    folder = tmp_path / 'many-images'
+    folder.mkdir()
+    for index in range(101):
+        (folder / f'{index}.jpg').write_bytes(b'ok')
+    preview = client.post(BASE + '/device-images', json={'path': str(folder)})
+    assert preview.json()['total'] == 101
+    response = client.post(BASE + '/jobs/from-device', json=dict(path=str(folder), settings=settings(catalog)))
+    assert response.status_code == 202, response.text
+    assert wait(manager, response.json()['id'])['completed'] == 101
+
+
+def test_storage_drop_stops_inference(console, monkeypatch):
+    from collections import namedtuple
+    client, manager, catalog = console
+    response = upload_batch(client, data={'settings': json.dumps(settings(catalog))}, files={'files': ('slow.jpg', b'ok')})
+    Usage = namedtuple('Usage', 'total used free')
+    monkeypatch.setattr(storage.shutil, 'disk_usage', lambda _: Usage(0, 0, storage.MIN_FREE_BYTES))
+    result = wait(manager, response.json()['id'])
+    assert result['status'] == 'failed' and '100 MB' in result['error']

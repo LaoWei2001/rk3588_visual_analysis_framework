@@ -12,7 +12,7 @@ export default function useModelChecks(models: ImageModel[]) {
   useEffect(() => {
     const controller = new AbortController()
     setState({ scope, revision, checks: [] })
-    // Typing an absolute path must not launch a probe for every keystroke.
+    // Coalesce rapid model/type changes before starting the native check.
     const timer = window.setTimeout(() => {
       const selections: [string, string][] = JSON.parse(scope)
       selections.forEach(async ([path, type], index) => {

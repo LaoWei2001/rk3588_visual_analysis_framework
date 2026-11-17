@@ -17,7 +17,7 @@
 .image-inference-page button { background: transparent; color: #9fc4f7; border: 0; border-radius: 4px; padding: 6px 0; cursor: pointer; }
 .image-inference-page button:hover:not(:disabled), .image-inference-page a:hover { color: #d2e6ff; }
 .image-inference-page button:disabled { cursor: default; opacity: .45; }
-.image-inference-page button:focus-visible, .image-inference-page a:focus-visible, .image-inference-page summary:focus-visible, .image-asset-upload:focus-within, .image-upload:focus-within { outline: 2px solid #82b5ff; outline-offset: 3px; }
+.image-inference-page button:focus-visible, .image-inference-page a:focus-visible, .image-inference-page summary:focus-visible, .image-upload:focus-within { outline: 2px solid #82b5ff; outline-offset: 3px; }
 .image-inference-page a { color: #9fc4f7; text-decoration: none; white-space: nowrap; }
 .image-inference-page summary { cursor: pointer; color: #9baec7; padding: 7px 0; font-size: 12px; }
 .image-inference-page details[open] > summary { margin-bottom: 10px; }
@@ -51,29 +51,19 @@
 .image-model-check.is-error { color: #ffb0b0; }
 .image-model-check > span { min-width: 0; }
 .image-inference-page .image-model-check > button { flex-shrink: 0; padding: 0; }
-.image-asset-heading { margin-bottom: 6px; color: #a6b3c7; font-size: 12px; }
-.image-asset-actions { display: flex; gap: 12px; align-items: center; }
-.image-asset-actions > select, .image-asset-actions > input { flex: 1; width: 0; text-overflow: ellipsis; }
-.image-inference-page .image-asset-upload { position: relative; display: flex; justify-content: center; flex-shrink: 0; margin: 0; padding: 6px 0; color: #9fc4f7; cursor: pointer; }
-.image-asset-upload:hover { color: #d2e6ff; }
-.image-inference-page .image-asset-upload input, .image-inference-page .image-upload input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; opacity: 0; cursor: pointer; }
-.image-model:disabled .image-asset-actions { opacity: .55; }
-.image-model:disabled .image-asset-upload input, .image-upload input:disabled { cursor: wait; }
-.image-asset-feedback { margin-top: 6px; color: #9eb8d9; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
-.image-asset-feedback progress { display: block; width: 100%; height: 4px; margin-top: 5px; accent-color: #82b5ff; }
-.image-asset-selected { color: #85c5a8; }
-.image-asset-error { color: #ffb0b0; }
+.image-inference-page .image-upload input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; opacity: 0; cursor: pointer; }
 .image-model-parameters { margin-top: 2px; }
 .image-model-parameters > label { margin-bottom: 12px; }
 .image-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
 .image-models { margin-bottom: 26px; }
-.image-config .image-add-model { color: #9baec7; }
+.image-config .image-add-model { width: 100%; padding: 10px; border: 1px solid #4a7cb9; background: #1e3552; color: #dcecff; font-size: 14px; }
+.image-config .image-add-model:hover:not(:disabled) { background: #294b72; border-color: #6b9bd5; color: white; }
 .image-config .image-remove { position: absolute; top: 7px; right: 0; color: #aeb8c9; padding: 0; }
 .image-config .image-model:first-child .image-remove { right: 40px; }
 .image-source-picker { border-top: 1px solid #303a4c; padding-top: 22px; margin-bottom: 22px; }
 .image-source-heading, .image-results-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .image-result-actions { display: flex; align-items: center; gap: 12px; }
-.image-inference-page .image-clear-results { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: -4px 0; padding: 0; color: #8c9cb3; border-radius: 5px; }
+.image-inference-page .image-clear-results { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 28px; margin: -4px 0; padding: 4px 6px; white-space: nowrap; color: #8c9cb3; border-radius: 5px; }
 .image-inference-page .image-clear-results:hover:not(:disabled) { color: #ffb0b0; background: rgba(255, 176, 176, .08); }
 .image-source-heading select { width: auto; max-width: 150px; border: 0; background: transparent; padding: 2px 0; color: #a6b3c7; font-size: 12px; }
 .image-upload-row { display: flex; align-items: center; gap: 12px; }
@@ -120,9 +110,8 @@
 .image-compare figure { min-width: 0; margin: 0; }
 .image-compare figcaption { margin-bottom: 8px; color: #9baec7; font-size: 12px; line-height: 20px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .image-stage { background: #0c1018; border-radius: 4px; height: 360px; overflow: hidden; }
-.image-stage img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.image-stage img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .image-result-meta { margin: 12px 0 8px; font-size: 12px; color: #9baec7; }
-.image-result-downloads { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 12px; }
 .image-table-wrap { width: 100%; overflow: auto; margin: 14px 0; }
 .image-inference-page table { border-collapse: collapse; width: 100%; font-size: 12px; white-space: nowrap; text-align: left; }
 .image-inference-page td, .image-inference-page th { padding: 10px; border-bottom: 1px solid #30394c; }
@@ -150,3 +139,14 @@
   .has-image-list .image-stage { height: 280px; }
 }
 @media (max-width: 600px) { .image-inference-page { padding: 16px; } .image-fields, .image-compare, .image-results-workspace.has-image-list { grid-template-columns: minmax(0, 1fr); } .image-stage { height: 280px; } .image-source-heading { flex-wrap: wrap; } .image-item-sidebar { position: static; } .image-item-list { max-height: 240px; } }
+
+.image-result-actions { flex-wrap: wrap; justify-content: flex-end; }
+.image-item-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.image-inference-page .image-item-row > button { flex: 1; width: 0; }
+.image-inference-page .image-select-all { flex-direction: row; align-items: center; gap: 6px; }
+.image-inference-page .image-item-row > input, .image-inference-page .image-select-all > input { width: 14px; height: 14px; flex-shrink: 0; padding: 0; margin: 0; accent-color: #82b5ff; cursor: pointer; }
+.image-inference-page .image-item-row > input:disabled { cursor: default; opacity: .4; }
+
+.image-import-feedback { margin-top: 6px; color: #98a6ba; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.image-import-feedback.image-error-text { color: #ffb0b0; }
+.image-import-feedback progress { display: block; width: 100%; height: 4px; margin-top: 5px; accent-color: #82b5ff; }

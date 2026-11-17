@@ -142,7 +142,6 @@ echo "[3/4] 安装 Web systemd 服务..."
     printf 'WorkingDirectory=%s\n' "$INSTALL_DIR/backend"
     printf 'Environment="APPS_ROOT=%s"\n' "$APPS_ROOT"
     printf 'Environment="IMAGE_INFERENCE_RUNTIME=%s/inference_runtime"\n' "$INSTALL_DIR"
-    printf 'Environment="IMAGE_INFERENCE_MODELS=%s/model_assets"\n' "$INSTALL_DIR"
     printf 'Environment="IMAGE_INFERENCE_ROOT=%s/image_inference"\n' "$INSTALL_DIR"
     echo 'Environment="BINARY_NAME=vision_analysis"'
     printf 'Environment="VISION_PYTHON=%s"\n' "$PYTHON_BIN"

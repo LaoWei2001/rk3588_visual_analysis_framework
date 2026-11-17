@@ -23,7 +23,7 @@ export default function ResultView({ job, item }: { job: ImageJob; item: ImageIt
   const model = result?.models.find(m => `model:${m.id}` === view)
   const file = model?.annotated ?? result?.annotated
   const objects = result?.results.filter(r => !model || r.model_id === model.id) ?? []
-  const artifact = (name: string, download = false) => imageArtifactUrl(job.id, item.index, name, download)
+  const artifact = (name: string) => imageArtifactUrl(job.id, item.index, name)
   return <section className="image-result" aria-label="推理结果">
     <div className="image-result-title"><strong>{item.name}</strong><span className={`image-status ${item.status}`}>{statusText[item.status] ?? item.status}</span></div>
     {(item.error || error) && <div className="image-error" role="alert">{item.error || error}</div>}
@@ -50,12 +50,8 @@ export default function ResultView({ job, item }: { job: ImageJob; item: ImageIt
       <p className="image-result-meta">{result.source_width} × {result.source_height} · {result.elapsed_ms.toFixed(1)} ms</p>
       <div className="image-result-details" role="region" aria-label="详细结果">
       {item.source_path && <p className="image-note image-source-origin">{item.source_path}</p>}
-      <div className="image-result-downloads">
-        <a href={artifact(result.original, true)} download>下载原图</a>
-        {file && <a href={artifact(file, true)} download>下载推理图</a>}
-      </div>
       <div className="image-table-wrap"><table>
-        <thead><tr><th>模型</th><th>输入尺寸</th><th>阈值 / NMS</th><th>预处理 / 推理 / 后处理</th><th>状态与数据</th></tr></thead>
+        <thead><tr><th>模型</th><th>输入尺寸</th><th>阈值 / NMS</th><th>预处理 / 推理 / 后处理</th><th>状态</th></tr></thead>
         <tbody>{result.models.map(m => {
           const settings = job.settings.models.find(s => s.id === m.id)
           return <tr key={m.id}>
@@ -63,8 +59,6 @@ export default function ResultView({ job, item }: { job: ImageJob; item: ImageIt
             <td>{settings?.obj_thresh.toFixed(2)} / {settings?.nms_thresh.toFixed(2)}</td>
             <td>{m.preprocess_ms.toFixed(1)} / {m.infer_ms.toFixed(1)} / {m.postprocess_ms.toFixed(1)} ms</td>
             <td>{m.succeeded ? '成功' : <span className="image-error-text">{m.error || '失败'}</span>}
-              {m.mask && <> · <a href={artifact(m.mask, true)} download>掩码 PNG</a></>}
-              {m.depth && <> · <a href={artifact(m.depth, true)} download>{m.depth_kind === 'metric' ? '米制深度' : '相对逆深度'} NPY</a></>}
             </td>
           </tr>
         })}</tbody>

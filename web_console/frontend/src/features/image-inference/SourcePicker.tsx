@@ -8,8 +8,8 @@ export interface SourceChoice {
   recursive: boolean
 }
 
-export default function SourcePicker({ source, files, disabled, onChange, onFiles, onClear }: {
-  source: SourceChoice; files: File[]; disabled: boolean
+export default function SourcePicker({ source, files, availableBytes, disabled, onChange, onFiles, onClear }: {
+  source: SourceChoice; files: File[]; availableBytes?: number; disabled: boolean
   onChange: (source: SourceChoice) => void; onFiles: (files: FileList | null) => void; onClear: () => void
 }) {
   const [preview, setPreview] = useState<DeviceImages | null>(null)
@@ -18,7 +18,7 @@ export default function SourcePicker({ source, files, disabled, onChange, onFile
   const requestVersion = useRef(0)
   const [urls, setUrls] = useState<string[]>([])
   useEffect(() => {
-    const next = files.map(file => URL.createObjectURL(file))
+    const next = files.slice(0, 60).map(file => URL.createObjectURL(file))
     setUrls(next)
     return () => next.forEach(url => URL.revokeObjectURL(url))
   }, [files])
@@ -40,20 +40,21 @@ export default function SourcePicker({ source, files, disabled, onChange, onFile
     }
   }
   return <section className="image-source-picker" aria-label="图片来源">
-    <div className="image-source-heading"><h2>图片</h2>
+    <div className="image-source-heading"><h2>待推理图片</h2>
       <select aria-label="选择图片来源" value={source.kind} disabled={disabled}
         onChange={event => onChange({ ...source, kind: event.target.value as SourceChoice['kind'] })}>
         <option value="upload">电脑上传</option><option value="device">板端文件</option>
       </select>
     </div>
+    {availableBytes !== undefined && <p className="image-note">可用 {(availableBytes / 1024 ** 2).toFixed(1)} MB · 已预留 100 MB</p>}
     {source.kind === 'upload' ? <>
-      <div className="image-upload-row"><label className="image-upload" title="JPG / PNG / BMP / WebP，最多 100 张，单张 20 MiB">
+      <div className="image-upload-row"><label className="image-upload" title="JPG / PNG / BMP / WebP，数量不限，需保留超过 100 MB 空间">
         <span>{files.length ? `已选 ${files.length} 张 · 重新选择` : '＋ 选择图片'}</span><input aria-label="选择图片" type="file" multiple
         accept=".jpg,.jpeg,.png,.bmp,.webp" disabled={disabled} onChange={e => onFiles(e.target.files)} /></label>
         {!!files.length && <button type="button" className="image-clear" aria-label="清空图片" title="清空图片" disabled={disabled} onClick={onClear}>×</button>}
       </div>
       {!!files.length && <>
-        <div className="image-thumbnails">{files.map((file, i) => <img key={`${i}-${file.name}`} src={urls[i]}
+        <div className="image-thumbnails">{files.slice(0, 60).map((file, i) => <img key={`${i}-${file.name}`} src={urls[i]}
           alt={file.name} title={file.name} loading="lazy" decoding="async" />)}</div>
       </>}
     </> : <div className="image-device-source">

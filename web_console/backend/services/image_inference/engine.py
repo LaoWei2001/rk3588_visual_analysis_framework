@@ -13,10 +13,7 @@ from services.model_info import inspect_model_file
 
 NPU_LOCK_FILE = Path('/run/lock/rk3588-visual-npu.lock')
 MODEL_ID = re.compile(r'[a-z][a-z0-9_-]{0,63}\Z')
-MAX_IMAGES = 100
 MAX_MODELS = 8
-MAX_IMAGE_BYTES = 20 * 1024 * 1024
-MAX_UPLOAD_BYTES = 256 * 1024 * 1024
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
 
 
@@ -92,8 +89,7 @@ class EngineCatalog:
                     self._cache.clear()
                 self._cache[key] = data
             data = copy.deepcopy(self._cache[key])
-        data.update(max_images=MAX_IMAGES, max_models=MAX_MODELS, max_image_bytes=MAX_IMAGE_BYTES,
-                    max_upload_bytes=MAX_UPLOAD_BYTES, busy=npu_busy())
+        data.update(max_models=MAX_MODELS, busy=npu_busy())
         return data
 
     @staticmethod

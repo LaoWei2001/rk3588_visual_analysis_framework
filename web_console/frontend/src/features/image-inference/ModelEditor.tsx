@@ -1,18 +1,33 @@
-import type { ImageAssets, ImageCapabilities, ImageModel, UploadedImageAsset } from '../../api/imageInference'
-import ModelAssetInput from './ModelAssetInput'
+import { useState } from 'react'
+import type { AppInfo } from '../../api/apps'
+import type { ImageCapabilities, ImageModel } from '../../api/imageInference'
+import ModelAssetInput, { type ModelImportResult } from './ModelAssetInput'
 import type { ModelCheck } from './useModelChecks'
 
-export default function ModelEditor({ models, capabilities, assets, disabled, checks, onRetryCheck, onUpload, onChange }: {
-  models: ImageModel[]; capabilities: ImageCapabilities; assets: ImageAssets; disabled: boolean
+export default function ModelEditor({ models, capabilities, apps, disabled, checks, onRetryCheck, onImport, onChange }: {
+  models: ImageModel[]; capabilities: ImageCapabilities; apps: AppInfo[]; disabled: boolean
   checks: ModelCheck[]; onRetryCheck: () => void
-  onUpload: (file: File, onProgress: (value: number) => void) => Promise<UploadedImageAsset>
+  onImport: (app: AppInfo, file: File, onProgress: (value: number) => void) => Promise<ModelImportResult>
   onChange: (models: ImageModel[]) => void
 }) {
-  const patch = (index: number, value: Partial<ImageModel>) => onChange(models.map((model, i) => i === index ? { ...model, ...value } : model))
+  const [selectedApps, setSelectedApps] = useState<Record<string, string>>({})
+  const patch = (index: number, value: Partial<ImageModel>) => {
+    const previousId = models[index].id
+    if (value.id !== undefined && value.id !== previousId) {
+      const nextId = value.id
+      setSelectedApps(current => ({ ...current, [nextId]: current[previousId] }))
+    }
+    onChange(models.map((model, i) => i === index ? { ...model, ...value } : model))
+  }
   return <div className="image-models">
     {models.map((model, index) => {
       const kind = capabilities.models.find(m => m.type === model.model_type)
       const check = checks[index]
+      const app = apps.find(app => model.model_path.startsWith(`${app.path}/`))
+        ?? apps.find(app => app.name === selectedApps[model.id])
+        ?? apps.find(app => model.label_path.startsWith(`${app.path}/`))
+      const modelPaths = app?.models.map(path => `${app.path}/${path}`) ?? []
+      const labelPaths = app?.labels.map(path => `${app.path}/${path}`) ?? []
       return <fieldset className="image-model" key={index} disabled={disabled} aria-label={`模型 ${index + 1}`}>
         <div className="image-model-section">
           <details className="image-model-settings" open>
@@ -21,16 +36,28 @@ export default function ModelEditor({ models, capabilities, assets, disabled, ch
               {!kind && <option value={model.model_type}>{model.model_type}（不支持）</option>}
               {capabilities.models.map(m => <option key={m.type}>{m.type}</option>)}
             </select></label>
-            <ModelAssetInput title={`模型 ${index + 1} 文件`} value={model.model_path} options={assets.models}
-              extension=".rknn" required onUpload={onUpload} onChange={model_path => patch(index, { model_path })} />
-            {model.model_path && <div className={`image-model-check${check?.error ? ' is-error' : ''}`}
-              role="status" aria-label={`模型 ${index + 1} 检查`}>
-              {check?.error ? <><span>{check.error}</span><button type="button" onClick={onRetryCheck}
-                aria-label={`重新检查模型 ${index + 1}`}>重试</button></> : check?.info
-                ? `✓ ${check.info.width} × ${check.info.height} · ${check.info.format}` : '检查中…'}
-            </div>}
-            <ModelAssetInput title={`模型 ${index + 1} 标签文件`} value={model.label_path} options={assets.labels}
-              extension=".txt" required={kind?.requires_labels} onUpload={onUpload} onChange={label_path => patch(index, { label_path })} />
+            <label>模型文件所在的程序包<select aria-label={`模型 ${index + 1} 程序包`} value={app?.name ?? ''}
+              onChange={event => {
+                const name = event.target.value
+                setSelectedApps(current => ({ ...current, [model.id]: name }))
+                patch(index, { model_path: '', label_path: '' })
+              }}>
+              <option value="">{apps.length ? '选择程序包' : '暂无程序包，请先安装'}</option>
+              {apps.map(app => <option key={app.name} value={app.name}>{app.name}</option>)}
+            </select></label>
+            {(app || model.model_path || model.label_path) && <>
+              <ModelAssetInput key={app?.name ?? "canvas"} title={`模型 ${index + 1} 文件`} value={model.model_path} options={modelPaths}
+                extension=".rknn" required onImport={app ? (file, progress) => onImport(app, file, progress) : undefined}
+                onChange={model_path => patch(index, { model_path })} />
+              {model.model_path && <div className={`image-model-check${check?.error ? ' is-error' : ''}`}
+                role="status" aria-label={`模型 ${index + 1} 检查`}>
+                {check?.error ? <><span>{check.error}</span><button type="button" onClick={onRetryCheck}
+                  aria-label={`重新检查模型 ${index + 1}`}>重试</button></> : check?.info
+                  ? `✓ ${check.info.width} × ${check.info.height} · ${check.info.format}` : '检查中…'}
+              </div>}
+              <ModelAssetInput title={`模型 ${index + 1} 标签文件`} value={model.label_path} options={labelPaths}
+                extension=".txt" required={kind?.requires_labels} onChange={label_path => patch(index, { label_path })} />
+            </>}
             <details className="image-model-parameters">
               <summary aria-label={`模型 ${index + 1} 参数`}>参数</summary>
               <label>模型 ID<input aria-label={`模型 ${index + 1} ID`} value={model.id} maxLength={64}

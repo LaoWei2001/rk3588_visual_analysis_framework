@@ -12,6 +12,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
+#include <vector>
 
 namespace
 {
@@ -79,9 +81,34 @@ void mkdir_checked(const std::string &path)
     if (::stat(path.c_str(), &st) != 0 || !S_ISDIR(st.st_mode))
         throw std::runtime_error("Output path is not a directory");
 }
+class StorageFull : public std::runtime_error
+{
+public:
+    StorageFull() : std::runtime_error("存储空间不足：需保留超过 100 MB，已停止图片推理") {}
+};
+void require_space(const std::string &path, size_t incoming = 0)
+{
+    const auto parent = path.substr(0, path.find_last_of('/'));
+    struct statvfs info{};
+    if (::statvfs(parent.c_str(), &info) != 0)
+        throw std::runtime_error("Cannot check image storage space");
+    const uint64_t free = static_cast<uint64_t>(info.f_bavail) * info.f_frsize;
+    constexpr uint64_t reserve = 100ULL * 1024 * 1024;
+    // Include allocation rounding so a final partial block also preserves the reserve.
+    const uint64_t bytes = ((incoming + info.f_frsize - 1) / info.f_frsize) * info.f_frsize;
+    if (free <= reserve || bytes >= free - reserve)
+        throw StorageFull();
+}
 void image(const std::string &path, const cv::Mat &pixels)
 {
-    if (!cv::imwrite(path, pixels))
+    std::vector<unsigned char> encoded;
+    if (!cv::imencode(path.substr(path.find_last_of('.')), pixels, encoded))
+        throw std::runtime_error("Cannot encode image: " + path);
+    require_space(path, encoded.size());
+    std::ofstream file(path, std::ios::binary);
+    file.write(reinterpret_cast<const char *>(encoded.data()), encoded.size());
+    file.close();
+    if (!file)
         throw std::runtime_error("Cannot write image: " + path);
 }
 
@@ -153,6 +180,7 @@ void write_depth(const std::string &path, const cv::Mat &depth)
                          std::to_string(depth.cols) + "), }";
     header.append((64 - ((10 + header.size() + 1) % 64)) % 64, ' ');
     header += '\n';
+    require_space(path, 10 + header.size() + depth.total() * sizeof(float));
     std::ofstream file(path, std::ios::binary);
     const unsigned char prefix[] = {0x93,
                                     'N',
@@ -283,7 +311,6 @@ int image_inference_capabilities_cli()
     auto root = object();
     cJSON_AddNumberToObject(root.get(), "version", 1);
     cJSON_AddNumberToObject(root.get(), "max_models", 8);
-    cJSON_AddNumberToObject(root.get(), "max_images", 100);
     cJSON_AddNumberToObject(root.get(), "max_pixels", 16777216);
     auto models = cJSON_AddArrayToObject(root.get(), "models");
     for (const auto &model : vision::inference_model_types())
@@ -314,16 +341,14 @@ int image_inference_cli(const char *job_path)
         if (!file)
             throw std::invalid_argument("Cannot open image inference job");
         std::string source((std::istreambuf_iterator<char>(file)), {});
-        if (source.size() > 1024 * 1024)
-            throw std::invalid_argument("Job description is too large");
         Json job(cJSON_Parse(source.c_str()), cJSON_Delete);
         if (!job || !cJSON_IsObject(job.get()))
             throw std::invalid_argument("Invalid job JSON");
         const auto settings = options(job.get());
         const auto images = field(job.get(), "images");
         const int count = cJSON_GetArraySize(images);
-        if (!cJSON_IsArray(images) || count < 1 || count > 100)
-            throw std::invalid_argument("Select between 1 and 100 images");
+        if (!cJSON_IsArray(images) || count < 1)
+            throw std::invalid_argument("Select at least one image");
         const std::string output = string(job.get(), "output_dir");
         if (output.empty())
             throw std::invalid_argument("output_dir is required");
@@ -332,12 +357,18 @@ int image_inference_cli(const char *job_path)
             throw std::invalid_argument("Output already contains a job");
         progress_path = output + "/progress.json";
         auto items = cJSON_AddArrayToObject(progress.get(), "items");
+        std::vector<const cJSON *> inputs;
+        const cJSON *input;
+        cJSON_ArrayForEach(input, images)
+            inputs.push_back(input);
+        std::vector<cJSON *> statuses;
         for (int i = 0; i < count; ++i)
         {
             auto item = cJSON_CreateObject();
+            statuses.push_back(item);
             cJSON_AddItemToArray(items, item);
             cJSON_AddNumberToObject(item, "index", i);
-            text(item, "name", string(cJSON_GetArrayItem(images, i), "name"));
+            text(item, "name", string(inputs[i], "name"));
             text(item, "status", "pending");
         }
         text(progress.get(), "status", "loading");
@@ -348,12 +379,13 @@ int image_inference_cli(const char *job_path)
         cJSON_ReplaceItemInObjectCaseSensitive(progress.get(), "status", cJSON_CreateString("running"));
         for (int i = 0; i < count && !cancelled; ++i)
         {
-            auto item = cJSON_GetArrayItem(items, i);
+            auto item = statuses[i];
             cJSON_ReplaceItemInObjectCaseSensitive(item, "status", cJSON_CreateString("running"));
             write_json(progress_path, progress.get());
             try
             {
-                const std::string path = string(cJSON_GetArrayItem(images, i), "path");
+                require_space(output + "/result");
+                const std::string path = string(inputs[i], "path");
                 cv::Mat pixels = cv::imread(path, cv::IMREAD_COLOR);
                 if (pixels.empty())
                     throw std::runtime_error("Cannot decode image");
@@ -375,6 +407,10 @@ int image_inference_cli(const char *job_path)
                 if (!result.complete())
                     ++failures;
             }
+            catch (const StorageFull &)
+            {
+                throw;
+            }
             catch (const std::exception &error)
             {
                 ++failures;
@@ -385,7 +421,7 @@ int image_inference_cli(const char *job_path)
         }
         for (int i = 0; i < count; ++i)
         {
-            auto item = cJSON_GetArrayItem(items, i);
+            auto item = statuses[i];
             if (string(item, "status") == "pending")
                 cJSON_ReplaceItemInObjectCaseSensitive(item, "status", cJSON_CreateString("cancelled"));
         }

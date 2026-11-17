@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios'
 import { api } from './http'
 import { useAuthStore } from '../store/authStore'
 import type { ModelInfo } from './apps'
@@ -19,9 +20,9 @@ export interface ImageSettings {
 export interface ImageCapabilities {
   models: { type: string; result_kind: string; requires_labels: boolean }[]
   max_models: number
-  max_images: number
-  max_image_bytes: number
-  max_upload_bytes: number
+  free_bytes: number
+  min_free_bytes: number
+  upload_available_bytes: number
   busy: boolean
 }
 export interface ImageItem {
@@ -102,36 +103,51 @@ export const clearCompletedImageJobs = () =>
 export const fetchImageResult = (id: string, index: number) =>
   api.get<ImageResult>(`${task(id)}/items/${index}`).then(r => r.data)
 export const cancelImageJob = (id: string) => api.post<ImageJob>(`${task(id)}/cancel`).then(r => r.data)
-export const createImageJob = (settings: ImageSettings, files: File[], onProgress: (n: number) => void) => {
-  const form = new FormData()
-  form.append('settings', JSON.stringify(settings))
-  files.forEach(file => form.append('files', file))
-  return api.post<ImageJob>(`${base}/jobs`, form, {
-    onUploadProgress: e => { if (e.total) onProgress(Math.round(e.loaded / e.total * 100)) },
-  }).then(r => r.data)
+export async function createImageJob(settings: ImageSettings, files: File[], onProgress: (n: number) => void) {
+  const { data: batch } = await api.post<{ id: string }>(`${base}/jobs`, {
+    settings, files: files.map(file => ({ name: file.name, size: file.size })),
+  })
+  let uploaded = 0
+  const total = files.reduce((sum, file) => sum + file.size, 0)
+  try {
+    for (const [index, file] of files.entries()) {
+      await api.put(`${task(batch.id)}/inputs/${index}`, file, {
+        headers: { 'Content-Type': 'application/octet-stream' },
+        onUploadProgress: event => onProgress(Math.min(100, Math.round((uploaded + event.loaded) / total * 100))),
+      })
+      uploaded += file.size
+      onProgress(Math.round(uploaded / total * 100))
+    }
+    return (await api.post<ImageJob>(`${task(batch.id)}/submit`)).data
+  } catch (error) {
+    // Includes files already uploaded if a later file runs out of disk space.
+    try { await api.delete(`${task(batch.id)}/upload`) } catch { /* Preserve the original error. */ }
+    throw error
+  }
 }
 export const inspectDeviceImages = (path: string, recursive: boolean) =>
   api.post<DeviceImages>(`${base}/device-images`, { path, recursive }).then(r => r.data)
 export const createDeviceImageJob = (settings: ImageSettings, path: string, recursive: boolean) =>
   api.post<ImageJob>(`${base}/jobs/from-device`, { settings, path, recursive }).then(r => r.data)
-export function imageArtifactUrl(id: string, index: number, file: string, download = false): string {
+export function imageArtifactUrl(id: string, index: number, file: string): string {
   const query = new URLSearchParams({ token: useAuthStore.getState().token ?? '' })
-  if (download) query.set('download', 'true')
   return `/api${task(id)}/files/${String(index).padStart(6, '0')}/${encodeURIComponent(file)}?${query}`
 }
-export function imageArchiveUrl(id: string): string {
-  return `/api${task(id)}/download?${new URLSearchParams({ token: useAuthStore.getState().token ?? '' })}`
+export const canExportImageLabels = (job: ImageJob) =>
+  job.settings.models.length === 1 && ['yolov5', 'yolov8_det'].includes(job.settings.models[0].model_type)
+
+export async function downloadImageLabels(id: string, indices: number[]): Promise<Blob> {
+  try {
+    const response = await api.post<Blob>(`${task(id)}/labels`, { indices }, { responseType: 'blob' })
+    return response.data
+  } catch (error) {
+    // Axios also returns HTTP errors as blobs for a binary response.
+    if (isAxiosError(error) && error.response?.data instanceof Blob) {
+      try { error.response.data = JSON.parse(await error.response.data.text()) } catch { /* Keep the HTTP error. */ }
+    }
+    throw error
+  }
 }
 
-export interface ImageAssets { models: string[]; labels: string[] }
-export interface UploadedImageAsset { path: string; name: string; renamed: boolean; size: number }
-export const fetchImageAssets = () => api.get<ImageAssets>(`${base}/assets`).then(r => r.data)
-export const uploadImageAsset = (file: File, onProgress: (value: number) => void) => {
-  const form = new FormData()
-  form.append('file', file)
-  return api.post<UploadedImageAsset>(`${base}/assets/upload`, form, {
-    onUploadProgress: event => { if (event.total) onProgress(Math.round(event.loaded / event.total * 100)) },
-  }).then(r => r.data)
-}
 export const resolveCanvasImageSettings = (app: string, settings: ImageSettings) =>
   api.post<ImageSettings>(`${base}/canvas-preset`, { app, settings }).then(r => r.data)
