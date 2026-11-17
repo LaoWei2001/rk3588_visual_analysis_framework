@@ -57,41 +57,27 @@ static bool g_pipeline_initialized = false;
 
 int pipeline_init(void)
 {
-    /* 跟踪器全部清零（各通道首次调用 process_channel_results 时惰性创建）*/
-    trackers_init();
+    // Prepare the topology before starting threads. All remaining queue setup is
+    // allocation-free (the frame pool uses malloc and tolerates empty slots).
+    g_logic_channel_ids.clear();
+    g_display_channel_ids.clear();
+    g_logic_channel_ids.reserve(g_pCtrl->config.channels.size());
+    g_display_channel_ids.reserve(g_pCtrl->config.channels.size());
+    for (const auto &channel : g_pCtrl->config.channels)
+    {
+        if (channel.enable && channel.id >= 0 && channel.id < MAX_CHANNEL_NUM)
+            g_logic_channel_ids.push_back(channel.id);
+        if (app_ctrl_get_enable_disp() || app_ctrl_get_enable_rtsp())
+            g_display_channel_ids.push_back(channel.id);
+    }
 
-    /* 热更新发布要与逐帧逻辑共用这些锁，必须先于首代运行快照初始化。 */
+    trackers_init();
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
         pthread_mutex_init(&g_process_mtx[i], nullptr);
     g_process_mutexes_initialized = true;
 
-    if (inference_init(g_pCtrl->config) != 0)
-    {
-        for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
-            pthread_mutex_destroy(&g_process_mtx[i]);
-        g_process_mutexes_initialized = false;
-        return -1;
-    }
-    g_pCtrl->inputW = inference_get_input_w();
-    g_pCtrl->inputH = inference_get_input_h();
-
-    if (!pipeline_publish_runtime_snapshot(g_pCtrl->config, g_pCtrl->config_generation))
-    {
-        inference_deinit();
-        for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
-            pthread_mutex_destroy(&g_process_mtx[i]);
-        g_process_mutexes_initialized = false;
-        return -1;
-    }
-    global_logic_start_all(g_pCtrl->config.global_logics);
-
-    /* 启用分发线程运行标志 */
-    g_dispatch_running.store(true);
-
-    /* 每个启用通道都预留一个传统逻辑 worker。通常推理通道的 worker
-     * 始终休眠，但这样运行时 infer_toggle 关闭 NPU 后仍能无缝转入异步 CV，
-     * 不会回退到 appsink 回调同步执行。 */
-    g_logic_channel_ids.clear();
+    // Every channel has a dormant traditional-logic worker so infer_toggle can
+    // switch to CPU business logic without running it inside an appsink callback.
     for (int channel_id = 0; channel_id < MAX_CHANNEL_NUM; ++channel_id)
     {
         TraditionalLogicQueue &queue = g_traditional_logic_queues[channel_id];
@@ -100,31 +86,42 @@ int pipeline_init(void)
         queue.has_task = false;
         queue.task = TraditionalLogicTask{};
     }
-    for (const auto &channel : g_pCtrl->config.channels)
-    {
-        if (!channel.enable || channel.id < 0 || channel.id >= MAX_CHANNEL_NUM)
-            continue;
-        g_logic_channel_ids.push_back(channel.id);
-    }
-
-    /* 纯分析模式不创建显示线程，也不预留每通道三槽 1080p 帧池。 */
-    g_display_channel_ids.clear();
-    if (app_ctrl_get_enable_disp() || app_ctrl_get_enable_rtsp())
-        for (const auto &channel : g_pCtrl->config.channels)
-            g_display_channel_ids.push_back(channel.id);
-    /* 初始化显示队列互斥量 / 条件变量 / 帧池 */
+    // Pure analysis still allocates no display workers or triple-frame pools.
     for (int channel_id : g_display_channel_ids)
     {
         pthread_mutex_init(&g_display_queues[channel_id].mtx, nullptr);
         pthread_cond_init(&g_display_queues[channel_id].cv, nullptr);
         g_display_queues[channel_id].has_task = 0;
         g_display_queues[channel_id].reset_fps_pending = true;
-        g_display_queues[channel_id].pool.init(); /* 预分配三槽帧缓冲（≈9 MB/通道，NV12 1080p）*/
+        g_display_queues[channel_id].pool.init();
     }
-
     g_pipeline_initialized = true;
 
-    printf("[Pipeline] initialized. Thread creation managed by main.\n");
+    // Initialization failure uses the same stop/join/release functions as normal
+    // shutdown, including any inference/global workers that already started.
+    struct InitRollback
+    {
+        bool committed = false;
+        ~InitRollback()
+        {
+            if (!committed)
+            {
+                pipeline_deinit();
+                pipeline_destroy_display_queues();
+            }
+        }
+    } rollback;
+
+    if (inference_init(g_pCtrl->config) != 0)
+        return -1;
+    g_pCtrl->business_width = business_coordinates::WIDTH;
+    g_pCtrl->business_height = business_coordinates::HEIGHT;
+    if (!pipeline_publish_runtime_snapshot(g_pCtrl->config, g_pCtrl->config_generation))
+        return -1;
+    global_logic_start_all(g_pCtrl->config.global_logics);
+    g_dispatch_running.store(true);
+    rollback.committed = true;
+    printf("[Pipeline] initialized. Thread creation managed by VideoRuntime.\n");
     return 0;
 }
 
@@ -229,6 +226,12 @@ void pipeline_channel_offline(int chnId)
         pthread_mutex_lock(&g_process_mtx[chnId]);
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         ch.online_state = CH_OFFLINE;
+        if (ch.capture_state != vision::VideoChannelState::Failed)
+        {
+            ch.capture_state = vision::VideoChannelState::Disconnected;
+            if (!ch.capture_error[0])
+                std::snprintf(ch.capture_error, sizeof(ch.capture_error), "视频源已断开或播放结束");
+        }
         ch.offline_ts_ms = steady_now_ms();
         ts = ch.offline_ts_ms;
         /* 清空全部逻辑状态：断线/换源后旧变量不应残留 */
@@ -274,6 +277,10 @@ void pipeline_channel_online(int chnId)
         pthread_mutex_lock(&g_process_mtx[chnId]);
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         ch.online_state = CH_ONLINE;
+        if (ch.capture_state != vision::VideoChannelState::Failed || g_pCtrl->isRunning.load())
+        {
+            ch.capture_state = vision::VideoChannelState::Connecting;
+        }
         ch.online_ts_ms = steady_now_ms();
         ts = ch.online_ts_ms;
         /* 清空全部逻辑状态：重连/换源后从全新状态开始 */

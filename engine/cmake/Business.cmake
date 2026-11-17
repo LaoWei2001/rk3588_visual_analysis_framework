@@ -21,17 +21,6 @@ if(NOT EXISTS "${LOGIC_CATALOG_GENERATOR}")
 endif()
 
 
-# Business code receives public headers and OpenCV only.
-# No engine/src, RKNN, GStreamer or GTK include path is exported.
-add_library(vision_sdk INTERFACE)
-add_library(Vision::SDK ALIAS vision_sdk)
-target_include_directories(vision_sdk INTERFACE
-    ${PROJECT_SOURCE_DIR}/include
-)
-target_include_directories(vision_sdk SYSTEM INTERFACE ${OpenCV_INCLUDE_DIRS})
-target_compile_features(vision_sdk INTERFACE cxx_std_11)
-
-
 file(GLOB_RECURSE project_logic_srcs
     "${VISION_PROJECTS_ROOT}/modules/*.cpp"
     "${VISION_PROJECTS_ROOT}/modules/*.cc"

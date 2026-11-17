@@ -35,7 +35,7 @@ bool SafetyController::write_output(const std::string &pin, int level, int *last
     level = level ? 1 : 0;
     if (*last_level == level)
         return true;
-    if (pin_out_val(pin.c_str(), level) != 0)
+    if (gpio_set_output(pin.c_str(), level) != 0)
         return false;
     *last_level = level;
     return true;
@@ -46,9 +46,9 @@ void SafetyController::release_previous_pins_if_changed(const HardwareConfig &co
     if (!configured_)
         return;
     if (config_.horn_pin != config.horn_pin && !config_.horn_pin.empty())
-        pin_out_val(config_.horn_pin.c_str(), 1 - (config_.horn_active_level ? 1 : 0));
+        gpio_set_output(config_.horn_pin.c_str(), 1 - (config_.horn_active_level ? 1 : 0));
     if (config_.lamp_pin != config.lamp_pin && !config_.lamp_pin.empty())
-        pin_out_val(config_.lamp_pin.c_str(), 1 - (config_.lamp_active_level ? 1 : 0));
+        gpio_set_output(config_.lamp_pin.c_str(), 1 - (config_.lamp_active_level ? 1 : 0));
 }
 
 HardwareStatus SafetyController::apply(const HardwareConfig &config, bool lamp_on, bool horn_on, uint64_t now_ms,
@@ -123,9 +123,9 @@ void SafetyController::shutdown()
     if (!configured_)
         return;
     if (!config_.horn_pin.empty())
-        pin_out_val(config_.horn_pin.c_str(), 1 - (config_.horn_active_level ? 1 : 0));
+        gpio_set_output(config_.horn_pin.c_str(), 1 - (config_.horn_active_level ? 1 : 0));
     if (!config_.lamp_pin.empty())
-        pin_out_val(config_.lamp_pin.c_str(), 1 - (config_.lamp_active_level ? 1 : 0));
+        gpio_set_output(config_.lamp_pin.c_str(), 1 - (config_.lamp_active_level ? 1 : 0));
     horn_level_ = -1;
     lamp_level_ = -1;
     configured_ = false;

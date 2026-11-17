@@ -32,8 +32,7 @@ int main(int argc, char **argv)
             if (type == "yolov5_seg")
                 return std::unique_ptr<ModelBase>(new YoloSeg(argv[2], argv[3], 1));
             if (type == "yolov8_det" || type == "yolov8_obb")
-                return std::unique_ptr<ModelBase>(new YoloV8Det(argv[2], argv[3], 1, .3f, .45f,
-                                                               type == "yolov8_obb"));
+                return std::unique_ptr<ModelBase>(new YoloV8Det(argv[2], argv[3], 1, .3f, .45f, type == "yolov8_obb"));
             throw std::runtime_error("Unsupported detection model type");
         };
         cv::VideoCapture video(argv[4], cv::CAP_FFMPEG);
@@ -81,8 +80,7 @@ int main(int argc, char **argv)
                 }
                 failures += below;
                 std::cout << "THRESHOLD type=" << type << " dma=" << dma << " threshold=" << threshold
-                          << " count=" << results.size() << " min_score=" << minimum << " below=" << below
-                          << '\n';
+                          << " count=" << results.size() << " min_score=" << minimum << " below=" << below << '\n';
             }
         }
         std::cout << "CHECKED=" << checked << " BELOW_THRESHOLD_RESULTS=" << failures << '\n';

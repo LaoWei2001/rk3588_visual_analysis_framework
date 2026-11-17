@@ -27,28 +27,54 @@
 #include "common/logging.h"
 #include "inference_engine.h"
 #include "inference_internal.h"
+#include "inference_roi_geometry.h"
 #include "model_status.h"
 #include "npu_core_assignment.h"
 #include "npu_core_gate.h"
+#include "npu_device_owner.h"
 #include "pipeline/frame_transform.h"
-#include "vision/models/composite_model.h"
-#include "vision/models/yolo/yolo.h"
+#include "vision/models/model_group.h"
+#include "vision/models/model_registry.h"
 
 namespace
 {
-const char *configured_npu_core_name(int configured_core)
+// Only lifecycle entry/exit accesses this flag; frame processing is unchanged.
+bool inference_initialized = false;
+// 初始化/销毁由运行时串行调用；热更新在 dispatch_mtx 写锁内访问。
+std::unique_ptr<npu::DeviceOwner> inference_device;
+std::mutex inference_device_mutex;
+bool inference_device_stopping = false;
+
+void acquire_inference_device()
 {
-    switch (configured_core)
-    {
-    case 0:
-        return "0";
-    case 1:
-        return "1";
-    case 2:
-        return "2";
-    default:
-        return "AUTO";
-    }
+    std::lock_guard<std::mutex> lock(inference_device_mutex);
+    if (inference_device_stopping)
+        throw npu::Cancelled();
+    if (!inference_device)
+        inference_device.reset(new npu::DeviceOwner());
+}
+
+void release_inference_device()
+{
+    std::lock_guard<std::mutex> lock(inference_device_mutex);
+    inference_device.reset();
+}
+
+void release_unused_device()
+{
+    for (const auto &models : g_inference.model_groups_per_chn)
+        for (const auto &model : models)
+            if (model)
+                return;
+    release_inference_device();
+}
+
+std::vector<ModelBuildSpec> video_model_specs(const ChannelConfig &channel)
+{
+    std::vector<ModelBuildSpec> specs;
+    for (const auto &model : channel.models)
+        specs.push_back({model, config_utils::effective_model_obj_thresh(channel, model)});
+    return specs;
 }
 
 InferenceRoiMode resolve_inference_source_roi(int channel_id, int source_width, int source_height, cv::Rect &out_roi,
@@ -64,16 +90,7 @@ InferenceRoiMode resolve_inference_source_roi(int channel_id, int source_width, 
 
     const InferenceRoiConfig &normalized = config->inference_roi;
     out_config = normalized;
-    int left = static_cast<int>(std::floor(normalized.x * source_width));
-    int top = static_cast<int>(std::floor(normalized.y * source_height));
-    int right = static_cast<int>(std::ceil((normalized.x + normalized.width) * source_width));
-    int bottom = static_cast<int>(std::ceil((normalized.y + normalized.height) * source_height));
-    left = std::max(0, std::min(source_width - 1, left));
-    top = std::max(0, std::min(source_height - 1, top));
-    right = std::max(left + 1, std::min(source_width, right));
-    bottom = std::max(top + 1, std::min(source_height, bottom));
-
-    out_roi = cv::Rect(left, top, right - left, bottom - top);
+    out_roi = inference_source_roi(normalized, source_width, source_height);
     if (out_roi.empty())
         return InferenceRoiMode::FullFrame;
     if (config->inference_roi.roi_only())
@@ -117,7 +134,10 @@ bool inference_take_results(int chnId, std::vector<AlgoResult> &out, std::shared
 
 int inference_init(const AppConfig &cfg)
 {
-    npu::CoreLease::resume();
+    {
+        std::lock_guard<std::mutex> lock(inference_device_mutex);
+        inference_device_stopping = false;
+    }
     const int auto_core_pool = npu::preferred_auto_core_pool(cfg.channels);
     log_printf_threadsafe("[NPU] core plan: explicit=0x%x auto_pool=0x%x%s\n",
                           npu::explicitly_assigned_cores(cfg.channels), auto_core_pool,
@@ -126,8 +146,8 @@ int inference_init(const AppConfig &cfg)
     model_status_reset(cfg);
     /* 业务坐标始终为 640×640；每个模型独立读取实际输入尺寸。
      * 载入顺序、无模型启动、热切换和反初始化后重启均不能改变业务坐标。 */
-    log_printf_threadsafe("[Inference] business canvas %dx%d (independent of model inputs)\n", g_inference.input_w,
-                          g_inference.input_h);
+    log_printf_threadsafe("[Inference] business canvas %dx%d (independent of model inputs)\n",
+                          business_coordinates::WIDTH, business_coordinates::HEIGHT);
 
     /* 初始化 pthread 同步原语 */
     pthread_rwlock_init(&g_inference.dispatch_mtx, nullptr);
@@ -137,8 +157,23 @@ int inference_init(const AppConfig &cfg)
         pthread_mutex_init(&g_inference.channel_results[i].mtx, nullptr);
         pthread_mutex_init(&g_inference.result_ready_mtx[i], nullptr);
         pthread_cond_init(&g_inference.result_ready_cv[i], nullptr);
-        pthread_mutex_init(&g_inference.chn_reload_mtx[i], nullptr);
     }
+
+    inference_initialized = true;
+    struct InitRollback
+    {
+        bool committed = false;
+        ~InitRollback()
+        {
+            if (!committed)
+                inference_deinit();
+        }
+    } rollback;
+
+    if (std::any_of(cfg.channels.begin(), cfg.channels.end(), [](const ChannelConfig &channel) {
+            return channel.enable && config_utils::is_channel_infer_enabled(channel);
+        }))
+        acquire_inference_device();
 
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
     {
@@ -160,7 +195,7 @@ int inference_init(const AppConfig &cfg)
             std::count_if(channel.models.begin(), channel.models.end(), [](const ChannelModelConfig &model) {
                 return model.enable && !model.model_path.empty() && !model.model_type.empty();
             });
-        /* CompositeModel 已按每个子模型独立过滤，外层过滤必须关闭，避免不同标签表
+        /* ModelGroup 已按每个子模型独立过滤，外层过滤必须关闭，避免不同标签表
          * 的 class_id=0 被通道级过滤误删。 */
         if (active_models > 1)
         {
@@ -190,7 +225,6 @@ int inference_init(const AppConfig &cfg)
 
     int loaded_models_count = 0;
 
-    g_inference.model_registry.clear();
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
         g_inference.result_dispatch_pending[i] = 0;
 
@@ -210,82 +244,30 @@ int inference_init(const AppConfig &cfg)
 
         try
         {
-            model_status_begin(channel_id, chn_cfg);
+            model_status_begin(channel_id);
             const auto placement = npu::channel_auto_placement(cfg.channels, channel_id);
             log_printf_threadsafe("[NPU] ch%d automatic pool=0x%x\n", channel_id, placement.pool);
             int threads_for_chn = chn_cfg.threads > 0 ? chn_cfg.threads : 1;
-            g_inference.models_per_chn[channel_id].clear();
-            std::vector<ChannelModelConfig> active_models;
-            for (const auto &model : chn_cfg.models)
-                if (model.enable && !model.model_path.empty() && !model.model_type.empty())
-                    active_models.push_back(model);
-
+            g_inference.model_groups_per_chn[channel_id].clear();
+            const auto specs = video_model_specs(chn_cfg);
             for (int t = 0; t < threads_for_chn; ++t)
             {
-                std::shared_ptr<ModelBase> model;
-                if (active_models.size() > 1)
-                {
-                    std::vector<CompositeModel::Entry> entries;
-                    entries.reserve(active_models.size());
-                    for (size_t model_index = 0; model_index < active_models.size(); ++model_index)
-                    {
-                        const auto &spec = active_models[model_index];
-                        const int core_mask = npu::assigned_core_mask(spec.npu_core, channel_id, t,
-                                                                      static_cast<int>(model_index), placement.pool);
-                        const float decode_thresh = config_utils::effective_model_obj_thresh(chn_cfg, spec);
-                        auto child = create_inference_model(spec.model_type, spec.model_path, spec.label_path,
-                                                            core_mask, decode_thresh, spec.nms_thresh);
-                        if (!child)
-                            throw std::runtime_error("unsupported model_type: " + spec.model_type);
-                        child->set_result_source(spec.id.empty() ? "model_" + std::to_string(model_index) : spec.id,
-                                                 spec.model_type, static_cast<int>(model_index));
-                        CompositeModel::Entry entry;
-                        entry.id = spec.id.empty() ? "model_" + std::to_string(model_index) : spec.id;
-                        entry.type = spec.model_type;
-                        entry.model = std::move(child);
-                        entry.obj_thresh = decode_thresh;
-                        entry.nms_thresh = spec.nms_thresh;
-                        entry.allowed_classes = names_to_class_ids(spec.detect_classes, spec.label_path);
-                        entries.push_back(std::move(entry));
-                        log_printf_threadsafe(
-                            "[Inference] Created composite child %zu/%zu for ch%d: %s core=%s requested_mask=0x%x\n",
-                            model_index + 1, active_models.size(), channel_id, spec.model_type.c_str(),
-                            configured_npu_core_name(spec.npu_core), core_mask);
-                    }
-                    model = std::make_shared<CompositeModel>(std::move(entries));
-                }
-                else
-                {
-                    const ChannelModelConfig &spec = active_models[0];
-                    const int mask = npu::assigned_core_mask(spec.npu_core, channel_id, t, 0, placement.pool);
-                    const float decode_thresh = config_utils::effective_model_obj_thresh(chn_cfg, spec);
-                    model = create_inference_model(spec.model_type, spec.model_path, spec.label_path, mask,
-                                                   decode_thresh, spec.nms_thresh);
-                    if (!model)
-                    {
-                        throw std::runtime_error("unsupported model_type: " + spec.model_type);
-                    }
-                    model->set_result_source(spec.id.empty() ? "model_0" : spec.id, spec.model_type, 0);
-                    log_printf_threadsafe(
-                        "[Inference] Created %s instance for ch%d (Core %s, thread %d/%d, requested_mask=0x%x)\n",
-                        spec.model_type.c_str(), channel_id, configured_npu_core_name(spec.npu_core), t,
-                        threads_for_chn, mask);
-                }
-
-                g_inference.models_per_chn[channel_id].push_back(model);
-                loaded_models_count++;
+                g_inference.model_groups_per_chn[channel_id].push_back(
+                    create_model_group(specs, channel_id, t, placement.pool));
+                ++loaded_models_count;
             }
             g_inference.auto_core_plan[channel_id].store(placement.key());
         }
         catch (const std::exception &e)
         {
             log_printf_threadsafe("[Inference] Load error ch%d: %s\n", channel_id, e.what());
-            loaded_models_count -= g_inference.models_per_chn[channel_id].size();
-            g_inference.models_per_chn[channel_id].clear();
+            loaded_models_count -= g_inference.model_groups_per_chn[channel_id].size();
+            g_inference.model_groups_per_chn[channel_id].clear();
             model_status_failed(channel_id, e.what(), true);
         }
     }
 
+    release_unused_device();
     if (loaded_models_count == 0)
         log_printf_threadsafe("[Inference] No active logic models available\n");
 
@@ -294,10 +276,18 @@ int inference_init(const AppConfig &cfg)
         g_inference.running.store(true);
         g_inference.max_queue_size = std::max(1, cfg.queue_size);
         g_inference.task_queues.clear();
+        // No vector allocation after initializing a queue or creating a worker:
+        // every successfully started pthread must retain its join handle.
+        g_inference.task_queues.reserve(MAX_CHANNEL_NUM);
+        size_t worker_count = 0;
+        for (const auto &models : g_inference.model_groups_per_chn)
+            worker_count += models.size();
+        g_inference.worker_tids.reserve(worker_count);
+        g_inference.worker_started.reserve(worker_count);
         int q_count = 0;
         for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
         {
-            if (!g_inference.models_per_chn[i].empty())
+            if (!g_inference.model_groups_per_chn[i].empty())
             {
                 auto tq = std::make_unique<InferenceTaskQueue>();
                 pthread_mutex_init(&tq->mtx, nullptr);
@@ -317,12 +307,12 @@ int inference_init(const AppConfig &cfg)
         int q_idx = 0;
         for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
         {
-            if (!g_inference.models_per_chn[i].empty())
+            if (!g_inference.model_groups_per_chn[i].empty())
             {
                 InferenceTaskQueue *tq = g_inference.task_queues[q_idx].get();
                 bool all_started = true;
                 int started_count = 0;
-                for (const auto &model : g_inference.models_per_chn[i])
+                for (const auto &model : g_inference.model_groups_per_chn[i])
                 {
                     InferenceWorkerArgs *wa = new InferenceWorkerArgs{i, tq, model};
                     pthread_t tid{};
@@ -344,7 +334,7 @@ int inference_init(const AppConfig &cfg)
                 }
                 for (const auto &channel : cfg.channels)
                     if (channel.id == i && started_count > 0)
-                        model_status_applied(i, channel, g_inference.models_per_chn[i]);
+                        model_status_applied(i, channel, g_inference.model_groups_per_chn[i]);
                 if (!all_started)
                     model_status_failed(i, "推理线程创建失败", started_count == 0);
                 g_inference.channel_results[i].latest_seq = 0;
@@ -352,6 +342,7 @@ int inference_init(const AppConfig &cfg)
             }
         }
     }
+    rollback.committed = true;
     return 0;
 }
 
@@ -359,8 +350,15 @@ int inference_init(const AppConfig &cfg)
 
 void inference_request_stop()
 {
+    if (!inference_initialized)
+        return;
     g_inference.running.store(false);
-    npu::CoreLease::stop();
+    {
+        std::lock_guard<std::mutex> lock(inference_device_mutex);
+        inference_device_stopping = true;
+        if (inference_device)
+            npu::CoreLease::stop();
+    }
     /* 必须和等待方使用同一把 mutex，避免“检查 running 后、进入 wait 前”
      * 丢失 broadcast，导致 shutdown 永久卡在 join。 */
     for (auto &tq : g_inference.task_queues)
@@ -379,6 +377,8 @@ void inference_request_stop()
 
 void inference_deinit()
 {
+    if (!inference_initialized)
+        return;
     inference_request_stop();
     model_status_stopped();
 
@@ -397,9 +397,10 @@ void inference_deinit()
         pthread_cond_destroy(&tq->cv);
     }
     g_inference.task_queues.clear();
-    for (auto &models : g_inference.models_per_chn)
+    for (auto &models : g_inference.model_groups_per_chn)
         models.clear();
-    g_inference.model_registry.clear();
+    // 所有 worker 已 join，模型已销毁，之后才允许其他进程取得 NPU。
+    release_inference_device();
 
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
     {
@@ -409,12 +410,12 @@ void inference_deinit()
         pthread_mutex_destroy(&g_inference.channel_results[i].mtx);
         pthread_mutex_destroy(&g_inference.result_ready_mtx[i]);
         pthread_cond_destroy(&g_inference.result_ready_cv[i]);
-        pthread_mutex_destroy(&g_inference.chn_reload_mtx[i]);
     }
     pthread_mutex_destroy(&g_inference.detect_classes_mtx);
 
     pthread_rwlock_unlock(&g_inference.dispatch_mtx);
     pthread_rwlock_destroy(&g_inference.dispatch_mtx);
+    inference_initialized = false;
 }
 
 /*======================== 帧入队（pipeline_submit_frame 调用）========================*/
@@ -448,7 +449,7 @@ int inference_process_source(int chnId, void *source_data, int fd, int srcW, int
     int q_idx = 0;
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
     {
-        if (!g_inference.models_per_chn[i].empty())
+        if (!g_inference.model_groups_per_chn[i].empty())
         {
             if (i == chnId)
             {
@@ -459,8 +460,9 @@ int inference_process_source(int chnId, void *source_data, int fd, int srcW, int
                 if (fd >= 0 && source_owner)
                     imported = rga_import_src_fd(fd, srcW, srcH, srcStrH, srcStrV, srcFmt);
                 std::shared_ptr<LazyVideoFrame> lazy_frame = std::make_shared<LazyVideoFrame>(
-                    chnId, imported, srcW, srcH, srcStrH, srcStrV, srcFmt, g_inference.input_w, g_inference.input_h,
-                    imported ? nullptr : source_data, imported ? source_owner : std::shared_ptr<void>{});
+                    chnId, imported, srcW, srcH, srcStrH, srcStrV, srcFmt, business_coordinates::WIDTH,
+                    business_coordinates::HEIGHT, imported ? nullptr : source_data,
+                    imported ? source_owner : std::shared_ptr<void>{});
                 if (!imported)
                 {
                     /* 异步 worker 不能借用解码回调指针。无 DMA-BUF 时只保留原始字节，
@@ -519,15 +521,6 @@ int inference_process_source(int chnId, void *source_data, int fd, int srcW, int
 }
 
 /*======================== 查询接口 ========================*/
-
-int inference_get_input_w()
-{
-    return g_inference.input_w;
-}
-int inference_get_input_h()
-{
-    return g_inference.input_h;
-}
 
 float inference_get_infer_fps(int chnId)
 {
@@ -602,21 +595,12 @@ void inference_update_thresh(int chnId, const ChannelConfig &config)
     g_inference.obj_thresh[chnId] = obj_thresh;
     g_inference.nms_thresh[chnId] = nms_thresh;
 
-    for (auto &model : g_inference.models_per_chn[chnId])
+    for (auto &model : g_inference.model_groups_per_chn[chnId])
     {
         if (!model)
             continue;
-        float min_obj = obj_thresh, min_nms = nms_thresh;
-        for (int c = 0; c < MAX_CHANNEL_NUM; ++c)
-            for (auto &m : g_inference.models_per_chn[c])
-                if (m.get() == model.get())
-                {
-                    min_obj = std::min(min_obj, g_inference.obj_thresh[c].load(std::memory_order_relaxed));
-                    min_nms = std::min(min_nms, g_inference.nms_thresh[c].load(std::memory_order_relaxed));
-                }
-        model->set_thresh(min_obj, min_nms);
-        printf("[AlgoProcess] Model instance updated for channel %d (model_thresh=%.2f/%.2f)\n", chnId, min_obj,
-               min_nms);
+        // 每通道/worker 都拥有独立实例；不再扫描旧的跨通道共享模型。
+        model->entries().front().model->set_thresh(obj_thresh, nms_thresh);
     }
 }
 
@@ -672,6 +656,15 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
         }
     } dispatch_lock(&g_inference.dispatch_mtx);
 
+    // 必须早于 old_models/new_models 声明：最后一个临时模型引用销毁后才释放设备。
+    struct DeviceRelease
+    {
+        ~DeviceRelease()
+        {
+            release_unused_device();
+        }
+    } device_release;
+
     // Reports every early return, while preserving the previous active model on rollback.
     struct ReloadStatus
     {
@@ -685,7 +678,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
                 model_status_failed(channel, error, clear_active);
         }
     } status{chnId};
-    model_status_begin(chnId, new_cfg);
+    model_status_begin(chnId);
 
     /* 找到此通道的任务队列（定义在 inference_executor.cpp，声明在 inference_internal.h）*/
     int q_idx = get_queue_idx_for_chn(chnId);
@@ -702,8 +695,8 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
 
     int worker_start = 0;
     for (int i = 0; i < chnId; ++i)
-        worker_start += (int)g_inference.models_per_chn[i].size();
-    int worker_count = (int)g_inference.models_per_chn[chnId].size();
+        worker_start += (int)g_inference.model_groups_per_chn[i].size();
+    int worker_count = (int)g_inference.model_groups_per_chn[chnId].size();
     const int requested_worker_count = new_cfg.threads > 0 ? new_cfg.threads : 1;
     if (requested_worker_count != worker_count)
     {
@@ -712,7 +705,20 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
                               worker_count, requested_worker_count);
         return false;
     }
-    const std::vector<std::shared_ptr<ModelBase>> old_models = g_inference.models_per_chn[chnId];
+    if (config_utils::is_channel_infer_enabled(new_cfg))
+    {
+        try
+        {
+            acquire_inference_device();
+        }
+        catch (const std::exception &error)
+        {
+            // 取得所有权失败时，旧 worker 和配置完全保留。
+            status.error = error.what();
+            return false;
+        }
+    }
+    const std::vector<std::shared_ptr<ModelGroup>> old_models = g_inference.model_groups_per_chn[chnId];
     const float old_obj_thresh = g_inference.obj_thresh[chnId].load(std::memory_order_relaxed);
     const float old_nms_thresh = g_inference.nms_thresh[chnId].load(std::memory_order_relaxed);
     std::shared_ptr<const std::set<int>> old_detect_classes;
@@ -740,8 +746,8 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
         pthread_mutex_unlock(&tq->mtx);
     }
 
-    auto restart_workers = [&](const std::vector<std::shared_ptr<ModelBase>> &new_models) -> bool {
-        g_inference.models_per_chn[chnId] = new_models;
+    auto restart_workers = [&](const std::vector<std::shared_ptr<ModelGroup>> &new_models) -> bool {
+        g_inference.model_groups_per_chn[chnId] = new_models;
         {
             pthread_mutex_lock(&g_inference.channel_results[chnId].mtx);
             g_inference.channel_results[chnId].data.clear();
@@ -756,8 +762,14 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
         for (int w = worker_start; w < worker_start + worker_count; ++w)
         {
             int m_idx = w - worker_start;
-            InferenceWorkerArgs *wa = new InferenceWorkerArgs{
-                chnId, tq, m_idx < (int)new_models.size() ? new_models[m_idx] : std::shared_ptr<ModelBase>()};
+            const auto model = m_idx < static_cast<int>(new_models.size()) ? new_models[m_idx] : nullptr;
+            if (!model)
+            {
+                // 关闭推理时只保留槽位，不能用空模型创建 FrameExecutor。
+                g_inference.worker_started[w] = 0;
+                continue;
+            }
+            InferenceWorkerArgs *wa = new InferenceWorkerArgs{chnId, tq, model};
             const int create_rc = pthread_create(&g_inference.worker_tids[w], nullptr, inference_worker_thread, wa);
             if (create_rc == 0)
                 g_inference.worker_started[w] = 1;
@@ -803,7 +815,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
 
     if (!config_utils::is_channel_infer_enabled(new_cfg))
     {
-        if (!restart_workers(std::vector<std::shared_ptr<ModelBase>>(worker_count)))
+        if (!restart_workers(std::vector<std::shared_ptr<ModelGroup>>(worker_count)))
         {
             stop_reloaded_workers();
             restore_old_workers();
@@ -816,7 +828,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
         return true;
     }
 
-    std::vector<std::shared_ptr<ModelBase>> new_models;
+    std::vector<std::shared_ptr<ModelGroup>> new_models;
     std::vector<ChannelModelConfig> active_models;
     for (const auto &model : new_cfg.models)
         if (model.enable && !model.model_path.empty() && !model.model_type.empty())
@@ -824,49 +836,9 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
 
     try
     {
+        const auto specs = video_model_specs(new_cfg);
         for (int t = 0; t < worker_count; ++t)
-        {
-            std::shared_ptr<ModelBase> model;
-            if (active_models.size() > 1)
-            {
-                std::vector<CompositeModel::Entry> entries;
-                for (size_t model_index = 0; model_index < active_models.size(); ++model_index)
-                {
-                    const auto &spec = active_models[model_index];
-                    const int core_mask =
-                        npu::assigned_core_mask(spec.npu_core, chnId, t, static_cast<int>(model_index), placement.pool);
-                    const float decode_thresh = config_utils::effective_model_obj_thresh(new_cfg, spec);
-                    auto child = create_inference_model(spec.model_type, spec.model_path, spec.label_path, core_mask,
-                                                        decode_thresh, spec.nms_thresh);
-                    if (!child)
-                        throw std::runtime_error("unsupported model_type: " + spec.model_type);
-                    child->set_result_source(spec.id.empty() ? "model_" + std::to_string(model_index) : spec.id,
-                                             spec.model_type, static_cast<int>(model_index));
-                    CompositeModel::Entry entry;
-                    entry.id = spec.id.empty() ? "model_" + std::to_string(model_index) : spec.id;
-                    entry.type = spec.model_type;
-                    entry.model = std::move(child);
-                    entry.obj_thresh = decode_thresh;
-                    entry.nms_thresh = spec.nms_thresh;
-                    entry.allowed_classes = names_to_class_ids(spec.detect_classes, spec.label_path);
-                    entries.push_back(std::move(entry));
-                }
-                model = std::make_shared<CompositeModel>(std::move(entries));
-            }
-            else
-            {
-                const ChannelModelConfig &spec = active_models[0];
-                const int core_mask = npu::assigned_core_mask(spec.npu_core, chnId, t, 0, placement.pool);
-                const float decode_thresh = config_utils::effective_model_obj_thresh(new_cfg, spec);
-                model = create_inference_model(spec.model_type, spec.model_path, spec.label_path, core_mask,
-                                               decode_thresh, spec.nms_thresh);
-                if (model)
-                    model->set_result_source(spec.id.empty() ? "model_0" : spec.id, spec.model_type, 0);
-            }
-            if (!model)
-                continue;
-            new_models.push_back(model);
-        }
+            new_models.push_back(create_model_group(specs, chnId, t, placement.pool));
     }
     catch (const std::exception &e)
     {

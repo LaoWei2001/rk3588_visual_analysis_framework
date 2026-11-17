@@ -131,12 +131,12 @@ int main()
     int assigned = 0;
     for (int worker = 0; worker < 3; ++worker)
     {
-        assigned |= npu::assigned_core_mask(-1, 0, worker, 0);
-        assert(npu::assigned_core_mask(1, 2, worker, 1) == 2);
+        assigned |= npu::assigned_core_mask(-1, 0, worker, 0, 7);
+        assert(npu::assigned_core_mask(1, 2, worker, 1, 7) == 2);
     }
     assert(assigned == 7);
-    assert(npu::assigned_core_mask(-1, 0, 0, 0) != npu::assigned_core_mask(-1, 1, 0, 0));
-    assert(npu::assigned_core_mask(-1, 0, 0, 0) != npu::assigned_core_mask(-1, 0, 0, 1));
+    assert(npu::assigned_core_mask(-1, 0, 0, 0, 7) != npu::assigned_core_mask(-1, 1, 0, 0, 7));
+    assert(npu::assigned_core_mask(-1, 0, 0, 0, 7) != npu::assigned_core_mask(-1, 0, 0, 1, 7));
 
     // Independent contexts sharing one explicitly pinned core never overlap.
     std::atomic<int> active{0}, completed{0};

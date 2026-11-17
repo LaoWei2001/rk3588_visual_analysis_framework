@@ -15,7 +15,6 @@
 #include <chrono>
 #include <cstdint>
 #include <fstream>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <opencv2/opencv.hpp>
@@ -29,33 +28,12 @@
 #include "common/performance_metrics.h"
 #include "inference_engine.h"
 #include "pipeline/frame_transform.h" /* RgaImportedBuffer / LazyVideoFrame */
-#include "vision/models/yolo/yolo.h"  /* ModelBase */
+#include "vision/models/model_group.h"
 #include <coordinates.h>
 
 /*======================== 内部任务结构 ========================*/
 
-enum class InferenceRoiMode : uint8_t
-{
-    FullFrame = 0,
-    RoiOnly,
-    FullPlusRoi,
-    FullFrameRoiFilter,
-};
-
-struct InferenceTask
-{
-    int chnId;
-    std::shared_ptr<LazyVideoFrame> frame;
-    std::chrono::steady_clock::time_point enqueue_tp;
-    int64_t frame_seq;
-    uint64_t frame_steady_ms;
-    uint64_t frame_unix_ms;
-    std::shared_ptr<RgaImportedBuffer> src_buf;
-    int srcW, srcH, srcFmt, srcStrH, srcStrV;
-    InferenceRoiMode roi_mode = InferenceRoiMode::FullFrame;
-    InferenceRoiConfig roi_config;
-    cv::Rect source_roi; /* 用户区域的源图包围盒；实际取景由 resize_mode 在 worker 中计算。 */
-};
+#include "inference_task.h"
 
 struct InferenceChannelResult
 {
@@ -111,10 +89,7 @@ struct InferenceRuntime
 {
     pthread_rwlock_t dispatch_mtx;
 
-    std::vector<std::vector<std::shared_ptr<ModelBase>>> models_per_chn{MAX_CHANNEL_NUM};
-    /* 兼容内部字段名：这是业务画布，不是某个模型的输入。编译期固定，模型不可改写。 */
-    static constexpr int input_w = business_coordinates::WIDTH;
-    static constexpr int input_h = business_coordinates::HEIGHT;
+    std::vector<std::vector<std::shared_ptr<ModelGroup>>> model_groups_per_chn{MAX_CHANNEL_NUM};
 
     std::atomic<float> obj_thresh[MAX_CHANNEL_NUM]{};
     std::atomic<float> nms_thresh[MAX_CHANNEL_NUM]{};
@@ -127,7 +102,6 @@ struct InferenceRuntime
     std::atomic<bool> chn_reload_stop[MAX_CHANNEL_NUM]{};
     // Requested placement of active contexts; retained when reload rolls back.
     std::atomic<int> auto_core_plan[MAX_CHANNEL_NUM]{};
-    pthread_mutex_t chn_reload_mtx[MAX_CHANNEL_NUM];
     std::vector<pthread_t> worker_tids;
     std::vector<unsigned char> worker_started;
     int max_queue_size{1};
@@ -137,9 +111,6 @@ struct InferenceRuntime
     pthread_cond_t result_ready_cv[MAX_CHANNEL_NUM];
     pthread_mutex_t result_ready_mtx[MAX_CHANNEL_NUM];
     int result_dispatch_pending[MAX_CHANNEL_NUM]{};
-
-    using ModelKey = std::tuple<std::string, std::string, int>;
-    std::map<ModelKey, std::shared_ptr<ModelBase>> model_registry;
 };
 
 /** @brief Worker 线程入口参数（heap-alloc，worker 内部 delete）。*/
@@ -147,7 +118,7 @@ struct InferenceWorkerArgs
 {
     int chnId;
     InferenceTaskQueue *tq;
-    std::shared_ptr<ModelBase> model;
+    std::shared_ptr<ModelGroup> model_group;
 };
 
 /*======================== 全局状态（定义在 inference_executor.cpp）========================*/
@@ -165,18 +136,10 @@ static inline uint64_t inference_steady_now_ms(void)
     return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 }
 
-/*======================== 跨文件函数声明（定义在 inference_executor.cpp）========================*/
+/*======================== 视频工作线程辅助函数 ========================*/
 
 /** @brief 返回 chnId 对应的任务队列下标；找不到返回 -1。*/
 int get_queue_idx_for_chn(int chnId);
-
-/** @brief 按标签名列表解析标签文件得到 class_id 集合。*/
-std::set<int> names_to_class_ids(const std::vector<std::string> &names, const std::string &label_path);
-
-/** @brief 按 model_type 创建对应的 ModelBase 子类实例。*/
-std::shared_ptr<ModelBase> create_inference_model(const std::string &type, const std::string &model_path,
-                                                  const std::string &label_path, int core_mask, float obj_thresh,
-                                                  float nms_thresh);
 
 /** @brief 推理 worker 线程入口（通过 pthread_create 调用）。*/
 void *inference_worker_thread(void *arg);

@@ -4,7 +4,7 @@ description: >-
   Develop, review, or explain a cross-channel global C++ logic module in this
   RK3588 visual-analysis framework. Use for GlobalContext, typed channel inputs,
   event-driven scheduling, multi-channel state, update versions, global actions, media source
-  selection, or global event reporting. Prefer inputs() for business data and
+  selection, or global event reporting. Use input_count()/input_at() for business data and
   verify behavior against the current global scheduler and module manifests.
 ---
 
@@ -28,7 +28,7 @@ description: >-
 | 两路或多路 outputs 联动 | 全局 logic |
 | 与视频帧无关的独立周期判断 | 全局 logic |
 | 需要在某个通道画叠加 | 通道 logic；全局上下文没有 `draw_*` |
-| 通道之间传业务值 | 上游 `publish_*()`，下游 `inputs()` |
+| 通道之间传业务值 | 上游 `publish_*()`，下游 `input_count()/input_at()` |
 
 单通道接口见 [`rk3588-channel-logic`](../rk3588-channel-logic/SKILL.md)。
 
@@ -47,7 +47,7 @@ description: >-
 2. 在 `projects/global_modules/<global_logic_id>/` 创建 `logic.cpp` 和 `logic.json`。
 3. 实现 `static void global_xxx(GlobalContext *gctx)`，末尾写
    `REGISTER_GLOBAL_LOGIC(global_xxx);`。
-4. 普通业务从 `gctx->inputs()` 读取框架已经过滤的输入，不直接依赖通道私有 state。
+4. 普通业务从 `gctx->input_count()/input_at()` 读取框架已经过滤的输入，不直接依赖通道私有 state。
 5. 用 `gctx->get_state<T>()` 获取跨 tick 状态；周期基于 `timestamp_ms`/`dt_ms`，现实时间基于 `unix_ms`。
 6. 参数、事件、上报字段、Action 和模板声明遵循与通道模块相同的 manifest 规则。
 7. 给出在 `global.global_logics[]` 创建稳定唯一 `instance_id`、输入通道、兜底周期和视频来源的配置说明；
@@ -72,8 +72,8 @@ static void global_total(GlobalContext *gctx)
     if (!state) return;
 
     int64_t total = 0;
-    for (const ChannelInput &input : gctx->inputs())
-        total += input.get_int("person_count", 0);
+    for (std::size_t i = 0; i < gctx->input_count(); ++i)
+        total += gctx->input_at(i)->get_int("person_count", 0);
     state->last_total = total;
 }
 
@@ -85,7 +85,7 @@ REGISTER_GLOBAL_LOGIC(global_total);
 
 ## 默认输入规则
 
-`inputs()` 是普通业务的入口：
+`input_count()/input_at()` 是普通业务的入口：
 
 - `channels` 非空时，只选择这些配置 ID；
 - `channels` 为空时，当前调度器遍历应用全部有效通道；
@@ -170,6 +170,6 @@ cd projects
 ```
 
 `config_global.json` 是仓库当前的全局逻辑示例；验收具体应用时应换成实际运行配置。运行时还应确认
-线程启动日志、有效 `inputs()` 数、断流淘汰、Action 回执、状态在不同实例间隔离，
+线程启动日志、有效 `input_count()/input_at()` 数、断流淘汰、Action 回执、状态在不同实例间隔离，
 以及全局回调耗时不会阻塞下一次业务所需调度。应用停机时只能完成静态校验；端到端延迟必须在
 目标设备启动实际配置后，用通道发布时间和全局回调时间戳测量，不能只根据配置周期推断。

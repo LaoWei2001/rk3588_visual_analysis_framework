@@ -15,7 +15,7 @@ int app_ctrl_materialize_channel_frame_snapshot(const ChannelLogicSnapshot &snap
     }
 
     const auto &media = *VisionContextAccess::media(snapshot);
-    const cv::Mat *frame = media.frame->model_frame();
+    const cv::Mat *frame = media.frame->business_frame();
     if (frame)
         out->frame = frame->clone();
     out->logic.has_frame = !out->frame.empty();
@@ -40,6 +40,11 @@ int app_ctrl_materialize_channel_frame_snapshot(const ChannelLogicSnapshot &snap
     /* 图片与结果已经复制到调用方；不让图片任务继续占用解码池缓冲区。 */
     VisionContextAccess::media(out->logic).reset();
     return 1;
+}
+
+bool ChannelContext::get_channel_frame_snapshot(int configuredId, ChannelFrameSnapshot *out) const
+{
+    return out && app_ctrl_get_channel_frame_snapshot(configuredId, out) != 0;
 }
 
 bool GlobalContext::get_channel_frame_snapshot(int configured_id, ChannelFrameSnapshot *out) const

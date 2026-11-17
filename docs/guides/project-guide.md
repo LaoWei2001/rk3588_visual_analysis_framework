@@ -517,10 +517,9 @@ Web 画布中“业务 ROI”节点直接连接视频流节点，表示它归属
 仍需检查物理测量标定。分割模型的输出结构须与解码器兼容，固定业务画布不代表所有模型已支持任意尺寸。
 
 业务代码可用 `ctx->business_width()` / `business_height()` / `business_size()` / `business_center()`
-查询画布，不触发取帧。`ctx->business_frame()` 和保留的 `ctx->model_frame()` 共用同一份惰性 640×640
+查询画布，不触发取帧。`ctx->business_frame()` 使用惰性生成的 640×640
 BGR 缓存；只有读取像素时才转换。`ctx->source_frame()` 保留原图尺寸，原图上的检测坐标需显式按
-`src_width/640`、`src_height/640` 转换。`inference_get_input_w/h()` 和全局逻辑的历史字段
-`model_width/model_height` 也表示业务尺寸，不用于查询实际 NPU 输入。
+`src_width/640`、`src_height/640` 转换。模型实际输入尺寸通过模型检查 SDK 获取。
 坐标约定、迁移示例和回归验证见 [固定业务坐标与模型输入尺寸](../reference/business-coordinates.md)。
 
 以下为字段组合示例；RTSP 地址、`assets/yolov8n.rknn` 与标签均为占位资源，必须替换后才能校验运行。深度类型还有独立的 ROI 语义，不直接套用检测的两批合并策略。
@@ -612,7 +611,7 @@ ZipDepth 相对逆深度在不同裁剪间没有共同尺度，因此 `full_plus
 
 - 以 `engine/src/vision/models/model_base.h` 的 `ModelBase` 为接口，实现普通输入、尺寸查询、阈值与结果语义；可选实现 `get_input_fd()` / `get_input_rga_handle()` / `infer_zero_copy()`。
 - 在 `engine/src/vision/inference/inference_executor.cpp` 的 `create_inference_model()` 中添加构造分支，供启动和重载共用。
-- 同步 `engine/src/application/config/config_validator.cpp` 的类型及标签规则、`projects/catalog.json` 和 Web 的模型识别/校验 `web_console/backend/services/model_info.py`；必要时扩展 `engine/src/vision/models/model_inspection.cpp` 中的模型检查 CLI。
+- 同步 `engine/src/application/config/config_validator.cpp` 的类型及标签规则、`projects/catalog.json` 和 Web 的模型类型枚举；张量兼容性规则统一扩展 `engine/src/vision/models/model_compatibility.cpp` 的公共 SDK 实现，Web 的 `model_info.py` 只转发 SDK 检查结果。
 - SDK 提交统一通过 `engine/src/vision/inference/npu_execution.h`，并正确记录实际生效的核心掩码；输出缓冲遵守 `npu::Outputs` 生命周期。新增模型不能绕过公共调度直接调用 RKNN 提交接口。
 - 输出使用 `AlgoResult`，保留 `model_id/model_type/model_index`；新结果语义需要同步公共接口、坐标映射、业务查询与渲染，不能仅让模型工厂“能加载”。
 - 增加张量契约、数值/坐标及同核/异核混跑回归，验收推理、发布和延迟；见 [NPU 调度](../../engine/src/vision/inference/NPU_SCHEDULING.md)与 [Benchmark](../performance/benchmark.md)。
@@ -643,7 +642,9 @@ projects/modules/logic_people_count/
 
 static void logic_people_count(ChannelContext *ctx)
 {
-    const int count = ctx->target_count("person");
+    TargetQuery query;
+    query.labels = {"person"};
+    const int count = ctx->query_targets(query).count;
     draw_text(ctx,
               ("person: " + std::to_string(count)).c_str(),
               cv::Point(20, 40),

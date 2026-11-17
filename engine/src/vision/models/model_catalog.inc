@@ -1,0 +1,10 @@
+// Shared by the CPU metadata catalog and the inference factory registry.
+// VISION_MODEL(type, result_kind, requires_labels, factory)
+VISION_MODEL("yolov5", "detection", true, detector<YOLO>)
+VISION_MODEL("yolov8_det", "detection", true, detector<YoloV8Det>)
+VISION_MODEL("yolov8_obb", "obb", false, obb_detector)
+VISION_MODEL("yolov8_pose", "pose", false, detector<YoloPose>)
+VISION_MODEL("yolo26_pose", "pose", false, detector<Yolo26Pose>)
+VISION_MODEL("yolov5_seg", "segmentation", true, detector<YoloSeg>)
+VISION_MODEL("yolo26_depth", "depth", false, depth<Yolo26Depth>)
+VISION_MODEL("zip_depth", "depth", false, depth<ZipDepth>)

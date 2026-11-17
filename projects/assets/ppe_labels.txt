@@ -1,6 +1,6 @@
 person
 helmet
-workwear_off
 hand_gloved
 hand_bare
 workwear_on
+head

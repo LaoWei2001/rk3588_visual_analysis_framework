@@ -26,7 +26,7 @@ static bool relay_apply(ChannelContext *ctx, const std::shared_ptr<RelayState> &
     std::string pin = ctx->param_string("relay_pin");
     if (pin.empty())
         return false;
-    if (pin_out_val(pin.c_str(), level) != 0)
+    if (gpio_set_output(pin.c_str(), level) != 0)
         return false;
     state->level = level;
     return true;

@@ -12,12 +12,19 @@ from routers import assets as assets_router
 from services import model_info
 
 
+# Decoder tensor cases now run against the real C++ SDK in test_model_inspection.cpp.
+def sdk_verdicts(*accepted):
+    return {kind: {"ok": kind in accepted, "error": "" if kind in accepted else "SDK: incompatible decoder"}
+            for kind in model_info.MODEL_TYPES}
+
+
 def detector(size=640):
     outputs = []
     for stride in (8, 16, 32):
         for channels in (64, 2, 1):
             outputs.append({"format": "NCHW", "shape": [1, channels, size // stride, size // stride]})
-    return {"ok": True, "width": size, "height": size, "format": "NHWC", "outputs": outputs}
+    return {"ok": True, "inspection_version": 1, "compatibility": sdk_verdicts("yolov8_det"),
+            "width": size, "height": size, "format": "NHWC", "outputs": outputs}
 
 
 @pytest.fixture
@@ -28,6 +35,10 @@ def app(tmp_path, monkeypatch):
     (directory / "vision_analysis").write_bytes(b"binary")
     (assets / "small.rknn").write_bytes(b"small")
     (assets / "large.rknn").write_bytes(b"large")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "image_inference_runner").write_bytes(b"SDK inspector")
+    monkeypatch.setattr(model_info, "inspection_runtime", lambda: runtime)
     model_info._cache.clear()
     monkeypatch.setattr(config_io, "APPS_ROOT", tmp_path)
     return directory
@@ -60,7 +71,10 @@ def test_probe_cache_single_flight_and_file_replacement(app, monkeypatch):
     fresh = model_info.inspect_model(app, "assets/small.rknn")
     assert len(calls) == 2
     assert fresh["file_version"] != results[0]["file_version"]
-    (app / "vision_analysis").write_bytes(b"new binary")
+    (app / "vision_analysis").write_bytes(b"new business binary")
+    model_info.inspect_model(app, "assets/small.rknn")
+    assert len(calls) == 2
+    (model_info.inspection_runtime() / "image_inference_runner").write_bytes(b"new SDK inspector")
     model_info.inspect_model(app, "assets/small.rknn")
     assert len(calls) == 3
 
@@ -76,6 +90,49 @@ def test_cached_probe_failure_expires(app, monkeypatch):
     clock[0] = 31.0
     model_info.inspect_model(app, "assets/small.rknn")
     assert len(calls) == 2
+
+
+def test_canvas_and_image_share_sdk_probe_without_business_binary(app, monkeypatch):
+    (app / 'vision_analysis').unlink()
+    runtime = model_info.inspection_runtime()
+    calls = []
+    def probe(directory, binary, model):
+        calls.append((directory, binary, model))
+        assert directory == runtime and binary == runtime / 'image_inference_runner'
+        return detector()
+    monkeypatch.setattr(model_info, '_probe', probe)
+    canvas = model_info.inspect_model(app, 'assets/small.rknn', 'yolov8_det')
+    image = model_info.inspect_model_file(runtime, runtime / 'image_inference_runner', app / 'assets/small.rknn', 'yolov8_det')
+    assert canvas['ok'] and image['ok'] and len(calls) == 1
+    assert canvas['path'] == 'assets/small.rknn' and image['path'] == str(app / 'assets/small.rknn')
+    assert canvas['file_version'] == image['file_version']
+    (runtime / 'image_inference_runner').unlink()
+    with pytest.raises(ValueError, match='独立模型检查引擎'):
+        model_info.inspect_model(app, 'assets/small.rknn', 'yolov8_det')
+
+
+def test_sdk_verdict_is_forwarded_without_python_tensor_rules():
+    info = dict(inspection_version=1, compatibility=sdk_verdicts('yolov8_det'))
+    assert model_info.compatibility_error(info, 'yolov8_det') == ''
+    assert model_info.compatibility_error(info, 'yolov5') == 'SDK: incompatible decoder'
+    assert '不支持' in model_info.compatibility_error(info, 'unknown')
+    for invalid in [{}, dict(info, inspection_version=0), dict(info, compatibility=[]),
+                    dict(info, compatibility={'yolov8_det': {'ok': 'yes'}})]:
+        assert '版本不兼容' in model_info.compatibility_error(invalid, 'yolov8_det')
+
+
+@pytest.mark.parametrize('target', ['default', 'named'])
+def test_incompatible_sdk_verdict_prevents_config_write(app, monkeypatch, target):
+    monkeypatch.setattr(model_info, '_probe', lambda *args: detector())
+    destination = app / 'assets' / ('config.json' if target == 'default' else 'custom.json')
+    destination.write_text('{"original":true}')
+    requested = config('small')
+    requested['channels'][0]['models'][0]['model_type'] = 'yolov5'
+    with pytest.raises(HTTPException) as error:
+        if target == 'default': asyncio.run(config_io.save_config('demo', requested))
+        else: asyncio.run(config_io.save_config_file('demo', 'assets/custom.json', requested))
+    assert error.value.status_code == 422 and 'SDK: incompatible decoder' in error.value.detail
+    assert json.loads(destination.read_text()) == {'original': True}
 
 
 @pytest.mark.parametrize("path", ["../small.rknn", "/etc/model.rknn", "assets/missing.rknn", "assets/config.json"])
@@ -119,24 +176,10 @@ def test_disabled_models_and_empty_draft_need_no_probe(app, monkeypatch):
         model_info.validate_model_config(app, disabled)
 
 
-@pytest.mark.parametrize("shape,fmt", [([1, 1, 640, 640], "NCHW"),
-                                       ([1, 352, 640, 1], "NHWC"),
-                                       ([1, 160, 160], "UNDEFINED"),
-                                       ([160, 160], "UNDEFINED")])
-@pytest.mark.parametrize("model_type", ["yolo26_depth", "zip_depth"])
-def test_depth_output_contract(shape, fmt, model_type):
-    output = {"shape": shape, "format": fmt, "type": 0, "elements": 1}
-    for size in shape:
-        output["elements"] *= size
-    info = {"width": 640, "height": 352 if fmt == "NHWC" else 640, "format": "NCHW", "outputs": [output]}
-    assert model_info.compatibility_error(info, model_type) == ""
-    output["elements"] += 1
-    assert "元素" in model_info.compatibility_error(info, model_type)
-
-
 @pytest.mark.parametrize("model_type", ["yolo26_depth", "zip_depth"])
 def test_depth_can_share_channel_with_different_detection_resolution(app, monkeypatch, model_type):
-    depth = {"ok": True, "width": 640, "height": 640, "format": "NCHW", "outputs": [
+    depth = {"ok": True, "inspection_version": 1, "compatibility": sdk_verdicts(model_type),
+             "width": 640, "height": 640, "format": "NCHW", "outputs": [
         {"format": "NCHW", "shape": [1, 1, 640, 640], "elements": 409600, "type": 0}]}
     monkeypatch.setattr(model_info, "_probe", lambda _, __, path: detector(960) if path.stem == "large" else depth)
     both = config("small", "large")
@@ -146,53 +189,10 @@ def test_depth_can_share_channel_with_different_detection_resolution(app, monkey
     model_info.validate_model_config(app, both)
 
 
-def test_detection_tensor_is_rejected_as_depth():
-    assert "单个" in model_info.compatibility_error(detector(), "yolo26_depth")
-    pose = {"width": 640, "height": 640, "format": "NCHW", "outputs": [
-        {"shape": [1, 56, 300], "elements": 56 * 300, "type": 0}]}
-    assert "宽高比" in model_info.compatibility_error(pose, "yolo26_depth")
-
-
 def test_valid_960_can_be_saved(app, monkeypatch):
     monkeypatch.setattr(model_info, "_probe", lambda *args: detector(960))
     assert asyncio.run(config_io.save_config("demo", config("large"))) == {"ok": True}
     assert json.loads((app / "assets" / "config.json").read_text()) == config("large")
-
-
-def test_decoder_input_layout_and_output_contract():
-    info = detector()
-    info["format"] = "NCHW"
-    assert not model_info.compatibility_error(info, "yolov8_det")
-    assert "NHWC" in model_info.compatibility_error(info, "yolov5")
-    info["outputs"][0]["shape"][2] = 79
-    assert model_info.compatibility_error(info, "yolov8_det")
-    assert model_info.compatibility_error(detector(), "unknown")
-
-
-def test_fused_pose_output_checks_quantization_and_element_count():
-    output = {"shape": [1, 56, 300], "elements": 56 * 300, "type": 1, "scale": 0}
-    info = {"format": "NHWC", "outputs": [output], "width": 960, "height": 960}
-    assert not model_info.compatibility_error(info, "yolo26_pose")
-    output.update(type=2, scale=2.0)
-    assert "scale" in model_info.compatibility_error(info, "yolo26_pose")
-    output.update(type=1, scale=0, elements=1)
-    assert "元素" in model_info.compatibility_error(info, "yolo26_pose")
-
-
-def test_segmentation_proto_size_guard():
-    outputs = []
-    for stride in (8, 16, 32):
-        outputs.extend([
-            {"format": "NCHW", "shape": [1, 21, 960 // stride, 960 // stride]},
-            {"format": "NCHW", "shape": [1, 96, 960 // stride, 960 // stride]},
-        ])
-    outputs.append({"format": "NCHW", "shape": [1, 32, 240, 240]})
-    info = {"width": 960, "height": 960, "format": "NHWC", "outputs": outputs}
-    assert not model_info.compatibility_error(info, "yolov5_seg")
-    outputs[-1]["shape"][1] = 31
-    assert "proto" in model_info.compatibility_error(info, "yolov5_seg")
-    outputs[-1]["shape"] = [1, 32, 160, 160]
-    assert not model_info.compatibility_error(info, "yolov5_seg")
 
 
 def test_missing_model_type_is_rejected_without_probe(app, monkeypatch):
@@ -225,6 +225,11 @@ def test_probe_protocol_and_timeout(app, monkeypatch):
         return subprocess.CompletedProcess(args[0], 0, "vendor log\nMODEL_INFO_JSON=" + json.dumps(detector()) + "\n", "")
     monkeypatch.setattr(model_info.subprocess, "run", execute)
     assert model_info._probe(app, binary, model)["ok"]
+    old = detector()
+    old.pop('inspection_version')
+    monkeypatch.setattr(model_info.subprocess, 'run', lambda *args, **kwargs:
+                        subprocess.CompletedProcess([], 0, 'MODEL_INFO_JSON=' + json.dumps(old), ''))
+    assert '版本不兼容' in model_info._probe(app, binary, model)['error']
     monkeypatch.setattr(model_info.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess([], 1, "old engine\n", ""))
     assert "更新" in model_info._probe(app, binary, model)["error"]
     def timeout(*args, **kwargs):
@@ -262,36 +267,6 @@ def test_stopped_runtime_does_not_open_socket(app, monkeypatch):
     monkeypatch.setattr(model_info.pm, "get_status", lambda _: {"status": "stopped", "config": None})
     monkeypatch.setattr(model_info.socket, "socket", lambda *args: pytest.fail("socket should not open"))
     assert model_info.runtime_status(app, "demo") == {"status": "stopped", "config": None, "channels": []}
-
-
-def test_obb_tensor_contract():
-    import copy
-    outputs = [{"shape": [1, 79, 640 // stride, 640 // stride], "format": "NCHW"}
-               for stride in (8, 16, 32)]
-    outputs.append({"shape": [1, 1, 8400], "elements": 8400})
-    info = {"width": 640, "height": 640, "format": "NHWC", "outputs": outputs}
-    assert not model_info.compatibility_error(info, "yolov8_obb")
-    assert model_info.compatibility_error(info, "yolov8_det")
-    for change in ("angle", "classes", "layout", "count"):
-        bad = copy.deepcopy(info)
-        if change == "angle": bad["outputs"][3]["elements"] = 8399
-        if change == "classes": bad["outputs"][1]["shape"][1] = 80
-        if change == "layout": bad["outputs"][0]["format"] = "NHWC"
-        if change == "count": bad["outputs"].pop()
-        assert model_info.compatibility_error(bad, "yolov8_obb")
-
-
-def test_segmentation_dynamic_prototype_sizes():
-    for width, height in [(640, 640), (960, 960), (768, 1088)]:
-        outputs = []
-        for stride in (8, 16, 32):
-            for channels in (255, 96):
-                outputs.append({"shape": [1, channels, height // stride, width // stride], "format": "NCHW"})
-        outputs.append({"shape": [1, 32, height // 4, width // 4], "format": "NCHW"})
-        info = {"width": width, "height": height, "format": "NHWC", "outputs": outputs}
-        assert not model_info.compatibility_error(info, "yolov5_seg")
-        outputs[-1]["shape"][2] = 0
-        assert model_info.compatibility_error(info, "yolov5_seg")
 
 
 @pytest.mark.parametrize("target", ["default", "named"])

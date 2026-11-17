@@ -52,7 +52,7 @@ message(STATUS
 set(toolkit_root ${PROJECT_SOURCE_DIR}/vendor)
 set(common_root  ${toolkit_root})
 
-if(EXISTS ${common_root}/gst_opt/api.cmake)
+if(NOT VISION_INFERENCE_ONLY AND EXISTS ${common_root}/gst_opt/api.cmake)
     include(${common_root}/gst_opt/api.cmake)
 else()
     set(GSTOPT_INCLUDE_DIRS "")
@@ -90,11 +90,15 @@ if(NOT OPENCV_FREETYPE_HEADER)
 endif()
 message(STATUS "OpenCV freetype module found -> overlay text rendered via FreeType (CN + EN)")
 
-pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
+if(NOT VISION_INFERENCE_ONLY)
+    pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
+    pkg_check_modules(GST_RTSP REQUIRED gstreamer-rtsp-1.0)
+endif()
 
 set(custom_inc
     ${OpenCV_INCLUDE_DIRS}
     ${GTK3_INCLUDE_DIRS}
+    ${GST_RTSP_INCLUDE_DIRS}
     ${PROJECT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/src
 )
@@ -105,6 +109,7 @@ set(custom_libs
     rknnrt_vendor
     ${OpenCV_LIBS}
     ${GTK3_LIBRARIES}
+    ${GST_RTSP_LIBRARIES}
     Threads::Threads
     gpiod
 )

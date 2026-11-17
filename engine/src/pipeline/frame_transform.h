@@ -64,7 +64,7 @@ struct RgaImportedBuffer
 /**
  * 同一业务帧的惰性图像容器。
  * - source handle 保留 DMA-BUF，source_owner 保留解码缓冲区，阻止池重用像素；
- * - model_frame() 是业务画布 BGR（运行时固定 640×640），source_frame() 是原图 BGR；
+ * - business_frame() 是业务画布 BGR（运行时固定 640×640），source_frame() 是原图 BGR；
  *   各自在第一次调用时生成一份并缓存；
  * - borrowed_data 仅服务同步解码回调，回调结束前必须 clear_borrowed_source()；
  * - DMA-BUF 不可用时可用 retain_borrowed_source() 只保留原始字节，延后到 worker 转换。
@@ -76,7 +76,7 @@ class LazyVideoFrame
                    int source_stride_w, int source_stride_h, int source_format, int model_width, int model_height,
                    const void *borrowed_data = nullptr, std::shared_ptr<void> source_owner = {});
 
-    const cv::Mat *model_frame();
+    const cv::Mat *business_frame();
     const cv::Mat *source_frame();
     /** CPU 推理回退：从原始缓冲直接生成实际模型尺寸 BGR。
      * output 由 worker 私有持有，可跨帧复用内存；不提前生成原图或业务画布缓存。 */

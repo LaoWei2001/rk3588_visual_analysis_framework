@@ -845,6 +845,7 @@ rsync -a --exclude='tests/' --exclude='.pytest_cache/' \
     --exclude='__pycache__/' --exclude='*.pyc' \
     "$PROJECT_ROOT/web_console/backend/" "$CONSOLE_DEST/backend/"
 cp -a "$FRONTEND_WORK/dist" "$CONSOLE_DEST/frontend/"
+bash "$PROJECT_ROOT/web_console/build_image_runtime.sh" "$CONSOLE_DEST/inference_runtime"
 for frontend_asset in logo.png img.png; do
     [ ! -f "$FRONTEND_DIR/$frontend_asset" ] \
         || cp -a "$FRONTEND_DIR/$frontend_asset" "$CONSOLE_DEST/frontend/"

@@ -27,7 +27,7 @@
 启用深度模型的通道以纯深度热力图作为视频底图，近处红、远处蓝，不再混入原图。
 无效/未推理区域显示黑色，首个深度结果到达前也使用黑底；检测框、ROI 和业务绘图
 按既有设置叠加在热力图上。该规则统一应用于视频窗口、RTSP 和启用绘图的截图/录像。
-推理及业务读取的 `model_frame()/source_frame()` 仍提供原始 BGR，浮点深度数据不受显示方式影响。
+推理及业务读取的 `business_frame()/source_frame()` 仍提供原始 BGR，浮点深度数据不受显示方式影响。
 
 更换实时摄像头时直接修改现有 `stream` 节点，例如：
 
@@ -93,7 +93,7 @@ REGISTER_LOGIC(logic_my_depth);
 
 一帧中每个深度模型只产生一条携带整张深度图的 `AlgoResult`。它含有与其他模型相同的
 `model_id/model_type/model_index/chn_id/frame_id/timestamp_ms`，可以直接遍历 `ctx->results`。
-深度图会随同帧视频和目标一起分发，不做跨帧拼接。`target_count()`、`query_targets()`、
+深度图会随同帧视频和目标一起分发，不做跨帧拼接。`query_targets()`、
 类别过滤、NMS、SORT 和 ByteTrack 均不会把深度图当成检测目标。
 
 ## ROI、数据生命周期与显示
@@ -103,7 +103,7 @@ REGISTER_LOGIC(logic_my_depth);
 - `ctx->depth_result()` 指针只在当前回调有效。需要跨帧保留时复制 Mat 头部：
   `cv::Mat saved = depth->depth_map;`，后续推理不会覆盖其像素；业务若要改写像素，请先 `clone()`。
 - `get_channel_frame_snapshot()` 与其他图像/结果一样，按需深拷贝深度数据，支持同帧证据和全局逻辑。
-- 读取深度不会触发 `model_frame()/source_frame()`，热路径无需生成 CPU BGR 视频图像。
+- 读取深度不会触发 `business_frame()/source_frame()`，热路径无需生成 CPU BGR 视频图像。
 - `depth_median()` 默认步长 4，减少每帧大量检测框查询的 CPU 开销；需要每像素参与时传 `step=1`。
   偶数样本使用两个中间值的平均值。零值、负值、NaN、Inf 不参与。
 

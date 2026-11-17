@@ -2527,33 +2527,6 @@ CJSON_PUBLIC(cJSON *) cJSON_CreateDoubleArray(const double *numbers, int count)
     return a;
 }
 
-// v1
-CJSON_PUBLIC(cJSON *)
-cJSON_AddFloatToObject(cJSON *const object, const char *const name, const double number, const int acc)
-{
-    cJSON *float_item = cJSON_CreateFloatWithAccuracy(number, acc);
-    if (add_item_to_object(object, name, float_item, &global_hooks, false))
-    {
-        return float_item;
-    }
-
-    cJSON_Delete(float_item);
-    return NULL;
-}
-
-CJSON_PUBLIC(cJSON *) cJSON_CreateFloatWithAccuracy(double num, int acc)
-{
-    cJSON *item = cJSON_New_Item(&global_hooks);
-    if (item)
-    {
-        item->type = cJSON_Number | cJSON_FloatWithAccuracy;
-        item->valuedouble = num;
-        item->valueint = acc;
-    }
-
-    return item;
-}
-
 CJSON_PUBLIC(cJSON *) cJSON_CreateStringArray(const char **strings, int count)
 {
     size_t i = 0;

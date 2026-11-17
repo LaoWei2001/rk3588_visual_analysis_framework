@@ -17,13 +17,13 @@
 
 ## 上游通道模块
 
-`logic_roi_person_count_demo` 调用 `roi_count_target(ctx, "person", ROI_ALL)`，在每次通道业务帧发布
+`logic_roi_person_count_demo` 调用 `ctx->query_targets(query)`（`query.labels={"person"}`、`query.roi=ROI_ALL`），在每次通道业务帧发布
 `person_count`。使用它前必须确认模型标签确实为 `person`，并在通道配置中提供业务需要的 ROI；
 全局模块只读取公开 output，不读取检测框或上游私有 state。
 
 ## 全局模块当前行为
 
-`global_person_count_alarm_demo` 遍历 `gctx->inputs()`：
+`global_person_count_alarm_demo` 遍历 `gctx->input_count()/input_at()`：
 
 1. 汇总每路 `person_count`；
 2. 把人数大于 0 的通道加入 `request.evidence_channel_ids`；
@@ -72,7 +72,7 @@
 
 | 场景 | 预期 |
 |---|---|
-| 所有上游未发布、离线或过期 | `inputs()` 为空，总数为 0，不告警 |
+| 所有上游未发布、离线或过期 | `input_count()` 为 0，总数为 0，不告警 |
 | 总人数未达阈值 | 清除闩锁，不告警 |
 | 总人数首次达到阈值 | 创建一次全局事件；accepted 后闩锁 |
 | 条件持续成立 | 不重复创建 |

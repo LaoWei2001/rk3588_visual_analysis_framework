@@ -18,7 +18,8 @@ struct TrackedFramePerson
     std::array<bool, PART_COUNT> violation_seen = {{false, false, false, false}};
     bool hand_unsided_seen = false;
     std::array<bool, PART_COUNT> positive_seen = {{false, false, false, false}};
-    bool head_checkable = false; /* 头部区域没被别人挡住，可用于“正类缺失”推断 */
+    bool head_checkable = false;  /* 头部区域没被别人挡住，可用于“正类缺失”推断 */
+    bool torso_checkable = false; /* 躯干区域没被别人挡住，可用于“未穿工装”推断 */
 };
 
 bool keypoint_visible(const AlgoResult &pose, int index, float min_score)
@@ -80,8 +81,10 @@ int resolve_hand_side(const TrackedFramePerson &person, const cv::Rect &box, con
 {
     const bool left_ok = person.visible[PART_HAND_LEFT];
     const bool right_ok = person.visible[PART_HAND_RIGHT];
+    /* 没有姿态结果（现场只挂检测模型）时，不能再拿腕点距离当门槛，
+     * 否则所有裸手框都会被判成“不是手”而丢弃。降级为“分不清左右”的证据。 */
     if ((!left_ok && !right_ok) || person.pose == nullptr)
-        return config.geometry_gate ? HAND_REJECTED : HAND_UNRESOLVED;
+        return config.glove_require_pose ? HAND_REJECTED : HAND_UNRESOLVED;
 
     const float max_distance = config.glove_wrist_ratio * person_height(person);
     const cv::Point center(box.x + box.width / 2, box.y + box.height / 2);
@@ -241,6 +244,42 @@ int unique_person_for_box(const cv::Rect &box, const std::vector<TrackedFramePer
     return match;
 }
 
+/* 手/手套框归属。现场手臂横伸出去时，手框中心经常落在人员框外面——人框往往只框到
+ * 躯干，而手伸在画面另一侧。严格 containment 会把裸手证据整条丢掉，等于“检出裸手
+ * 也不报警”。这里退一步：先按严格归属，失败则取“到人框矩形外沿最近、且距离不超过
+ * hand_attach_ratio × 人框高”的人；多人符合时取中心最近者（手比帽子更能确定归属）。 */
+int nearest_person_for_hand(const cv::Rect &box, const std::vector<TrackedFramePerson> &people, const Config &config)
+{
+    const int strict = unique_person_for_box(box, people, PART_HAND_LEFT, config);
+    if (strict >= 0)
+        return strict;
+    const cv::Point center(box.x + box.width / 2, box.y + box.height / 2);
+    int best = -1;
+    float best_center_distance = 0.0f;
+    for (size_t index = 0; index < people.size(); ++index)
+    {
+        const cv::Rect &target = people[index].detection->box;
+        const float limit = config.hand_attach_ratio * static_cast<float>(std::max(1, target.height));
+        if (limit <= 0.0f)
+            continue;
+        const float over_x = std::max(0.0f, std::max(static_cast<float>(target.x - center.x),
+                                                     static_cast<float>(center.x - (target.x + target.width))));
+        const float over_y = std::max(0.0f, std::max(static_cast<float>(target.y - center.y),
+                                                     static_cast<float>(center.y - (target.y + target.height))));
+        if (std::hypot(over_x, over_y) > limit)
+            continue;
+        const float dx = static_cast<float>(center.x) - static_cast<float>(target.x + target.width / 2);
+        const float dy = static_cast<float>(center.y) - static_cast<float>(target.y + target.height / 2);
+        const float center_distance = std::hypot(dx, dy);
+        if (best < 0 || center_distance < best_center_distance)
+        {
+            best = static_cast<int>(index);
+            best_center_distance = center_distance;
+        }
+    }
+    return best;
+}
+
 /* 优先同 track_id 的姿态结果，其次取框中心落在人员框内的姿态结果。 */
 const AlgoResult *find_pose_for(const AlgoResult &person, const std::vector<AlgoResult> &results)
 {
@@ -287,15 +326,22 @@ bool evidence_confirmed(const std::deque<uint64_t> &times, size_t required_obser
 void collect_positive_parts(const std::vector<AlgoResult> &results, std::vector<TrackedFramePerson> &people,
                             const Config &config)
 {
-    if (!config.positive_veto)
+    if (!config.positive_veto && !config.helmet_infer_by_absence && !config.workwear_require_positive)
         return;
     for (const AlgoResult &result : results)
     {
-        if (result.score < config.violation_min_score)
-            continue;
+        if (result.score < config.positive_min_score)
+            continue; /* 正类用独立的低门槛：穿好/戴好的框分数普遍偏低 */
         for (int part = 0; part < PART_COUNT; ++part)
         {
             if (!config.enabled[static_cast<size_t>(part)])
+                continue;
+            /* 只收集真正需要的正类：positive_veto 是全部位否决，
+             * 缺正类推断只关心它自己的那个部位。 */
+            const bool need_positive = config.positive_veto ||
+                                       (part == PART_HELMET && config.helmet_infer_by_absence) ||
+                                       (part == PART_WORKWEAR && config.workwear_require_positive);
+            if (!need_positive)
                 continue;
             if (!matches_label(result.label, config.positive_labels[static_cast<size_t>(part)]))
                 continue;
@@ -304,7 +350,9 @@ void collect_positive_parts(const std::vector<AlgoResult> &results, std::vector<
                 credit_helmet_shared(result.box, people, config);
                 continue;
             }
-            const int person_index = unique_person_for_box(result.box, people, part, config);
+            const int person_index = (part == PART_HAND_LEFT || part == PART_HAND_RIGHT)
+                                         ? nearest_person_for_hand(result.box, people, config)
+                                         : unique_person_for_box(result.box, people, part, config);
             if (person_index < 0)
                 continue;
             TrackedFramePerson &person = people[static_cast<size_t>(person_index)];
@@ -381,7 +429,7 @@ char status_char(int status)
     case PART_CANDIDATE:
         return '?';
     case PART_CLEAR:
-        return '.';
+        return 'O'; /* ok：一眼能和 '-'(未知) 区分开 */
     default:
         break;
     }
@@ -441,7 +489,7 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
                 continue; /* 人太小，头部区域只有几个像素，推断不可靠 */
             if (box.y < 6)
                 continue; /* 头顶贴画面边缘，头部可能被裁掉，看不见不等于没戴 */
-            if (people[i].detection->score < config.violation_min_score)
+            if (people[i].detection->score < config.absence_min_person_score)
                 continue; /* 人框本身不可信，不拿它推断“没戴” */
             const cv::Rect head(box.x, box.y, box.width, std::max(1, static_cast<int>(box.height * head_ratio)));
             bool covered = false;
@@ -461,19 +509,66 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
         }
     }
 
+    /* “躯干区里没有工装框”同理：人太小、人框不可信、或前面有人挡住躯干时，
+     * 看不见不等于没穿。躯干遮挡用重叠面积占躯干框的比例判定。 */
+    if (config.workwear_require_positive && config.enabled[PART_WORKWEAR])
+    {
+        const float top_ratio = config.workwear_top_ratio > 0.0f ? config.workwear_top_ratio : 0.25f;
+        const float bottom_ratio = config.workwear_bottom_ratio > top_ratio ? config.workwear_bottom_ratio : 0.75f;
+        for (size_t i = 0; i < people.size(); ++i)
+        {
+            const cv::Rect &box = people[i].detection->box;
+            if (static_cast<float>(box.height) < config.workwear_min_person_height)
+                continue; /* 人太小，躯干只有几十像素，工装框根本出不来 */
+            if (people[i].detection->score < config.absence_min_person_score)
+                continue; /* 人框本身不可信，不拿它推断“没穿” */
+            const int torso_y = box.y + static_cast<int>(static_cast<float>(box.height) * top_ratio);
+            const int torso_h =
+                std::max(1, static_cast<int>(static_cast<float>(box.height) * (bottom_ratio - top_ratio)));
+            const cv::Rect torso(box.x, torso_y, box.width, torso_h);
+            bool covered = false;
+            for (size_t j = 0; j < people.size() && !covered; ++j)
+            {
+                if (j == i)
+                    continue;
+                const cv::Rect &other = people[j].detection->box;
+                const int overlap_x =
+                    std::max(0, std::min(torso.x + torso.width, other.x + other.width) - std::max(torso.x, other.x));
+                const int overlap_y =
+                    std::max(0, std::min(torso.y + torso.height, other.y + other.height) - std::max(torso.y, other.y));
+                if (static_cast<float>(overlap_x * overlap_y) > 0.4f * static_cast<float>(torso.area()))
+                    covered = true;
+            }
+            people[i].torso_checkable = !covered;
+        }
+    }
+
     /* 违规框 → 同类去重 → 唯一人员框 → 部位。归属不明或跨帧不一致的框直接丢弃。 */
     std::vector<const AlgoResult *> violations;
     violations.reserve(results.size());
     for (const AlgoResult &result : results)
     {
-        if (result.score < config.violation_min_score)
-            continue;
         bool wanted = false;
-        for (int part = 0; part < PART_COUNT && !wanted; ++part)
-            wanted = config.enabled[static_cast<size_t>(part)] &&
-                     matches_label(result.label, config.violation_labels[static_cast<size_t>(part)]);
-        if (wanted)
-            violations.push_back(&result);
+        bool hand_wanted = false;
+        bool other_wanted = false;
+        for (int part = 0; part < PART_COUNT; ++part)
+        {
+            if (!config.enabled[static_cast<size_t>(part)] ||
+                !matches_label(result.label, config.violation_labels[static_cast<size_t>(part)]))
+                continue;
+            wanted = true;
+            if (part == PART_HAND_LEFT || part == PART_HAND_RIGHT)
+                hand_wanted = true;
+            else
+                other_wanted = true;
+        }
+        if (!wanted)
+            continue;
+        /* 手部用独立门槛：现场手框只有 0.59~0.72，卡 0.75 会让手套这项永远不报。 */
+        const float min_score = (hand_wanted && !other_wanted) ? config.glove_min_score : config.violation_min_score;
+        if (result.score < min_score)
+            continue;
+        violations.push_back(&result);
     }
     /* 同一物品被输出多个重叠框时只留最高分，别让一帧凑出多条证据。 */
     if (config.dedupe_iou > 0.0f && violations.size() > 1)
@@ -517,7 +612,9 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
         if (matched_part < 0)
             continue;
 
-        const int person_index = unique_person_for_box(result.box, people, matched_part, config);
+        const int person_index = (matched_part == PART_HAND_LEFT || matched_part == PART_HAND_RIGHT)
+                                     ? nearest_person_for_hand(result.box, people, config)
+                                     : unique_person_for_box(result.box, people, matched_part, config);
         if (person_index < 0)
         {
             ++outcome.rejected_observations; /* 不在任何人身上，或同时落在两个人身上 */
@@ -578,6 +675,10 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
             !person.positive_seen[PART_HELMET])
             person.violation_seen[PART_HELMET] = true; /* 头部可核验，但没有安全帽框 */
 
+        if (config.workwear_require_positive && config.enabled[PART_WORKWEAR] && person.torso_checkable &&
+            !person.positive_seen[PART_WORKWEAR])
+            person.violation_seen[PART_WORKWEAR] = true; /* 躯干可核验，但没有工装框 */
+
         PersonState &person_state = *person.state;
         Evaluation evaluation;
         evaluation.track_id = person.detection->track_id;
@@ -587,6 +688,14 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
         for (int part = 0; part < PART_COUNT; ++part)
         {
             PartEvidence &evidence = person_state.parts[static_cast<size_t>(part)];
+            /* 本帧看到了“穿好了/戴好了”的正类框，就撤销该部位已确认的违规：
+             * 检测器漏检一两帧就永久报警是不能接受的。撤销后允许重新上报。 */
+            if (person.positive_seen[static_cast<size_t>(part)] && (evidence.confirmed || !evidence.violations.empty()))
+            {
+                evidence.violations.clear();
+                evidence.confirmed = false;
+                person_state.reported = false;
+            }
             prune_evidence(evidence.violations, now_ms, config.evidence_window_ms);
             if (person.violation_seen[static_cast<size_t>(part)])
             {
@@ -603,7 +712,9 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
                 evaluation.status[static_cast<size_t>(part)] = PART_VIOLATION;
             else if (!evidence.violations.empty())
                 evaluation.status[static_cast<size_t>(part)] = PART_CANDIDATE;
-            else if (person.visible[static_cast<size_t>(part)])
+            else if (person.visible[static_cast<size_t>(part)] || person.positive_seen[static_cast<size_t>(part)])
+                /* 有姿态关键点看到该部位，或本帧看到了“戴好了/穿好了”的正类框，
+                 * 都算确认正常。现场只挂检测模型时没有关键点，正类是唯一依据。 */
                 evaluation.status[static_cast<size_t>(part)] = PART_CLEAR;
             else
                 evaluation.status[static_cast<size_t>(part)] = PART_UNKNOWN;
@@ -621,11 +732,20 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
                                config.required_span_ms))
             person_state.hand_unsided.confirmed = true;
         evaluation.gloves_unsided = config.enabled[PART_HAND_LEFT] && person_state.hand_unsided.confirmed;
+        if (evaluation.gloves_unsided)
+        {
+            /* 分不清左右手的裸手证据确认后，两只手的徽标都点亮：
+             * 否则现场只看到顶部计数变红、手部还是 '-'，不知道是哪一项在报。 */
+            evaluation.status[PART_HAND_LEFT] = PART_VIOLATION;
+            evaluation.status[PART_HAND_RIGHT] = PART_VIOLATION;
+        }
 
         for (int part = 0; part < PART_COUNT; ++part)
         {
             if (evaluation.status[static_cast<size_t>(part)] != PART_VIOLATION)
                 continue;
+            if (evaluation.gloves_unsided && (part == PART_HAND_LEFT || part == PART_HAND_RIGHT))
+                continue; /* 下面统一记一条“未戴手套(未分左右手)”，不重复两次 */
             evaluation.violation = true;
             if (!evaluation.violation_types.empty())
                 evaluation.violation_types += ", ";

@@ -19,7 +19,7 @@ description: >-
 - 事件接口：`engine/include/events.h`。
 
 不要从旧文档推断接口。当前 `ChannelContext` 没有 `frame` 成员；需要像素时调用
-`business_frame()`（兼容名称 `model_frame()`）或 `source_frame()`。
+`business_frame()`或 `source_frame()`。
 
 ## 何时使用
 
@@ -81,7 +81,9 @@ static void logic_xxx(ChannelContext *ctx)
     if (!state) return;
     ++state->seen_frames;
 
-    const int count = ctx->target_count("person");
+    TargetQuery query;
+    query.labels = {"person"};
+    const int count = ctx->query_targets(query).count;
     ctx->publish_int("person_count", count);
     const std::string status = "count=" + std::to_string(count);
     draw_text(ctx, status.c_str(), {20, 30});

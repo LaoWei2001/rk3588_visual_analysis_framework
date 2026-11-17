@@ -63,7 +63,7 @@ void test_tick_keeps_evidence_after_later_publications()
     auto latest = publication(10, 10);
     std::vector<ChannelLogicSnapshot> sampled{latest};
     GlobalContext context;
-    VisionContextAccess::bind_global(context, &sampled, nullptr, nullptr, nullptr);
+    VisionContextAccess::bind_global(context, &sampled, nullptr, nullptr);
     GlobalLogicConfig config;
     config.instance_id = "controller";
     context.config = &config;
@@ -154,7 +154,7 @@ void test_overlays_use_detection_coordinates()
     detection.box = cv::Rect(20, 70, 30, 30);
     detection.track_id = 1;
     std::vector<AlgoResult> results{detection};
-    RenderParams params;
+    vision::OverlayOptions params;
     params.inputW = params.inputH = 160;
     params.show_fps = 0;
     params.results = &results;
@@ -165,7 +165,7 @@ void test_overlays_use_detection_coordinates()
         {
             params.infer_fps = infer_fps;
             cv::Mat overlay = cv::Mat::zeros(320, 320, CV_8UC3);
-            render_overlays(overlay, params);
+            render_runtime_overlays(overlay, params);
             assert(overlay.at<cv::Vec3b>(180, 40)[1] == 255);
             assert(overlay.at<cv::Vec3b>(180, 100)[1] == 255);
             assert(overlay.at<cv::Vec3b>(180, 160)[1] == 0);

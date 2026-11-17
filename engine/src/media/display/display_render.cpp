@@ -23,7 +23,7 @@
 #include "pipeline/frame_transform.h"
 #include "pipeline/image_convert.h"
 #include "vision/inference/inference_engine.h"
-#include <channel.h> /* DrawCommand, RenderParams */
+#include <channel.h> /* DrawCommand, vision::OverlayOptions */
 
 #include <algorithm>
 #include <atomic>
@@ -224,21 +224,27 @@ void display_refresh_channel_overlays(int chnId)
         return;
     auto &cache = cs.performance_overlay;
     const bool show_perf = app_ctrl_get_performance_display();
-    RenderParams params;
+    vision::OverlayOptions params;
     params.chnId = chnId;
     params.disp_fps = app_ctrl_get_disp_fps(chnId);
     params.infer_fps = inference_get_infer_fps(chnId);
+    const auto runtime = app_ctrl_get_runtime_snapshot();
+    const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, chnId);
+    params.show_network_rtt = channel && channel->stream.src_type == "rtsp";
+    pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
+    params.network_rtt_ms = cs.network_rtt_ms;
+    pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
     if (pause_ctrl::is_paused())
         params.disp_fps = params.infer_fps = 0.0f;
     if (show_perf == cache.visible &&
-        (!show_perf || (params.disp_fps == cache.render_fps && params.infer_fps == cache.infer_fps)))
+        (!show_perf || (params.disp_fps == cache.render_fps && params.infer_fps == cache.infer_fps &&
+                        params.show_network_rtt == cache.show_network_rtt &&
+                        (!params.show_network_rtt || params.network_rtt_ms == cache.network_rtt_ms))))
         return; // 数字没变：不拷贝、不画字、不写 framebuffer。
 
     cv::Mat view = cs.tile_staging(cv::Rect(0, 0, tile_w, tile_h));
-    const cv::Rect bounds = performance_overlay_bounds(view);
+    const cv::Rect bounds = vision::performance_overlay_bounds(view, params);
     cv::Mat footer = view(bounds);
-    const auto runtime = app_ctrl_get_runtime_snapshot();
-    const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, chnId);
     const bool swap_rb = channel && channel->swap_rb;
     if (cache.background.empty())
     {
@@ -250,7 +256,7 @@ void display_refresh_channel_overlays(int chnId)
     if (cache.background.size() != footer.size())
         return;
     cache.background.copyTo(footer);
-    render_performance_overlay(view, params);
+    render_runtime_performance_overlay(view, params);
     if (!swap_rb)
         cv::cvtColor(footer, footer, cv::COLOR_BGR2RGB);
     constexpr int screen_bpp = 3;
@@ -263,6 +269,8 @@ void display_refresh_channel_overlays(int chnId)
     cache.visible = show_perf;
     cache.render_fps = params.disp_fps;
     cache.infer_fps = params.infer_fps;
+    cache.show_network_rtt = params.show_network_rtt;
+    cache.network_rtt_ms = params.network_rtt_ms;
     if (!show_perf)
         cache.background.release();
 }

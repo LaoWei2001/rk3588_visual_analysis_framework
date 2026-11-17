@@ -1,6 +1,6 @@
 #include "model_status.h"
 
-#include "vision/models/composite_model.h"
+#include "vision/models/model_group.h"
 #include <coordinates.h>
 #include <json.h>
 #include <map>
@@ -42,7 +42,7 @@ void model_status_reset(const AppConfig &config)
         statuses[channel.id] = ChannelStatus{};
 }
 
-void model_status_begin(int channel, const ChannelConfig &)
+void model_status_begin(int channel)
 {
     std::lock_guard<std::mutex> lock(status_mutex);
     statuses[channel].state = "loading";
@@ -50,18 +50,17 @@ void model_status_begin(int channel, const ChannelConfig &)
 }
 
 void model_status_applied(int channel, const ChannelConfig &config,
-                          const std::vector<std::shared_ptr<ModelBase>> &models)
+                          const std::vector<std::shared_ptr<ModelGroup>> &models)
 {
     std::vector<ActiveModel> active;
     if (!models.empty() && models[0])
     {
-        const auto composite = std::dynamic_pointer_cast<CompositeModel>(models[0]);
         size_t index = 0;
         for (const auto &spec : config.models)
         {
             if (!spec.enable || spec.model_path.empty() || spec.model_type.empty())
                 continue;
-            const auto child = composite ? composite->entries().at(index).model : models[0];
+            const auto child = models[0]->entries().at(index).model;
             active.push_back({spec.id.empty() ? "model_" + std::to_string(index) : spec.id, spec.model_type,
                               spec.model_path, file_version(spec.model_path), child->input_width(),
                               child->input_height()});

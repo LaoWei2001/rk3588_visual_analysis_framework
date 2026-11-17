@@ -279,7 +279,7 @@ bool LazyVideoFrame::materialize_borrowed(int dst_width, int dst_height, cv::Mat
     return !out.empty();
 }
 
-const cv::Mat *LazyVideoFrame::model_frame()
+const cv::Mat *LazyVideoFrame::business_frame()
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!model_attempted_)

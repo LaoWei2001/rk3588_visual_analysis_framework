@@ -1,16 +1,14 @@
-// 测试夹具可以绑定内部上下文；被测业务单独编译，只获得 Vision::SDK include 路径。
-#include "logic/context_access.h"
-#include "logic/logic_parameters.h"
-#include "logic/logic_registry.h"
-#include "media/display/display.h"
+// 外部消费者：业务回调、session、参数、事件和绘图都只引用公开 SDK。
 #include <cassert>
 #include <cmath>
 #include <events.h>
 #include <fstream>
 #include <iostream>
+#include <logic_session.h>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
+#include <rendering.h>
 
 namespace
 {
@@ -34,57 +32,59 @@ AlgoResult target(int x = 180, const char *label = "person")
     return result;
 }
 
-struct Fixture
+vision::LogicSessionOptions session_options(int channel, EventSink *sink)
 {
-    ChannelContext ctx{};
-    LogicParameterSet parameters;
-    LogicOutputSet outputs;
-    std::shared_ptr<void> state;
-    std::vector<DrawCommand> drawing;
+    vision::LogicSessionOptions options;
+    options.channel.id = channel;
+    options.channel.logic = logic_name;
+    options.events = sink;
+    return options;
+}
+
+struct Fixture : EventSink
+{
     std::vector<AlgoResult> results;
     std::vector<RoiZone> rois;
-    std::string json = "{}";
-    ChannelLogicFunc run = channel_logic_get(logic_name);
+    vision::LogicSession session;
+    const ChannelContext &ctx;
+    const LogicOutputSet &outputs;
+    const std::vector<DrawCommand> &drawing;
+    bool infer_enabled = true;
+    bool results_available = true;
 
     explicit Fixture(int channel = 0)
+        : session(session_options(channel, this)), ctx(session.context()), outputs(session.outputs()),
+          drawing(session.drawing())
     {
-        assert(run);
         RoiZone zone;
         zone.name = "alarm_zone";
         zone.polygon = {{100, 100}, {500, 100}, {500, 500}, {100, 500}};
         rois.push_back(zone);
-        ctx.chnId = channel;
-        ctx.state = &state;
-        ctx.results = &results;
-        ctx.rois = &rois;
-        ctx.infer_enabled = 1;
-        VisionContextAccess::bind_outputs(ctx, &outputs);
-        VisionContextAccess::bind_drawing(ctx, &drawing);
-        configure("{}");
+    }
+
+    EventReportResult report(ChannelContext &context, const EventRequest &request) override
+    {
+        submissions.push_back({context.chnId, context.timestamp_ms, request, drawing});
+        EventReportResult result;
+        result.status = next_status;
+        return result;
     }
 
     void configure(const std::string &value)
     {
-        LogicParameterSet updated;
-        std::vector<LogicParameterError> errors;
-        assert(logic_parameters_resolve(logic_name, value, nullptr, &updated, &errors));
-        // 与运行时相同的 schema 影响计算；这里不启动 Web/配置监视线程。
-        if (logic_parameters_reload_impact(logic_name, json, value) == LogicReloadImpact::RESET_STATE)
-            state.reset();
-        parameters = std::move(updated);
-        json = value;
-        VisionContextAccess::bind_parameters(ctx, &parameters);
+        session.set_parameters(value);
     }
 
     void frame(uint64_t now, std::vector<AlgoResult> detections = {target()}, bool valid = true)
     {
         results = std::move(detections);
-        outputs = LogicOutputSet{};
-        drawing.clear();
-        ++ctx.frame_id;
-        ctx.timestamp_ms = now;
-        ctx.inference_valid = valid;
-        run(&ctx);
+        vision::LogicFrame input;
+        input.timestamp_ms = now;
+        input.results = results_available ? &results : nullptr;
+        input.rois = &rois;
+        input.inference_valid = valid;
+        input.inference_enabled = infer_enabled;
+        session.run(input);
         assert(outputs.size() == 5); // 空帧也应发布完整的当前帧状态，不能留下旧值。
     }
 
@@ -176,15 +176,15 @@ void interruptions()
             f.frame(1500, {target()}, false);
         if (kind == 2)
         {
-            f.ctx.infer_enabled = 0;
+            f.infer_enabled = 0;
             f.frame(1500);
-            f.ctx.infer_enabled = 1;
+            f.infer_enabled = 1;
         }
         if (kind == 3)
         {
-            f.ctx.results = nullptr;
+            f.results_available = false;
             f.frame(1500);
-            f.ctx.results = &f.results;
+            f.results_available = true;
         }
         assert(!f.boolean("alarm_active") && f.integer("dwell_ms") == 0);
         if (kind != 0)
@@ -232,17 +232,17 @@ void parameters_and_instances()
     b.frame(2000);
     assert(a.boolean("alarm_active") && !b.boolean("alarm_active"));
     assert(submissions.size() == 1 && submissions.front().channel == 0);
-    const auto old_state = a.state; // 保持旧分配存活，确保比较的不是重用地址。
+    const auto old_state = (*a.ctx.state); // 保持旧分配存活，确保比较的不是重用地址。
     a.configure(R"({"hold_ms":1000})");
     a.frame(2500);
-    assert(a.state != old_state && a.integer("dwell_ms") == 0);
+    assert((*a.ctx.state) != old_state && a.integer("dwell_ms") == 0);
     a.occupy(3000, 3500);
     assert(submissions.size() == 2 && a.boolean("alarm_active"));
     b.occupy(2500, 3500);
     assert(submissions.size() == 3 && submissions.back().channel == 1);
-    const auto unchanged = a.state;
+    const auto unchanged = (*a.ctx.state);
     a.configure(R"({"hold_ms":1000})");
-    assert(a.state == unchanged);
+    assert((*a.ctx.state) == unchanged);
     for (const auto &json : {R"({"hold_ms":-1})", R"({"hold_ms":1.5})", R"({"hold_ms":"1000"})", R"({"unknown":1})",
                              R"({"max_gap_ms":0})"})
     {
@@ -265,7 +265,7 @@ void rendering(const std::string &directory)
     Fixture f;
     f.occupy(0, 2000);
     assert(text_overlay_available());
-    RenderParams params;
+    vision::OverlayOptions params;
     params.inputW = params.inputH = 640;
     params.show_fps = 0;
     params.show_system_overlays = false;
@@ -275,7 +275,7 @@ void rendering(const std::string &directory)
         {
             params.target_mask = target;
             cv::Mat image = cv::Mat::zeros(size, CV_8UC3);
-            render_overlays(image, params);
+            vision::render_overlays(image, params);
             const auto pixel = image.at<cv::Vec3b>(size.height * 300 / 640, size.width * 100 / 640);
             assert(pixel[2] == 255 && pixel[1] == 0); // 红色区域线随画布缩放。
             assert(cv::countNonZero(image(cv::Rect(0, 0, size.width, size.height * 60 / 640)).reshape(1)) > 0);
@@ -308,12 +308,12 @@ void replay(const std::string &directory, const std::string &video)
         // 真实录像画面 + 已知检测结果；不把可控输入冒充 NPU 检测。
         const bool present = (now >= 1000 && now < 4000) || now >= 5000;
         f.frame(now, present ? std::vector<AlgoResult>{target()} : std::vector<AlgoResult>{});
-        RenderParams params;
+        vision::OverlayOptions params;
         params.inputW = params.inputH = 640;
         params.show_fps = 0;
         params.show_system_overlays = false;
         params.draw_cmds = &f.drawing;
-        render_overlays(frame, params);
+        vision::render_overlays(frame, params);
         if (present)
             cv::rectangle(frame, target().box, {255, 200, 0}, 2);
         cv::putText(frame, "SDK TEST: SCRIPTED DETECTIONS", {20, 600}, cv::FONT_HERSHEY_SIMPLEX, .65, {0, 255, 255}, 2);
@@ -331,22 +331,12 @@ void replay(const std::string &directory, const std::string &video)
 }
 } // namespace
 
-// 只替换具有外部副作用的事件出口；SDK 参数/查询/状态/绘图/注册执行真实代码。
-EventReportResult report_event(ChannelContext *ctx, const EventRequest &request)
-{
-    submissions.push_back({ctx->chnId, ctx->timestamp_ms, request, *VisionContextAccess::drawing(*ctx)});
-    EventReportResult result;
-    result.status = next_status;
-    return result;
-}
-extern "C" int app_ctrl_get_performance_display()
-{
-    return 0;
-}
+extern const char *logic_embedded_catalog_json();
 
 int main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3);
+    vision::set_logic_catalog(logic_embedded_catalog_json());
     cv::setNumThreads(1);
     for (auto test : {boundary_and_payload, missing_and_invalid_rois, interruptions, retry_and_acceptance,
                       parameters_and_instances})

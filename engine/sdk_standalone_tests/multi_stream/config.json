@@ -1,0 +1,45 @@
+{
+  "global": {
+    "enable_display": false,
+    "enable_rtsp": false,
+    "tracker_enable": 0,
+    "performance_display": false,
+    "max_fps": 5
+  },
+  "channels": [
+    {
+      "id": 0,
+      "enable": true,
+      "infer_enable": false,
+      "models": [],
+      "stream": {
+        "src_type": "rtsp",
+        "url": "rtsp://192.0.2.10:554/live",
+        "video_enc": "h264"
+      },
+      "logic": "receive_frame",
+      "logic_parameters": {},
+      "report_policy": {
+        "enabled": false,
+        "deliveries": []
+      }
+    },
+    {
+      "id": 1,
+      "enable": true,
+      "infer_enable": false,
+      "models": [],
+      "stream": {
+        "src_type": "rtsp",
+        "url": "rtsp://192.0.2.11:554/live",
+        "video_enc": "h264"
+      },
+      "logic": "receive_frame",
+      "logic_parameters": {},
+      "report_policy": {
+        "enabled": false,
+        "deliveries": []
+      }
+    }
+  ]
+}

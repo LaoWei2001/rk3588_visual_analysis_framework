@@ -20,17 +20,21 @@
 #include <utility>
 #include <vector>
 
+#include "application/runtime/runtime_status.h"
 #include "application/runtime/service_watchdog.h"
 #include "common/logging.h"
+#include "common/pthread_lock.h"
 #include "frame_transform.h"
 #include "pipeline_internal.h"
 #include "vision/inference/inference_engine.h"
+#include <exception>
 
 /* 帧匹配诊断日志节流（每通道约 2 秒一次，由 performance_display 开关控制）*/
 static uint64_t g_sync_dbg_last_ms[MAX_CHANNEL_NUM] = {0};
 static constexpr uint64_t SYNC_DBG_WINDOW_MS = 2000;
 
 extern "C" void *pipeline_dispatch_worker(void *arg)
+try
 {
     const int chnId = (int)(intptr_t)arg;
     service_watchdog::Progress watchdog_progress("result dispatch", chnId);
@@ -85,9 +89,10 @@ extern "C" void *pipeline_dispatch_worker(void *arg)
         /* 串行化同通道的 process_channel_results 调用
          * （与 traditional logic worker 在推理开关切换期间互斥）*/
         const uint64_t process_begin_ms = steady_now_ms();
-        pthread_mutex_lock(&g_process_mtx[chnId]);
-        process_channel_results(chnId, raw, &current_results, result_frame_id);
-        pthread_mutex_unlock(&g_process_mtx[chnId]);
+        {
+            PthreadLock process_lock(g_process_mtx[chnId]);
+            process_channel_results(chnId, raw, &current_results, result_frame_id);
+        }
 
         /* lag_frames 是输入序号差；age_ms 是从输入到业务处理结束的本机耗时。 */
         const uint64_t dbg_now = steady_now_ms();
@@ -108,5 +113,15 @@ extern "C" void *pipeline_dispatch_worker(void *arg)
         }
     }
 
+    return nullptr;
+}
+catch (const std::exception &error)
+{
+    app_ctrl_worker_failed(static_cast<int>(reinterpret_cast<intptr_t>(arg)), "推理结果处理", error.what());
+    return nullptr;
+}
+catch (...)
+{
+    app_ctrl_worker_failed(static_cast<int>(reinterpret_cast<intptr_t>(arg)), "推理结果处理", "未知异常");
     return nullptr;
 }

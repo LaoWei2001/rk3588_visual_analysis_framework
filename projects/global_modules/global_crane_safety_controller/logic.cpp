@@ -64,7 +64,7 @@ enum class AlgorithmDisplayState
 
 void show_algorithm_state(GlobalContext *gctx, int channel_id, const char *algorithm, AlgorithmDisplayState state)
 {
-    if (!gctx || !algorithm || channel_id < 0 || gctx->model_width <= 0 || gctx->model_height <= 0)
+    if (!gctx || !algorithm || channel_id < 0 || gctx->business_width() <= 0 || gctx->business_height() <= 0)
         return;
 
     const char *state_text = "等待数据";
@@ -90,7 +90,7 @@ void show_algorithm_state(GlobalContext *gctx, int channel_id, const char *algor
     DrawCommand label;
     label.type = DrawCommand::TEXT;
     label.text = text;
-    label.text_pos = cv::Point(gctx->model_width - margin - 10, margin + 29);
+    label.text_pos = cv::Point(gctx->business_width() - margin - 10, margin + 29);
     label.text_align_right = true;
     label.font_scale = 0.72;
     label.color = color;

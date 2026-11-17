@@ -150,7 +150,7 @@ static void logic_crane_hook(ChannelContext *ctx)
 {
     if (!ctx || !ctx->state || !ctx->results)
         return;
-    const cv::Mat *frame = ctx->model_frame();
+    const cv::Mat *frame = ctx->business_frame();
     if (!frame || frame->empty())
         return;
     if (!*ctx->state)

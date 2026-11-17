@@ -76,9 +76,8 @@ template <typename Channels> inline AutoCorePlacement channel_auto_placement(con
     return {1 << cores[ordinal % groups]};
 }
 
-// Give AUTO a concrete affinity within its channel's planned pool. The default
-// arguments retain legacy striping for direct callers and oversubscribed pools.
-inline int assigned_core_mask(int configured_core, int channel, int worker, int model_index, int auto_pool = 7)
+// Give AUTO a concrete affinity within the explicitly supplied channel pool.
+inline int assigned_core_mask(int configured_core, int channel, int worker, int model_index, int auto_pool)
 {
     if (configured_core >= 0 && configured_core < 3)
         return 1 << configured_core;

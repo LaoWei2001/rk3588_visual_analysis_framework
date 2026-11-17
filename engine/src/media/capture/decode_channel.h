@@ -1,10 +1,12 @@
 #pragma once
+#include "network_rtt.h"
 #include <atomic>
 #include <gst/gst.h>
 #include <mutex>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string>
+#include <utility>
 #include <vector>
 
 // 源配置
@@ -27,13 +29,18 @@ struct FilePlaybackStatus
     int64_t duration_ms = 0;
 };
 
+bool capture_sources_share(const SrcCfg_t &first, const SrcCfg_t &second);
+
 class DecChannel;
 
 /* GStreamer 管道元素 */
 typedef struct gst_Channel
 {
+    explicit gst_Channel(std::vector<int> channels) : chnIds(std::move(channels))
+    {
+    }
     DecChannel *owner;
-    std::vector<int> chnIds;
+    const std::vector<int> chnIds; // 构造时确定，采集及重连期间永不修改。
     GstElement *pipeline;
     GstElement *source;
     union {
@@ -60,7 +67,7 @@ typedef struct gst_Channel
 class DecChannel
 {
   public:
-    DecChannel(int chnId, const SrcCfg_t &cfg);
+    DecChannel(std::vector<int> channel_ids, const SrcCfg_t &cfg);
     ~DecChannel();
 
     int init(bool start_thread = true);
@@ -78,10 +85,6 @@ class DecChannel
         if (mReconnectCount.load(std::memory_order_relaxed) != 0)
             mReconnectCount.store(0, std::memory_order_relaxed);
     }
-    void addTargetChannel(int chnId)
-    {
-        mGstChn.chnIds.push_back(chnId);
-    }
     /** @brief 检查此采集器是否服务指定逻辑通道 */
     bool hasChannel(int chnId) const;
     /** @brief 请求停止并等待 bus 线程完成 pipeline 清理和退出。
@@ -96,7 +99,6 @@ class DecChannel
     {
         return mCfg.location;
     }
-    bool canShareWith(const SrcCfg_t &cfg) const;
     std::vector<int> channelIds() const
     {
         return mGstChn.chnIds;
@@ -142,4 +144,5 @@ class DecChannel
     mutable std::mutex mPipelineMutex;
 
     SrcCfg_t mCfg;
+    NetworkRttMonitor mNetworkRtt;
 };

@@ -26,9 +26,9 @@ class ModelBase
         pthread_mutex_destroy(&infer_mtx);
     }
 
-    /* 推理互斥锁: 多通道共享同一模型实例时, 保证 RKNN ctx 串行访问.
-     * 独占实例时不存在竞争, lock/unlock 开销可忽略不计 (~20ns).
-     * 锁定范围: RGA 写入输入缓冲区 → NPU 推理完成 (需覆盖零拷贝写和 infer). */
+    /* 保护一次完整推理：从写入模型输入缓冲区，到推理完成并读取结果。
+     *
+     * 使用零拷贝输入时，写入操作也必须在锁内完成。 */
     pthread_mutex_t infer_mtx;
 
     /**

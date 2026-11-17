@@ -24,16 +24,14 @@
 | `timestamp_ms` | 近似开机后的单调时间，适合计算间隔 |
 | `unix_ms` | 当前业务帧进入管线时的 Unix epoch 毫秒 |
 | `dt_ms` | 当前业务帧与上一业务帧的间隔 |
-| `time_hms()` | 按本地时区返回 `HH:MM:SS` |
 | `time_str()` | 按本地时区返回 `YYYY-MM-DD HH:MM:SS` |
-| `datetime()` | 返回拆分后的 `FrameTime` |
 | `infer_enabled` | 当前通道是否开启推理 |
 | `inference_valid` | 当前批次是否有有效推理结果；多模型时不等于每个子模型都成功 |
 | `infer_fps` / `disp_fps` | 当前推理/显示速率 |
 
 ### 两种帧接口
 
-- `business_frame()` / `model_frame()`：固定 640×640 业务 BGR 图，坐标与 `results[].box` 和 ROI 完全一致；与实际 NPU 输入尺寸独立。
+- `business_frame()`：固定 640×640 业务 BGR 图，坐标与 `results[].box` 和 ROI 完全一致；与实际 NPU 输入尺寸独立。
 - `source_frame()`：源分辨率 BGR 图，尺寸对应 `src_width × src_height`。
 
 两者都惰性转换：本帧第一次调用时生成，之后复用同一不可变缓存；取帧失败返回 `nullptr`。
@@ -58,10 +56,9 @@
 | `has_obb`, `obb_corners` | 旋转框标识和业务坐标系四角 |
 | `depth_map`, `depth_kind` | 深度平面和米制/相对逆深度语义 |
 
-跟踪在 logic 之前执行，因此 logic 看到的是已更新跟踪字段的结果。`has_target(label)` 和
-`target_count(label)` 是整帧快捷查询；必须先确认业务标签与模型 labels 完全一致。
-姿态业务应使用 `is_pose()` 或 `is_coco17_pose()` 判断统一能力，不要通过 `model_type`
-枚举 YOLO 版本；确实需要限定模型来源时，可用 `TargetQuery.model_id` / `model_type`。
+跟踪在 logic 之前执行，因此 logic 看到的是已更新跟踪字段的结果。
+使用 `TargetQuery` 指定标签、ROI 和阈值，调用 `ctx->query_targets(query)`；
+先检查返回状态，再读取 `count` 和 `best`。标签需与模型 labels 完全一致。
 
 组合标签、模型、置信度和 ROI 条件时，优先使用 `query_targets()`，见
 [通用目标查询](../../../sdk/target-query.md)。该接口同时返回有效性、数量和最佳目标。
@@ -98,17 +95,13 @@ C++ 与 manifest 中重复定义成不同契约。
 
 `rois` 中的多边形已经缩放到固定 640×640 业务坐标系。可用接口：
 
-- `roi_count()`、`roi_at(i)`、`roi_polygon_at(i)`、`roi_name_at(i)`；
-- `roi_by_name(name)`、`roi_find(ctx, name)`；
-- `roi_contains(ctx, box, idx)`；
-- `roi_has_target(ctx, label, idx)`、`roi_count_target(ctx, label, idx)`；
-- `roi_index_of(box)`。
+- `roi_count()`、`roi_at(i)`、`roi_polygon_at(i)`、`roi_by_name(name)`；
+- `roi_find(ctx, name)` 返回区域序号，找不到为 `ROI_NONE`；
+- `roi_contains(ctx, box, idx)` 只判断框中心的几何归属；
+- `query_targets(query)` 统一处理标签、得分、模型、ROI 筛选和计数。
 
-命中规则使用检测框中心点。`ROI_ALL == -1` 表示所有 ROI 的并集；没有配置 ROI 时表示整帧不
-设限。`ROI_NONE == -2` 表示不存在/未命中，不能误当作 `ROI_ALL`。运行快照会排除少于三个点的
-区域；若直接调用静态 `point_box_in_poly()`，空/无效 polygon 会返回 1，而 `roi_contains()`、
-`roi_has_target()`、`roi_count_target()` 对无效的指定 ROI 返回 0。生产逻辑优先使用组合查询接口，
-业务若要求“必须画有效区域”还应先确认区域存在。
+`ROI_FRAME` 忽略区域，`ROI_ALL` 为区域并集（无区域时整帧），非负序号选择指定区域。
+目标查询遇到无效区域会返回错误状态；业务若要求“必须画有效区域”应检查区域和返回状态。
 
 ## 绘制和显示底图
 
@@ -146,5 +139,4 @@ if (!state) return;
 
 `get_channel_frame_snapshot(configuredId, &out)` 会在目标通道锁内原子取得帧、results、outputs、
 绘制和发布元信息，并在返回前释放锁；带图快照会深拷贝图像，属于高级且更昂贵的接口。
-通常的跨通道业务应由通道发布 outputs，再交给全局 logic 聚合。辅助方法还有
-`get_channel_logic_name(id)` 和 `channel_has_logic(id, name)`。
+通常的跨通道业务应由通道发布 outputs，再交给全局 logic 聚合。

@@ -1,6 +1,6 @@
-#include "dataset/rules.h"
 #include <cassert>
 #include <chrono>
+#include <dataset.h>
 #include <iostream>
 #include <stdexcept>
 using namespace dataset;
@@ -289,7 +289,58 @@ int main()
     assert(rejected(rule(deep)));
     // ALL 必须完整验证，不能因为第一项肯定满足而接受未知类别。
     assert(rejected(rule("{\"all\":[" + absent("x") + "," + absent("unknown") + "]}")));
+    // Public structs can be assembled without the JSON parser; malformed groups must not crash.
+    for (const auto kind : {Condition::Not, Condition::All, Condition::Any})
+    {
+        Condition invalid;
+        invalid.kind = kind;
+        bool rejected = false;
+        try
+        {
+            (void)invalid.matches({});
+        }
+        catch (const std::invalid_argument &)
+        {
+            rejected = true;
+        }
+        assert(rejected);
+    }
+    Condition invalid_not;
+    invalid_not.kind = Condition::Not;
+    invalid_not.children.resize(2);
+    bool bad_not = false;
+    try
+    {
+        (void)invalid_not.matches({});
+    }
+    catch (const std::invalid_argument &)
+    {
+        bad_not = true;
+    }
+    assert(bad_not);
+
+    Gate zero_clock(1);
+    assert(zero_clock.update(0, 0, {true}, 100, 0, 1000, true).empty());
+    assert(zero_clock.update(1, 100, {true}, 100, 0, 1000, true) == std::vector<size_t>{0});
+    Gate zero_gap(1);
+    assert(zero_gap.update(0, 0, {true}, 100, 0, 200, true).empty());
+    assert(zero_gap.update(1, 1000, {true}, 100, 0, 200, true).empty());
+    assert(zero_gap.update(2, 1100, {true}, 100, 0, 200, true) == std::vector<size_t>{0});
+
     Gate gate(2);
+    for (const auto &wrong_size : {std::vector<bool>{true}, std::vector<bool>{true, false, true}})
+    {
+        bool rejected = false;
+        try
+        {
+            (void)gate.update(1, 1000, wrong_size, 200, 1000, 2000, false);
+        }
+        catch (const std::invalid_argument &)
+        {
+            rejected = true;
+        }
+        assert(rejected);
+    }
     assert(gate.update(1, 1000, {true, false}, 200, 1000, 2000, false).empty());
     assert(gate.update(1, 1300, {true, false}, 200, 1000, 2000, false).empty()); // duplicate
     assert(gate.update(2, 1200, {true, false}, 200, 1000, 2000, false) == std::vector<size_t>{0});

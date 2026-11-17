@@ -12,6 +12,7 @@
 | 停止程序、配置恢复、排查设备问题 | [运维文档](operations/README.md) |
 | 理解代码分工和依赖 | [整体架构](architecture/overview.md)、[C++ 源码导航](../engine/README.md) |
 | 编写通道/全局 Logic | [公共 SDK](sdk/README.md)、[现有业务示例](skills/rk3588-channel-logic/references/current-examples.md) |
+| 用图片调试一个或多个模型 | [图片推理与公共单帧接口](sdk/image-inference.md) |
 | 查询模型结果、坐标、采集规则 | [技术参考](reference/README.md) |
 | 查看性能数据及复现条件 | [性能实测](performance/README.md) |
 | 使用开发向导或给代码代理指定任务 | [开发 Skill 索引](skills/README.md) |

@@ -1,4 +1,5 @@
 #pragma once
+#include "npu_core_gate.h"
 
 #include <cerrno>
 #include <cstring>
@@ -28,6 +29,17 @@ class DeviceOwner
                 throw std::runtime_error(
                     "NPU is owned by another inference process; stop it before starting this program");
             throw std::runtime_error(std::string("Cannot lock NPU device: ") + strerror(error));
+        }
+        try
+        {
+            // 取得所有权后才恢复本进程的调度；纯取流不能改变图片会话的状态。
+            CoreLease::resume();
+        }
+        catch (...)
+        {
+            close(fd_);
+            fd_ = -1;
+            throw;
         }
     }
     ~DeviceOwner()

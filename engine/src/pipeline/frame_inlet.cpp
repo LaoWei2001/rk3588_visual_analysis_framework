@@ -7,7 +7,7 @@
  *
  * 每帧做三件事（顺序固定）：
  *   1. FPS 节流 + 交错调度（phase-offset）：按 max_fps 决定本帧是否"处理"（推理通道与传统算法通道都限频）
- *   2. 只传递稳定的 DMA-BUF 引用；Logic 调用 model_frame()/source_frame() 时才生成 BGR
+ *   2. 只传递稳定的 DMA-BUF 引用；Logic 调用 business_frame()/source_frame() 时才生成 BGR
  *   3. 分流：
  *      - 推理通道(infer_enable 且配置了模型)：inference_process_source → TaskQueue → infer_worker
  *      - 传统算法通道(infer_enable=false)：发布最新帧给独立 logic worker
@@ -110,10 +110,19 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
     int infer_enabled = 0;
     infer_enabled = config_utils::is_channel_infer_enabled(*channel_config) ? 1 : 0;
     /* 运行时开关: 系统级动作 infer_toggle 可逐通道强制关闭推理(画面正常显示) */
-    if (infer_enabled)
     {
         pthread_mutex_lock(&g_pCtrl->chn_mtx[ch]);
-        if (!g_pCtrl->channels_state[ch].infer_runtime_enable)
+        auto &state = g_pCtrl->channels_state[ch];
+        ++state.received_frames;
+        state.last_input_steady_ms = frame_steady_ms;
+        state.src_w_now = imgDesc.width;
+        state.src_h_now = imgDesc.height;
+        if (state.capture_state != vision::VideoChannelState::Failed)
+        {
+            state.capture_state = vision::VideoChannelState::Streaming;
+            state.capture_error[0] = '\0';
+        }
+        if (!state.infer_runtime_enable)
             infer_enabled = 0;
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[ch]);
     }
@@ -192,7 +201,7 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
         const bool has_imported_source = static_cast<bool>(imported);
         raw_frame.lazy_frame = std::make_shared<LazyVideoFrame>(
             ch, std::move(imported), imgDesc.width, imgDesc.height, imgDesc.horStride, imgDesc.verStride, fmt_int,
-            g_pCtrl->inputW, g_pCtrl->inputH, has_imported_source ? nullptr : imgData,
+            g_pCtrl->business_width, g_pCtrl->business_height, has_imported_source ? nullptr : imgData,
             has_imported_source ? std::move(source_owner) : std::shared_ptr<void>{});
         if (!has_imported_source)
         {

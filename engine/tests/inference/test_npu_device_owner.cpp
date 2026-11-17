@@ -28,8 +28,26 @@ int main()
         assert(waitpid(child, &status, 0) == child);
         assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
     }
+    npu::CoreLease::stop();
     {
         npu::DeviceOwner next(path);
+        npu::CoreLease resumed(1); // A new session restores scheduling after a previous shutdown.
+    }
+    {
+        npu::CoreLease active(1);
+        bool rejected = false;
+        try
+        {
+            npu::DeviceOwner while_active(path);
+        }
+        catch (const std::logic_error &)
+        {
+            rejected = true;
+        }
+        assert(rejected);
+    }
+    {
+        npu::DeviceOwner after_failed_constructor(path); // Failed resume released the file lock too.
     }
     unlink(path); // test-private inode only
 }

@@ -32,8 +32,14 @@
 - **数据集模型**：`frontend/src/models/dataset.ts` 持有类型与兼容转换；store 不从 API 或组件导入纯模型。
 - **推理 ROI 几何**：`frontend/src/models/inferenceRoi.ts` 提供校验和坐标算法，UI 只使用它们。
 - **帧抓取**：`backend/services/frame_snapshot.py` 管 OpenCV 资源与编码，`routers/snapshot.py` 在线程池调用并映射 HTTP 错误。
-- **模型公共能力**：`vision/models/model_base.h`、`composite_model.*`、`rknn_output_buffers.h` 等放在模型根目录。
+- **模型公共能力**：`vision/models/model_base.h`、`model_group.*`、`rknn_output_buffers.h` 等放在模型根目录。
   YOLO 专用张量约束仍归 `models/yolo/`，不以“通用工具”为名混入公共接口。
+- **模型创建与单帧执行**：视频启动、模型热更和图片会话共用 `models/model_registry.cpp` 的
+  `create_model_group()`。`ModelGroup` 保存模型和合并结果，不继承单个模型接口；实际推理统一由
+  `inference/frame_executor.cpp` 执行。视频调用方明确传入跟踪所需的解码阈值，图片调用方传入用户配置值。
+- **业务上下文工具**：`logic/channel_context.cpp` 集中图片访问、参数读取和变量发布，
+  `logic/target_query.cpp` 集中目标与区域查询。跨通道取图依赖正式运行状态，实现放在
+  `application/runtime/channel_snapshot.cpp`；通用蒙版绘图放在 `media/display/mask_blend.cpp`。
 
 后端的 runtime 模块别名桥接、前端 API 的兼容类型导出承担导入兼容职责，不是第二套实现。
 删除前必须核对部署环境和外部调用方。教学示例的相似代码也不等同于可删的生产冗余。

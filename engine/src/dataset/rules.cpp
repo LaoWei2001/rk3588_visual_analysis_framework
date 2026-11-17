@@ -1,6 +1,6 @@
-#include "dataset/rules.h"
 #include <algorithm>
 #include <cmath>
+#include <dataset.h>
 #include <functional>
 #include <json.h>
 #include <memory>
@@ -305,7 +305,13 @@ std::vector<Rule> parse_rules(const std::string &text, const std::vector<std::st
 bool Condition::matches(const std::vector<Detection> &detections) const
 {
     if (kind == Not)
+    {
+        if (children.size() != 1)
+            throw std::invalid_argument("Not requires exactly one child condition");
         return !children.front().matches(detections);
+    }
+    if ((kind == All || kind == Any) && children.empty())
+        throw std::invalid_argument("All/Any require at least one child condition");
     if (kind == All)
         return std::all_of(children.begin(), children.end(), [&](const Condition &c) { return c.matches(detections); });
     if (kind == Any)
@@ -345,6 +351,7 @@ bool Condition::matches(const std::vector<Detection> &detections) const
 void Gate::reset()
 {
     std::fill(since_.begin(), since_.end(), 0);
+    std::fill(matching_.begin(), matching_.end(), false);
     std::fill(previous_.begin(), previous_.end(), false);
     frame_ = -1;
     time_ = 0;
@@ -353,9 +360,11 @@ void Gate::reset()
 std::vector<size_t> Gate::update(int64_t frame, uint64_t now, const std::vector<bool> &matches, uint64_t confirm_ms,
                                  uint64_t interval_ms, uint64_t gap_ms, bool on_enter)
 {
+    if (matches.size() != since_.size())
+        throw std::invalid_argument("Gate match count must equal its rule count");
     if (frame == frame_)
         return {};
-    if (frame < frame_ || now < time_ || (time_ && now - time_ > gap_ms))
+    if (frame < frame_ || now < time_ || (frame_ >= 0 && now - time_ > gap_ms))
         reset();
     frame_ = frame;
     time_ = now;
@@ -365,11 +374,15 @@ std::vector<size_t> Gate::update(int64_t frame, uint64_t now, const std::vector<
         if (!matches[i])
         {
             since_[i] = 0;
+            matching_[i] = false;
             previous_[i] = false;
             continue;
         }
-        if (!since_[i])
+        if (!matching_[i])
+        {
             since_[i] = now;
+            matching_[i] = true;
+        }
         bool confirmed = now - since_[i] >= confirm_ms;
         if (confirmed && (!on_enter || !previous_[i]))
             ready.push_back(i);

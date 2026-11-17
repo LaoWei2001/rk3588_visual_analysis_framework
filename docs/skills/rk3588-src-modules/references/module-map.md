@@ -14,7 +14,7 @@
 | `dataset/` | 数据集采集规则求值 | `rules.h/.cpp` |
 | `platform/gpio/` | libgpiod 引脚解析、输入输出 | `gpio.cpp`、`gpio_runtime.h`；公开 `engine/include/gpio.h` |
 | `vision/inference/` | 模型实例、任务队列、RKNN worker、同帧结果发布与热换 | `inference_engine.h` |
-| `logic/` | Channel/Global Context、注册表、参数、outputs | `channel.h`、`global.h`、`channel_logic.cpp` |
+| `logic/` | Channel/Global Context、注册表、参数、outputs | `channel_context.cpp`、`target_query.cpp`、`global_logic.cpp` |
 | `projects/modules/` | 单通道可插拔业务 | 每模块 `logic.cpp + logic.json` |
 | `projects/global_modules/` | 全局可插拔业务 | 每模块 `logic.cpp + logic.json` |
 | `pipeline/` | 帧入口、惰性转换、tracker 后业务调用、显示队列消费与结果分发 | `pipeline_runtime.h`、`display_worker.h` |
@@ -24,7 +24,7 @@
 | `engine/vendor/gst_opt/` | 随引擎编译的 GStreamer 辅助实现 | `gst_opt.h` |
 | `engine/vendor/cjson/` | vendored cJSON | `cJSON.c`、公开 `engine/include/json.h` |
 | `vision/tracking/` | 每通道 tracker | `tracker.h/.cpp` |
-| `vision/models/` | 模型公共接口、组合执行、RKNN 元数据检查与输出缓冲、结果几何 | `model_base.h`、`composite_model.h`、`model_inspection.h` |
+| `vision/models/` | 模型公共接口、模型组装与结果合并、RKNN 元数据检查与输出缓冲、结果几何 | `model_base.h`、`model_group.h`、`model_inspection.h` |
 | `vision/models/yolo/` | YOLO 检测、分割、姿态、深度的模型封装和后处理 | `yolo.h`、`yolov8det.h`、`yolo26pose.h` |
 | `vision/models/zip-depth/` | ZipDepth 相对逆深度模型适配 | `zip_depth.h/.cpp` |
 

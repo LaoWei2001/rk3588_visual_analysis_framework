@@ -11,8 +11,11 @@
 #include "pipeline_runtime.h"
 
 #include "application/runtime/pause_ctrl.h"
+#include "application/runtime/runtime_status.h"
 #include "application/runtime/service_watchdog.h"
+#include "common/pthread_lock.h"
 
+#include <exception>
 #include <utility>
 
 namespace
@@ -61,6 +64,7 @@ void traditional_logic_publish(int chn_id, ChannelRawFrame raw_frame, int64_t fr
 }
 
 extern "C" void *pipeline_logic_worker(void *arg)
+try
 {
     const int chn_id = static_cast<int>(reinterpret_cast<intptr_t>(arg));
     if (chn_id < 0 || chn_id >= MAX_CHANNEL_NUM)
@@ -89,11 +93,20 @@ extern "C" void *pipeline_logic_worker(void *arg)
         /* 与热更新、在线状态切换和同通道 NPU 在途结果串行。
          * 获锁后重新检查推理开关，避免开关翻转后执行旧的传统任务。 */
         service_watchdog::Scope watchdog_scope(watchdog_progress);
-        pthread_mutex_lock(&g_process_mtx[chn_id]);
+        PthreadLock process_lock(g_process_mtx[chn_id]);
         if (channel_should_run_traditional_logic(chn_id, task.raw_frame.frame_steady_ms, task.runtime_generation))
             process_channel_results(chn_id, task.raw_frame, nullptr, task.frame_seq);
-        pthread_mutex_unlock(&g_process_mtx[chn_id]);
     }
 
+    return nullptr;
+}
+catch (const std::exception &error)
+{
+    app_ctrl_worker_failed(static_cast<int>(reinterpret_cast<intptr_t>(arg)), "通道逻辑", error.what());
+    return nullptr;
+}
+catch (...)
+{
+    app_ctrl_worker_failed(static_cast<int>(reinterpret_cast<intptr_t>(arg)), "通道逻辑", "未知异常");
     return nullptr;
 }

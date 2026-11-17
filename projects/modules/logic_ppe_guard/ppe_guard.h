@@ -39,6 +39,9 @@ struct Config
     std::array<bool, PART_COUNT> enabled = {{true, true, true, true}};
     float person_min_score = 0.35f;
     float violation_min_score = 0.75f;
+    /* 手部专用门槛：手框天生小、分数天然低（现场实测 0.59~0.72）。
+     * 沿用 violation_min_score 的 0.75 等于让“未戴手套”这一项永远不触发。 */
+    float glove_min_score = 0.5f;
     float keypoint_min_score = 0.3f;
     uint64_t evidence_window_ms = 4000;
     uint64_t evidence_gap_ms = 250;
@@ -60,6 +63,7 @@ struct Config
     float workwear_top_ratio = 0.25f;    /* 工作服框中心允许的垂直区间起点 */
     float workwear_bottom_ratio = 0.75f; /* 区间终点 */
     float glove_wrist_ratio = 0.2f;      /* 手套框中心到对应腕点的距离上限（占人员框高） */
+    float hand_attach_ratio = 0.6f; /* 手框中心可以伸出人员框边缘的最大距离（占人员框高） */
 
     /* 同一物品常被输出多个重叠框：同类别且 IoU 超阈值时只留置信度最高的一个。 */
     float dedupe_iou = 0.6f;
@@ -70,6 +74,19 @@ struct Config
     /* 正类缺失推断：模型只有“戴好了”的正类（如 helmet）时，用“头部区域里连续没有
      * 安全帽框”推断未戴。只有头部可核验（没被别人挡住、没贴边）时才计数。 */
     bool helmet_infer_by_absence = false;
+    /* 工装“必须看到正类”：模型有 workwear_on 正类、没有 no_workwear 负类时，
+     * 用“躯干区里没有工装框”推断未穿。只在该人员的躯干本身可核验
+     * （人够大、人框可信、没被前面的人挡住）时才计证据。 */
+    bool workwear_require_positive = false;
+    float workwear_min_person_height = 80.0f; /* 人框矮于此值不参与“缺正类”推断 */
+    /* 缺正类推断时人员框本身的最低分：人框都不可信，就不能拿它推断“没穿”。 */
+    float absence_min_person_score = 0.6f;
+    /* 正类框（戴好了/穿好了）的收集门槛。现场工装、手套正类框分数普遍低于
+     * violation_min_score，用同一个门槛会把“明明穿了”当成“没穿”。 */
+    float positive_min_score = 0.35f;
+    /* 手套判定是否必须依赖姿态腕点。现场只挂检测模型（没有 pose）时，
+     * 开启会把所有裸手证据当成“离腕点太远”丢弃，等于不判手套。 */
+    bool glove_require_pose = false;
     std::array<std::vector<std::string>, PART_COUNT> positive_labels;
 };
 

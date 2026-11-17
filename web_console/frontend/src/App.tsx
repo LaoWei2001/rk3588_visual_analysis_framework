@@ -15,6 +15,7 @@ const DatasetPage = lazy(() => import('./pages/DatasetPage'))
 const EditorPage = lazy(() => import('./pages/EditorPage'))
 const LogsPage = lazy(() => import('./pages/LogsPage'))
 const RecordsPage = lazy(() => import('./pages/RecordsPage'))
+const ImageInferencePage = lazy(() => import('./features/image-inference/ImageInferencePage'))
 const TerminalPage = lazy(() => import('./features/terminal/TerminalPage'))
 const ServicesPage = lazy(() => import('./pages/ServicesPage'))
 const SystemSettingsPage = lazy(() => import('./pages/SystemSettingsPage'))
@@ -101,6 +102,10 @@ function AppShell() {
           <span className="nav-icon">▰</span> 实时画面
         </NavLink>
 
+        <NavLink to="/image-inference" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
+          <span className="nav-icon">▧</span> 图片推理
+        </NavLink>
+
         <NavLink to="/video-capture" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
           <span className="nav-icon">●</span> 视频采集
         </NavLink>
@@ -142,6 +147,7 @@ function AppShell() {
           <Routes>
             <Route path="/"                  element={<AppsPage />} />
             <Route path="/live-view"         element={<LiveViewPage />} />
+            <Route path="/image-inference" element={<ImageInferencePage />} />
             <Route path="/video-capture"     element={<VideoCapturePage />} />
             <Route path="/dataset"           element={<DatasetPage />} />
             <Route path="/editor/:appName"   element={<EditorPage />} />

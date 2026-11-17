@@ -98,7 +98,7 @@ static void log_report_failure_periodically(ChannelContext *ctx, DifyPeriodicSta
 
 static void logic_dify(ChannelContext *ctx)
 {
-    /* 到达上报周期后，report_event() 才会通过 model_frame() 惰性取得截图。 */
+    /* 到达上报周期后，report_event() 才会通过 business_frame() 惰性取得截图。 */
     if (!ctx || !ctx->state)
         return;
 

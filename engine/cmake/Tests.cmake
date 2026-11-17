@@ -7,7 +7,8 @@ if(BUILD_DEPTH_TESTS)
         tests/inference/test_depth_results.cpp
         src/vision/inference/inference_result_mapping.cpp
         src/vision/inference/inference_roi_filter.cpp
-        src/logic/channel_logic.cpp)
+        ${analysis_context_srcs}
+        src/media/display/mask_blend.cpp)
     target_include_directories(depth_result_tests PRIVATE ${custom_inc} ${api_inc})
     target_compile_options(depth_result_tests PRIVATE -UNDEBUG -ffunction-sections -fdata-sections)
     set_target_properties(depth_result_tests PROPERTIES LINK_FLAGS "-Wl,--gc-sections")
@@ -134,6 +135,13 @@ endif()
 option(BUILD_SDK_TESTS "Validate public SDK without engine include paths" OFF)
 if(BUILD_SDK_TESTS)
     enable_testing()
+    add_executable(sdk_network_rtt_tests tests/sdk/test_network_rtt.cpp)
+    target_include_directories(sdk_network_rtt_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(sdk_network_rtt_tests PRIVATE -UNDEBUG)
+    target_link_libraries(sdk_network_rtt_tests PRIVATE Vision::Network)
+    set_target_properties(sdk_network_rtt_tests PROPERTIES LINK_FLAGS "-Wl,--wrap=send")
+    add_test(NAME sdk_network_rtt_regression COMMAND sdk_network_rtt_tests)
+    set_tests_properties(sdk_network_rtt_regression PROPERTIES TIMEOUT 10 SKIP_RETURN_CODE 77)
     set(sdk_test_args
         --compiler "${CMAKE_CXX_COMPILER}"
         --include "${PROJECT_SOURCE_DIR}/include"
@@ -146,12 +154,27 @@ if(BUILD_SDK_TESTS)
         COMMAND "${PYTHON3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/sdk/test_public_headers.py" ${sdk_test_args})
     set_tests_properties(sdk_public_headers_regression PROPERTIES TIMEOUT 180)
 
+    add_test(NAME sdk_inference_dependencies_regression
+        COMMAND "${PYTHON3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/sdk/test_inference_dependencies.py"
+            --source "${PROJECT_SOURCE_DIR}" --cmake "${CMAKE_COMMAND}")
+    set_tests_properties(sdk_inference_dependencies_regression PROPERTIES TIMEOUT 60)
+
+    add_executable(sdk_gpio_protocol_tests tests/sdk/test_gpio_protocol.cpp)
+    target_include_directories(sdk_gpio_protocol_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(sdk_gpio_protocol_tests PRIVATE -UNDEBUG)
+    set_target_properties(sdk_gpio_protocol_tests PROPERTIES
+        LINK_FLAGS "-Wl,--wrap=gpiod_chip_open_by_name,--wrap=gpiod_chip_open_by_number")
+    target_link_libraries(sdk_gpio_protocol_tests PRIVATE Vision::SDK gpiod Threads::Threads)
+    add_test(NAME sdk_gpio_protocol_regression COMMAND sdk_gpio_protocol_tests)
+    set_tests_properties(sdk_gpio_protocol_regression PROPERTIES TIMEOUT 15)
+
     add_library(sdk_target_query_consumer OBJECT tests/sdk/test_target_query.cpp)
     target_link_libraries(sdk_target_query_consumer PRIVATE Vision::SDK)
     target_compile_options(sdk_target_query_consumer PRIVATE -UNDEBUG)
     add_executable(sdk_target_query_tests
         $<TARGET_OBJECTS:sdk_target_query_consumer>
-        src/logic/channel_logic.cpp
+        ${analysis_context_srcs}
+        src/media/display/mask_blend.cpp
     )
     target_include_directories(sdk_target_query_tests PRIVATE ${custom_inc} ${api_inc})
     target_compile_options(sdk_target_query_tests PRIVATE -ffunction-sections -fdata-sections)
@@ -159,6 +182,61 @@ if(BUILD_SDK_TESTS)
     target_link_libraries(sdk_target_query_tests PRIVATE ${OpenCV_LIBS} Threads::Threads)
     add_test(NAME sdk_target_query_regression COMMAND sdk_target_query_tests)
     set_tests_properties(sdk_target_query_regression PROPERTIES TIMEOUT 15)
+
+    add_executable(sdk_logic_session_tests tests/sdk/test_logic_session.cpp)
+    target_compile_options(sdk_logic_session_tests PRIVATE -UNDEBUG)
+    target_link_libraries(sdk_logic_session_tests PRIVATE Vision::Analysis)
+    add_test(NAME sdk_logic_session_regression COMMAND sdk_logic_session_tests)
+    set_tests_properties(sdk_logic_session_regression PROPERTIES TIMEOUT 30)
+
+    add_executable(sdk_logic_registry_tests tests/sdk/test_logic_registry.cpp)
+    target_include_directories(sdk_logic_registry_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(sdk_logic_registry_tests PRIVATE -UNDEBUG)
+    target_link_libraries(sdk_logic_registry_tests PRIVATE Vision::Runtime)
+    add_test(NAME sdk_logic_registry_regression COMMAND sdk_logic_registry_tests)
+
+    add_executable(sdk_parameters_tests tests/sdk/test_parameters.cpp)
+    target_compile_options(sdk_parameters_tests PRIVATE -UNDEBUG)
+    target_link_libraries(sdk_parameters_tests PRIVATE Vision::Analysis)
+    add_test(NAME sdk_parameters_regression COMMAND sdk_parameters_tests)
+
+    add_executable(sdk_rendering_tests tests/sdk/test_rendering.cpp)
+    target_compile_options(sdk_rendering_tests PRIVATE -UNDEBUG)
+    target_link_libraries(sdk_rendering_tests PRIVATE Vision::Inference)
+    add_test(NAME sdk_rendering_regression COMMAND sdk_rendering_tests)
+
+    add_executable(sdk_runtime_lifecycle_tests tests/runtime/test_video_runtime.cpp)
+    target_compile_options(sdk_runtime_lifecycle_tests PRIVATE -UNDEBUG)
+    target_link_libraries(sdk_runtime_lifecycle_tests PRIVATE Vision::Runtime)
+    add_test(NAME sdk_runtime_lifecycle_regression COMMAND sdk_runtime_lifecycle_tests)
+    set_tests_properties(sdk_runtime_lifecycle_regression PROPERTIES TIMEOUT 15)
+
+    add_executable(runtime_initialization_tests tests/runtime/test_runtime_initialization.cpp)
+    target_include_directories(runtime_initialization_tests PRIVATE ${custom_inc} ${api_inc})
+    target_compile_options(runtime_initialization_tests PRIVATE -UNDEBUG)
+    target_link_libraries(runtime_initialization_tests PRIVATE Vision::Runtime)
+    add_test(NAME runtime_initialization_regression COMMAND runtime_initialization_tests)
+    set_tests_properties(runtime_initialization_regression PROPERTIES TIMEOUT 30)
+
+    add_executable(runtime_design_tests tests/runtime/test_runtime_design.cpp)
+    target_include_directories(runtime_design_tests PRIVATE ${custom_inc} ${api_inc})
+    target_compile_options(runtime_design_tests PRIVATE -UNDEBUG)
+    target_link_libraries(runtime_design_tests PRIVATE Vision::Runtime)
+    add_test(NAME runtime_design_regression COMMAND runtime_design_tests)
+    set_tests_properties(runtime_design_regression PROPERTIES TIMEOUT 30)
+
+    add_executable(logic_config_tests tests/runtime/test_logic_config.cpp)
+    target_include_directories(logic_config_tests PRIVATE ${custom_inc} ${api_inc})
+    target_compile_options(logic_config_tests PRIVATE -UNDEBUG)
+    target_link_libraries(logic_config_tests PRIVATE Vision::Runtime)
+    add_test(NAME logic_config_default_regression COMMAND logic_config_tests)
+    add_test(NAME logic_config_explicit_regression COMMAND logic_config_tests explicit)
+
+    add_executable(sdk_default_parameters_tests tests/sdk/test_default_logic_parameters.cpp)
+    target_compile_options(sdk_default_parameters_tests PRIVATE -UNDEBUG)
+    target_link_libraries(sdk_default_parameters_tests PRIVATE Vision::Analysis)
+    add_test(NAME sdk_default_parameters_regression COMMAND sdk_default_parameters_tests)
+    add_test(NAME sdk_explicit_catalog_regression COMMAND sdk_default_parameters_tests explicit)
 
     # The example is optional in externally supplied business workspaces.
     set(sdk_example "${VISION_PROJECTS_ROOT}/modules/logic_roi_dwell_demo/logic.cpp")
@@ -168,17 +246,10 @@ if(BUILD_SDK_TESTS)
         add_executable(sdk_business_tests
             tests/sdk/test_business_workflow.cpp
             $<TARGET_OBJECTS:sdk_example_consumer>
-            src/logic/channel_logic.cpp
-            src/logic/logic_parameters.cpp
-            src/media/display/display.cpp
-            src/media/display/text_overlay.cpp
             "${logic_catalog_cpp}"
-            ${cjson_src}
         )
-        target_include_directories(sdk_business_tests PRIVATE ${custom_inc} ${api_inc})
-        target_compile_options(sdk_business_tests PRIVATE -UNDEBUG -ffunction-sections -fdata-sections)
-        set_target_properties(sdk_business_tests PROPERTIES LINK_FLAGS "-Wl,--gc-sections")
-        target_link_libraries(sdk_business_tests PRIVATE ${OpenCV_LIBS} ${GTK3_LIBRARIES} Threads::Threads)
+        target_compile_options(sdk_business_tests PRIVATE -UNDEBUG)
+        target_link_libraries(sdk_business_tests PRIVATE Vision::Analysis)
         file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sdk-acceptance")
         add_test(NAME sdk_business_workflow_regression
             COMMAND sdk_business_tests "${CMAKE_CURRENT_BINARY_DIR}/sdk-acceptance")
@@ -222,6 +293,7 @@ if(BUILD_PERFORMANCE_TESTS)
         tests/performance/test_display_metrics.cpp
         src/media/display/display_render.cpp
         src/media/display/display.cpp
+        src/media/display/result_renderer.cpp
         src/media/display/text_overlay.cpp
         src/application/runtime/pause_ctrl.cpp
         src/application/runtime/service_watchdog.cpp
@@ -239,6 +311,7 @@ if(BUILD_PERFORMANCE_BENCHMARKS)
         tests/performance/benchmark_display.cpp
         src/media/display/display_render.cpp
         src/media/display/display.cpp
+        src/media/display/result_renderer.cpp
         src/media/display/text_overlay.cpp
         src/application/runtime/pause_ctrl.cpp
         src/application/runtime/service_watchdog.cpp
@@ -314,8 +387,10 @@ if(BUILD_INFERENCE_ROI_TESTS)
         src/vision/inference/inference_roi_filter.cpp
         src/pipeline/frame_transform.cpp
         src/pipeline/image_convert.cpp
-        src/logic/channel_logic.cpp
+        ${analysis_context_srcs}
+        src/media/display/mask_blend.cpp
         src/media/display/display.cpp
+        src/media/display/result_renderer.cpp
         src/media/display/text_overlay.cpp
     )
     target_include_directories(business_coordinates_tests PRIVATE ${custom_inc} ${api_inc} ${RKNN_API_INCLUDE_DIR})
@@ -327,7 +402,7 @@ if(BUILD_INFERENCE_ROI_TESTS)
     add_executable(model_status_tests
         tests/inference/test_model_status.cpp
         src/vision/inference/model_status.cpp
-        src/vision/models/composite_model.cpp
+        src/vision/models/model_group.cpp
         ${cjson_src}
     )
     target_include_directories(model_status_tests PRIVATE ${custom_inc})
@@ -350,6 +425,7 @@ if(BUILD_FRAME_SNAPSHOT_TESTS)
         src/pipeline/frame_transform.cpp
         src/pipeline/image_convert.cpp
         src/media/display/display.cpp
+        src/media/display/result_renderer.cpp
         src/media/display/text_overlay.cpp
     )
     target_include_directories(frame_snapshot_tests PRIVATE ${custom_inc} ${api_inc})
@@ -436,4 +512,16 @@ if(BUILD_PPE_TESTS)
     target_compile_options(ppe_tests PRIVATE -UNDEBUG)
     target_link_libraries(ppe_tests PRIVATE ${OpenCV_LIBS})
     add_test(NAME ppe_regression COMMAND ppe_tests)
+endif()
+
+# Shared image/video executor contract; no real RKNN model is required.
+option(BUILD_IMAGE_INFERENCE_TESTS "Build shared single-frame inference tests" OFF)
+if(BUILD_IMAGE_INFERENCE_TESTS)
+    enable_testing()
+    add_executable(frame_executor_tests tests/inference/test_frame_executor.cpp)
+    target_include_directories(frame_executor_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(frame_executor_tests PRIVATE -UNDEBUG)
+    target_link_libraries(frame_executor_tests PRIVATE vision_inference ${CMAKE_DL_LIBS})
+    add_test(NAME frame_executor_regression COMMAND frame_executor_tests)
+    set_tests_properties(frame_executor_regression PROPERTIES TIMEOUT 30)
 endif()

@@ -31,7 +31,18 @@ event.fields.set_json("result", result_json);
 const EventReportResult result = report_event(ctx, event);
 ```
 
-`accepted()` 只表示事件进入了本地持久化发件箱，不表示远端已经收到。
+正式视频运行时，`accepted()` 只表示事件进入了本地持久化队列，不表示已经落盘或远端已经收到。
+
+## 独立 C++ 调试
+
+公共 `report_event()` 根据当前 session 绑定的 `EventSink` 提交事件。业务回调保持相同写法：
+正式 `VideoRuntime` 自动绑定持久化上报器；`LogicSession` 默认把事件及提交时的业务绘图
+保存在 `events()` 中，下一次 `run()` 清空本帧记录。需要其它行为时，继承 `EventSink` 并通过
+`LogicSessionOptions::events` 注入；sink 由调用方持有，生命周期必须长于 session。
+
+未绑定 sink 的裸 `ChannelContext` / `GlobalContext` 返回 `INVALID_REQUEST`，不会隐式启动
+事件线程。自定义 sink 的 `accepted()` 表示该 sink 接收了请求，具体落盘策略由 sink 决定。
+独立业务调试无需链接 RTSP、录像或运行时控制器。
 
 ## 全局事件的图片通道
 
@@ -150,6 +161,18 @@ requested -> generating -> ready
 - `EVENT_STORE_MAX_BYTES`
 - `EVENT_STORE_MIN_FREE_BYTES`
 
-实现入口是 `events.h`、`event_report.cpp`。当前仓库没有独立的 C++ 事件模块单元测试；
-上报队列、契约选择和重试行为由 `services/framework/upload/tests/test_functional.py` 覆盖，
-改动本目录代码时仍需在设备侧补做事件生成、媒体落盘和断网恢复验证。
+实现按职责划分，正式运行和独立测试只有一套提交接口：
+
+| 文件 | 职责 |
+| --- | --- |
+| `events.h` / `event_submission.cpp` | 公共数据类型、sink 接口、提交分发与状态名；无运行时依赖 |
+| `event_report.cpp` | 正式上报器；从当前业务上下文取证、构造事件并入队 |
+| `event_policy.cpp` | 投递策略与图片选择解析 |
+| `event_workers.cpp` | 持久化队列、图片队列的生命周期与事件合并状态 |
+| `event_images.cpp` | 单图及多通道证据图片生成 |
+| `event_outbox.cpp` | JSON 事务、媒体就绪状态和存储回收 |
+| `event_storage.cpp` | 原子文件写入与同步 |
+
+`engine/tests/sdk/test_logic_session.cpp` 验证独立业务回调的事件采集；
+`services/framework/upload/tests/test_functional.py` 覆盖上传队列、契约选择和重试。
+修改持久化、图片或录像阶段时，还需在设备侧验证实际文件生成及断网恢复。

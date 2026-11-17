@@ -180,7 +180,7 @@ static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
             return;
         if (bgr.cols != output_width || bgr.rows != output_height)
             cv::resize(bgr, bgr, cv::Size(output_width, output_height));
-        RenderParams params;
+        vision::OverlayOptions params;
         params.chnId = raw.channel_id;
         params.inputW = raw.input_w;
         params.inputH = raw.input_h;
@@ -199,14 +199,14 @@ static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
         params.roi_zones = &raw.rois;
         params.results = &raw.results;
         params.draw_cmds = &raw.commands;
-        render_overlays(bgr, params);
+        render_runtime_overlays(bgr, params);
 
         if (raw.swap_rb)
             cv::cvtColor(bgr, bgr, cv::COLOR_BGR2RGB);
         return;
     }
 
-    RenderParams params;
+    vision::OverlayOptions params;
     params.chnId = raw.channel_id;
     params.inputW = raw.input_w;
     params.inputH = raw.input_h;
@@ -224,7 +224,7 @@ static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
     params.roi_zones = &raw.rois;
     params.results = &raw.results;
     params.draw_cmds = &raw.commands;
-    render_overlays(bgr, params);
+    render_runtime_overlays(bgr, params);
 }
 
 static bool event_has_pending_frame_locked(const VideoEvent &event)
@@ -714,8 +714,8 @@ void event_video_recorder_push_source_frame(int channel_id, const void *data, in
         raw.result_frame_id = state.published_frame_seq;
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[channel_id]);
 
-        raw.input_w = g_pCtrl->inputW;
-        raw.input_h = g_pCtrl->inputH;
+        raw.input_w = g_pCtrl->business_width;
+        raw.input_h = g_pCtrl->business_height;
         if (channel)
             raw.swap_rb = channel->swap_rb;
     }

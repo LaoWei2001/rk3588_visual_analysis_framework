@@ -73,8 +73,8 @@ int main(int argc, char **argv)
     }
     cv::setNumThreads(1);
     g_pCtrl = new APP_CTRL();
-    g_pCtrl->inputW = 640;
-    g_pCtrl->inputH = 640;
+    g_pCtrl->business_width = 640;
+    g_pCtrl->business_height = 640;
     runtime->config.channels.resize(4);
     pause_ctrl::init(true);
     cv::Mat front(1280, 1920, CV_8UC3, cv::Scalar(0));

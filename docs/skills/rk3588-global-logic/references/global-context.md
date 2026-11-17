@@ -19,12 +19,10 @@
 
 ## 推荐业务输入 `ChannelInput`
 
-`gctx->inputs()` 返回本 tick 固定的有效输入列表。偏 C 写法可以改用 `input_count()` 获取数量，
-再通过 `input_at(index)` 取得只读 `ChannelInput*`，从而使用普通下标 `for` 循环。每个
-`ChannelInput` 提供：
+`input_count()` 返回本 tick 有效输入数量，`input_at(index)` 返回只读 `ChannelInput*`。
+通过下标循环遍历。每个 `ChannelInput` 提供：
 
-- 身份/帧：`channel_id()`、`frame_id()`；
-- 尺寸/运行：`src_width()`、`src_height()`、`infer_enabled()`、`logic_name()`；
+- 身份：`channel_id()`；
 - 严格读取：`has()`、`read_string/number/int/bool/json()`；
 - 带默认值读取：`get_string/number/int/bool/json()`。
 
@@ -36,7 +34,7 @@
 ## 框架过滤
 
 调度器每 tick 获取所有应用通道的轻量快照，然后选择配置 `channels`（非空）或所有通道（空），
-再调用 `ChannelLogicSnapshot::readable(timeout)`。只有以下条件全部满足才进入 `inputs()`：
+再调用 `ChannelLogicSnapshot::readable(timeout)`。只有以下条件全部满足才进入 `input_count()/input_at()`：
 
 - `has_publication == true`；
 - `online_state == CH_ONLINE`；
@@ -46,31 +44,10 @@
 这套过滤是运行时健康策略。若业务需要比自动阈值更严格的同步或新鲜度，使用下面的原始快照并
 显式判断。
 
-## 更新版本
+## 原始快照与证据
 
-框架记录上个 tick 到当前 tick 的版本变化，业务通过更新查询方法读取。`ChannelUpdate` 字段：
-
-- `channel_id`；
-- `initial_snapshot`；
-- `previous_publication_seq`、`publication_seq`；
-- `revision_count`、`missed_revisions`；
-- `published_steady_ms`。
-
-可用 `has_updates()`、`channel_update(id)`、`channel_updated(id)`、`latest_update()` 和
-`for_each_updated_channel()`。`missed_revisions > 0` 表示两次实际分发之间出现多个发布版本，但快照只保留
-最新状态；不能把瞬时 outputs 当作无损事件队列。
-
-不要对所有全局规则无条件 `if (!has_updates()) return`。超时、断流复位、周期事件仍需在没有新
-版本的 tick 运行。
-
-## 高级原始快照
-
-框架保存应用通道的本 tick 轻量快照，内部绑定不可直接访问。业务通过以下方法读取：
-
-- `channel_count()`、`channel_at(index)`；
-- `channel(configured_id)`、`contains_channel(id)`；
-- `connected_channel_count()`、`connected_channel_at(index)`、`is_connected_channel(id)`；
-- `for_each_channel()`、`for_each_connected_channel()`。
+`channel(configured_id)` 返回指定通道的本 tick 轻量快照。未发布或过期时仍可用于诊断；
+业务聚合使用已过滤的 `input()` / `input_at()`。
 
 `ChannelLogicSnapshot` 除 outputs 外还包含 publication/frame 版本和时间、配置 generation、源尺寸、
 推理/显示 FPS、在线状态、logic 名等。各通道分别原子采样，但不保证同一采集时刻；同步业务应
@@ -87,7 +64,7 @@
 1. 任一通道提交新业务状态时递增全局发布序号并广播条件变量，全局实例立即醒来；
 2. 没有新发布时，最多等待 `effective_poll_interval_ms` 后兜底运行一次，使超时、复位和周期任务继续推进。
 
-每次分发的顺序是：采样通道 → 构造 ready inputs/updates → 处理排队 Action → 调用全局 logic →
+每次分发的顺序是：采样通道 → 构造 有效输入批次 → 处理排队 Action → 调用全局 logic →
 等待新发布或兜底超时。调度器在分发之间保留至少 5 ms，避免高帧率、多通道同时发布时持续抢占
 CPU。线程在采样前记录全局发布序号；如果取快照或执行回调期间又有通道发布，后续等待会立即
 返回，不会因错过条件变量通知而延迟到兜底周期。

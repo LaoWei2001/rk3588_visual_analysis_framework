@@ -1,6 +1,7 @@
-"""RKNN metadata probes and cached, save-time compatibility checks.
+"""HTTP-service adapter for the C++ ModelInspection SDK.
 
-Only probes create an RKNN context; runtime status reads the engine's lifecycle snapshot.
+Both canvas and image checks use the console-owned CLI. Python validates paths,
+caches SDK verdicts and reads runtime status; it implements no tensor rules.
 """
 import copy
 import json
@@ -75,128 +76,45 @@ def _probe(app: Path, binary: Path, model: Path) -> dict:
             raise ValueError("invalid response")
         if result.returncode != 0 and info["ok"]:
             raise ValueError("probe process failed")
+        if info["ok"] and (info.get("inspection_version") != 1 or not isinstance(info.get("compatibility"), dict)):
+            return {"ok": False, "error": "模型检查引擎版本不兼容，请更新 Web 控制台"}
         return info
     except (ValueError, TypeError):
         return {"ok": False, "error": "引擎返回的模型信息无效"}
 
 
 def compatibility_error(info: dict, model_type: str) -> str:
-    """Check the tensor contracts used by the existing decoders; never infer type from filename."""
+    """Forward the SDK verdict; decoder rules live only in C++."""
     if model_type not in MODEL_TYPES:
         return f"不支持的模型类型: {model_type}"
-    if model_type in {"yolov5", "yolov5_seg"} and info.get("format") != "NHWC":
-        return f"{model_type} 当前要求 NHWC 输入布局"
-    outputs = info.get("outputs", [])
-    width, height = info.get("width", 0), info.get("height", 0)
-    if model_type in {"yolo26_depth", "zip_depth"}:
-        if width <= 0 or height <= 0 or info.get("format") not in {"NHWC", "NCHW"}:
-            return f"{model_type} 要求有效的 RGB 图像输入"
-        if len(outputs) != 1:
-            return f"{model_type} 要求单个深度输出"
-        output = outputs[0]
-        shape = output.get("shape", [])
-        fmt = output.get("format")
-        if len(shape) == 4 and shape[0] == 1 and fmt == "NCHW" and shape[1] == 1:
-            spatial = shape[2:]
-        elif len(shape) == 4 and shape[0] == 1 and fmt == "NHWC" and shape[3] == 1:
-            spatial = shape[1:3]
-        elif len(shape) == 3 and shape[0] == 1:
-            spatial = shape[1:]
-        elif len(shape) == 2:
-            spatial = shape
-        else:
-            return f"{model_type} 输出必须为单通道 [1,1,H,W] / [1,H,W,1] / [1,H,W] / [H,W]"
-        if min(spatial) <= 0 or output.get("elements") != spatial[0] * spatial[1]:
-            return f"{model_type} 输出元素数量与张量形状不匹配"
-        if spatial[0] > height or spatial[1] > width or spatial[0] * width != spatial[1] * height:
-            return f"{model_type} 输出必须与输入画布宽高比一致，可为较低分辨率深度图"
-        if output.get("type") not in {0, 1, 2, 3}:
-            return f"{model_type} 输出仅支持 FLOAT32/FLOAT16/INT8/UINT8"
+    verdicts = info.get("compatibility")
+    verdict = verdicts.get(model_type) if isinstance(verdicts, dict) else None
+    if (info.get("inspection_version") != 1 or not isinstance(verdict, dict)
+            or not isinstance(verdict.get("ok"), bool)):
+        return "模型检查引擎版本不兼容，请更新 Web 控制台"
+    if verdict["ok"]:
         return ""
-    if model_type == "yolo26_pose":
-        shape = [dim for dim in outputs[0].get("shape", []) if dim != 1] if len(outputs) == 1 else []
-        if len(shape) != 2 or 56 not in shape or min(shape) <= 0:
-            return "yolo26_pose 要求单输出，特征维为 56（17 个关键点）"
-        if outputs[0].get("elements") != shape[0] * shape[1]:
-            return "yolo26_pose 输出元素数量与张量形状不匹配"
-        if outputs[0].get("type") not in {0, 1, 2, 3}:
-            return "yolo26_pose 输出仅支持 FLOAT32/FLOAT16/INT8/UINT8"
-        if outputs[0]["type"] in {2, 3} and outputs[0].get("scale", 0) > 1:
-            return "yolo26_pose INT8 输出量化 scale 大于 1，无法保留置信度，需要重新导出模型"
-        return ""
-    if width <= 0 or height <= 0 or width % 32 or height % 32:
-        return f"{model_type} 当前要求输入宽高为 32 的整数倍"
-    if model_type == "yolov8_obb":
-        if len(outputs) != 4:
-            return "yolov8_obb 要求 3 个 DFL 检测头及 1 个角度输出"
-        classes = outputs[0].get("shape", [0, 0])[1] - 64 if len(outputs[0].get("shape", [])) == 4 else 0
-        if classes <= 0:
-            return "yolov8_obb 检测头通道数必须为 64 + 类别数"
-        cells = 0
-        for head, stride in zip(outputs[:3], (8, 16, 32)):
-            shape = [1, 64 + classes, height // stride, width // stride]
-            if head.get("format") != "NCHW" or head.get("shape") != shape:
-                return "yolov8_obb 输出布局或步长不兼容"
-            cells += shape[2] * shape[3]
-        if outputs[3].get("elements") != cells:
-            return "yolov8_obb 角度输出大小不匹配"
-        return ""
-    if model_type == "yolov8_det":
-        if len(outputs) != 9:
-            return "yolov8_det 要求三个检测分支、共 9 个输出张量"
-        for i, stride in enumerate((8, 16, 32)):
-            box, score = outputs[i * 3:i * 3 + 2]
-            shape = box.get("shape", [])
-            score_shape = score.get("shape", [])
-            if (box.get("format") != "NCHW" or score.get("format") != "NCHW"
-                    or len(shape) != 4 or len(score_shape) != 4 or shape[0] != 1
-                    or shape[1] < 4 or shape[1] % 4 or score_shape[1] <= 0
-                    or shape[2:] != [height // stride, width // stride]
-                    or score_shape[0] != 1 or score_shape[2:] != shape[2:]):
-                return "yolov8_det 输出布局或检测网格与当前解码器不兼容"
-    elif model_type in {"yolov5", "yolov5_seg"}:
-        count = 3 if model_type == "yolov5" else 7
-        if len(outputs) != count:
-            return f"{model_type} 当前要求 {count} 个输出张量"
-        for i, stride in enumerate((8, 16, 32)):
-            index = i if count == 3 else i * 2
-            head = outputs[index]
-            shape = head.get("shape", [])
-            if (head.get("format") != "NCHW" or len(shape) != 4 or shape[0] != 1
-                    or shape[1] <= 15 or shape[1] % 3
-                    or shape[2:] != [height // stride, width // stride]):
-                return f"{model_type} 检测头输出布局与当前解码器不兼容"
-            if count == 7:
-                coeff = outputs[index + 1]
-                if coeff.get("format") != "NCHW" or coeff.get("shape") != [1, 96, *shape[2:]]:
-                    return "yolov5_seg 要求每个检测头对应 32 维 mask 系数"
-        if count == 7 and (outputs[6].get("format") != "NCHW"
-                           or len(outputs[6].get("shape", [])) != 4
-                           or outputs[6]["shape"][:2] != [1, 32]
-                           or not (0 < outputs[6]["shape"][2] <= height)
-                           or not (0 < outputs[6]["shape"][3] <= width)):
-            return "yolov5_seg 要求 NCHW 的 32 通道有效 proto 输出"
-    elif model_type == "yolov8_pose":
-        if len(outputs) < 4:
-            return "yolov8_pose 要求三个检测头和关键点输出"
-        candidates = 0
-        for head in outputs[:3]:
-            shape = head.get("shape", [])
-            if (head.get("format") != "NCHW" or len(shape) != 4
-                    or shape[0] != 1 or shape[1] != 65 or min(shape[2:]) <= 0):
-                return "yolov8_pose 当前要求 NCHW 的 65 通道检测头"
-            candidates += shape[2] * shape[3]
-        if not any(out.get("elements", 0) > 0 and out["elements"] % (candidates * 3) == 0
-                   for out in outputs[3:]):
-            return "yolov8_pose 关键点输出数量与检测候选数不匹配"
-    return ""
+    return verdict.get("error") if isinstance(verdict.get("error"), str) and verdict["error"] else "模型与所选类型不兼容"
+
+
+def inspection_runtime() -> Path:
+    root = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps")) / "_console"
+    return Path(os.environ.get("IMAGE_INFERENCE_RUNTIME", str(root / "inference_runtime"))).resolve()
 
 
 def inspect_model(app: Path, path: str, model_type: str = "") -> dict:
     model = _model_path(app, path)
-    binary = app / pm.BINARY_NAME
+    runtime = inspection_runtime()
+    binary = runtime / "image_inference_runner"
     if not binary.is_file():
-        raise ValueError("程序包缺少推理引擎，无法检查模型")
+        raise ValueError("独立模型检查引擎尚未安装，请更新 Web 控制台")
+    info = inspect_model_file(runtime, binary, model, model_type)
+    info["path"] = path
+    return info
+
+
+def inspect_model_file(runtime: Path, binary: Path, model: Path, model_type: str = "") -> dict:
+    """Shared probe/cache/decoder checks; callers validate their own file locations."""
     # Serializing probes also bounds the extra NPU memory use to one context.
     with _probe_lock:
         key = (_fingerprint(binary), _fingerprint(model))
@@ -205,14 +123,14 @@ def inspect_model(app: Path, path: str, model_type: str = "") -> dict:
             _cache.move_to_end(key)
             info = copy.deepcopy(cached[1])
         else:
-            info = _probe(app, binary, model)
+            info = _probe(runtime, binary, model)
             # Refuse to cache metadata for a file replaced during the probe.
             if key != (_fingerprint(binary), _fingerprint(model)):
                 raise ValueError("检查期间模型或引擎被替换，请重新检查")
             _cache[key] = (time.monotonic(), copy.deepcopy(info))
             while len(_cache) > _MAX_CACHE:
                 _cache.popitem(last=False)
-        info["path"] = path
+        info["path"] = str(model)
         info["file_version"] = _version(model)
     if info.get("ok") and model_type:
         error = compatibility_error(info, model_type)

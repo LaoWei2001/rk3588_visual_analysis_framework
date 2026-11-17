@@ -44,6 +44,15 @@ void expect_failure(const TargetQueryResult &result, TargetQueryStatus status)
     assert(!result.valid() && result.count == 0 && result.best == nullptr);
 }
 
+void expect_unavailable(const ChannelContext &ctx)
+{
+    TargetQuery query;
+    query.labels = {"person"};
+    expect_failure(ctx.query_targets(query), TargetQueryStatus::INFERENCE_UNAVAILABLE);
+    query.roi = ROI_ALL;
+    expect_failure(ctx.query_targets(query), TargetQueryStatus::INFERENCE_UNAVAILABLE);
+}
+
 void filters_and_best()
 {
     Fixture f;
@@ -92,6 +101,8 @@ void regions_and_union()
     expect_failure(f.ctx.query_targets(q), TargetQueryStatus::INVALID_ROI);
     q.roi = ROI_ALL;
     expect_failure(f.ctx.query_targets(q), TargetQueryStatus::INVALID_ROI);
+    q.roi = 1;
+    assert(f.ctx.query_targets(q).count == 1); // 单独查询仍然有效的区域。
     q.roi = ROI_FRAME;
     assert(f.ctx.query_targets(q).count == 2); // 整帧查询不依赖区域配置。
     f.rois.clear();
@@ -117,26 +128,26 @@ void anchor_and_boundary()
     q.anchor = TargetAnchor::Center;
     f.results = {detection("person", .9f, {-10, 0, 20, 20}), detection("person", .8f, {20, 90, 21, 21})};
     result = f.ctx.query_targets(q);
-    assert(result.count == 2); // 左边界、奇数宽高的整数中心与旧接口一致。
-    assert(result.count == roi_count_target(&f.ctx, "person", 0));
+    assert(result.count == 2); // 包含左边界，奇数宽高使用整数中心。
     f.results = {detection("person", .9f, {std::numeric_limits<int>::max(), std::numeric_limits<int>::max(), 50, 50})};
     assert(f.ctx.query_targets(q).count == 0); // 坐标加法不能整数溢出。
+    assert(roi_contains(&f.ctx, f.results[0].box, 0) == 0);
 }
 
 void availability_and_precedence()
 {
     ChannelContext unbound;
-    expect_failure(unbound.query_targets(), TargetQueryStatus::INFERENCE_UNAVAILABLE);
+    expect_unavailable(unbound);
     Fixture f;
     f.results = {detection("person", .8f)};
     f.ctx.inference_valid = false;
-    expect_failure(f.ctx.query_targets(), TargetQueryStatus::INFERENCE_UNAVAILABLE);
+    expect_unavailable(f.ctx);
     f.ctx.inference_valid = true;
     f.ctx.infer_enabled = 0;
-    expect_failure(f.ctx.query_targets(), TargetQueryStatus::INFERENCE_UNAVAILABLE);
+    expect_unavailable(f.ctx);
     f.ctx.infer_enabled = 1;
     f.ctx.results = nullptr;
-    expect_failure(f.ctx.query_targets(), TargetQueryStatus::INFERENCE_UNAVAILABLE);
+    expect_unavailable(f.ctx);
     TargetQuery q;
     q.roi = ROI_NONE;
     expect_failure(f.ctx.query_targets(q), TargetQueryStatus::ROI_NOT_FOUND);
@@ -171,28 +182,50 @@ void invalid_values()
                  detection("person", 0)};
     const auto result = f.ctx.query_targets(q);
     assert(result.valid() && result.count == 1 && result.best == &f.results.back());
+    auto depth = detection("person", 1);
+    depth.depth_map = cv::Mat::ones(1, 1, CV_32FC1);
+    f.results.push_back(depth);
+    const int regions[] = {ROI_FRAME, ROI_ALL, 0};
+    for (int roi : regions)
+    {
+        q.roi = roi;
+        assert(f.ctx.query_targets(q).count == 1);
+    }
+    f.results.erase(f.results.end() - 2); // 删除唯一合法检测，余下异常数据和深度载荷。
+    assert(f.ctx.query_targets(q).valid() && f.ctx.query_targets(q).count == 0);
 }
 
-void compatibility_and_isolation()
+void isolation_and_geometry()
 {
     Fixture a, b;
     a.results = {detection("person", .8f), detection("person", .9f, {200, 10, 20, 20})};
     b.results = {detection("car", .7f)};
     assert(a.ctx.query_targets().best == &a.results[1]);
     assert(b.ctx.query_targets().best == &b.results[0]);
-    a.ctx.inference_valid = false;
-    assert(a.ctx.has_target("person") == 1 && a.ctx.target_count("person") == 2);
-    assert(roi_count_target(&a.ctx, "person", ROI_ALL) == 1);
-    assert(roi_count_target(&a.ctx, "person", ROI_FRAME) == 2);
-    assert(roi_has_target(&a.ctx, "person", ROI_FRAME) == 1);
+    assert(roi_contains(&a.ctx, a.results[0].box, ROI_ALL) == 1);
+    assert(roi_contains(&a.ctx, a.results[1].box, ROI_ALL) == 0);
     assert(roi_contains(&a.ctx, a.results[1].box, ROI_FRAME) == 1);
     assert(roi_contains(nullptr, a.results[0].box, ROI_FRAME) == 0);
-    assert(roi_count_target(&a.ctx, "person", ROI_NONE) == 0);
-    assert(roi_count_target(&a.ctx, "person", -99) == 0);
+    assert(roi_contains(&a.ctx, a.results[0].box, ROI_NONE) == 0);
+    assert(roi_contains(&a.ctx, a.results[0].box, -99) == 0);
+    assert(roi_contains(&a.ctx, a.results[0].box, 99) == 0);
+    a.ctx.inference_valid = false;
+    expect_unavailable(a.ctx);
+    assert(roi_contains(&a.ctx, a.results[0].box, 0) == 1); // 几何查询独立于推理状态。
+    assert(b.ctx.query_targets().valid() && b.ctx.query_targets().count == 1);
     a.rois.clear();
-    assert(roi_count_target(&a.ctx, "person", ROI_ALL) == 2);
-    expect_failure(a.ctx.query_targets(), TargetQueryStatus::INFERENCE_UNAVAILABLE);
-    assert(b.ctx.query_targets().valid());
+    expect_unavailable(a.ctx);
+    assert(roi_contains(&a.ctx, a.results[1].box, ROI_ALL) == 1);
+    a.ctx.inference_valid = true;
+    TargetQuery query;
+    query.labels = {"missing"};
+    assert(a.ctx.query_targets(query).count == 0);
+    query.labels = {""}; // 空字符串按字面匹配，空标签数组才表示所有类别。
+    assert(a.ctx.query_targets(query).count == 0);
+    a.results.push_back(detection("", .5f));
+    assert(a.ctx.query_targets(query).count == 1);
+    a.results.clear();
+    assert(a.ctx.query_targets().valid() && a.ctx.query_targets().count == 0);
     assert(std::string(target_query_status_name(TargetQueryStatus::OK)) == "ok");
     assert(std::string(target_query_status_name(TargetQueryStatus::INVALID_ROI)) == "invalid_roi");
     assert(std::string(target_query_status_name(static_cast<TargetQueryStatus>(99))) == "unknown");
@@ -224,6 +257,6 @@ int main()
     anchor_and_boundary();
     availability_and_precedence();
     invalid_values();
-    compatibility_and_isolation();
-    std::cout << "Target query: filters, scores, ROI, anchors, validity, borrowing and compatibility passed\n";
+    isolation_and_geometry();
+    std::cout << "Target query: filters, scores, ROI, anchors, validity, borrowing and isolation passed\n";
 }

@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from routers import (apps, assets, auth, camera_settings, logic_control, file_playback, config_io, logs, network_settings,
                      ota_config, process, records, services, snapshot, storage_settings, stream,
-                     system_settings, terminal, delivery_config, video_capture, dataset, recovery)
+                     system_settings, terminal, delivery_config, video_capture, dataset, recovery, image_inference)
 from services.auth_service import get_session
 from services import process_manager as process_manager
 from services import service_watchdog
@@ -49,6 +49,7 @@ _PUBLIC_LOGIC_ACTION = re.compile(
 async def lifespan(app: FastAPI):
     if not os.environ.get("LOGIC_ACTION_TOKEN"):
         print("[Auth] Action 接口处于兼容免登录模式；设置 LOGIC_ACTION_TOKEN 可要求集成令牌或控制台登录")
+    await asyncio.to_thread(image_inference.image_jobs.recover)
     ready = asyncio.Event()
     watchdog_task = asyncio.create_task(service_watchdog.heartbeat(ready))
     # 网络事务由独立 systemd 定时器保护。控制台异常重启时先确认保护仍存在，
@@ -70,6 +71,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await asyncio.to_thread(image_inference.image_jobs.shutdown)
         await terminal.terminal_sessions.shutdown()
         await stream._stream_pool.shutdown()
         watchdog_task.cancel()
@@ -170,6 +172,7 @@ app.include_router(system_settings.router, prefix="/api")
 app.include_router(recovery.router, prefix="/api")
 app.include_router(video_capture.router, prefix="/api")
 app.include_router(dataset.router, prefix="/api")
+app.include_router(image_inference.router, prefix="/api")
 app.include_router(logs.router)      # WebSocket has its own /ws prefix
 app.include_router(terminal.router)  # WebSocket terminal
 

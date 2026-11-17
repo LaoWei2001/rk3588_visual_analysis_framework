@@ -5,12 +5,13 @@
 #include "config.h"
 #include "config_registry.h"
 #include "config_validator.h"
-#include "logic/logic_parameters.h"
+#include "logic/logic_registry.h"
 #include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <initializer_list>
 #include <json.h>
+#include <parameters.h>
 #include <set>
 #include <sstream>
 #include <sys/stat.h>
@@ -400,6 +401,13 @@ bool load_config(const std::string &path, AppConfig &cfg)
             if (cJSON_IsNumber(gl_media_channel))
                 gl_cfg.media_source_channel_id = gl_media_channel->valueint;
 
+            if (!global_logic_get(gl_cfg.logic.c_str()))
+            {
+                fprintf(stderr, "[Config] global instance '%s': global logic '%s' is not registered\n",
+                        gl_cfg.instance_id.c_str(), gl_cfg.logic.c_str());
+                cJSON_Delete(root);
+                return false;
+            }
             {
                 std::vector<LogicParameterError> parameter_errors;
                 std::string normalized_parameters;
@@ -708,6 +716,12 @@ bool load_config(const std::string &path, AppConfig &cfg)
         /* logic 为空表示该通道不执行业务后处理模块；隐式空 Schema 只接受空参数对象。
          * 非空 logic 的专有参数由嵌入二进制的 logic.json Schema 校验并补默认值。
          * 这里在初始启动和热重载时都执行；失败时整份新配置不发布。 */
+        if (!ch.logic.empty() && !channel_logic_get(ch.logic.c_str()))
+        {
+            fprintf(stderr, "[Config] channel %d: channel logic '%s' is not registered\n", ch.id, ch.logic.c_str());
+            cJSON_Delete(root);
+            return false;
+        }
         {
             std::vector<LogicParameterError> parameter_errors;
             std::string normalized_parameters;

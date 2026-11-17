@@ -296,8 +296,10 @@ void test_ambiguous_hand_side()
     CHECK(only_person(outcome).gloves_unsided);
     CHECK(only_person(outcome).violation);
     CHECK(only_person(outcome).violation_types == "未戴手套(未分左右手)");
-    CHECK(status_of(only_person(outcome), ppe_guard::PART_HAND_LEFT) != ppe_guard::PART_VIOLATION);
-    CHECK(status_of(only_person(outcome), ppe_guard::PART_HAND_RIGHT) != ppe_guard::PART_VIOLATION);
+    /* 证据不归属具体某只手（只记一条“不分侧”），但两只手的徽标都点亮，
+     * 否则现场只看到顶部变红、手部还是 '-'，不知道是哪一项在报。 */
+    CHECK(status_of(only_person(outcome), ppe_guard::PART_HAND_LEFT) == ppe_guard::PART_VIOLATION);
+    CHECK(status_of(only_person(outcome), ppe_guard::PART_HAND_RIGHT) == ppe_guard::PART_VIOLATION);
 }
 
 /* 目标：同一 track 断开超过 reacquire_gap 视为新会话，可以再次报警。 */
@@ -501,8 +503,9 @@ void test_glove_geometry_rejects_far_box()
     CHECK(!only_person(outcome).gloves_unsided);
 }
 
-/* 目标：没有腕点就无法确认“这是手”，手套项不产生证据。 */
-void test_glove_requires_wrist()
+/* 目标：现场只挂检测模型、没有姿态时，裸手不能因为“找不到腕点”被整条丢弃，
+ * 而是降级成“分不清左右”的裸手证据。 */
+void test_glove_without_pose_degrades_to_unsided()
 {
     Guard guard;
     const Config config = base_config();
@@ -511,9 +514,184 @@ void test_glove_requires_wrist()
     frame.push_back(violation_box("bare_hand", cv::Rect(40, 90, 20, 20)));
 
     const Outcome outcome = guard.update(frame, 0, config);
+    CHECK(outcome.candidate_observations == 1); /* 记一条“不分左右”的裸手证据 */
+    CHECK(outcome.rejected_observations == 0);
+    CHECK(!only_person(outcome).gloves_unsided); /* 一帧还不足以确认 */
+}
+
+/* 目标：无姿态时裸手连续 3 帧，手套项最终确认违规（现场手套判定的主路径）。 */
+void test_glove_without_pose_confirms()
+{
+    Guard guard;
+    const Config config = base_config();
+    std::vector<AlgoResult> frame;
+    frame.push_back(person_box(142, cv::Rect(0, 0, 100, 200)));
+    frame.push_back(violation_box("bare_hand", cv::Rect(40, 90, 20, 20)));
+
+    guard.update(frame, 0, config);
+    guard.update(frame, 400, config);
+    const Outcome outcome = guard.update(frame, 1200, config);
+    CHECK(only_person(outcome).gloves_unsided);
+    CHECK(only_person(outcome).violation);
+}
+
+/* 目标：需要严格腕点时可切回保守模式，无姿态的裸手框一律丢弃。 */
+void test_glove_require_pose_rejects_without_pose()
+{
+    Guard guard;
+    Config config = base_config();
+    config.glove_require_pose = true;
+    std::vector<AlgoResult> frame;
+    frame.push_back(person_box(143, cv::Rect(0, 0, 100, 200)));
+    frame.push_back(violation_box("bare_hand", cv::Rect(40, 90, 20, 20)));
+
+    const Outcome outcome = guard.update(frame, 0, config);
     CHECK(outcome.candidate_observations == 0);
     CHECK(outcome.rejected_observations == 1);
     CHECK(!only_person(outcome).gloves_unsided);
+}
+
+/* 目标：模型只有 workwear_on 正类时，躯干可核验但没有工装框 → 推断“未穿工作服”。 */
+void test_workwear_absence_infers_violation()
+{
+    Guard guard;
+    Config config = base_config();
+    config.workwear_require_positive = true;
+    config.violation_labels[ppe_guard::PART_WORKWEAR].clear();
+    config.positive_labels[ppe_guard::PART_WORKWEAR].push_back("workwear_on");
+    std::vector<AlgoResult> frame;
+    frame.push_back(person_box(17, cv::Rect(0, 10, 100, 200)));
+
+    guard.update(frame, 0, config);
+    guard.update(frame, 400, config);
+    const Outcome outcome = guard.update(frame, 1200, config);
+    CHECK(status_of(only_person(outcome), ppe_guard::PART_WORKWEAR) == ppe_guard::PART_VIOLATION);
+    CHECK(only_person(outcome).violation);
+    CHECK(only_person(outcome).violation_types == "未穿工作服");
+
+    /* 一旦出现 workwear_on 正类框，本帧不再计“缺失”证据。 */
+    std::vector<AlgoResult> with_workwear = frame;
+    with_workwear.push_back(violation_box("workwear_on", cv::Rect(10, 60, 80, 100)));
+    const Outcome suppressed = guard.update(with_workwear, 1600, config);
+    CHECK(suppressed.candidate_observations == 0);
+}
+
+/* 目标：人太小时躯干只有几十像素，工装框根本出不来，不能据此推断“没穿”。 */
+void test_workwear_absence_skips_small_person()
+{
+    Guard guard;
+    Config config = base_config();
+    config.workwear_require_positive = true;
+    config.violation_labels[ppe_guard::PART_WORKWEAR].clear();
+    config.positive_labels[ppe_guard::PART_WORKWEAR].push_back("workwear_on");
+    std::vector<AlgoResult> frame;
+    frame.push_back(person_box(18, cv::Rect(0, 10, 40, 70))); /* 高 70 < 80 */
+
+    guard.update(frame, 0, config);
+    guard.update(frame, 400, config);
+    const Outcome outcome = guard.update(frame, 1200, config);
+    CHECK(status_of(only_person(outcome), ppe_guard::PART_WORKWEAR) != ppe_guard::PART_VIOLATION);
+    CHECK(outcome.candidate_observations == 0);
+}
+
+/* 目标：人框本身分数不可信时，不能拿它推断“没穿”。 */
+void test_workwear_absence_needs_confident_person()
+{
+    Guard guard;
+    Config config = base_config();
+    config.workwear_require_positive = true;
+    config.violation_labels[ppe_guard::PART_WORKWEAR].clear();
+    config.positive_labels[ppe_guard::PART_WORKWEAR].push_back("workwear_on");
+    std::vector<AlgoResult> frame;
+    frame.push_back(person_box(19, cv::Rect(0, 10, 100, 200), 0.5f)); /* < absence_min_person_score */
+
+    guard.update(frame, 0, config);
+    guard.update(frame, 400, config);
+    const Outcome outcome = guard.update(frame, 1200, config);
+    CHECK(status_of(only_person(outcome), ppe_guard::PART_WORKWEAR) != ppe_guard::PART_VIOLATION);
+}
+
+/* 目标：前面站着别人把躯干挡住时，“没看到工装”不能当证据。 */
+void test_workwear_absence_blocked_by_occluder()
+{
+    Guard guard;
+    Config config = base_config();
+    config.workwear_require_positive = true;
+    config.violation_labels[ppe_guard::PART_WORKWEAR].clear();
+    config.positive_labels[ppe_guard::PART_WORKWEAR].push_back("workwear_on");
+    std::vector<AlgoResult> frame;
+    frame.push_back(person_box(20, cv::Rect(0, 10, 100, 200)));
+    frame.push_back(person_box(21, cv::Rect(0, 50, 100, 120))); /* 盖住前一个人的躯干区 */
+
+    guard.update(frame, 0, config);
+    guard.update(frame, 400, config);
+    const Outcome outcome = guard.update(frame, 1200, config);
+    CHECK(outcome.candidate_observations == 0);
+    for (size_t index = 0; index < outcome.people.size(); ++index)
+        CHECK(outcome.people[index].status[ppe_guard::PART_WORKWEAR] != ppe_guard::PART_VIOLATION);
+}
+
+/* 目标：先确认“未穿工作服”，随后看到 workwear_on 正类框时撤销报警。
+ * 检测器漏检一两帧不能让人永久挂红。正类门槛独立且低于违规门槛。 */
+void test_workwear_positive_clears_confirmed_violation()
+{
+    Guard guard;
+    Config config = base_config();
+    config.workwear_require_positive = true;
+    config.violation_labels[ppe_guard::PART_WORKWEAR].clear();
+    config.positive_labels[ppe_guard::PART_WORKWEAR].push_back("workwear_on");
+    std::vector<AlgoResult> frame;
+    frame.push_back(person_box(23, cv::Rect(0, 10, 100, 200)));
+
+    guard.update(frame, 0, config);
+    guard.update(frame, 400, config);
+    Outcome outcome = guard.update(frame, 1200, config);
+    CHECK(status_of(only_person(outcome), ppe_guard::PART_WORKWEAR) == ppe_guard::PART_VIOLATION);
+
+    std::vector<AlgoResult> dressed = frame;
+    /* 0.4 低于 violation_min_score(0.5)，但高于 positive_min_score(0.35)：仍要认作“穿了”。 */
+    dressed.push_back(violation_box("workwear_on", cv::Rect(10, 60, 80, 100), 0.4f));
+    outcome = guard.update(dressed, 1600, config);
+    CHECK(status_of(only_person(outcome), ppe_guard::PART_WORKWEAR) != ppe_guard::PART_VIOLATION);
+    CHECK(!only_person(outcome).violation);
+}
+
+/* 目标：正类门槛以下的正类框不参与否决，不能因为一个 0.2 分的噪声框就撤销报警。 */
+void test_workwear_low_score_positive_is_ignored()
+{
+    Guard guard;
+    Config config = base_config();
+    config.workwear_require_positive = true;
+    config.violation_labels[ppe_guard::PART_WORKWEAR].clear();
+    config.positive_labels[ppe_guard::PART_WORKWEAR].push_back("workwear_on");
+    std::vector<AlgoResult> frame;
+    frame.push_back(person_box(24, cv::Rect(0, 10, 100, 200)));
+
+    guard.update(frame, 0, config);
+    guard.update(frame, 400, config);
+    Outcome outcome = guard.update(frame, 1200, config);
+    CHECK(status_of(only_person(outcome), ppe_guard::PART_WORKWEAR) == ppe_guard::PART_VIOLATION);
+
+    std::vector<AlgoResult> noisy = frame;
+    noisy.push_back(violation_box("workwear_on", cv::Rect(10, 60, 80, 100), 0.2f));
+    outcome = guard.update(noisy, 1600, config);
+    CHECK(status_of(only_person(outcome), ppe_guard::PART_WORKWEAR) == ppe_guard::PART_VIOLATION);
+}
+
+/* 目标：开关默认关闭，行为与改造前一致。 */
+void test_workwear_absence_off_by_default()
+{
+    Guard guard;
+    Config config = base_config();
+    config.violation_labels[ppe_guard::PART_WORKWEAR].clear();
+    config.positive_labels[ppe_guard::PART_WORKWEAR].push_back("workwear_on");
+    std::vector<AlgoResult> frame;
+    frame.push_back(person_box(22, cv::Rect(0, 10, 100, 200)));
+
+    guard.update(frame, 0, config);
+    guard.update(frame, 400, config);
+    const Outcome outcome = guard.update(frame, 1200, config);
+    CHECK(!only_person(outcome).violation);
 }
 
 /* 目标：几何门控可关闭，用于现场对比“模型问题”还是“门控问题”。 */
@@ -619,6 +797,38 @@ void test_low_confidence_never_counts()
     CHECK(status_of(only_person(outcome), ppe_guard::PART_HELMET) == ppe_guard::PART_UNKNOWN);
 }
 
+/* 目标：手部走独立的低门槛。现场手框实测只有 0.59~0.72，
+ * 卡 violation_min_score=0.75 等于让“未戴手套”这一项永远不触发。 */
+void test_glove_low_score_still_counts()
+{
+    Guard guard;
+    Config config = base_config();
+    config.violation_min_score = 0.75f;
+    config.glove_min_score = 0.5f;
+    std::vector<AlgoResult> frame;
+    frame.push_back(person_box(15, cv::Rect(0, 0, 100, 200)));
+    frame.push_back(violation_box("bare_hand", cv::Rect(40, 100, 30, 40), 0.60f));
+
+    const Outcome outcome = guard.update(frame, 0, config);
+    CHECK(outcome.candidate_observations == 1);
+}
+
+/* 目标：低门槛只给手部。安全帽框 0.60 仍然低于 0.75，不能采信。 */
+void test_helmet_low_score_still_rejected()
+{
+    Guard guard;
+    Config config = base_config();
+    config.violation_min_score = 0.75f;
+    config.glove_min_score = 0.5f;
+    std::vector<AlgoResult> frame;
+    frame.push_back(person_box(16, cv::Rect(0, 0, 100, 200)));
+    frame.push_back(violation_box("no_helmet", cv::Rect(40, 0, 20, 20), 0.60f));
+
+    const Outcome outcome = guard.update(frame, 0, config);
+    CHECK(outcome.candidate_observations == 0);
+    CHECK(status_of(only_person(outcome), ppe_guard::PART_HELMET) == ppe_guard::PART_UNKNOWN);
+}
+
 /* 目标：同一部位上有正类框时，负类框不再作数（戴了就不该报没戴）。 */
 void test_positive_veto_blocks_violation()
 {
@@ -633,7 +843,8 @@ void test_positive_veto_blocks_violation()
     const Outcome outcome = guard.update(frame, 0, config);
     CHECK(outcome.candidate_observations == 0);
     CHECK(outcome.vetoed_observations == 1);
-    CHECK(status_of(only_person(outcome), ppe_guard::PART_HELMET) == ppe_guard::PART_UNKNOWN);
+    /* 看到 helmet 正类框，部位状态应显示为“已确认正常”，不再是 UNKNOWN。 */
+    CHECK(status_of(only_person(outcome), ppe_guard::PART_HELMET) == ppe_guard::PART_CLEAR);
 
     Config no_veto = config;
     no_veto.positive_veto = false;
@@ -694,13 +905,15 @@ void test_helmet_absence_infers_violation()
 
     guard.mark_reported(16);
 
-    /* 一旦出现安全帽正类框，本帧不再计“缺失”证据。 */
+    /* 一旦出现安全帽正类框，本帧不再计“缺失”证据，并且撤销之前的确认：
+     * 检测器漏检一两帧不能让人永久挂红。 */
     std::vector<AlgoResult> with_helmet = frame;
     with_helmet.push_back(violation_box("helmet", cv::Rect(40, 10, 20, 22)));
     const Outcome suppressed = guard.update(with_helmet, 1600, config);
     CHECK(suppressed.candidate_observations == 0);
-    CHECK(status_of(only_person(suppressed), ppe_guard::PART_HELMET) == ppe_guard::PART_VIOLATION); /* 仍锁存 */
-    CHECK(!only_person(suppressed).report_due); /* 已上报过，同会话不再推 */
+    CHECK(status_of(only_person(suppressed), ppe_guard::PART_HELMET) != ppe_guard::PART_VIOLATION);
+    CHECK(!only_person(suppressed).violation);
+    CHECK(!only_person(suppressed).report_due);
 }
 
 /* 目标：前面还站着别人、头部区域被盖住时，“没看到安全帽”不能当证据。 */
@@ -773,7 +986,7 @@ void test_helmet_above_person_still_counts()
     guard.update(frame, 500, config);
     const Outcome outcome = guard.update(frame, 1200, config);
     CHECK(outcome.candidate_observations == 0);
-    CHECK(status_of(only_person(outcome), ppe_guard::PART_HELMET) == ppe_guard::PART_UNKNOWN);
+    CHECK(status_of(only_person(outcome), ppe_guard::PART_HELMET) == ppe_guard::PART_CLEAR);
 }
 
 /* 目标：人框贴画面顶边（头可能被裁掉）时不做缺帽推断。 */
@@ -834,7 +1047,58 @@ void test_helmet_shared_credit_between_neighbours()
     CHECK(outcome.candidate_observations == 0);
     CHECK(outcome.people.size() == 2);
     for (size_t i = 0; i < outcome.people.size(); ++i)
-        CHECK(status_of(outcome.people[i], ppe_guard::PART_HELMET) == ppe_guard::PART_UNKNOWN);
+        CHECK(status_of(outcome.people[i], ppe_guard::PART_HELMET) == ppe_guard::PART_CLEAR);
+}
+
+/* 目标：手臂横伸到人框外面（人框只框到躯干）时，裸手证据仍要归到这个人。
+ * 现场 m02479 截图里手框中心就在人框右侧 60px 外，严格归属会把证据整条丢掉。 */
+void test_hand_outside_person_box_still_attaches()
+{
+    Guard guard;
+    const Config config = base_config();
+    std::vector<AlgoResult> frame;
+    frame.push_back(person_box(11, cv::Rect(100, 100, 120, 260)));
+    frame.push_back(violation_box("bare_hand", cv::Rect(230, 300, 30, 40)));
+
+    Outcome outcome = guard.update(frame, 0, config);
+    CHECK(outcome.rejected_observations == 0);
+    CHECK(outcome.candidate_observations == 1);
+
+    guard.update(frame, 400, config);
+    guard.update(frame, 800, config);
+    outcome = guard.update(frame, 1300, config);
+    CHECK(outcome.people.at(0).violation);
+    CHECK(outcome.people.at(0).violation_types.find("手套") != std::string::npos);
+}
+
+/* 目标：离人很远的手形框不能硬塞给这个人。 */
+void test_hand_far_away_is_rejected()
+{
+    Guard guard;
+    const Config config = base_config();
+    std::vector<AlgoResult> frame;
+    frame.push_back(person_box(12, cv::Rect(100, 100, 120, 260)));
+    frame.push_back(violation_box("bare_hand", cv::Rect(900, 700, 30, 40)));
+
+    const Outcome outcome = guard.update(frame, 0, config);
+    CHECK(outcome.rejected_observations == 1);
+    CHECK(outcome.candidate_observations == 0);
+}
+
+/* 目标：两个人都在画面里时，人框外的裸手框只能归给离它最近的那个人。 */
+void test_hand_attaches_to_center_nearest_person()
+{
+    Guard guard;
+    const Config config = base_config();
+    std::vector<AlgoResult> frame;
+    frame.push_back(person_box(13, cv::Rect(100, 100, 120, 260)));
+    frame.push_back(person_box(14, cv::Rect(600, 100, 120, 260)));
+    frame.push_back(violation_box("bare_hand", cv::Rect(250, 300, 30, 40)));
+
+    const Outcome outcome = guard.update(frame, 0, config);
+    CHECK(outcome.people.size() == 2);
+    CHECK(outcome.candidate_observations == 1); /* 只有左边那个近邻拿到这条证据 */
+    CHECK(outcome.rejected_observations == 0);
 }
 
 } // namespace
@@ -861,13 +1125,24 @@ int main()
     test_helmet_geometry_accepts_top_box();
     test_workwear_band();
     test_glove_geometry_rejects_far_box();
-    test_glove_requires_wrist();
+    test_glove_without_pose_degrades_to_unsided();
+    test_glove_without_pose_confirms();
+    test_glove_require_pose_rejects_without_pose();
+    test_workwear_absence_infers_violation();
+    test_workwear_absence_skips_small_person();
+    test_workwear_absence_needs_confident_person();
+    test_workwear_absence_blocked_by_occluder();
+    test_workwear_positive_clears_confirmed_violation();
+    test_workwear_low_score_positive_is_ignored();
+    test_workwear_absence_off_by_default();
     test_geometry_gate_can_be_disabled();
     test_helmet_geometry_keeps_correct_position_box();
     test_neutral_head_label_is_not_a_violation();
     test_dedupe_drops_overlapping_boxes();
     test_dedupe_keeps_distinct_boxes();
     test_low_confidence_never_counts();
+    test_glove_low_score_still_counts();
+    test_helmet_low_score_still_rejected();
     test_positive_veto_blocks_violation();
     test_require_pose_blocks_violation();
     test_require_pose_allows_visible_part();
@@ -879,6 +1154,9 @@ int main()
     test_helmet_absence_skips_edge_person();
     test_helmet_absence_skips_small_person();
     test_helmet_shared_credit_between_neighbours();
+    test_hand_outside_person_box_still_attaches();
+    test_hand_far_away_is_rejected();
+    test_hand_attaches_to_center_nearest_person();
 
     if (g_failures == 0)
     {

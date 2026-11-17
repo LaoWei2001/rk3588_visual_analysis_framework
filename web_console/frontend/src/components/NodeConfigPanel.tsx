@@ -43,6 +43,7 @@ interface Props {
   reportConfigPath?: string | null
   modelIdError?: string | null
   modelChannelId?: number
+  onImageInference?: () => void
   globalTrackerType?: string
   globalTrackerEnable?: number
 }
@@ -68,7 +69,7 @@ const HEADER_CLASS: Record<string, string> = {
 
 export default function NodeConfigPanel({
   node, onUpdate, channelIds = [], allChannelIds = [], globalInputs = [],
-  reportConfigJson = null, reportConfigPath = null, modelIdError = null, modelChannelId,
+  reportConfigJson = null, reportConfigPath = null, modelIdError = null, modelChannelId, onImageInference,
   globalTrackerType = 'sort', globalTrackerEnable = 1,
 }: Props) {
   if (!node) {
@@ -95,7 +96,7 @@ export default function NodeConfigPanel({
         {node.type === 'stream' && <StreamForm node={node} onUpdate={onUpdate}
           globalTrackerType={globalTrackerType} globalTrackerEnable={globalTrackerEnable} />}
         {node.type === 'model'  && <ModelForm   node={node} onUpdate={onUpdate}
-          duplicateIdError={modelIdError} channelId={modelChannelId} />}
+          duplicateIdError={modelIdError} channelId={modelChannelId} onImageInference={onImageInference} />}
         {node.type === 'logic'  && <LogicForm   node={node} onUpdate={onUpdate} />}
         {node.type === 'globalLogic' &&
           <GlobalLogicForm node={node} onUpdate={onUpdate} inputs={globalInputs} />}
@@ -491,11 +492,12 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
 // ─────────────────────────────────────────────────────────────────────────────
 // Model form
 // ─────────────────────────────────────────────────────────────────────────────
-function ModelForm({ node, onUpdate, duplicateIdError, channelId }: {
+function ModelForm({ node, onUpdate, duplicateIdError, channelId, onImageInference }: {
   node: Node
   onUpdate: Props['onUpdate']
   duplicateIdError?: string | null
   channelId?: number
+  onImageInference?: () => void
 }) {
   const appName = useEditorStore(s => s.appName)
   const assets     = useEditorStore(s => s.assets)
@@ -516,6 +518,11 @@ function ModelForm({ node, onUpdate, duplicateIdError, channelId }: {
 
   return (
     <div className="ncp-form">
+      {onImageInference && <button type="button" className="btn btn-secondary" onClick={onImageInference}>
+        图片推理 · 带入本通道启用的模型
+      </button>}
+      <div className="ncp-hint">在新标签页用图片验证当前模型配置，支持同一通道的多个模型。</div>
+
       <label className="node-toggle ncp-top-toggle">
         <input type="checkbox" checked={d.enable !== false} onChange={e => set('enable', e.target.checked)} />
         启用 NPU 推理

@@ -7,7 +7,7 @@ struct VisionContextAccess
 {
     static void bind_frames(ChannelContext &ctx, ChannelFrameGetter business, ChannelFrameGetter source, void *opaque)
     {
-        ctx.model_frame_getter = business;
+        ctx.business_frame_getter = business;
         ctx.source_frame_getter = source;
         ctx.frame_getter_opaque = opaque;
     }
@@ -32,6 +32,26 @@ struct VisionContextAccess
     {
         return ctx.draw_cmds;
     }
+    static void bind_events(ChannelContext &ctx, EventSink *sink)
+    {
+        ctx.event_sink = sink;
+    }
+    static EventSink *events(const ChannelContext &ctx)
+    {
+        return ctx.event_sink;
+    }
+    static void bind_events(GlobalContext &ctx, EventSink *sink)
+    {
+        ctx.event_sink = sink;
+    }
+    static EventSink *events(const GlobalContext &ctx)
+    {
+        return ctx.event_sink;
+    }
+    static bool has_canvas(const ChannelContext &ctx)
+    {
+        return ctx.canvas && ctx.show_canvas;
+    }
     static void bind_canvas(ChannelContext &ctx, cv::Mat *canvas, bool *enabled)
     {
         ctx.canvas = canvas;
@@ -39,12 +59,10 @@ struct VisionContextAccess
     }
 
     static void bind_global(GlobalContext &ctx, const std::vector<ChannelLogicSnapshot> *snapshots,
-                            const std::vector<int> *channels, const std::vector<ChannelUpdate> *updates,
-                            const std::vector<ChannelInput> *inputs)
+                            const std::vector<int> *channels, const std::vector<ChannelInput> *inputs)
     {
         ctx.channel_snapshots = snapshots;
         ctx.connected_channel_ids = channels;
-        ctx.updated_channels = updates;
         ctx.ready_inputs = inputs;
     }
 

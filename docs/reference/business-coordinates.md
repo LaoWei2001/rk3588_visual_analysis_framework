@@ -9,7 +9,7 @@
 | `.rknn` 实际输入、模型内部解码结果 | 由模型张量属性决定 |
 | 业务可见检测框、关键点、分割掩码、跟踪结果 | 完整画面的 640×640 |
 | 业务 ROI、自定义 `draw_*` 指令、像素距离 / 面积阈值 | 640×640 业务单位 |
-| `ctx->business_frame()` / `ctx->model_frame()` | 同一份惰性 640×640 BGR 缓存 |
+| `ctx->business_frame()` | 同一份惰性 640×640 BGR 缓存 |
 | `ctx->source_frame()` | 视频原图真实宽高 |
 | 实时显示、带叠加的上报图片和录像 | 输出可以不同尺寸，叠加统一从业务坐标缩放 |
 
@@ -30,7 +30,7 @@ CPU 回退在模型输入为 640 时复用业务缓存；其他输入尺寸从�
 业务画布对应区域，避免中间缩放图的再次复制。整帧 / ROI 双批次需要合并掩码时，
 才创建可写副本。
 
-## 业务代码与兼容接口
+## 业务坐标接口
 
 已有 `(320,320)`、以 640 画布定义的 ROI 和像素阈值可以继续使用。新代码推荐：
 
@@ -45,8 +45,7 @@ const cv::Mat *frame = ctx->business_frame();
 ```
 
 通道和全局上下文均提供 `business_width()`、`business_height()`、`business_size()`、
-`business_center()`。历史 `model_frame()`、`inference_get_input_w/h()`、全局上下文
-`model_width/model_height` 保留，但表示业务画布，不表示实际 NPU 输入。
+`business_center()`。业务图使用 `business_frame()`；模型实际输入尺寸通过模型检查 SDK 获取。
 
 直接处理原图的业务仍须使用原图坐标。完整画面的业务点 `(x,y)` 对应原图中的
 `(x*src_width/640, y*src_height/640)`。更改摄像头取景、镜头或业务裁剪后，物理测量

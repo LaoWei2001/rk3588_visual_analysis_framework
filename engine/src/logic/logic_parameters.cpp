@@ -2,23 +2,47 @@
  * @file logic_parameters.cpp
  * @brief 嵌入式模块 Schema 的解析、配置规范化与热重载差异计算。
  */
-#include "logic_parameters.h"
+#include "logic_registry.h"
+#include <parameters.h>
 
 #include <json.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
-/* 由 build/generated/logic_catalog_embedded.cpp 提供。 */
-extern const char *logic_embedded_catalog_json();
-
 namespace
 {
 constexpr double kMaxExactJsonInteger = 9007199254740991.0; /* 2^53 - 1 */
+
+// Accessors expose number parameters as float. Check IEEE bits as builds may use -ffast-math.
+bool parameter_number_is_finite(double value)
+{
+    uint64_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(value), "IEEE-754 double required");
+    std::memcpy(&bits, &value, sizeof(bits));
+    return (bits & UINT64_C(0x7ff0000000000000)) != UINT64_C(0x7ff0000000000000);
+}
+
+bool parameter_number_fits_float(double value)
+{
+    return parameter_number_is_finite(value) && value >= -std::numeric_limits<float>::max() &&
+           value <= std::numeric_limits<float>::max();
+}
+
+cJSON *parse_document(const std::string &text)
+{
+    // cJSON's NUL-terminated API must not silently accept a truncated std::string.
+    return text.find('\0') == std::string::npos ? cJSON_ParseWithOpts(text.c_str(), nullptr, 1) : nullptr;
+}
 
 struct ParameterSpec
 {
@@ -40,12 +64,102 @@ struct LogicSchema
     bool additional_properties = false;
 };
 
+bool parse_parameter_value(cJSON *item, LogicParameterType type, LogicParameterValue &out, std::string &error)
+{
+    out = LogicParameterValue();
+    out.type = type;
+    switch (type)
+    {
+    case LogicParameterType::STRING:
+        if (!cJSON_IsString(item) || !item->valuestring)
+        {
+            error = "expected string";
+            return false;
+        }
+        out.text_value = item->valuestring;
+        return true;
+    case LogicParameterType::NUMBER:
+        if (!cJSON_IsNumber(item) || !parameter_number_fits_float(item->valuedouble))
+        {
+            error = "expected finite number within float range";
+            return false;
+        }
+        out.number_value = item->valuedouble;
+        return true;
+    case LogicParameterType::INTEGER: {
+        if (!cJSON_IsNumber(item) || !parameter_number_is_finite(item->valuedouble) ||
+            std::floor(item->valuedouble) != item->valuedouble || item->valuedouble < -kMaxExactJsonInteger ||
+            item->valuedouble > kMaxExactJsonInteger)
+        {
+            error = "expected integer";
+            return false;
+        }
+        out.integer_value = static_cast<int64_t>(item->valuedouble);
+        return true;
+    }
+    case LogicParameterType::BOOLEAN:
+        if (!cJSON_IsBool(item))
+        {
+            error = "expected boolean";
+            return false;
+        }
+        out.bool_value = cJSON_IsTrue(item);
+        return true;
+    case LogicParameterType::ARRAY:
+    case LogicParameterType::OBJECT: {
+        const bool expected = type == LogicParameterType::ARRAY ? cJSON_IsArray(item) : cJSON_IsObject(item);
+        if (!expected)
+        {
+            error = type == LogicParameterType::ARRAY ? "expected array" : "expected object";
+            return false;
+        }
+        char *text = cJSON_PrintUnformatted(item);
+        if (!text)
+        {
+            error = "cannot serialize JSON value";
+            return false;
+        }
+        out.text_value = text;
+        cJSON_free(text);
+        return true;
+    }
+    }
+    error = "unsupported parameter type";
+    return false;
+}
+
+bool validate_parameter_value(const LogicParameterValue &out, const ParameterSpec &spec, std::string &error)
+{
+    const double numeric =
+        spec.type == LogicParameterType::NUMBER ? out.number_value : static_cast<double>(out.integer_value);
+    if ((spec.type == LogicParameterType::NUMBER || spec.type == LogicParameterType::INTEGER) && spec.has_minimum &&
+        numeric < spec.minimum)
+    {
+        error = "不得小于 " + std::to_string(spec.minimum);
+        return false;
+    }
+    if ((spec.type == LogicParameterType::NUMBER || spec.type == LogicParameterType::INTEGER) && spec.has_maximum &&
+        numeric > spec.maximum)
+    {
+        error = "不得大于 " + std::to_string(spec.maximum);
+        return false;
+    }
+    if (!spec.enum_values.empty() &&
+        std::find(spec.enum_values.begin(), spec.enum_values.end(), out) == spec.enum_values.end())
+    {
+        error = "不在允许的枚举值中";
+        return false;
+    }
+    return true;
+}
+
 class LogicSchemaRegistry
 {
   public:
-    LogicSchemaRegistry()
+    explicit LogicSchemaRegistry(const char *catalog_text, bool registered_defaults = false)
+        : registered_defaults_(registered_defaults)
     {
-        load();
+        load(catalog_text);
     }
 
     const LogicSchema *find(const std::string &logic_name) const
@@ -58,7 +172,16 @@ class LogicSchemaRegistry
             return &no_logic_schema;
         }
         const auto it = schemas_.find(logic_name);
-        return it == schemas_.end() ? nullptr : &it->second;
+        if (it != schemas_.end())
+            return &it->second;
+        // 独立程序未提供参数目录时，已注册函数默认不接受参数。
+        // 提供了目录则严格以目录为准，不能掩盖正式模块遗漏 Schema 的错误。
+        if (registered_defaults_ && (channel_logic_get(logic_name.c_str()) || global_logic_get(logic_name.c_str())))
+        {
+            static const LogicSchema no_parameters;
+            return &no_parameters;
+        }
+        return nullptr;
     }
 
     bool valid() const
@@ -93,70 +216,6 @@ class LogicSchemaRegistry
         return true;
     }
 
-    static bool parse_value(cJSON *item, LogicParameterType type, LogicParameterValue &out, std::string &error)
-    {
-        out = LogicParameterValue();
-        out.type = type;
-        switch (type)
-        {
-        case LogicParameterType::STRING:
-            if (!cJSON_IsString(item) || !item->valuestring)
-            {
-                error = "expected string";
-                return false;
-            }
-            out.text_value = item->valuestring;
-            return true;
-        case LogicParameterType::NUMBER:
-            if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble))
-            {
-                error = "expected finite number";
-                return false;
-            }
-            out.number_value = item->valuedouble;
-            return true;
-        case LogicParameterType::INTEGER: {
-            if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble) ||
-                std::floor(item->valuedouble) != item->valuedouble || item->valuedouble < -kMaxExactJsonInteger ||
-                item->valuedouble > kMaxExactJsonInteger)
-            {
-                error = "expected integer";
-                return false;
-            }
-            out.integer_value = static_cast<int64_t>(item->valuedouble);
-            return true;
-        }
-        case LogicParameterType::BOOLEAN:
-            if (!cJSON_IsBool(item))
-            {
-                error = "expected boolean";
-                return false;
-            }
-            out.bool_value = cJSON_IsTrue(item);
-            return true;
-        case LogicParameterType::ARRAY:
-        case LogicParameterType::OBJECT: {
-            const bool expected = type == LogicParameterType::ARRAY ? cJSON_IsArray(item) : cJSON_IsObject(item);
-            if (!expected)
-            {
-                error = type == LogicParameterType::ARRAY ? "expected array" : "expected object";
-                return false;
-            }
-            char *text = cJSON_PrintUnformatted(item);
-            if (!text)
-            {
-                error = "cannot serialize JSON value";
-                return false;
-            }
-            out.text_value = text;
-            cJSON_free(text);
-            return true;
-        }
-        }
-        error = "unsupported parameter type";
-        return false;
-    }
-
     static LogicReloadImpact parse_reload_impact(cJSON *property)
     {
         cJSON *item = cJSON_GetObjectItemCaseSensitive(property, "x-hot-reload");
@@ -176,13 +235,12 @@ class LogicSchemaRegistry
             error_ = message;
     }
 
-    void load()
+    void load(const char *catalog_text)
     {
-        const char *catalog_text = logic_embedded_catalog_json();
-        cJSON *root = catalog_text ? cJSON_Parse(catalog_text) : nullptr;
+        cJSON *root = catalog_text ? cJSON_ParseWithOpts(catalog_text, nullptr, 1) : nullptr;
         if (!root)
         {
-            fail("embedded logic catalog is invalid JSON");
+            fail("logic catalog is invalid JSON");
             return;
         }
 
@@ -192,7 +250,7 @@ class LogicSchemaRegistry
             cJSON *logics = cJSON_GetObjectItemCaseSensitive(root, collection);
             if (!cJSON_IsArray(logics))
             {
-                fail(std::string("embedded logic catalog has no ") + collection + " array");
+                fail(std::string("logic catalog has no ") + collection + " array");
                 break;
             }
 
@@ -235,7 +293,8 @@ class LogicSchemaRegistry
                     }
                     cJSON *default_item = cJSON_GetObjectItemCaseSensitive(property, "default");
                     std::string value_error;
-                    if (!default_item || !parse_value(default_item, spec.type, spec.default_value, value_error))
+                    if (!default_item ||
+                        !parse_parameter_value(default_item, spec.type, spec.default_value, value_error))
                     {
                         fail(logic_name + "." + spec.key + ".default: " + value_error);
                         break;
@@ -244,6 +303,19 @@ class LogicSchemaRegistry
 
                     cJSON *minimum = cJSON_GetObjectItemCaseSensitive(property, "minimum");
                     cJSON *maximum = cJSON_GetObjectItemCaseSensitive(property, "maximum");
+                    const bool numeric =
+                        spec.type == LogicParameterType::INTEGER || spec.type == LogicParameterType::NUMBER;
+                    if ((minimum || maximum) && !numeric)
+                    {
+                        fail(logic_name + "." + spec.key + ": minimum/maximum require a numeric parameter");
+                        break;
+                    }
+                    if ((minimum && (!cJSON_IsNumber(minimum) || !parameter_number_is_finite(minimum->valuedouble))) ||
+                        (maximum && (!cJSON_IsNumber(maximum) || !parameter_number_is_finite(maximum->valuedouble))))
+                    {
+                        fail(logic_name + "." + spec.key + ": minimum/maximum must be finite numbers");
+                        break;
+                    }
                     if (cJSON_IsNumber(minimum))
                     {
                         spec.has_minimum = true;
@@ -254,21 +326,39 @@ class LogicSchemaRegistry
                         spec.has_maximum = true;
                         spec.maximum = maximum->valuedouble;
                     }
+                    if (spec.has_minimum && spec.has_maximum && spec.minimum > spec.maximum)
+                    {
+                        fail(logic_name + "." + spec.key + ": minimum exceeds maximum");
+                        break;
+                    }
 
                     cJSON *enum_item = cJSON_GetObjectItemCaseSensitive(property, "enum");
+                    if (enum_item && (!cJSON_IsArray(enum_item) || cJSON_GetArraySize(enum_item) == 0))
+                    {
+                        fail(logic_name + "." + spec.key + ": enum must be a nonempty array");
+                        break;
+                    }
                     if (cJSON_IsArray(enum_item))
                     {
                         cJSON *enum_value = nullptr;
                         cJSON_ArrayForEach(enum_value, enum_item)
                         {
                             LogicParameterValue parsed;
-                            if (!parse_value(enum_value, spec.type, parsed, value_error))
+                            if (!parse_parameter_value(enum_value, spec.type, parsed, value_error))
                             {
                                 fail(logic_name + "." + spec.key + ".enum: " + value_error);
                                 break;
                             }
                             spec.enum_values.push_back(std::move(parsed));
                         }
+                    }
+                    if (!error_.empty())
+                        break;
+                    // 默认值与用户显式填写的值必须遵守同一套约束。
+                    if (!validate_parameter_value(spec.default_value, spec, value_error))
+                    {
+                        fail(logic_name + "." + spec.key + ".default: " + value_error);
+                        break;
                     }
 
                     schema.spec_index.emplace(spec.key, schema.ordered_specs.size());
@@ -278,7 +368,7 @@ class LogicSchemaRegistry
                     break;
                 if (!schemas_.emplace(logic_name, std::move(schema)).second)
                 {
-                    fail("duplicate embedded logic schema: " + logic_name);
+                    fail("duplicate logic schema: " + logic_name);
                     break;
                 }
             }
@@ -290,103 +380,37 @@ class LogicSchemaRegistry
     }
 
     std::unordered_map<std::string, LogicSchema> schemas_;
+    bool registered_defaults_;
     std::string error_;
 };
 
+struct CatalogState
+{
+    std::mutex mutex;
+    bool sealed = false;
+    std::unique_ptr<LogicSchemaRegistry> registry;
+};
+
+CatalogState &catalog_state()
+{
+    static CatalogState state;
+    return state;
+}
+
 const LogicSchemaRegistry &schema_registry()
 {
-    static const LogicSchemaRegistry registry;
-    return registry;
+    CatalogState &state = catalog_state();
+    std::lock_guard<std::mutex> guard(state.mutex);
+    if (!state.registry)
+        state.registry.reset(new LogicSchemaRegistry("{\"channel_logics\":[],\"global_logics\":[]}", true));
+    state.sealed = true;
+    return *state.registry;
 }
 
 void add_error(std::vector<LogicParameterError> *errors, const std::string &field, const std::string &message)
 {
     if (errors)
         errors->push_back({field, message});
-}
-
-bool parse_configured_value(cJSON *item, const ParameterSpec &spec, LogicParameterValue &out, std::string &error)
-{
-    /* 与 Registry 构造时相同的解析规则，单独写在这里避免把内部加载器暴露出去。 */
-    out = LogicParameterValue();
-    out.type = spec.type;
-    switch (spec.type)
-    {
-    case LogicParameterType::STRING:
-        if (!cJSON_IsString(item) || !item->valuestring)
-        {
-            error = "必须是字符串";
-            return false;
-        }
-        out.text_value = item->valuestring;
-        break;
-    case LogicParameterType::NUMBER:
-        if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble))
-        {
-            error = "必须是有限数值";
-            return false;
-        }
-        out.number_value = item->valuedouble;
-        break;
-    case LogicParameterType::INTEGER:
-        if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble) ||
-            std::floor(item->valuedouble) != item->valuedouble || item->valuedouble < -kMaxExactJsonInteger ||
-            item->valuedouble > kMaxExactJsonInteger)
-        {
-            error = "必须是整数";
-            return false;
-        }
-        out.integer_value = static_cast<int64_t>(item->valuedouble);
-        break;
-    case LogicParameterType::BOOLEAN:
-        if (!cJSON_IsBool(item))
-        {
-            error = "必须是布尔值";
-            return false;
-        }
-        out.bool_value = cJSON_IsTrue(item);
-        break;
-    case LogicParameterType::ARRAY:
-    case LogicParameterType::OBJECT: {
-        const bool valid = spec.type == LogicParameterType::ARRAY ? cJSON_IsArray(item) : cJSON_IsObject(item);
-        if (!valid)
-        {
-            error = spec.type == LogicParameterType::ARRAY ? "必须是数组" : "必须是对象";
-            return false;
-        }
-        char *text = cJSON_PrintUnformatted(item);
-        if (!text)
-        {
-            error = "JSON 序列化失败";
-            return false;
-        }
-        out.text_value = text;
-        cJSON_free(text);
-        break;
-    }
-    }
-
-    const double numeric =
-        spec.type == LogicParameterType::NUMBER ? out.number_value : static_cast<double>(out.integer_value);
-    if ((spec.type == LogicParameterType::NUMBER || spec.type == LogicParameterType::INTEGER) && spec.has_minimum &&
-        numeric < spec.minimum)
-    {
-        error = "不得小于 " + std::to_string(spec.minimum);
-        return false;
-    }
-    if ((spec.type == LogicParameterType::NUMBER || spec.type == LogicParameterType::INTEGER) && spec.has_maximum &&
-        numeric > spec.maximum)
-    {
-        error = "不得大于 " + std::to_string(spec.maximum);
-        return false;
-    }
-    if (!spec.enum_values.empty() &&
-        std::find(spec.enum_values.begin(), spec.enum_values.end(), out) == spec.enum_values.end())
-    {
-        error = "不在允许的枚举值中";
-        return false;
-    }
-    return true;
 }
 
 cJSON *value_to_json(const LogicParameterValue &value)
@@ -403,11 +427,25 @@ cJSON *value_to_json(const LogicParameterValue &value)
         return cJSON_CreateBool(value.bool_value ? 1 : 0);
     case LogicParameterType::ARRAY:
     case LogicParameterType::OBJECT:
-        return cJSON_Parse(value.text_value.c_str());
+        return parse_document(value.text_value);
     }
     return nullptr;
 }
 } // namespace
+
+void vision::set_logic_catalog(const std::string &catalog_json)
+{
+    CatalogState &state = catalog_state();
+    std::lock_guard<std::mutex> guard(state.mutex);
+    if (state.sealed)
+        throw std::logic_error("logic catalog must be registered before parameter resolution");
+    if (catalog_json.find('\0') != std::string::npos)
+        throw std::invalid_argument("logic catalog contains an embedded NUL");
+    std::unique_ptr<LogicSchemaRegistry> registry(new LogicSchemaRegistry(catalog_json.c_str()));
+    if (!registry->valid())
+        throw std::invalid_argument(registry->error());
+    state.registry = std::move(registry);
+}
 
 bool operator==(const LogicParameterValue &lhs, const LogicParameterValue &rhs)
 {
@@ -419,8 +457,8 @@ bool operator==(const LogicParameterValue &lhs, const LogicParameterValue &rhs)
         return lhs.text_value == rhs.text_value;
     case LogicParameterType::ARRAY:
     case LogicParameterType::OBJECT: {
-        cJSON *left = cJSON_Parse(lhs.text_value.c_str());
-        cJSON *right = cJSON_Parse(rhs.text_value.c_str());
+        cJSON *left = parse_document(lhs.text_value);
+        cJSON *right = parse_document(rhs.text_value);
         const bool equal = left && right && cJSON_Compare(left, right, 1);
         cJSON_Delete(left);
         cJSON_Delete(right);
@@ -457,7 +495,7 @@ float LogicParameterSet::get_float(const char *key) const
     const LogicParameterValue *value = key ? find(key) : nullptr;
     if (!value)
         return 0.0f;
-    if (value->type == LogicParameterType::NUMBER)
+    if (value->type == LogicParameterType::NUMBER && parameter_number_fits_float(value->number_value))
         return static_cast<float>(value->number_value);
     if (value->type == LogicParameterType::INTEGER)
         return static_cast<float>(value->integer_value);
@@ -509,12 +547,12 @@ bool logic_parameters_resolve(const std::string &logic_name, const std::string &
     const LogicSchema *schema = registry.find(logic_name);
     if (!schema)
     {
-        add_error(errors, "logic", "未找到已编译的模块 Schema: " + logic_name);
+        add_error(errors, "logic", "未找到已注册的模块 Schema: " + logic_name);
         return false;
     }
 
     const std::string input_text = parameters_json.empty() ? "{}" : parameters_json;
-    cJSON *input = cJSON_Parse(input_text.c_str());
+    cJSON *input = parse_document(input_text);
     if (!cJSON_IsObject(input))
     {
         add_error(errors, "logic_parameters", "必须是 JSON 对象");
@@ -555,7 +593,8 @@ bool logic_parameters_resolve(const std::string &logic_name, const std::string &
         if (configured)
         {
             std::string error;
-            if (!parse_configured_value(configured, spec, value, error))
+            if (!parse_parameter_value(configured, spec.type, value, error) ||
+                !validate_parameter_value(value, spec, error))
             {
                 add_error(errors, "logic_parameters." + spec.key, error);
                 valid = false;

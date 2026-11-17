@@ -196,7 +196,7 @@ static void logic_crane_motion(ChannelContext *ctx)
 {
     if (!ctx || !ctx->state)
         return;
-    const cv::Mat *frame = ctx->model_frame();
+    const cv::Mat *frame = ctx->business_frame();
     if (!frame || frame->empty())
         return;
     if (!*ctx->state)

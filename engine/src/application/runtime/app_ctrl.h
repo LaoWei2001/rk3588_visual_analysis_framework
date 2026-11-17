@@ -18,19 +18,21 @@
 #pragma once
 #include "logic/logic_outputs.h"
 #include <coordinates.h>
+#include <runtime.h>
 #include <snapshot.h>
 
 #include "application/config/config.h"
 #include "application/runtime/publication_signal.h"
 #include "common/performance_metrics.h"
-#include "logic/logic_parameters.h"
 #include "media/display/display.h"
 #include <atomic>
 #include <channel.h>
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <opencv2/opencv.hpp>
+#include <parameters.h>
 #include <pthread.h>
 #include <string>
 #include <vector>
@@ -98,10 +100,15 @@ struct ChannelState
 {
     /* 图像由 display_worker 独占；计数器内部同步，查询会自动淘汰过期样本。 */
     cv::Mat tile_staging;
-    PerformanceOverlayCache performance_overlay; /* FPS 底部背景，仅在显示性能文字时缓存 */
+    vision::OverlayCache performance_overlay; /* FPS 底部背景，仅在显示性能文字时缓存 */
     FrameRateCounter preview_rate;
 
     /* 由 chn_mtx[chnId] 保护 */
+    vision::VideoChannelState capture_state = vision::VideoChannelState::Connecting;
+    uint64_t received_frames = 0;
+    uint64_t last_input_steady_ms = 0;
+    float network_rtt_ms = -1.0f; // ICMP 往返毫秒数；未知为 -1，由 chn_mtx 保护。
+    char capture_error[512]{};
     ChannelOnlineState online_state = CH_ONLINE; /*!< 当前在线状态 */
     uint64_t offline_ts_ms = 0;                  /*!< 最近一次离线时刻 */
     uint64_t online_ts_ms = 0;                   /*!< 最近一次上线时刻 */
@@ -200,8 +207,8 @@ struct APP_CTRL
     int capturer_count;                            /*!< 有效采集器数量 */
 
     /*!< 4. 推理子系统 */
-    int inputW = business_coordinates::WIDTH;  /*!< 业务坐标宽度；保留历史字段名 */
-    int inputH = business_coordinates::HEIGHT; /*!< 业务坐标高度；与 NPU 输入独立 */
+    int business_width = business_coordinates::WIDTH;   /*!< 业务坐标宽度 */
+    int business_height = business_coordinates::HEIGHT; /*!< 业务坐标高度；与 NPU 输入独立 */
 
     /*!< 5. 通道运行时状态 (索引=通道号) */
     ChannelState channels_state[MAX_CHANNEL_NUM]; /*!< 每通道独立状态 */
@@ -213,6 +220,9 @@ struct APP_CTRL
     pthread_mutex_t capturer_mtx;             /*!< 保护 capturers 热切换与播放控制并发访问 */
     pthread_mutex_t chn_mtx[MAX_CHANNEL_NUM]; /*!< 通道独立锁 */
     std::atomic<bool> isRunning{false};       /*!< 全局运行标志: false=退出 */
+    std::mutex failure_mutex;
+    bool worker_failed = false; // failure_mutex 保护；错误路径不分配内存。
+    char worker_error[512]{};
 
     /*!< 7. 线程句柄 (main 中 pthread_create 填充) */
     pthread_t config_monitor_tid; /*!< 配置热加载监控线程 */
@@ -254,13 +264,9 @@ extern "C"
         const std::shared_ptr<const AppRuntimeSnapshot> &snapshot, int channel_id);
 
     /*======================== 通道数据查询 (线程安全) ========================*/
-    std::vector<AlgoResult> app_ctrl_get_results(int chnId);
-    std::vector<AlgoResult> app_ctrl_get_results_fresh(int chnId, int max_age_ms);
     float app_ctrl_get_disp_fps(int chnId);
     float app_ctrl_get_infer_fps(int chnId);
 
-    int app_ctrl_get_target_count(int chnId, const char *label, int max_age_ms);
-    int app_ctrl_has_target(int chnId, const char *label, int max_age_ms);
     std::string app_ctrl_get_logic_name(int chnId);
 
     int app_ctrl_get_channel_logic_snapshot(int chnId, ChannelLogicSnapshot *out);

@@ -132,3 +132,21 @@ InferenceRoiTransform make_inference_roi_transform(const cv::Rect &selection, in
                                        : fit_content(source.width, source.height, model_width, model_height);
     return transform;
 }
+
+cv::Rect inference_source_roi(const InferenceRoiConfig &normalized, int source_width, int source_height)
+{
+    if (source_width <= 0 || source_height <= 0)
+        return {};
+    if (!normalized.has_roi())
+        return {0, 0, source_width, source_height};
+    int left = static_cast<int>(std::floor(normalized.x * source_width));
+    int top = static_cast<int>(std::floor(normalized.y * source_height));
+    int right = static_cast<int>(std::ceil((normalized.x + normalized.width) * source_width));
+    int bottom = static_cast<int>(std::ceil((normalized.y + normalized.height) * source_height));
+    left = std::max(0, std::min(source_width - 1, left));
+    top = std::max(0, std::min(source_height - 1, top));
+    right = std::max(left + 1, std::min(source_width, right));
+    bottom = std::max(top + 1, std::min(source_height, bottom));
+
+    return cv::Rect(left, top, right - left, bottom - top);
+}

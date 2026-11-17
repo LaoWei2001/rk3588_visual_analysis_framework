@@ -1,3 +1,4 @@
+#include <results.h>
 /**
  * @file app_ctrl.cpp
  * @brief 应用全局控制块实现 — C/pthread 风格
@@ -115,27 +116,7 @@ std::shared_ptr<const AppRuntimeSnapshot> app_ctrl_build_runtime_snapshot(const 
         }
 
         /* ROI 配置统一是归一化坐标；运行快照在发布前一次性转换到固定业务坐标系(640×640)。 */
-        auto &runtime_rois = snapshot->roi_zones[channel.id];
-        auto add_zone = [&](const std::string &name, const std::vector<std::pair<double, double>> &polygon) {
-            size_t point_count = polygon.size();
-            while (point_count > 1 && polygon.front() == polygon[point_count - 1])
-                --point_count;
-            if (point_count < 3 || input_w <= 0 || input_h <= 0)
-                return;
-            RoiZone zone;
-            zone.name = name;
-            zone.polygon.reserve(point_count);
-            for (size_t i = 0; i < point_count; ++i)
-            {
-                const auto &point = polygon[i];
-                zone.polygon.emplace_back(static_cast<int>(point.first * input_w + 0.5),
-                                          static_cast<int>(point.second * input_h + 0.5));
-            }
-            runtime_rois.push_back(std::move(zone));
-        };
-
-        for (const auto &zone : channel.roi_zones)
-            add_zone(zone.name, zone.polygon);
+        snapshot->roi_zones[channel.id] = vision::make_roi_zones(channel.roi_zones, cv::Size(input_w, input_h));
     }
     return snapshot;
 }
@@ -672,9 +653,7 @@ extern "C" void *config_monitor_thread_func(void *arg)
                     old_src.usb_width = ps.usb_width;
                     old_src.usb_height = ps.usb_height;
 
-                    DecChannel *rebuild = new DecChannel(primary, old_src);
-                    for (size_t k = 1; k < remaining.size(); ++k)
-                        rebuild->addTargetChannel(remaining[k]);
+                    DecChannel *rebuild = new DecChannel(remaining, old_src);
 
                     if (rebuild->init() == 0)
                     {
@@ -696,7 +675,7 @@ extern "C" void *config_monitor_thread_func(void *arg)
                 bool stream_applied = false;
                 if (!sw.new_src.location.empty())
                 {
-                    DecChannel *nc = new DecChannel(chnId, sw.new_src);
+                    DecChannel *nc = new DecChannel({chnId}, sw.new_src);
                     if (nc->init() == 0)
                     {
                         ctrl->capturers[chnId] = nc;
@@ -722,7 +701,7 @@ extern "C" void *config_monitor_thread_func(void *arg)
                 /* 新源启动失败时尽力恢复旧源，且绝不把失败的新 stream 发布给上层。 */
                 if (!stream_applied && !sw.old_src.location.empty())
                 {
-                    DecChannel *rollback = new DecChannel(chnId, sw.old_src);
+                    DecChannel *rollback = new DecChannel({chnId}, sw.old_src);
                     if (rollback->init() == 0)
                     {
                         ctrl->capturers[chnId] = rollback;
@@ -781,53 +760,54 @@ int app_ctrl_init(const char *cfgPath)
     if (g_pCtrl)
         return 0;
 
-    g_pCtrl = new APP_CTRL();
-    if (!g_pCtrl)
+    if (!cfgPath || !*cfgPath)
         return -1;
-
-    g_pCtrl->magic = APP_CTRL_MAGIC;
+    // Publish only fully initialized state: allocation/configuration failures must
+    // leave no global pointer that shutdown could mistake for a live control block.
+    std::unique_ptr<APP_CTRL> ctrl(new APP_CTRL());
+    ctrl->magic = APP_CTRL_MAGIC;
 
     std::string path(cfgPath);
-    if (!load_config(path, g_pCtrl->config))
-    {
-        delete g_pCtrl;
-        g_pCtrl = nullptr;
+    if (!load_config(path, ctrl->config))
         return -1;
-    }
+
+    // Do every allocating operation before initializing pthread resources.
+    auto snapshot = app_ctrl_build_runtime_snapshot(ctrl->config, ctrl->business_width, ctrl->business_height,
+                                                    ctrl->config_generation);
+    if (!snapshot)
+        return -1;
+    ctrl->runtime_snapshot = std::move(snapshot);
 
     /* 初始化 pthread 同步原语 */
-    pthread_rwlock_init(&g_pCtrl->mtx, nullptr);
-    pthread_mutex_init(&g_pCtrl->cv_config_mtx, nullptr);
-    pthread_cond_init(&g_pCtrl->cv_config, nullptr);
-    pthread_mutex_init(&g_pCtrl->capturer_mtx, nullptr);
+    pthread_rwlock_init(&ctrl->mtx, nullptr);
+    pthread_mutex_init(&ctrl->cv_config_mtx, nullptr);
+    pthread_cond_init(&ctrl->cv_config, nullptr);
+    pthread_mutex_init(&ctrl->capturer_mtx, nullptr);
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
-        pthread_mutex_init(&g_pCtrl->chn_mtx[i], nullptr);
+        pthread_mutex_init(&ctrl->chn_mtx[i], nullptr);
 
     /* 初始化通道逻辑时间戳；预览 FPS 由 display_worker 在首帧建立采样窗口。 */
     uint64_t now_ms = steady_now_ms();
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
     {
-        g_pCtrl->channels_state[i].last_logic_ts_ms = now_ms;
+        ctrl->channels_state[i].last_logic_ts_ms = now_ms;
     }
 
-    /* 业务尺寸无需等待模型初始化；首代 ROI 快照就使用固定 640×640 坐标。 */
-    app_ctrl_store_runtime_snapshot(
-        app_ctrl_build_runtime_snapshot(g_pCtrl->config, g_pCtrl->inputW, g_pCtrl->inputH, g_pCtrl->config_generation));
-
-    g_pCtrl->b_init = 1;
-    g_pCtrl->isRunning.store(true);
-    g_pCtrl->pDispBuffer = nullptr;
-    g_pCtrl->capturer_count = 0;
+    ctrl->b_init = 1;
+    ctrl->isRunning.store(true);
+    ctrl->pDispBuffer = nullptr;
+    ctrl->capturer_count = 0;
     for (int i = 0; i < APP_CTRL_MAX_CAPTURERS; ++i)
-        g_pCtrl->capturers[i] = nullptr;
+        ctrl->capturers[i] = nullptr;
 
-    g_pCtrl->configLastMtime = config_get_mtime(path);
+    ctrl->configLastMtime = config_get_mtime(path);
 
-    /* 线程退出标志: 0=运行中, 1=请求退出 (由 main 管理) */
-    g_pCtrl->config_monitor_exit.store(false);
-    g_pCtrl->fd_monitor_exit.store(false);
-    g_pCtrl->disp_thread_exit.store(false);
+    /* 线程退出标志: 0=运行中, 1=请求退出 (由 VideoRuntime 管理) */
+    ctrl->config_monitor_exit.store(false);
+    ctrl->fd_monitor_exit.store(false);
+    ctrl->disp_thread_exit.store(false);
 
+    g_pCtrl = ctrl.release();
     return 0;
 }
 
@@ -940,42 +920,6 @@ int app_ctrl_get_performance_display(void)
 }
 
 /*======================== 通道数据查询 ========================*/
-std::vector<AlgoResult> app_ctrl_get_results(int chnId)
-{
-    if (!app_ctrl_has_channel(chnId))
-        return {};
-    pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-    std::vector<AlgoResult> out = g_pCtrl->channels_state[chnId].last_results;
-    pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
-    return out;
-}
-
-std::vector<AlgoResult> app_ctrl_get_results_fresh(int chnId, int max_age_ms)
-{
-    if (!app_ctrl_has_channel(chnId))
-        return {};
-    if (max_age_ms <= 0)
-        return app_ctrl_get_results(chnId);
-
-    pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-    auto &cs = g_pCtrl->channels_state[chnId];
-    uint64_t now = steady_now_ms();
-    if (cs.published_steady_ms == 0)
-    {
-        pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
-        return {};
-    }
-    int64_t age_ms = now >= cs.published_steady_ms ? static_cast<int64_t>(now - cs.published_steady_ms) : 0;
-    if (age_ms > max_age_ms)
-    {
-        pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
-        return {};
-    }
-    std::vector<AlgoResult> out = cs.last_results;
-    pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
-    return out;
-}
-
 float app_ctrl_get_disp_fps(int chnId)
 {
     if (!app_ctrl_has_channel(chnId) || pause_ctrl::is_paused())
@@ -989,27 +933,6 @@ float app_ctrl_get_disp_fps(int chnId)
 float app_ctrl_get_infer_fps(int chnId)
 {
     return inference_get_infer_fps(chnId);
-}
-
-int app_ctrl_get_target_count(int chnId, const char *label, int max_age_ms)
-{
-    auto results = app_ctrl_get_results_fresh(chnId, max_age_ms);
-    std::string s(label);
-    int n = 0;
-    for (const auto &r : results)
-        if (r.label == s)
-            ++n;
-    return n;
-}
-
-int app_ctrl_has_target(int chnId, const char *label, int max_age_ms)
-{
-    auto results = app_ctrl_get_results_fresh(chnId, max_age_ms);
-    std::string s(label);
-    for (const auto &r : results)
-        if (r.label == s)
-            return 1;
-    return 0;
 }
 
 std::string app_ctrl_get_logic_name(int chnId)

@@ -1,6 +1,7 @@
 #include "decode_channel.h"
 #include "application/runtime/app_ctrl.h"
 #include "application/runtime/pause_ctrl.h"
+#include "application/runtime/runtime_status.h"
 #include "application/runtime/service_watchdog.h"
 #include "common/logging.h"
 #include "gst_opt.h"
@@ -11,10 +12,12 @@
 #include <csignal>
 #include <cstring>
 #include <fcntl.h>
+#include <gst/rtsp/gstrtspurl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
+#include <stdexcept>
 #include <string>
 #include <sys/socket.h>
 #include <thread>
@@ -24,36 +27,15 @@
  * 在创建 mppvideodec 之前先快速确认 RTSP 端口能不能连上.
  * 网络挂时直接快速失败, 避免反复 create/destroy mppvideodec 触发
  * RK3588 内核 mpp_service session 慢漏 (一天网络抖动一次足以让多路掉帧). */
-static bool probe_rtsp_tcp(const std::string &rtsp_url, int timeout_ms = 2000)
+static bool probe_rtsp_tcp(const std::string &rtsp_url, NetworkRttMonitor &network_rtt, int timeout_ms = 2000)
 {
-    /* 从 rtsp://[user:pass@]host[:port]/path 中提取 host 和 port */
-    auto scheme_pos = rtsp_url.find("://");
-    if (scheme_pos == std::string::npos)
-        return true; /* 不是标准 URL, 跳过探测让上层走原路径 */
-    std::string rest = rtsp_url.substr(scheme_pos + 3);
-
-    auto at = rest.find('@');
-    if (at != std::string::npos)
-        rest = rest.substr(at + 1);
-
-    auto slash = rest.find('/');
-    if (slash != std::string::npos)
-        rest = rest.substr(0, slash);
-
-    std::string host;
-    std::string port_str = "554";
-    auto colon = rest.find(':');
-    if (colon != std::string::npos)
-    {
-        host = rest.substr(0, colon);
-        port_str = rest.substr(colon + 1);
-    }
-    else
-    {
-        host = rest;
-    }
-    if (host.empty())
-        return true; /* 解析不出 host, 不拦截 */
+    network_rtt.clear_target();
+    GstRTSPUrl *parsed = nullptr;
+    if (gst_rtsp_url_parse(rtsp_url.c_str(), &parsed) != GST_RTSP_OK || !parsed)
+        return true; // 无法解析时仍由原来的取流路径报告错误。
+    const std::string host = parsed->host ? parsed->host : "";
+    const std::string port_str = std::to_string(parsed->port ? parsed->port : GST_RTSP_DEFAULT_PORT);
+    gst_rtsp_url_free(parsed);
 
     struct addrinfo hints
     {
@@ -67,6 +49,7 @@ static bool probe_rtsp_tcp(const std::string &rtsp_url, int timeout_ms = 2000)
         return false;
     }
 
+    network_rtt.set_target(res->ai_addr, res->ai_addrlen);
     bool connected = false;
     int sock = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (sock >= 0)
@@ -389,6 +372,9 @@ static void *busListen(void *para)
                            err->message);
                 if (dbg)
                     g_printerr("  Debug: %s\n", dbg);
+                if (pThis)
+                    for (int cid : pThis->mGstChn.chnIds)
+                        app_ctrl_capture_status(cid, vision::VideoChannelState::Disconnected, err->message);
                 g_clear_error(&err);
                 g_free(dbg);
                 terminate = TRUE;
@@ -473,7 +459,7 @@ static void *busListen(void *para)
              *   - 重置跟踪器 track_id (重连后 ID 从新分配,不与旧目标混淆)
              *   - 重置 feed throttle 时间戳
              * 在所有 chnIds 上调用，因为一条 GstChannel 可能服务多个逻辑通道
-             * (例如通过 addTargetChannel 共享同一 RTSP 流)。 */
+             * (例如构造时分配了共享同一 RTSP 流的多个通道)。 */
             for (int cid : pThis->mGstChn.chnIds)
                 pipeline_channel_offline(cid);
 
@@ -544,10 +530,19 @@ static void *initialRtspConnect(void *para)
 
 /* ==================== 构造 / 析构 ==================== */
 
-DecChannel::DecChannel(int chnId, const SrcCfg_t &cfg)
-    : bObjIsInited(false), mReconnectCount(0), mRecoverOkCount(0), mRecoverFailCount(0),
-      mIsFileSrc(cfg.srcType == "file"), mIsUsbSrc(cfg.srcType == "usb"), mLoop(cfg.loop), mCfg(cfg)
+DecChannel::DecChannel(std::vector<int> channel_ids, const SrcCfg_t &cfg)
+    : mGstChn(std::move(channel_ids)), bObjIsInited(false), mReconnectCount(0), mRecoverOkCount(0),
+      mRecoverFailCount(0), mIsFileSrc(cfg.srcType == "file"), mIsUsbSrc(cfg.srcType == "usb"), mLoop(cfg.loop),
+      mCfg(cfg), mNetworkRtt([ids = mGstChn.chnIds](float rtt) {
+          for (int id : ids)
+              app_ctrl_network_rtt(id, rtt);
+      })
 {
+    if (mGstChn.chnIds.empty())
+        throw std::invalid_argument("capture requires at least one channel");
+    for (auto it = mGstChn.chnIds.begin(); it != mGstChn.chnIds.end(); ++it)
+        if (*it < 0 || *it >= MAX_CHANNEL_NUM || std::find(mGstChn.chnIds.begin(), it, *it) != it)
+            throw std::invalid_argument("capture channel IDs must be valid and unique");
     mGstChn.owner = this;
     mGstChn.pipeline = nullptr;
     mGstChn.source = nullptr;
@@ -558,7 +553,6 @@ DecChannel::DecChannel(int chnId, const SrcCfg_t &cfg)
     mGstChn.vDec = nullptr;
     mGstChn.vSink = nullptr;
 
-    mGstChn.chnIds.push_back(chnId);
     mGstChn.is_file = mIsFileSrc;
     mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
                                                                 std::chrono::steady_clock::now().time_since_epoch())
@@ -579,19 +573,19 @@ bool DecChannel::hasChannel(int chnId) const
     return false;
 }
 
-bool DecChannel::canShareWith(const SrcCfg_t &cfg) const
+bool capture_sources_share(const SrcCfg_t &first, const SrcCfg_t &cfg)
 {
-    if (mCfg.srcType != cfg.srcType || mCfg.location != cfg.location)
+    if (first.srcType != cfg.srcType || first.location != cfg.location)
         return false;
     if (cfg.srcType == "rtsp")
-        return mCfg.videoEncType == cfg.videoEncType;
+        return first.videoEncType == cfg.videoEncType;
     if (cfg.srcType == "file")
         // 文件的播放时钟和 seek 属于各自通道，不能因路径相同而共用管线。
         return false;
     if (cfg.srcType == "usb")
     {
-        const int own_width = mCfg.usb_width > 0 ? mCfg.usb_width : 1280;
-        const int own_height = mCfg.usb_height > 0 ? mCfg.usb_height : 720;
+        const int own_width = first.usb_width > 0 ? first.usb_width : 1280;
+        const int own_height = first.usb_height > 0 ? first.usb_height : 720;
         const int other_width = cfg.usb_width > 0 ? cfg.usb_width : 1280;
         const int other_height = cfg.usb_height > 0 ? cfg.usb_height : 720;
         return own_width == other_width && own_height == other_height;
@@ -601,6 +595,7 @@ bool DecChannel::canShareWith(const SrcCfg_t &cfg) const
 
 void DecChannel::stop()
 {
+    mNetworkRtt.stop();
     /* bObjIsInited 在重连窗口会暂时为 false，不能据此跳过 join；否则首次
      * 冷启动持续断网时删除 DecChannel 会留下仍访问 this 的重连线程。 */
     if (!mThreadStarted)
@@ -674,7 +669,7 @@ int DecChannel::createVideoDecChannel(bool start_thread)
      * 避免网络抖动期间高频 create/destroy mppvideodec 触发 RK3588
      * 内核侧 mpp_service session 慢漏 — 这是程序运行一天后多路视频
      * 掉帧、重启进程无效、必须重启设备才能恢复的根因之一. */
-    if (!probe_rtsp_tcp(mCfg.location, 2000))
+    if (!probe_rtsp_tcp(mCfg.location, mNetworkRtt, 2000))
     {
         g_printerr("[DecChannel ch%d] RTSP TCP probe failed for %s, skip pipeline build this round\n", channelId(),
                    mCfg.location.c_str());

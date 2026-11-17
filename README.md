@@ -11,13 +11,31 @@
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Page views](https://hits.sh/github.com/LaoWei2001/rk3588_visual_analysis_framework.svg?label=Page%20views&color=7c3aed)](https://hits.sh/github.com/LaoWei2001/rk3588_visual_analysis_framework/)
 
-[快速开始](#快速开始) · [模型与业务接入](#模型与业务接入) · [性能实测](#性能与验证) · [文档中心](docs/README.md) · [项目愿景](#项目愿景)
+[效果展示](#效果展示) · [快速开始](#快速开始) · [模型与业务接入](#模型与业务接入) · [性能实测](#性能与验证) · [文档中心](docs/README.md) · [项目愿景](#项目愿景)
 
 </div>
 
 面向 **Rockchip RK3588** 的 C++ 多路视觉框架，将视频接入、RKNN 推理、目标跟踪、业务规则、事件证据与 Web 运维连接在一起。你通过公开 SDK 编写业务，框架负责共用的视频管线、模型调度、媒体存储与应用管理。
 
 适合需要多摄像头分析、区域告警、工业视觉或现场维护的边缘项目，也适合学习一套视觉应用从算法接入到板端交付的完整实现。
+
+## 效果展示
+
+**多路同时推理，每一路都能配置自己的业务逻辑。**
+
+在浏览器中查看多路实时画面与分析结果。每路视频可以独立选择模型、配置业务逻辑，将目标检测、区域判断和告警规则组合成自己的应用。
+
+[![Web 实时画面：多路视频同时推理，每路可独立配置模型与自定义业务逻辑](image1.png)](image1.png)
+
+**在画布上，把视频、模型和逻辑连接起来。**
+
+拖拽节点、连接分析流程，直观看到每一路视频使用的模型和逻辑。通过 C++ SDK 编写的自定义业务，也可以接入画布，在页面中配置参数。
+
+[![Web 配置画布：为各路视频连接模型与逻辑函数，分别配置分析流程](image.png)](image.png)
+
+*点击图片可查看原图。*
+
+**[从快速开始部署到 RK3588，接入自己的视频与模型，查看实际效果 →](#快速开始)**
 
 ## 核心能力
 
@@ -49,7 +67,7 @@ flowchart LR
 
 以下操作在 **RK3588 板端**进行。验证环境为 **Debian 11 / Linux 5.10.160 / RKNPU 0.9.0**，仓库固定 RKNN Runtime `2.4.2a2`。板端配套 RKNPU、RGA 和 MPP，驱动及视频栈版本见[平台基线](engine/vendor/rockchip/PLATFORM_COMPATIBILITY.env)。
 
-### 1. 获取源码，安装平台
+### 1. 获取源码，安装平台(需要互联网连接)
 
 ```bash
 git clone https://github.com/LaoWei2001/rk3588_visual_analysis_framework.git
@@ -64,7 +82,7 @@ sudo ./install.sh online
 
 ### 2. 构建第一个应用
 
-准备一段自己的、MPP 可解码的 H.264 MP4，将下面的 `/path/to/input.mp4` 替换为实际路径。`readme_demo` 请使用一个尚未安装的新应用名。
+<!-- 准备一段自己的、MPP 可解码的 H.264/265 MP4文件，将下面的 `/path/to/input.mp4` 替换为实际路径。`readme_demo` 请使用一个尚未安装的新应用名。 -->
 
 ```bash
 ./build.sh readme_demo
@@ -125,7 +143,7 @@ export LD_LIBRARY_PATH="$PWD/libs:$LD_LIBRARY_PATH"
 
 ### 扩展更多模型
 
-**框架已经接入 ZipDepth 深度估计。** ZipDepth 输出相对逆深度，表达画面中的远近层次；YOLO26 Depth 提供米制深度。深度模型与检测、姿态、分割共享视频管线、NPU 调度和业务结果接口，可以按场景组合使用。
+**框架已经接入 ZipDepth 深度估计作为示例。** ZipDepth 输出相对逆深度，表达画面中的远近层次；YOLO26 Depth 提供米制深度。深度模型与检测、姿态、分割共享视频管线、NPU 调度和业务结果接口，可以按场景组合使用。用这两个模型来说明本项目架构适配其他模型的灵活性。
 
 新增模型时，通过 [`ModelBase`](engine/src/vision/models/model_base.h) 实现前后处理与结果契约，在模型工厂中注册，并同步配置校验、能力目录和 Web 模型识别规则；重新构建后，新模型即可接入现有分析管线。具体步骤见[新增模型类型](docs/guides/project-guide.md#新增模型类型)。
 

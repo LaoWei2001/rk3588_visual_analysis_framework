@@ -1,5 +1,5 @@
 #include "vision/inference/model_status.h"
-#include "vision/models/composite_model.h"
+#include "vision/models/model_group.h"
 #include <cassert>
 #include <iostream>
 #include <json.h>
@@ -38,34 +38,12 @@ class FakeModel : public ModelBase
     }
 };
 
-class FakeDepth : public FakeModel
+std::shared_ptr<ModelGroup> single_group(int width)
 {
-  public:
-    FakeDepth() : FakeModel(640)
-    {
-    }
-    bool infer(cv::Mat &, std::vector<AlgoResult> &out, ModelPerfStat *) override
-    {
-        AlgoResult depth;
-        depth.score = 1;
-        depth.depth_map = cv::Mat(640, 640, CV_32FC1, cv::Scalar(2));
-        depth.box = cv::Rect(0, 0, 640, 640);
-        out = {depth};
-        return true;
-    }
-};
-
-class FailingModel : public FakeModel
-{
-  public:
-    FailingModel() : FakeModel(640)
-    {
-    }
-    bool infer(cv::Mat &, std::vector<AlgoResult> &, ModelPerfStat *) override
-    {
-        throw std::runtime_error("simulated NPU submission failure");
-    }
-};
+    ModelGroup::Entry entry;
+    entry.model = std::make_shared<FakeModel>(width);
+    return std::make_shared<ModelGroup>(std::vector<ModelGroup::Entry>{entry});
+}
 
 void check(const char *state, int width, int active_count = 1)
 {
@@ -83,25 +61,6 @@ void check(const char *state, int width, int active_count = 1)
 
 int main()
 {
-    {
-        CompositeModel::Entry child;
-        child.model = std::make_shared<FailingModel>();
-        CompositeModel composite({child});
-        cv::Mat frame(640, 640, CV_8UC3);
-        std::vector<AlgoResult> results;
-        bool failed = false;
-        try
-        {
-            composite.infer(frame, results, nullptr);
-        }
-        catch (const std::runtime_error &)
-        {
-            failed = true;
-        }
-        assert(failed);
-        assert(pthread_mutex_trylock(&child.model->infer_mtx) == 0);
-        pthread_mutex_unlock(&child.model->infer_mtx);
-    }
     AppConfig config;
     ChannelConfig channel;
     channel.id = 2;
@@ -113,17 +72,17 @@ int main()
     config.channels = {channel};
     model_status_reset(config);
     check("disabled", 0, 0);
-    model_status_begin(2, channel);
-    model_status_applied(2, channel, {std::make_shared<FakeModel>(640)});
+    model_status_begin(2);
+    model_status_applied(2, channel, {single_group(640)});
     check("applied", 640);
     channel.models[0].model_path = "assets/large.rknn";
-    model_status_begin(2, channel);
+    model_status_begin(2);
     check("loading", 640);
     model_status_failed(2, "load failed");
     check("failed", 640);
     assert(inference_model_status_json().find("assets/small.rknn") != std::string::npos);
-    model_status_begin(2, channel);
-    model_status_applied(2, channel, {std::make_shared<FakeModel>(960)});
+    model_status_begin(2);
+    model_status_applied(2, channel, {single_group(960)});
     check("applied", 960);
     // Polling and lifecycle writes can proceed concurrently with no inference lock.
     std::thread reader([] {
@@ -131,16 +90,15 @@ int main()
             check("applied", 960);
     });
     for (int i = 0; i < 500; ++i)
-        model_status_applied(2, channel, {std::make_shared<FakeModel>(960)});
+        model_status_applied(2, channel, {single_group(960)});
     reader.join();
     channel.models.push_back(spec);
-    CompositeModel::Entry first, second;
+    ModelGroup::Entry first, second;
     first.id = "a";
     first.model = std::make_shared<FakeModel>(960);
     second.id = "b";
     second.model = std::make_shared<FakeModel>(960);
-    model_status_applied(2, channel,
-                         {std::make_shared<CompositeModel>(std::vector<CompositeModel::Entry>{first, second})});
+    model_status_applied(2, channel, {std::make_shared<ModelGroup>(std::vector<ModelGroup::Entry>{first, second})});
     check("applied", 960, 2);
     model_status_applied(2, channel, {});
     check("disabled", 0, 0);
@@ -150,26 +108,8 @@ int main()
     check("disabled", 0, 0);
     std::cout << "Model lifecycle snapshot regression passed\n";
 
-    first.type = "yolov8_det";
-    second.type = "yolov5";
     second.model = std::make_shared<FakeModel>(640);
-    {
-        CompositeModel different_detector_sizes({first, second});
-    }
-    second.type = "yolo26_depth";
-    second.model = std::make_shared<FakeDepth>();
-    second.allowed_classes = {123}; // object class filters must not discard depth
-    for (const std::string type : {"yolo26_depth", "zip_depth"})
-        for (bool depth_first : {false, true})
-        {
-            second.type = type;
-            CompositeModel composite(depth_first ? std::vector<CompositeModel::Entry>{second, first}
-                                                 : std::vector<CompositeModel::Entry>{first, second});
-            cv::Mat frame(composite.input_height(), composite.input_width(), CV_8UC3, cv::Scalar(0));
-            std::vector<AlgoResult> out;
-            assert(composite.infer(frame, out));
-            assert(out.size() == 1 && out[0].is_depth());
-            assert(out[0].depth_map.size() == frame.size() && out[0].depth_at(320, 320) == 2);
-            assert(out[0].model_id == second.id && out[0].model_type == type);
-        }
+    ModelGroup different_sizes({first, second});
+    assert(different_sizes.entries()[0].model->input_width() == 960);
+    assert(different_sizes.entries()[1].model->input_width() == 640);
 }

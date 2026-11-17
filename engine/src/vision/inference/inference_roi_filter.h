@@ -1,6 +1,6 @@
 #pragma once
 
-#include "application/config/config.h"
+#include <config_types.h>
 #include <types.h>
 
 #include <vector>

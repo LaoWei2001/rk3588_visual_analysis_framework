@@ -73,13 +73,13 @@ def main():
 static void sdk_channel(ChannelContext *ctx) {
     struct State { int calls = 0; };
     if (auto *state = ctx->get_state<State>()) ++state->calls;
-    ctx->publish_int("count", roi_count_target(ctx, "person", ROI_ALL));
     TargetQuery query;
     query.labels = {"person", "car"};
     query.min_score = 0.7f;
     query.roi = roi_find(ctx, "entrance");
     query.anchor = TargetAnchor::BottomCenter;
     const auto selected = ctx->query_targets(query);
+    ctx->publish_int("count", selected.count);
     if (selected.valid() && selected.best) draw_rect(ctx, selected.best->box);
     (void)target_query_status_name(selected.status);
     draw_text(ctx, "test", ctx->business_center());
@@ -90,11 +90,11 @@ static void sdk_channel(ChannelContext *ctx) {
     if (ctx->config) (void)ctx->config->models.size();
     EventRequest request;
     request.event_type = "test";
-    request.fields = {event_field("count", ctx->target_count("person"))};
+    request.fields = {event_field("count", selected.count)};
     report_event(ctx, request);
 }
 static void sdk_global(GlobalContext *ctx) {
-    for (const auto &channel : ctx->inputs()) (void)channel.get_int("count");
+    for (std::size_t i = 0; i < ctx->input_count(); ++i) (void)ctx->input_at(i)->get_int("count");
     ChannelFrameSnapshot evidence;
     ctx->get_channel_frame_snapshot(0, &evidence);
     logic_control_set_channel_inference(0, true);
@@ -104,7 +104,7 @@ REGISTER_GLOBAL_LOGIC(sdk_global);
 ''')
 
     private_members = [
-        'ChannelContext ctx{}; ctx.model_frame_getter = nullptr;',
+        'ChannelContext ctx{}; ctx.business_frame_getter = nullptr;',
         'ChannelContext ctx{}; ctx.draw_cmds = nullptr;',
         'ChannelContext ctx{}; ctx.logic_parameters = nullptr;',
         'GlobalContext ctx{}; ctx.ready_inputs = nullptr;',
@@ -121,6 +121,26 @@ REGISTER_GLOBAL_LOGIC(sdk_global);
                    'global_logic_get', 'global_logic_action_get', 'global_logic_names',
                    'draw_text_unicode_cached', 'gpio_init', 'gpio_deinit', 'gpio_restore_outputs'):
         compile_case(f'{symbol} is engine-only', public_code + f'auto hidden = &{symbol};\n', accepted=False)
+    # Removed compatibility APIs must not silently return to the public surface.
+    removed = {
+        'ChannelContext': ('model_frame', 'has_target', 'target_count', 'roi_name_at',
+                           'roi_index_of', 'point_box_in_poly', 'time_hms', 'datetime',
+                           'get_channel_logic_name', 'channel_has_logic'),
+        'GlobalContext': ('model_width', 'model_height', 'inputs', 'contains_channel',
+                          'channel_count', 'connected_channel_count', 'channel_at',
+                          'connected_channel_at', 'is_connected_channel', 'has_updates',
+                          'channel_update', 'channel_updated', 'latest_update',
+                          'clear_channel_draw_commands'),
+        'AlgoResult': ('box_contains', 'dist_sq_to'),
+        'EventReportResult': ('media_failed',),
+    }
+    for owner, members in removed.items():
+        for member in members:
+            compile_case(f'removed {owner}::{member}',
+                         public_code + f'auto obsolete = &{owner}::{member};', accepted=False)
+    for symbol in ('pin_out_val', 'pin_set_high', 'pin_set_low', 'read_pin_val',
+                   'roi_count_target', 'roi_has_target', 'vision::model_inspection_types'):
+        compile_case(f'removed {symbol}', public_code + f'auto obsolete = &{symbol};', accepted=False)
     for code in ('RenderParams params;', 'LogicEntry entry;', 'GPIOCfg_t config;',
                  'void test(ChannelContext &ctx) { ctx.render_params(); }'):
         compile_case('internal rendering/registry/lifecycle types', public_code + code, accepted=False)

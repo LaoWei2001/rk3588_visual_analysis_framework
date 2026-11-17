@@ -8,7 +8,7 @@
  *  3. 暂定轨迹只与剩余高置信度检测关联；
  *  4. 仅剩余高置信度检测可创建新轨迹。
  */
-#include "bytetrack.h"
+#include <bytetrack.h>
 
 #include <algorithm>
 #include <cmath>

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # RK3588 Web Console 内部部署脚本。
-# 只消费已经准备好的 Python 环境和前端产物；正常部署请从项目根目录执行 ./install.sh。
+# 使用已准备好的 Python/前端环境并构建独立图片引擎；正常部署从根目录执行 ./install.sh。
 set -Eeuo pipefail
 
 if [ "$#" -ne 0 ]; then
@@ -77,6 +77,9 @@ if ! "$PYTHON_BIN" -m pip check; then
     echo "       请从项目根目录重新执行 sudo ./install.sh online，或修复离线环境。" >&2
     exit 1
 fi
+# Prepare the independent image engine before replacing the running console.
+bash "$SCRIPT_DIR/build_image_runtime.sh" "$INSTALL_DIR/inference_runtime"
+
 rm -rf -- "$INSTALL_DIR/backend"
 mkdir -p "$INSTALL_DIR/backend"
 cp -a "$SCRIPT_DIR/backend/." "$INSTALL_DIR/backend/"
@@ -138,6 +141,9 @@ echo "[3/4] 安装 Web systemd 服务..."
     echo "User=root"
     printf 'WorkingDirectory=%s\n' "$INSTALL_DIR/backend"
     printf 'Environment="APPS_ROOT=%s"\n' "$APPS_ROOT"
+    printf 'Environment="IMAGE_INFERENCE_RUNTIME=%s/inference_runtime"\n' "$INSTALL_DIR"
+    printf 'Environment="IMAGE_INFERENCE_MODELS=%s/model_assets"\n' "$INSTALL_DIR"
+    printf 'Environment="IMAGE_INFERENCE_ROOT=%s/image_inference"\n' "$INSTALL_DIR"
     echo 'Environment="BINARY_NAME=vision_analysis"'
     printf 'Environment="VISION_PYTHON=%s"\n' "$PYTHON_BIN"
     echo "ExecStartPre=-/usr/bin/nm-online -q --timeout=30"

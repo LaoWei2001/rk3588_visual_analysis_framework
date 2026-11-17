@@ -36,6 +36,7 @@ import {
   fetchConfigFiles, loadConfigFile, fetchAppLogics, fetchAssets, fetchConnections,
 } from '../api/client'
 import GlobalSettingsPanel, { GlobalSettingsData, DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
+import { channelImageSettings, openImageInference } from '../features/image-inference/preset'
 import NodeConfigPanel from '../components/NodeConfigPanel'
 import ConfigPreviewPanel from '../components/ConfigPreviewPanel'
 import AppIntegrationModal from '../components/AppIntegrationModal'
@@ -1716,6 +1717,10 @@ export default function EditorPage() {
             reportConfigJson={selectedReportConfig?.json ?? null}
             reportConfigPath={selectedReportConfig?.path ?? null}
             modelIdError={selectedModelIdError}
+            onImageInference={selectedNode?.type === 'model' ? () => {
+              try { openImageInference(appName ?? '', channelImageSettings(selectedNode, nodes, edges)) }
+              catch (error) { showToast(apiErrorMessage(error)) }
+            } : undefined}
             modelChannelId={selectedNode?.type === 'model' ? (() => {
               const edge = edges.find(item => item.target === selectedNode.id && item.targetHandle === 'stream-in')
               const stream = edge ? nodes.find(item => item.id === edge.source && item.type === 'stream') : undefined

@@ -33,7 +33,6 @@ int main()
     context.inference_valid = true;
     assert(context.depth_result("distance") == &results[0]);
     assert(context.depth_result("missing") == nullptr);
-    assert(context.target_count("depth") == 0);
     assert(context.query_targets().valid() && context.query_targets().count == 0);
 
     const auto *identity = results[0].depth_map.data;

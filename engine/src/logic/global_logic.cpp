@@ -1,3 +1,4 @@
+#include "events/event_report.h"
 /**
  * @file global_logic.cpp
  * @brief 全局逻辑模块 — C/pthread 风格
@@ -6,20 +7,24 @@
  * instance_id 只替换发生变化的实例，避免一个节点改参数导致其它全局状态被清空。
  */
 
-#include "global_logic.h"
 #include "application/control/logic_control.h"
 #include "application/runtime/app_ctrl.h"
 #include "application/runtime/pause_ctrl.h"
 #include "application/runtime/publication_signal.h"
+#include "application/runtime/runtime_status.h"
 #include "application/runtime/service_watchdog.h"
 #include "context_access.h"
+#include "global_logic.h"
 #include "logic/logic_registry.h"
-#include "logic_parameters.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <exception>
+#include <memory>
+#include <mutex>
+#include <parameters.h>
 #include <pthread.h>
 #include <thread>
 #include <utility>
@@ -37,107 +42,16 @@ struct GlobalLogicThread
     uint64_t last_tick_steady_ms;
 
     std::vector<int> channel_ids;
-    std::vector<unsigned char> channel_observed;
-    std::vector<uint64_t> last_publication_seq;
     std::vector<ChannelLogicSnapshot> channel_snapshots;
     std::vector<ChannelInput> ready_inputs;
-    std::vector<ChannelUpdate> updated_channels;
 
     GlobalContext gctx;
     GlobalLogicFunc func;
 };
 
 static std::vector<GlobalLogicThread *> g_threads;
-static pthread_mutex_t g_threads_mtx = PTHREAD_MUTEX_INITIALIZER;
+static std::mutex g_threads_mtx;
 static constexpr int GLOBAL_LOGIC_MIN_DISPATCH_INTERVAL_MS = 5;
-
-/*======================== 全局逻辑分发表 ========================*/
-constexpr int MAX_GLOBAL_LOGIC_FUNCS = 64;
-
-struct GlobalLogicEntry
-{
-    const char *name = nullptr;
-    GlobalLogicFunc func = nullptr;
-};
-static GlobalLogicEntry g_logic_registry[MAX_GLOBAL_LOGIC_FUNCS];
-static int g_logic_count = 0;
-
-struct GlobalLogicActionEntry
-{
-    const char *name = nullptr;
-    GlobalLogicActionFunc func = nullptr;
-};
-static GlobalLogicActionEntry g_action_registry[MAX_GLOBAL_LOGIC_FUNCS];
-static int g_action_count = 0;
-
-void register_global_logic(const char *name, GlobalLogicFunc func)
-{
-    if (!name || !func)
-        return;
-    for (int i = 0; i < g_logic_count; ++i)
-    {
-        if (g_logic_registry[i].name && strcmp(g_logic_registry[i].name, name) == 0)
-        {
-            g_logic_registry[i].func = func;
-            return;
-        }
-    }
-    if (g_logic_count < MAX_GLOBAL_LOGIC_FUNCS)
-    {
-        g_logic_registry[g_logic_count].name = name;
-        g_logic_registry[g_logic_count].func = func;
-        ++g_logic_count;
-    }
-}
-
-GlobalLogicFunc global_logic_get(const char *name)
-{
-    if (name)
-        for (int i = 0; i < g_logic_count; ++i)
-            if (g_logic_registry[i].name && strcmp(g_logic_registry[i].name, name) == 0)
-                return g_logic_registry[i].func;
-    return nullptr;
-}
-
-void register_global_logic_action(const char *name, GlobalLogicActionFunc func)
-{
-    if (!name || !func)
-        return;
-    for (int i = 0; i < g_action_count; ++i)
-    {
-        if (g_action_registry[i].name && strcmp(g_action_registry[i].name, name) == 0)
-        {
-            g_action_registry[i].func = func;
-            return;
-        }
-    }
-    if (g_action_count < MAX_GLOBAL_LOGIC_FUNCS)
-    {
-        g_action_registry[g_action_count].name = name;
-        g_action_registry[g_action_count].func = func;
-        ++g_action_count;
-    }
-}
-
-GlobalLogicActionFunc global_logic_action_get(const char *name)
-{
-    if (name)
-        for (int i = 0; i < g_action_count; ++i)
-            if (g_action_registry[i].name && strcmp(g_action_registry[i].name, name) == 0)
-                return g_action_registry[i].func;
-    return nullptr;
-}
-
-std::vector<std::string> global_logic_names()
-{
-    std::vector<std::string> names;
-    names.reserve(g_logic_count);
-    for (int i = 0; i < g_logic_count; ++i)
-        if (g_logic_registry[i].name)
-            names.emplace_back(g_logic_registry[i].name);
-    std::sort(names.begin(), names.end());
-    return names;
-}
 
 /*======================== GlobalContext 参数访问 ========================*/
 bool GlobalContext::has_param(const char *key) const
@@ -177,11 +91,6 @@ void GlobalContext::set_channel_draw_commands(int channel_id, const std::vector<
         image_draw_commands[channel_id] = commands;
         app_ctrl_set_global_draw_commands(channel_id, config->instance_id, commands);
     }
-}
-
-void GlobalContext::clear_channel_draw_commands(int channel_id) const
-{
-    set_channel_draw_commands(channel_id, {});
 }
 
 /*======================== 辅助: 时间戳 ========================*/
@@ -236,6 +145,7 @@ static void prepare_ready_inputs(GlobalLogicThread *thread, int64_t timeout_ms)
 
 /*======================== 全局逻辑线程入口 (pthread) ========================*/
 void *global_logic_thread_func(void *arg)
+try
 {
     GlobalLogicThread *t = (GlobalLogicThread *)arg;
     if (!t)
@@ -262,11 +172,8 @@ void *global_logic_thread_func(void *arg)
     }
 
     int ch_count = (int)t->channel_ids.size();
-    t->channel_observed.assign(ch_count, 0);
-    t->last_publication_seq.assign(ch_count, 0);
     t->channel_snapshots.reserve(ch_count);
     t->ready_inputs.reserve(ch_count);
-    t->updated_channels.reserve(ch_count);
 
     int poll_ms = std::max(10, t->config.poll_interval_ms);
     const int64_t input_timeout_ms = automatic_input_timeout_ms(poll_ms);
@@ -289,7 +196,6 @@ void *global_logic_thread_func(void *arg)
         t->last_tick_steady_ms = tick_begin_ms;
 
         t->channel_snapshots.clear();
-        t->updated_channels.clear();
         VisionContextAccess::overlays(t->gctx).clear();
 
         for (int i = 0; i < ch_count; ++i)
@@ -299,25 +205,6 @@ void *global_logic_thread_func(void *arg)
             if (!app_ctrl_get_channel_logic_snapshot(channel_id, &snapshot))
                 continue;
 
-            const uint64_t previous_seq = t->last_publication_seq[i];
-            const uint64_t current_seq = snapshot.publication_seq;
-            if (current_seq != previous_seq)
-            {
-                const bool initial_snapshot = t->channel_observed[i] == 0;
-                const uint64_t revision_count =
-                    initial_snapshot ? 1 : (current_seq > previous_seq ? current_seq - previous_seq : 1);
-                ChannelUpdate update;
-                update.channel_id = channel_id;
-                update.initial_snapshot = initial_snapshot;
-                update.previous_publication_seq = previous_seq;
-                update.publication_seq = current_seq;
-                update.revision_count = revision_count;
-                update.missed_revisions = revision_count > 0 ? revision_count - 1 : 0;
-                update.published_steady_ms = snapshot.published_steady_ms;
-                t->updated_channels.push_back(update);
-                t->last_publication_seq[i] = current_seq;
-            }
-            t->channel_observed[i] = 1;
             t->channel_snapshots.push_back(std::move(snapshot));
         }
 
@@ -333,10 +220,7 @@ void *global_logic_thread_func(void *arg)
         t->gctx.tick_id = t->tick_id++;
         t->gctx.effective_poll_interval_ms = poll_ms;
         t->gctx.runtime_generation = runtime ? runtime->generation : 0;
-        t->gctx.model_width = g_pCtrl ? g_pCtrl->inputW : 0;
-        t->gctx.model_height = g_pCtrl ? g_pCtrl->inputH : 0;
-        VisionContextAccess::bind_global(t->gctx, &t->channel_snapshots, &t->config.channels, &t->updated_channels,
-                                         &t->ready_inputs);
+        VisionContextAccess::bind_global(t->gctx, &t->channel_snapshots, &t->config.channels, &t->ready_inputs);
 
         std::vector<LogicAction> pending_actions;
         logic_control_take_global(t->config.instance_id, pending_actions);
@@ -387,6 +271,18 @@ void *global_logic_thread_func(void *arg)
     printf("[GlobalLogic] Thread exited: id=%s logic=%s\n", t->config.instance_id.c_str(), t->config.logic.c_str());
     return nullptr;
 }
+catch (const std::exception &error)
+{
+    const auto *thread = static_cast<GlobalLogicThread *>(arg);
+    app_ctrl_worker_failed(-1, thread->config.instance_id.c_str(), error.what());
+    return nullptr;
+}
+catch (...)
+{
+    const auto *thread = static_cast<GlobalLogicThread *>(arg);
+    app_ctrl_worker_failed(-1, thread->config.instance_id.c_str(), "未知异常");
+    return nullptr;
+}
 
 /*======================== 公开接口 ========================*/
 static GlobalLogicThread *start_one(const GlobalLogicConfig &cfg, const std::shared_ptr<void> &preserved_state = {})
@@ -398,7 +294,7 @@ static GlobalLogicThread *start_one(const GlobalLogicConfig &cfg, const std::sha
         return nullptr;
     }
 
-    GlobalLogicThread *t = new GlobalLogicThread();
+    std::unique_ptr<GlobalLogicThread> t(new GlobalLogicThread());
     t->config = cfg;
     t->state = preserved_state;
     t->running.store(true);
@@ -414,19 +310,18 @@ static GlobalLogicThread *start_one(const GlobalLogicConfig &cfg, const std::sha
                 cfg.logic.c_str());
         for (const auto &error : parameter_errors)
             fprintf(stderr, "  - %s: %s\n", error.field.c_str(), error.message.c_str());
-        delete t;
         return nullptr;
     }
 
-    int ret = pthread_create(&t->tid, nullptr, global_logic_thread_func, t);
+    VisionContextAccess::bind_events(t->gctx, &event_report_runtime_sink());
+    int ret = pthread_create(&t->tid, nullptr, global_logic_thread_func, t.get());
     if (ret != 0)
     {
         fprintf(stderr, "[GlobalLogic][%s] pthread_create failed for %s: %s\n", cfg.instance_id.c_str(),
                 cfg.logic.c_str(), strerror(ret));
-        delete t;
         return nullptr;
     }
-    return t;
+    return t.release();
 }
 
 static void stop_one(GlobalLogicThread *t)
@@ -441,6 +336,17 @@ static void stop_one(GlobalLogicThread *t)
     app_ctrl_clear_all_global_draw_commands(t->config.instance_id);
 }
 
+/* Caller owns g_threads_mtx; used for normal shutdown and failed startup rollback. */
+static void stop_all_locked()
+{
+    for (GlobalLogicThread *t : g_threads)
+    {
+        stop_one(t);
+        delete t;
+    }
+    g_threads.clear();
+}
+
 static const GlobalLogicConfig *find_config(const std::vector<GlobalLogicConfig> &cfgs, const std::string &instance_id)
 {
     for (const auto &cfg : cfgs)
@@ -453,20 +359,30 @@ int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs)
 {
     global_logic_stop_all();
 
-    pthread_mutex_lock(&g_threads_mtx);
     int started = 0;
-    for (const auto &cfg : cfgs)
     {
-        if (!cfg.enable)
-            continue;
-        GlobalLogicThread *t = start_one(cfg);
-        if (t)
+        const std::lock_guard<std::mutex> lock(g_threads_mtx);
+        g_threads.reserve(cfgs.size());
+        try
         {
-            g_threads.push_back(t);
-            ++started;
+            for (const auto &cfg : cfgs)
+            {
+                if (!cfg.enable)
+                    continue;
+                GlobalLogicThread *t = start_one(cfg);
+                if (t)
+                {
+                    g_threads.push_back(t); // Capacity was reserved before any thread was started.
+                    ++started;
+                }
+            }
+        }
+        catch (...)
+        {
+            stop_all_locked();
+            throw;
         }
     }
-    pthread_mutex_unlock(&g_threads_mtx);
 
     printf("[GlobalLogic] Started %d/%zu instance(s)\n", started, cfgs.size());
     return started;
@@ -474,7 +390,8 @@ int global_logic_start_all(const std::vector<GlobalLogicConfig> &cfgs)
 
 int global_logic_reload_all(const std::vector<GlobalLogicConfig> &cfgs)
 {
-    pthread_mutex_lock(&g_threads_mtx);
+    const std::lock_guard<std::mutex> lock(g_threads_mtx);
+    g_threads.reserve(std::max(g_threads.size(), cfgs.size()));
 
     for (auto it = g_threads.begin(); it != g_threads.end();)
     {
@@ -486,7 +403,8 @@ int global_logic_reload_all(const std::vector<GlobalLogicConfig> &cfgs)
             continue;
         }
 
-        stop_one(current);
+        // Complete potentially allocating comparisons before stopping the current instance.
+        const std::string instance_id = current->config.instance_id;
         std::shared_ptr<void> preserved_state;
         bool preserve_state = false;
         if (next && next->enable && current->config.logic == next->logic && current->config.channels == next->channels)
@@ -496,11 +414,12 @@ int global_logic_reload_all(const std::vector<GlobalLogicConfig> &cfgs)
             if (impact == LogicReloadImpact::NONE || impact == LogicReloadImpact::PRESERVE_STATE)
             {
                 preserve_state = true;
-                preserved_state = current->state;
             }
         }
 
-        const std::string instance_id = current->config.instance_id;
+        stop_one(current);
+        if (preserve_state)
+            preserved_state = current->state;
         delete current;
         it = g_threads.erase(it);
 
@@ -533,31 +452,19 @@ int global_logic_reload_all(const std::vector<GlobalLogicConfig> &cfgs)
     }
 
     const int running = static_cast<int>(g_threads.size());
-    pthread_mutex_unlock(&g_threads_mtx);
     return running;
 }
 
 void global_logic_stop_all(void)
 {
-    pthread_mutex_lock(&g_threads_mtx);
-
-    for (GlobalLogicThread *t : g_threads)
-    {
-        if (!t)
-            continue;
-        stop_one(t);
-        delete t;
-    }
-    g_threads.clear();
-
-    pthread_mutex_unlock(&g_threads_mtx);
+    const std::lock_guard<std::mutex> lock(g_threads_mtx);
+    stop_all_locked();
 }
 
 /*======================== 查询接口 (供 main) ========================*/
 int global_logic_get_instance_count(void)
 {
-    pthread_mutex_lock(&g_threads_mtx);
+    const std::lock_guard<std::mutex> lock(g_threads_mtx);
     int n = (int)g_threads.size();
-    pthread_mutex_unlock(&g_threads_mtx);
     return n;
 }

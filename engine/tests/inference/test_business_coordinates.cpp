@@ -44,9 +44,9 @@ void expect_box(const cv::Rect &actual, const cv::Rect &expected)
 
 void test_fixed_contract_and_model_switch()
 {
-    static_assert(std::is_const<decltype(InferenceRuntime::input_w)>::value,
+    static_assert(std::is_const<decltype(business_coordinates::WIDTH)>::value,
                   "model load/reload must not change business width");
-    static_assert(InferenceRuntime::input_w == 640 && InferenceRuntime::input_h == 640,
+    static_assert(business_coordinates::WIDTH == 640 && business_coordinates::HEIGHT == 640,
                   "business dimensions are a stable contract");
     ChannelContext channel{};
     GlobalContext global{};
@@ -54,8 +54,8 @@ void test_fixed_contract_and_model_switch()
     assert(channel.business_center() == cv::Point(320, 320));
     assert(global.business_center() == channel.business_center());
     assert(channel.business_size() == cv::Size(640, 640));
-    assert(global.model_width == 640 && global.model_height == 640);
-    assert(control.inputW == 640 && control.inputH == 640);
+    assert(global.business_width() == 640 && global.business_height() == 640);
+    assert(control.business_width == 640 && control.business_height == 640);
 
     // 相同取景在不同模型下依次输入，包含切回 640、非正方形输入以及改变顺序。
     for (const cv::Size model :
@@ -139,7 +139,7 @@ void test_crop_padding_and_roi_filter()
 
 const cv::Mat *business_getter(void *opaque)
 {
-    return static_cast<LazyVideoFrame *>(opaque)->model_frame();
+    return static_cast<LazyVideoFrame *>(opaque)->business_frame();
 }
 
 void test_lazy_business_frame_and_direct_model_input()
@@ -152,7 +152,7 @@ void test_lazy_business_frame_and_direct_model_input()
     VisionContextAccess::bind_frames(channel, business_getter, nullptr, frame.get());
     const auto *business = channel.business_frame();
     assert(business && business->size() == cv::Size(640, 640));
-    assert(channel.model_frame() == business);
+    assert(channel.business_frame() == business);
 
     cv::Mat model_input;
     assert(frame->resized_frame(960, 960, model_input));
@@ -171,7 +171,7 @@ void test_lazy_business_frame_and_direct_model_input()
         for (int x = 0; x < detail.cols; ++x)
             detail.at<cv::Vec3b>(y, x) = cv::Vec3b((x & 1) ? 255 : 0, (y & 1) ? 255 : 0, 30);
     LazyVideoFrame detailed_frame(0, nullptr, 960, 960, 960, 960, RK_FORMAT_BGR_888, 640, 640, detail.data);
-    assert(detailed_frame.model_frame()->size() == cv::Size(640, 640));
+    assert(detailed_frame.business_frame()->size() == cv::Size(640, 640));
     assert(detailed_frame.resized_frame(960, 960, model_input));
     assert(cv::norm(model_input, detail, cv::NORM_INF) == 0);
 }
@@ -191,7 +191,7 @@ void test_display_and_evidence_overlays_use_business_coordinates()
             detection(cv::Rect(model_size / 4, model_size / 4, model_size / 2, model_size / 2))};
         const InferenceRoiTransform full{cv::Rect(0, 0, 1920, 1080), cv::Rect(0, 0, model_size, model_size)};
         map_results_to_business_frame(1920, 1080, full, model_size, model_size, results);
-        RenderParams params;
+        vision::OverlayOptions params;
         params.inputW = params.inputH = 640;
         params.results = &results;
         params.draw_cmds = &commands;
@@ -200,7 +200,7 @@ void test_display_and_evidence_overlays_use_business_coordinates()
         {
             params.target_mask = target;
             cv::Mat view = cv::Mat::zeros(720, 1280, CV_8UC3);
-            render_overlays(view, params);
+            render_runtime_overlays(view, params);
             assert(view.at<cv::Vec3b>(360, 640)[0] == 255); // 所有出口的业务中心仍是画面中心。
             assert(view.at<cv::Vec3b>(360, 320)[1] == 255); // 模型框与业务绘制使用同一缩放规则。
         }
@@ -234,7 +234,7 @@ void test_depth_background_and_overlay_order()
     depth.depth_map = cv::Mat(640, 640, CV_32FC1, cv::Scalar(0));
     depth.depth_map(cv::Rect(160, 160, 320, 320)).setTo(2.0f);
     std::vector<AlgoResult> results{depth};
-    RenderParams params;
+    vision::OverlayOptions params;
     params.inputW = params.inputH = 640;
     params.results = &results;
     params.show_fps = 0;
@@ -243,13 +243,13 @@ void test_depth_background_and_overlay_order()
     {
         params.target_mask = target;
         cv::Mat image(720, 1280, CV_8UC3, cv::Scalar(10, 20, 30));
-        render_overlays(image, params);
+        render_runtime_overlays(image, params);
         assert(image.at<cv::Vec3b>(0, 0) == cv::Vec3b(0, 0, 0));
         assert(image.at<cv::Vec3b>(360, 640) != cv::Vec3b(10, 20, 30));
         // Rendering must be independent of every source-image pixel, including
         // cached reuse across display, screenshot and recorded-video targets.
         cv::Mat alternate(image.size(), CV_8UC3, cv::Scalar(200, 130, 70));
-        render_overlays(alternate, params);
+        render_runtime_overlays(alternate, params);
         assert(cv::norm(image, alternate, cv::NORM_INF) == 0);
     }
 
@@ -271,7 +271,7 @@ void test_depth_background_and_overlay_order()
     {
         params.target_mask = target;
         cv::Mat image(640, 640, CV_8UC3, cv::Scalar(10, 20, 30));
-        render_overlays(image, params);
+        render_runtime_overlays(image, params);
         assert(image.at<cv::Vec3b>(250, 200) == cv::Vec3b(0, 255, 0));   // detection above depth
         assert(image.at<cv::Vec3b>(80, 100) == cv::Vec3b(0, 255, 255));  // ROI above depth
         assert(image.at<cv::Vec3b>(220, 420) == cv::Vec3b(255, 0, 255)); // business commands above depth
@@ -280,7 +280,7 @@ void test_depth_background_and_overlay_order()
     params.show_system_overlays = false;
     params.show_custom_overlays = false;
     cv::Mat image(640, 640, CV_8UC3, cv::Scalar(10, 20, 30));
-    render_overlays(image, params);
+    render_runtime_overlays(image, params);
     assert(image.at<cv::Vec3b>(0, 0) == cv::Vec3b(0, 0, 0));
     assert(image.at<cv::Vec3b>(320, 320) != cv::Vec3b(10, 20, 30)); // base is independent of overlays
 
@@ -305,7 +305,7 @@ void test_depth_background_and_overlay_order()
     relative.depth_map.at<float>(0, 0) = relative.invalid_depth_value();
     results = {relative};
     ++params.result_frame_id;
-    render_overlays(image, params);
+    render_runtime_overlays(image, params);
     assert(image.at<cv::Vec3b>(200, 100)[0] > image.at<cv::Vec3b>(200, 100)[2]); // low = blue/far
     assert(image.at<cv::Vec3b>(200, 500)[2] > image.at<cv::Vec3b>(200, 500)[0]); // high = red/near
     assert(image.at<cv::Vec3b>(0, 0) == cv::Vec3b(0, 0, 0));                     // invalid = black
@@ -314,12 +314,12 @@ void test_depth_background_and_overlay_order()
     results.clear();
     params.depth_background = true;
     image.setTo(cv::Scalar(10, 20, 30));
-    render_overlays(image, params);
+    render_runtime_overlays(image, params);
     assert(cv::countNonZero(image.reshape(1)) == 0);
     params.depth_background = false;
     image.setTo(cv::Scalar(10, 20, 30));
     const cv::Mat original = image.clone();
-    render_overlays(image, params);
+    render_runtime_overlays(image, params);
     assert(cv::norm(image, original, cv::NORM_INF) == 0); // normal streams retain their source base
 }
 } // namespace

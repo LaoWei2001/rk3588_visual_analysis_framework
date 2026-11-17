@@ -213,7 +213,7 @@ void gpio_latency_does_not_shorten_minimum_output_duration()
 }
 } // namespace
 
-extern "C" int pin_out_val(const char *pin, int level)
+extern "C" int gpio_set_output(const char *pin, int level)
 {
     fake_now_ms += next_write_delay_ms;
     next_write_delay_ms = 0;

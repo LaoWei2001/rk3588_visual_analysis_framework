@@ -31,3 +31,6 @@ InferenceRoiTransform make_inference_roi_transform(const cv::Rect &selection, in
 cv::Mat make_inference_roi_input(const cv::Mat &source, const InferenceRoiTransform &transform, int model_width,
                                  int model_height,
                                  const std::vector<std::pair<double, double>> *mask_polygon = nullptr);
+
+#include <config_types.h>
+cv::Rect inference_source_roi(const InferenceRoiConfig &roi, int source_width, int source_height);

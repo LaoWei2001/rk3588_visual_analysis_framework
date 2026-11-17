@@ -1,5 +1,5 @@
 /** @file types.h
- * @brief 通用视觉数据：检测框、类别、跟踪 ID、姿态/分割结果、ROI、绘图指令和帧时间。
+ * @brief 通用视觉数据：检测框、类别、跟踪 ID、姿态/分割结果、ROI、绘图指令。
  * 功能索引与用法见同目录 README.md。
  */
 #pragma once
@@ -45,33 +45,45 @@ struct AlgoResult
     int model_index = 0;       // 在本次有效模型列表中的顺序
     cv::Scalar box_color = cv::Scalar(-1, -1, -1); // (-1,-1,-1) means use default color
 
+    /** @brief 返回包围框的整数中心；坐标需在 int 可表示范围内。
+     * 示例：
+     * @code
+     * AlgoResult r;
+     * r.box = {10, 20, 40, 60};
+     * cv::Point center = r.box_center();
+     * @endcode
+     */
     cv::Point box_center() const
     {
         return cv::Point(box.x + box.width / 2, box.y + box.height / 2);
-    }
-
-    bool box_contains(const cv::Point &point) const
-    {
-        return box.contains(point);
-    }
-
-    int dist_sq_to(const cv::Point &point) const
-    {
-        const cv::Point center = box_center();
-        const int dx = center.x - point.x;
-        const int dy = center.y - point.y;
-        return dx * dx + dy * dy;
     }
 
     std::vector<cv::Point2f> keypoints;
     std::vector<float> keypoint_scores;
     PoseKeypointSchema pose_schema = PoseKeypointSchema::None;
 
+    /** @brief 检查是否声明了姿态 schema；不校验关键点数量/置信度。
+     * 示例：
+     * @code
+     * AlgoResult r;
+     * bool pose = r.is_pose();
+     * @endcode
+     */
     bool is_pose() const
     {
         return pose_schema != PoseKeypointSchema::None;
     }
 
+    /** @brief 检查 COCO17 schema 且坐标/置信度数组均为 17 项。
+     * 示例：
+     * @code
+     * AlgoResult r;
+     * if (r.is_coco17_pose())
+     * {
+     *     cv::Point2f nose = r.keypoints[0];
+     * }
+     * @endcode
+     */
     bool is_coco17_pose() const
     {
         return pose_schema == PoseKeypointSchema::Coco17 && keypoints.size() == 17 && keypoint_scores.size() == 17;
@@ -87,25 +99,70 @@ struct AlgoResult
     cv::Mat depth_map;
     DepthKind depth_kind = DepthKind::Metric;
 
+    /** @brief 检查是否携带非空深度矩阵；不检查矩阵类型或像素有效性。
+     * 示例：
+     * @code
+     * if (const auto *r = ctx->depth_result())
+     * {
+     *     bool has_depth = r->is_depth();
+     *     (void)has_depth;
+     * }
+     * @endcode
+     */
     bool is_depth() const
     {
         return !depth_map.empty();
     }
+    /** @brief 检查非空深度结果是否使用米制单位；数值越小通常越近。
+     * 示例：
+     * @code
+     * if (const auto *r = ctx->depth_result())
+     * {
+     *     if (r->is_metric_depth())
+     *     {
+     *         float m = r->depth_at(320, 320);
+     *         (void)m;
+     *     }
+     * }
+     * @endcode
+     */
     bool is_metric_depth() const
     {
         return is_depth() && depth_kind == DepthKind::Metric;
     }
+    /** @brief 检查非空结果是否为相对逆深度；不能当作米，数值越大通常越近。
+     * 示例：
+     * @code
+     * if (const auto *r = ctx->depth_result())
+     * {
+     *     bool relative = r->is_relative_inverse_depth();
+     *     (void)relative;
+     * }
+     * @endcode
+     */
     bool is_relative_inverse_depth() const
     {
         return is_depth() && depth_kind == DepthKind::RelativeInverse;
     }
 
+    /** @brief 返回当前深度类型的无效值：米制为 0，相对逆深度为 NaN。
+     * 示例：
+     * @code
+     * AlgoResult r;
+     * r.depth_map = cv::Mat(640, 640, CV_32FC1, cv::Scalar(r.invalid_depth_value()));
+     * @endcode
+     */
     float invalid_depth_value() const
     {
         return depth_kind == DepthKind::RelativeInverse ? std::numeric_limits<float>::quiet_NaN() : 0.0f;
     }
 
-    // 位检查也适用于宿主工程启用 -ffast-math 的场合。
+    /** @brief 检查米制深度是否有限且严格大于 0；不适用于相对逆深度。
+     * 示例：
+     * @code
+     * bool valid = AlgoResult::valid_depth(2.5f);
+     * @endcode
+     */
     static bool valid_depth(float value)
     {
         uint32_t bits;
@@ -113,6 +170,14 @@ struct AlgoResult
         return bits != 0 && bits < 0x7f800000U;
     }
 
+    /** @brief 按 depth_kind 判断像素有效性；相对逆深度允许有限的 0/负数。
+     * 示例：
+     * @code
+     * AlgoResult r;
+     * r.depth_kind = DepthKind::RelativeInverse;
+     * bool valid = r.valid_depth_value(0);
+     * @endcode
+     */
     bool valid_depth_value(float value) const
     {
         if (depth_kind == DepthKind::Metric)
@@ -122,13 +187,35 @@ struct AlgoResult
         return (bits & 0x7fffffffU) < 0x7f800000U;
     }
 
+    /** @brief 检查深度图坐标 (x,y) 是否有效；空图、类型不符或越界返回 false。
+     * 示例：
+     * @code
+     * if (const auto *r = ctx->depth_result())
+     * {
+     *     if (r->depth_valid_at(320, 320))
+     *     {
+     *         float d = r->depth_at(320, 320);
+     *         (void)d;
+     *     }
+     * }
+     * @endcode
+     */
     bool depth_valid_at(int x, int y) const
     {
         return depth_map.type() == CV_32FC1 && x >= 0 && y >= 0 && x < depth_map.cols && y < depth_map.rows &&
                valid_depth_value(depth_map.at<float>(y, x));
     }
 
-    // 返回原始深度值（参见 depth_kind）。无效返回 0；相对深度可用 depth_valid_at 区分有效的 0。
+    /** @brief 读取原始深度值；无效/越界返回 0，使用 depth_valid_at 区分有效的相对深度 0。
+     * 示例：
+     * @code
+     * if (const auto *r = ctx->depth_result())
+     * {
+     *     float d = r->depth_at(320, 320);
+     *     (void)d;
+     * }
+     * @endcode
+     */
     float depth_at(int x, int y) const
     {
         if (depth_map.type() != CV_32FC1 || x < 0 || y < 0 || x >= depth_map.cols || y >= depth_map.rows)
@@ -137,7 +224,17 @@ struct AlgoResult
         return valid_depth_value(value) ? value : 0.0f;
     }
 
-    // 取区域内有效深度的中位数。默认每 4 像素采样；step=1 为精确中位数。
+    /** @brief 取 region 内有效深度中位数；区域裁剪到图内，step 为采样步长（1 为逐像素）。
+     * @return 无有效样本、非深度图或 step<=0 时为 0；相对逆深度结果仍不代表米。
+     * 示例：
+     * @code
+     * if (const auto *r = ctx->depth_result())
+     * {
+     *     float d = r->depth_median(cv::Rect(200, 200, 100, 100), 1);
+     *     (void)d;
+     * }
+     * @endcode
+     */
     float depth_median(const cv::Rect &region, int step = 4) const
     {
         if (depth_map.type() != CV_32FC1 || step <= 0)
@@ -219,16 +316,4 @@ struct DrawCommand
 
     cv::Scalar color = cv::Scalar(0, 255, 0);
     int thickness = 2;
-};
-
-/*======================== 帧时间 (年月日时分秒, 由 ctx->datetime() 拆出) ========================*/
-struct FrameTime
-{
-    int year;   /* 如 2026 */
-    int month;  /* 1~12 */
-    int day;    /* 1~31 */
-    int hour;   /* 0~23 */
-    int minute; /* 0~59 */
-    int second; /* 0~59 */
-    int millis; /* 0~999 */
 };

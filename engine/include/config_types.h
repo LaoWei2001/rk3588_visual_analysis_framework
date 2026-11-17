@@ -46,30 +46,83 @@ struct InferenceRoiConfig
     double height = 1.0;
     std::vector<std::pair<double, double>> polygon;
 
+    /** @brief 仅 ROI 裁剪推理模式时返回 true。
+     * 示例：
+     * @code
+     * InferenceRoiConfig roi;
+     * roi.mode = "roi_only";
+     * bool cropped = roi.roi_only();
+     * @endcode
+     */
     bool roi_only() const
     {
         return mode == "roi_only";
     }
+    /** @brief 整帧加 ROI 两批推理模式时返回 true。
+     * 示例：
+     * @code
+     * InferenceRoiConfig roi;
+     * roi.mode = "full_plus_roi";
+     * bool twice = roi.full_plus_roi();
+     * @endcode
+     */
     bool full_plus_roi() const
     {
         return mode == "full_plus_roi";
     }
+    /** @brief 整帧推理后只保留 ROI 内结果的模式时返回 true。
+     * 示例：
+     * @code
+     * InferenceRoiConfig roi;
+     * roi.mode = "full_frame_roi_filter";
+     * bool filter = roi.full_frame_roi_filter();
+     * @endcode
+     */
     bool full_frame_roi_filter() const
     {
         return mode == "full_frame_roi_filter";
     }
+    /** @brief 判断结果是否限于 ROI（roi_only 或 full_frame_roi_filter）。
+     * 示例：
+     * @code
+     * InferenceRoiConfig roi;
+     * bool restricted = roi.restricts_results_to_roi();
+     * @endcode
+     */
     bool restricts_results_to_roi() const
     {
         return roi_only() || full_frame_roi_filter();
     }
+    /** @brief 判断是否启用受支持的 ROI 模式；不代表多边形有效。
+     * 示例：
+     * @code
+     * InferenceRoiConfig roi;
+     * bool enabled = roi.has_roi();
+     * @endcode
+     */
     bool has_roi() const
     {
         return roi_only() || full_plus_roi() || full_frame_roi_filter();
     }
+    /** @brief 判断 polygon 是否至少三个点；不检查自交、数值或面积。
+     * 示例：
+     * @code
+     * InferenceRoiConfig roi;
+     * bool enough = roi.has_polygon();
+     * @endcode
+     */
     bool has_polygon() const
     {
         return polygon.size() >= 3;
     }
+    /** @brief 检查四个顶点是否恰为运行时包围框的四角；不负责计算包围框。
+     * 示例：
+     * @code
+     * InferenceRoiConfig roi;
+     * roi.polygon = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+     * bool rectangle = roi.is_axis_aligned_rectangle();
+     * @endcode
+     */
     bool is_axis_aligned_rectangle() const
     {
         if (polygon.size() != 4 || width <= 0.0 || height <= 0.0)
@@ -94,11 +147,25 @@ struct InferenceRoiConfig
     }
 };
 
+/** @brief 比较模式、缩放方式、运行包围框和顶点，返回是否相等。
+ * 示例：
+ * @code
+ * InferenceRoiConfig a, b;
+ * bool same = (a == b);
+ * @endcode
+ */
 inline bool operator==(const InferenceRoiConfig &a, const InferenceRoiConfig &b)
 {
     return a.mode == b.mode && a.resize_mode == b.resize_mode && a.x == b.x && a.y == b.y && a.width == b.width &&
            a.height == b.height && a.polygon == b.polygon;
 }
+/** @brief 比较模式、缩放方式、运行包围框和顶点，返回是否不同。
+ * 示例：
+ * @code
+ * InferenceRoiConfig a, b;
+ * bool changed = (a != b);
+ * @endcode
+ */
 inline bool operator!=(const InferenceRoiConfig &a, const InferenceRoiConfig &b)
 {
     return !(a == b);
@@ -129,12 +196,26 @@ struct ChannelModelConfig
     int npu_core = -1; /* -1=框架全局规划自动核心池, 0/1/2=固定 NPU 核 */
 };
 
+/** @brief 逐项比较模型配置是否相等；比较路径等配置值，不读取模型文件内容。
+ * 示例：
+ * @code
+ * ChannelModelConfig a, b;
+ * bool same = (a == b);
+ * @endcode
+ */
 inline bool operator==(const ChannelModelConfig &a, const ChannelModelConfig &b)
 {
     return a.id == b.id && a.enable == b.enable && a.model_type == b.model_type && a.model_path == b.model_path &&
            a.label_path == b.label_path && a.version == b.version && a.obj_thresh == b.obj_thresh &&
            a.nms_thresh == b.nms_thresh && a.detect_classes == b.detect_classes && a.npu_core == b.npu_core;
 }
+/** @brief 逐项比较模型配置是否不同；比较路径等配置值，不读取模型文件内容。
+ * 示例：
+ * @code
+ * ChannelModelConfig a, b;
+ * bool changed = (a != b);
+ * @endcode
+ */
 inline bool operator!=(const ChannelModelConfig &a, const ChannelModelConfig &b)
 {
     return !(a == b);
@@ -179,7 +260,7 @@ struct GlobalLogicConfig
     std::string instance_id;              /* Web/配置持久化的稳定实例 ID，用于实例级热更新 */
     bool enable = false;                  /* 是否启用 */
     std::string logic = "global_default"; /* 逻辑名称 */
-    std::vector<int> channels;            /* Web 画布连入的通道列表；空表示没有画布输入 */
+    std::vector<int> channels;            /* 连入的配置通道 ID；空表示运行时选择全部通道 */
     int poll_interval_ms = 100;           /* 无通道更新时的兜底运行间隔 (毫秒) */
     /* 全局逻辑模块专有参数：由 global_modules/<name>/logic.json 统一定义和校验。 */
     std::string logic_parameters_json = "{}";
@@ -191,7 +272,13 @@ struct GlobalLogicConfig
     EventVideoRuntimeConfig event_video;
 };
 
-/* 用于热重载时检测 global_logics 数组是否变化, 任一字段不同即视为变化 */
+/** @brief 比较持久化配置字段；派生的 event_video 不单独参与，返回是否相等。
+ * 示例：
+ * @code
+ * GlobalLogicConfig a, b;
+ * bool same = (a == b);
+ * @endcode
+ */
 inline bool operator==(const GlobalLogicConfig &a, const GlobalLogicConfig &b)
 {
     return a.instance_id == b.instance_id && a.enable == b.enable && a.logic == b.logic && a.channels == b.channels &&
@@ -199,6 +286,13 @@ inline bool operator==(const GlobalLogicConfig &a, const GlobalLogicConfig &b)
            a.report_policy_json == b.report_policy_json && a.report_parameters_json == b.report_parameters_json &&
            a.media_source_channel_id == b.media_source_channel_id;
 }
+/** @brief 比较持久化配置字段；派生的 event_video 不单独参与，返回是否不同。
+ * 示例：
+ * @code
+ * GlobalLogicConfig a, b;
+ * bool changed = (a != b);
+ * @endcode
+ */
 inline bool operator!=(const GlobalLogicConfig &a, const GlobalLogicConfig &b)
 {
     return !(a == b);

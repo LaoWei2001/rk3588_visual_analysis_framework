@@ -22,6 +22,15 @@ playwright-report/
 /dist/
 /web_console/frontend/dist/
 /engine/tests/**/build/
+/engine/sdk_standalone_tests/**/build/
+/engine/sdk_standalone_tests/model_inspection/model_inspection
+/engine/sdk_standalone_tests/image_inference/image_inference
+/engine/sdk_standalone_tests/drawing/drawing
+/engine/sdk_standalone_tests/drawing/drawing-result.png
+/engine/sdk_standalone_tests/drawing-result.png
+/engine/sdk_standalone_tests/multi_stream/multi_stream
+/engine/sdk_standalone_tests/analysis/analysis
+/engine/sdk_standalone_tests/video_runtime/video_runtime
 /services/framework/gpio_state/build/
 /tools/device/gpio_test/build/
 /tools/device/first_net_config/build/

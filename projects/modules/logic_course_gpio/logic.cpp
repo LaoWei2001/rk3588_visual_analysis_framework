@@ -41,13 +41,16 @@ static void logic_course_gpio(ChannelContext *ctx)
     }
 
     // 目标存在 -> 有效电平; 不存在 -> 无效电平
-    int has_target = ctx->has_target(target_label.c_str());
+    TargetQuery query;
+    query.labels = {target_label};
+    const auto targets = ctx->query_targets(query);
+    const bool has_target = targets.valid() && targets.count > 0;
     int want_level = has_target ? active_level : 1 - active_level;
 
     // 只在电平需要变化时写引脚; 写失败保持旧值, 下一帧自动重试(错误只打印一次)
     if (want_level != state->last_level)
     {
-        if (pin_out_val(pin_name.c_str(), want_level) == 0)
+        if (gpio_set_output(pin_name.c_str(), want_level) == 0)
             state->last_level = want_level;
     }
 

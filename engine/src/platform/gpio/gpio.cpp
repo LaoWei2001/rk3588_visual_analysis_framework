@@ -44,8 +44,6 @@
 #ifndef GPIO_CONTROL_SOCKET
 #define GPIO_CONTROL_SOCKET "/run/rk3588-gpio-control/control.sock"
 #endif
-#define LEGACY_GPIO_STATE "/var/lib/gpio6_a0_test.state"
-#define LEGACY_RELAY_STATE "/var/lib/relay_test.state"
 
 namespace
 {
@@ -56,8 +54,6 @@ struct GpioPin
     int group = -1;
     int offset = -1;
     int direction = GPIO_DIRECTION_UNKNOWN;
-    int defaultVal = 0;
-    int persistedVal = -1;
     struct gpiod_line *line = nullptr;
     bool errLogged = false;
     bool persistErrLogged = false;
@@ -79,8 +75,6 @@ std::vector<GpioPin> g_pins;
 struct gpiod_chip *g_chips[GPIO_MAXGROUP_NUM] = {};
 bool g_chipErrLogged[GPIO_MAXGROUP_NUM] = {};
 std::set<std::string> g_badNames;
-
-void migrate_legacy_state(const char *pinName, const char *legacyPath);
 
 template <size_t N> void copy_text(char (&destination)[N], const char *source)
 {
@@ -138,7 +132,7 @@ void log_bad_name_once(const char *pinName)
 /*
  * 返回 0=后台完整处理成功，1=后台未运行，-1=后台未执行，
  * -2=GPIO 已经改变、但后台未能完成状态落盘。
- * 新操作在旧后台上通常返回 EINVAL，调用方可据此选择安全的本地回退。
+ * 仅后台未运行时使用本地 libgpiod；协议或操作错误直接返回。
  */
 int controller_request(const char *operation, const char *pinName, int requestedValue, int *returnedValue)
 {
@@ -164,15 +158,15 @@ int controller_request(const char *operation, const char *pinName, int requested
     }
 
     int requestSize = -1;
-    if (strcmp(operation, "SET") == 0 || strcmp(operation, "SET_MANAGED") == 0)
+    if (strcmp(operation, "SET_MANAGED") == 0)
     {
         requestSize = snprintf(request, sizeof(request), "%s %s %d", operation, pinName, requestedValue ? 1 : 0);
     }
-    else if (strcmp(operation, "INPUT") == 0 || strcmp(operation, "INPUT_MANAGED") == 0)
+    else if (strcmp(operation, "INPUT_MANAGED") == 0)
     {
         requestSize = snprintf(request, sizeof(request), "%s %s", operation, pinName);
     }
-    else if (strcmp(operation, "GET") == 0 || strcmp(operation, "READ") == 0 || strcmp(operation, "STATUS") == 0)
+    else if (strcmp(operation, "READ") == 0 || strcmp(operation, "STATUS") == 0)
     {
         requestSize = snprintf(request, sizeof(request), "%s %s", operation, pinName);
     }
@@ -340,10 +334,6 @@ bool clear_saved_output(const char *pinName)
     char path[PATH_MAX];
     if (!state_path(pinName, path, sizeof(path)) || !unlink_if_exists(path))
         return false;
-    if (strcmp(pinName, "GPIO6_A0") == 0 && !unlink_if_exists(LEGACY_GPIO_STATE))
-        return false;
-    if (strcmp(pinName, "GPIO6_A2") == 0 && !unlink_if_exists(LEGACY_RELAY_STATE))
-        return false;
     return true;
 }
 
@@ -359,12 +349,12 @@ bool persist_output(GpioPin *pin, int value)
     value = value ? 1 : 0;
     if (!persistence_enabled())
     {
-        pin->persistedVal = -1;
+
         pin->persistErrLogged = false;
         return true;
     }
     /*
-     * 不以进程内缓存跳过写入：旧后台/本地回退期间，命令行工具可能已经从
+     * 不以进程内缓存跳过写入：本地控制期间，命令行工具可能已经从
      * 另一个进程更新同一状态文件，缓存不能再被视为持久状态的事实来源。
      */
     if (!save_persistent_value(pin->name.c_str(), value))
@@ -376,7 +366,7 @@ bool persist_output(GpioPin *pin, int value)
         }
         return false;
     }
-    pin->persistedVal = value;
+
     pin->persistErrLogged = false;
     return true;
 }
@@ -496,7 +486,7 @@ int configure_output_locked(GpioPin *pin, int value)
             return -2;
         }
         pin->direction = DIR_OUTPUT;
-        pin->defaultVal = value;
+
         if (!persist_output(pin, value))
             return -3;
         pin->errLogged = false;
@@ -514,39 +504,17 @@ int configure_output_locked(GpioPin *pin, int value)
             return -2;
         }
         pin->direction = DIR_OUTPUT;
-        pin->defaultVal = value;
-        pin->persistedVal = persistence_enabled() ? value : -1;
+
         pin->errLogged = false;
         return 0;
     }
     if (controllerResult == -2)
     {
         pin->direction = DIR_OUTPUT;
-        pin->defaultVal = value;
+
         log_pin_error_once(pin, "【GPIO】%s 已输出 %d，但后台保存统一状态失败：%s\n", pin->name.c_str(), value,
                            strerror(errno));
         return -3;
-    }
-    if (controllerResult < 0 && (errno == EINVAL || errno == EPROTO))
-    {
-        /* 兼容尚未支持统一持久化协议的旧后台。 */
-        controllerResult = controller_request("SET", pin->name.c_str(), value, &readback);
-        if (controllerResult == 0)
-        {
-            if (readback != value)
-            {
-                errno = EIO;
-                log_pin_error_once(pin, "【GPIO】%s 输出校验失败（期望%d，读取%d）\n", pin->name.c_str(), value,
-                                   readback);
-                return -2;
-            }
-            pin->direction = DIR_OUTPUT;
-            pin->defaultVal = value;
-            if (!persist_output(pin, value))
-                return -3;
-            pin->errLogged = false;
-            return 0;
-        }
     }
     if (controllerResult < 0)
     {
@@ -558,7 +526,7 @@ int configure_output_locked(GpioPin *pin, int value)
     if (!pin->line)
         return -2;
     pin->direction = DIR_OUTPUT;
-    pin->defaultVal = value;
+
     if (!persist_output(pin, value))
         return -3;
     pin->errLogged = false;
@@ -583,7 +551,7 @@ int configure_input_locked(GpioPin *pin)
         if (controllerResult == 0)
         {
             pin->direction = DIR_INPUT;
-            pin->persistedVal = -1;
+
             managedState = true;
         }
         else if (controllerResult == -2)
@@ -593,16 +561,9 @@ int configure_input_locked(GpioPin *pin)
                                strerror(errno));
             return -3;
         }
-        else if (controllerResult < 0 && (errno == EINVAL || errno == EPROTO))
+        if (controllerResult > 0)
         {
-            /* 旧后台只支持 INPUT，状态文件仍由兼容路径维护。 */
-            controllerResult = controller_request("INPUT", pin->name.c_str(), 0, nullptr);
-            if (controllerResult == 0)
-                pin->direction = DIR_INPUT;
-        }
-        if (controllerResult > 0 || (controllerResult < 0 && (errno == EINVAL || errno == EPROTO)))
-        {
-            /* 兼容后台未运行或不支持 INPUT 的旧版本。 */
+            /* 控制服务未运行时由本进程直接持有线路。 */
             pin->line = request_line(pin, DIR_INPUT, 0);
             if (!pin->line)
                 return -2;
@@ -630,7 +591,6 @@ int configure_input_locked(GpioPin *pin)
                                strerror(errno));
             return -3;
         }
-        pin->persistedVal = -1;
     }
     pin->errLogged = false;
     return 0;
@@ -703,11 +663,6 @@ int gpio_init(const GPIOCfg_t cfg[], int size)
     }
 
     std::lock_guard<std::mutex> lock(g_mutex);
-    if (persistence_enabled())
-    {
-        migrate_legacy_state("GPIO6_A0", LEGACY_GPIO_STATE);
-        migrate_legacy_state("GPIO6_A2", LEGACY_RELAY_STATE);
-    }
     for (auto &pin : g_pins)
         release_pin_line(&pin);
     g_pins.clear();
@@ -737,19 +692,18 @@ int gpio_init(const GPIOCfg_t cfg[], int size)
         pin.group = group;
         pin.offset = offset;
         pin.direction = cfg[i].direction;
-        pin.defaultVal = cfg[i].val ? 1 : 0;
+        int initialValue = cfg[i].val ? 1 : 0;
         if (pin.direction == DIR_OUTPUT)
         {
             int savedValue = 0;
             if (persistence_enabled() && load_saved_value(pin.name.c_str(), &savedValue))
             {
-                pin.defaultVal = savedValue;
-                pin.persistedVal = savedValue;
+                initialValue = savedValue;
             }
         }
         g_pins.push_back(pin);
         GpioPin *registered = &g_pins.back();
-        int result = registered->direction == DIR_OUTPUT ? configure_output_locked(registered, registered->defaultVal)
+        int result = registered->direction == DIR_OUTPUT ? configure_output_locked(registered, initialValue)
                                                          : configure_input_locked(registered);
         printf("[%d]======(Name:%s, Dir:%s) %s\n", i, cfg[i].pinName,
                cfg[i].direction == DIR_OUTPUT ? "OUTPUT" : "INPUT",
@@ -847,76 +801,9 @@ int gpio_read_input(const char *pinName, int *value)
     int controllerResult = controller_request("READ", pinName, 0, value);
     if (controllerResult == 0)
         return 0;
-    if (controllerResult < 0 && errno != EINVAL && errno != EPROTO)
-        return -1;
-    return strict_read_fallback(pinName, group, offset, value);
-}
-
-int pin_out_val(const char *pinName, int val)
-{
-    return gpio_set_output(pinName, val);
-}
-
-int pin_set_high(const char *pinName)
-{
-    return gpio_set_output(pinName, 1);
-}
-
-int pin_set_low(const char *pinName)
-{
-    return gpio_set_output(pinName, 0);
-}
-
-int read_pin_val(const char *pinName)
-{
-    if (!pinName)
-    {
-        errno = EINVAL;
-        return -1;
-    }
-    std::lock_guard<std::mutex> lock(g_mutex);
-    int group = 0;
-    int offset = 0;
-    if (!parse_pin_name(pinName, &group, &offset))
-    {
-        log_bad_name_once(pinName);
-        return -1;
-    }
-
-    int index = find_pin(pinName);
-    if (index >= 0)
-    {
-        GpioPin *pin = &g_pins[static_cast<size_t>(index)];
-        if (pin->line)
-        {
-            int result = gpiod_line_get_value(pin->line);
-            if (result < 0)
-                log_pin_error_once(pin, "【GPIO】读取 %s 电平失败：%s\n", pinName, strerror(errno));
-            else
-                pin->errLogged = false;
-            return result;
-        }
-    }
-
-    int value = -1;
-    int controllerResult = controller_request("GET", pinName, 0, &value);
-    if (controllerResult == 0)
-        return value;
     if (controllerResult < 0)
         return -1;
-
-    GpioPin *pin =
-        index >= 0 ? &g_pins[static_cast<size_t>(index)] : find_or_add_pin(pinName, group, offset, DIR_INPUT);
-    if (!pin->line)
-        pin->line = request_line(pin, pin->direction, pin->defaultVal);
-    if (!pin->line)
-        return -1;
-    value = gpiod_line_get_value(pin->line);
-    if (value < 0)
-        log_pin_error_once(pin, "【GPIO】读取 %s 电平失败：%s\n", pinName, strerror(errno));
-    else
-        pin->errLogged = false;
-    return value;
+    return strict_read_fallback(pinName, group, offset, value);
 }
 
 /* ======================== 状态与持久化 ======================== */
@@ -937,13 +824,6 @@ int gpio_get_output_status(const char *pinName, GPIOOutputStatus_t *status)
 
     memset(status, 0, sizeof(*status));
     status->persistenceEnabled = persistence_enabled() ? 1 : 0;
-    if (status->persistenceEnabled)
-    {
-        if (strcmp(pinName, "GPIO6_A0") == 0)
-            migrate_legacy_state(pinName, LEGACY_GPIO_STATE);
-        else if (strcmp(pinName, "GPIO6_A2") == 0)
-            migrate_legacy_state(pinName, LEGACY_RELAY_STATE);
-    }
     status->hasSavedValue = load_saved_value(pinName, &status->savedValue) ? 1 : 0;
     status->hasRuntimeRecord = load_runtime_value(pinName, &status->runtimeValue) ? 1 : 0;
 
@@ -977,7 +857,7 @@ int gpio_get_output_status(const char *pinName, GPIOOutputStatus_t *status)
     }
     if (status->hasRuntimeRecord || status->hasSavedValue)
         return 0;
-    if (controllerResult < 0 && controllerErrno != EINVAL && controllerErrno != EPROTO && controllerErrno != ENOENT)
+    if (controllerResult < 0 && controllerErrno != ENOENT)
     {
         errno = controllerErrno;
         return -1;
@@ -988,15 +868,6 @@ int gpio_get_output_status(const char *pinName, GPIOOutputStatus_t *status)
 
 namespace
 {
-
-void migrate_legacy_state(const char *pinName, const char *legacyPath)
-{
-    int value = 0;
-    if (load_saved_value(pinName, &value))
-        return;
-    if (read_value_file(legacyPath, &value))
-        (void)save_persistent_value(pinName, value);
-}
 
 bool wait_for_gpio_chip(const char *pinName, int timeoutMilliseconds)
 {
@@ -1035,9 +906,6 @@ int gpio_restore_outputs(int *restoredCount, int *failedCount)
         return 0;
     if (!ensure_state_dir())
         return -1;
-
-    migrate_legacy_state("GPIO6_A0", LEGACY_GPIO_STATE);
-    migrate_legacy_state("GPIO6_A2", LEGACY_RELAY_STATE);
 
     DIR *directory = opendir(GPIO_STATE_DIR);
     if (!directory)

@@ -37,6 +37,16 @@
         "x-hot-reload": "preserve_state",
         "description": "低于该置信度的违规框一律不采信；现场要求 0.75，调低会明显提高误报。"
       },
+      "glove_min_score": {
+        "type": "number",
+        "title": "手套判定最低置信度",
+        "default": 0.5,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state",
+        "description": "手部专用的低门槛。手框天生小、分数低（现场实测 0.59~0.72），用 0.75 会让“未戴手套”永远不报警。"
+      },
       "keypoint_min_score": {
         "type": "number",
         "title": "关键点可见性阈值",
@@ -170,6 +180,16 @@
         "x-step": 0.02,
         "x-hot-reload": "preserve_state"
       },
+      "hand_attach_ratio": {
+        "type": "number",
+        "title": "手框允许伸出人员框的距离",
+        "description": "手/手套框中心到人员框外沿的距离不得超过该比例 × 人员框高。手臂横伸出去时手框常在人框外，设 0 等于要求严格落在人框内。",
+        "default": 0.6,
+        "minimum": 0.0,
+        "maximum": 2.0,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state"
+      },
       "evidence_window_sec": {
         "type": "integer",
         "title": "违规证据时间窗口",
@@ -297,6 +317,50 @@
         "x-step": 0.05,
         "x-hot-reload": "preserve_state",
         "description": "安全帽框中心左右允许超出人体框的比例；越大越不容易把“戴了”判成“没戴”，但多人并排时可能算到别人头上。"
+      },
+      "workwear_require_positive": {
+        "type": "boolean",
+        "title": "未穿工装按“缺正类”推断",
+        "description": "模型只有 workwear_on 正类、没有 no_workwear 负类时，用“躯干区里没有工装框”推断未穿。只在该人员躯干本身可核验（人框够高、分数可信、没被前面的人挡住）时才计证据。",
+        "default": false,
+        "x-hot-reload": "preserve_state"
+      },
+      "workwear_min_person_height": {
+        "type": "number",
+        "title": "推断未穿工装的最小人体框高",
+        "default": 80,
+        "minimum": 40,
+        "maximum": 400,
+        "x-step": 10,
+        "x-hot-reload": "preserve_state",
+        "description": "人体框高度低于该值时不参与“缺正类”推断，避免远景小人误报。"
+      },
+      "absence_min_person_score": {
+        "type": "number",
+        "title": "缺正类推断的最小人体框分数",
+        "default": 0.6,
+        "minimum": 0.3,
+        "maximum": 0.95,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state",
+        "description": "人体框本身不可信时，不能拿它推断“没戴/没穿”。安全帽与工装的缺正类推断共用这个门槛。"
+      },
+      "positive_min_score": {
+        "type": "number",
+        "title": "正类框（穿戴正常）收集门槛",
+        "description": "识别到 helmet / workwear_on / hand_gloved 时的最低分。现场这些正类框分数普遍低于违规门槛，用同一个门槛会把“明明穿了”当成“没穿”而误报。",
+        "default": 0.35,
+        "minimum": 0.2,
+        "maximum": 0.9,
+        "x-step": 0.05,
+        "x-hot-reload": "preserve_state"
+      },
+      "glove_require_pose": {
+        "type": "boolean",
+        "title": "手套判定必须依赖姿态腕点",
+        "description": "开启后没有姿态关键点时裸手框一律丢弃（更保守，但现场只挂检测模型时等于不判手套）。关闭时无姿态的裸手按“分不清左右”降级处理。",
+        "default": false,
+        "x-hot-reload": "preserve_state"
       }
     }
   },

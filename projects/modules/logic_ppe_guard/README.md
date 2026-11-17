@@ -42,14 +42,18 @@
 
 | 字符 | 含义 | 是否触发报警 |
 | --- | --- | --- |
-| `-` | `unknown`：遮挡、模糊、无姿态、归属不明、该项未启用 | 否 |
-| `.` | `clear`：本帧可核验且**未见**违规证据 | 否 |
+| `-` | `unknown`：遮挡、模糊、归属不明、该项未启用，或本帧两者都没看到 | 否 |
+| `O` | `clear`：本帧**看到了「戴好了 / 穿好了」的正类框**，或有关键点看到该部位 | 否 |
 | `?` | `candidate`：有违规证据，未达确认门槛 | 否 |
 | `X` | `violation`：已达确认门槛 | 是 |
 
-> `clear` 只表示"没看到违规"，**不等于"装备符合要求"**。结果层拿不到正向的装备类别，
-> 真正的"合规"需要模型输出 `helmet / workwear / glove` 正类并在 `clear` 基础上再确认。
-> 这是本模块刻意的取舍：宁可少一条合规结论，也不拿"没检测到"当"穿好了"。
+> 早期版本 `clear` 输出 `.`，在 720p 现场画面上和小 `-` 几乎分不清，已改为 `O`（ok）。
+>
+> `clear` 的含义是**正向确认**：本帧真的看到了 `helmet` / `workwear_on` / `hand_gloved` 框
+> （由 `positive_veto` + `positive_min_score` 收集），不再是"没看到违规"。
+
+示例（现场 6 类权重实测）：`#2 HO TO L- R-` = 帽子已戴、工装已穿、双手未判定；
+注入一次"工装正类永远不匹配"后变成 `#2 HO TX L- R-` 并转红报警。
 
 ## 四、参数
 
@@ -58,6 +62,7 @@
 | `person_labels` | `person` | 人员类别，逗号分隔 |
 | `person_min_score` | 0.35 | 人员框最低置信度 |
 | `violation_min_score` | 0.75 | 违规框最低置信度；低于它一律不采信（现场要求 0.75） |
+| `glove_min_score` | 0.5 | **手部专用**门槛。手框天生小、分数低（现场实测 0.59~0.72），沿用 0.75 会让“未戴手套”永远不触发；只对手部生效，人/安全帽/工装仍走 `violation_min_score` |
 | `keypoint_min_score` | 0.3 | 关键点可见性阈值 |
 | `roi_name` | 空 | 只判定框中心落在该 ROI 的人员；**留空=整帧**；区域名不存在时停止判定 |
 | `check_helmet` / `check_workwear` / `check_gloves` | true | 三项独立开关 |
@@ -279,3 +284,83 @@ cmake --build build/engine --target ppe_tests -j4
   并且仍然建议同时训练负类作为主判据。
 
 在模型补齐之前，本通道的正确行为是：**不报警，人号徽标显示 `H-`（未知）**，而不是猜。
+
+
+## 十四、六类权重下的判定规则（2026-11-16 上线）
+
+现场换成了 6 类权重 `assets/best.rknn`（输入 640×640、输出 33=3×(5+6)），标签顺序：
+
+```
+0 person / 1 helmet / 2 hand_gloved / 3 hand_bare / 4 workwear_on / 5 head
+```
+
+注意第 6 类是中性 **`head`（头部）**，不是 `no_helmet`。所以：
+
+| 部位 | 正类 | 负类 | 规则 |
+| --- | --- | --- | --- |
+| 安全帽 `H` | `helmet` | `head` | 看到 `head` 且同一人没有 `helmet` → 违规；两者都没看到 → 未知不报 |
+| 工装 `T` | `workwear_on` | 无 | **`workwear_require_positive=true`**：人框够高、躯干未被别人挡住、本帧没有 `workwear_on` → 违规 |
+| 手套 `L`/`R` | `hand_gloved` | `hand_bare` | 看到 `hand_bare` 就是证据；模型区分左右手时按腕点分侧，分不清走"不分侧"通道 |
+
+用户口径（m02112）："检测到人，并且人得穿工装才不会报警，裸手识别到了就报警。"
+
+### 关键参数（现场 `assets/depth_multi_model.json` 的 `logic_parameters`）
+
+```json
+{
+  "no_helmet_labels": "head",
+  "helmet_positive_labels": "helmet",
+  "workwear_positive_labels": "workwear_on",
+  "no_gloves_labels": "hand_bare",
+  "glove_positive_labels": "hand_gloved",
+  "workwear_require_positive": true,
+  "workwear_min_person_height": 80,
+  "absence_min_person_score": 0.6,
+  "positive_min_score": 0.35,
+  "glove_require_pose": false,
+  "helmet_infer_by_absence": false
+}
+```
+
+### 正类撤销机制（防"漏检一帧就永久挂红"）
+
+检测器漏检一两帧是常态。`Guard::update` 每帧先检查 `positive_seen[part]`，一旦本帧
+看到了 "戴好了/穿好了" 的正类框，就**清空该部位已确认的违规并允许重新上报**：
+
+```cpp
+if (person.positive_seen[part] && (evidence.confirmed || !evidence.violations.empty())) {
+    evidence.violations.clear();
+    evidence.confirmed = false;
+    person_state.reported = false;
+}
+```
+
+### 端到端验证记录
+
+现场源是循环播放的 `assets/10_23.mp4`（201 秒，08:29:04→08:31:44）。整段视频里的人
+**全部戴蓝安全帽、穿蓝工装**，所以只能验证"不误报"，验证"能报"需要人为注入：
+
+| 场景 | 顶部计数 | 人号徽标 | 结论 |
+| --- | --- | --- | --- |
+| 正常配置 | `候选0 确认0 人员1` | `#2 HO TO L- R-`（绿框） | 不误报 ✅ |
+| 注入 `workwear_positive_labels=workwear_disabled_for_test` | `候选1 确认1 人员1`（红字） | `#2 HO TX L- R-`（红框） | 约 1 秒后确认报警 ✅ |
+| 恢复配置 | `候选0 确认0 人员1` | `#2 HO TO L- R-`（绿框） | 恢复正常 ✅ |
+
+注入脚本 `inject_violation.py on|off`（临时把 `workwear_positive_labels` 改成一个永不存在的类名，
+等价于"所有人身上都没检出工装正类"，用来打通往"缺正类 → 报警"整条链路；`off` 从 `.bak-inject` 还原）。
+
+### 已知局限
+
+1. **手套依赖模型区分左右手**。`hand_bare` 若带 `track_id` 且能对上人，会按腕点分侧；
+   无姿态、无 track 时两次腕距接近，只计"不分侧"证据，画面显示 `L- R-` 但内部会累计
+   `gloves_unsided`。现场实测手部框只有 24×30 像素，远景基本不可靠。
+2. **工装判定靠"缺正类"**，仍属推断。已加三道门：人框高 ≥ `workwear_min_person_height`、
+   人框分 ≥ `absence_min_person_score`、躯干被别人框盖 >40% 时 `torso_checkable=false` 不判。
+   如果现场出现"人蹲着/背对/被设备挡"的高误报，优先抬 `workwear_min_person_height` 和
+   `absence_min_person_score`，而不是关掉整项。
+3. **`head` 类必须真能分出发"露头未戴帽"**。如果模型把戴帽的人头也框成 `head`，
+   就会和 08:31 的缺帽误报一样翻车。上线后要专门抽查 `head` 框的准确率。
+4. **手套用 0.5、其余用 0.75 是刻意的不对称门槛**（2026-11-16 现场决定）。原因是手框
+   实测只有 0.59~0.72，卡 0.75 等于整项失效；代价是手部误检更容易变成报警。
+   手部本就是六类里最不可靠的一项（实测有框画在头顶的误检），
+   误报压不住时优先抬 `glove_min_score` 到 0.6，而不是关掉整项。

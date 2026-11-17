@@ -56,6 +56,7 @@ ppe_guard::Config load_config(ChannelContext *ctx)
 
     config.person_min_score = static_cast<float>(ctx->param_float("person_min_score"));
     config.violation_min_score = static_cast<float>(ctx->param_float("violation_min_score"));
+    config.glove_min_score = static_cast<float>(ctx->param_float("glove_min_score"));
     config.keypoint_min_score = static_cast<float>(ctx->param_float("keypoint_min_score"));
     config.evidence_window_ms = static_cast<uint64_t>(ctx->param_int("evidence_window_sec")) * 1000U;
     config.evidence_gap_ms = static_cast<uint64_t>(ctx->param_int("evidence_gap_ms"));
@@ -74,10 +75,16 @@ ppe_guard::Config load_config(ChannelContext *ctx)
     config.workwear_top_ratio = static_cast<float>(ctx->param_float("workwear_top_ratio"));
     config.workwear_bottom_ratio = static_cast<float>(ctx->param_float("workwear_bottom_ratio"));
     config.glove_wrist_ratio = static_cast<float>(ctx->param_float("glove_wrist_ratio"));
+    config.hand_attach_ratio = static_cast<float>(ctx->param_float("hand_attach_ratio"));
     config.dedupe_iou = static_cast<float>(ctx->param_float("dedupe_iou"));
     config.require_pose_for_violation = ctx->param_bool("require_pose_for_violation");
     config.positive_veto = ctx->param_bool("positive_veto");
     config.helmet_infer_by_absence = ctx->param_bool("helmet_infer_by_absence");
+    config.workwear_require_positive = ctx->param_bool("workwear_require_positive");
+    config.workwear_min_person_height = static_cast<float>(ctx->param_float("workwear_min_person_height"));
+    config.absence_min_person_score = static_cast<float>(ctx->param_float("absence_min_person_score"));
+    config.positive_min_score = static_cast<float>(ctx->param_float("positive_min_score"));
+    config.glove_require_pose = ctx->param_bool("glove_require_pose");
     config.positive_labels[ppe_guard::PART_HELMET] =
         ppe_guard::split_labels(ctx->param_string("helmet_positive_labels"));
     config.positive_labels[ppe_guard::PART_WORKWEAR] =

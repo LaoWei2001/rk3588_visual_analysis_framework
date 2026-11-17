@@ -1,7 +1,9 @@
 # 通用目标查询
 
-公开类型和方法在 [channel.h](../../engine/include/channel.h)，实现位于引擎内部的
-`channel_logic.cpp`。业务只包含 `<channel.h>`，无需新增包含路径。
+公开类型在 [results.h](../../engine/include/results.h)，通道入口在
+[channel.h](../../engine/include/channel.h)。查询实现位于
+[target_query.cpp](../../engine/src/logic/target_query.cpp)，通道和便捷接口位于
+[target_query.cpp](../../engine/src/logic/target_query.cpp)。业务只包含 `<channel.h>`，无需新增包含路径。
 
 `ctx->query_targets(query)` 一次遍历当前帧结果，返回匹配数量、最高置信度目标和查询状态。
 不构造匹配目标数组，不复制目标中的图像或姿态数据，不触发取帧转换。
@@ -86,15 +88,17 @@ if (selected.best)
 多模型通道的 `inference_valid` 可能表示部分模型成功，因此 `OK` 只说明当前结果批次可用，
 不能据此断定每个子模型都成功，也不能把某类别的零数量解释为其所属模型必定正常运行。
 
-## 兼容与验证
+## 验证与几何查询
 
-原有 `has_target()`、`target_count()`、`roi_has_target()` 和 `roi_count_target()` 保留：
-它们仍按旧约定查询，不自动判断推理有效性。新增的 `ROI_FRAME` 也可用于 ROI 自由函数，
-明确选择整帧；旧 `ROI_ALL` 和非法编号的行为不变。
+目标筛选只有 `query_targets()` 入口；使用 `count > 0` 判断存在，使用 `count` 计数。
+通过 `valid()` / `status` 区分有效空结果、推理不可用和无效查询。
+手工构造 `ChannelContext` 的测试需要明确设置 `infer_enabled` 和 `inference_valid`；
+通过 `LogicSession` 调用时由会话根据当前帧填写。
+`roi_contains()` 只判断给定框与区域的几何关系，不读取检测结果、不检查推理状态。
 
 独立业务测试 [test_target_query.cpp](../../engine/tests/sdk/test_target_query.cpp) 仅以公开 SDK
-路径编译，执行真实引擎查询实现，覆盖条件组合、阈值边界、判断点、状态区分、坏数据与旧接口兼容。
-现有 [区域报警示例](../../projects/modules/logic_roi_dwell_demo/README.md) 已使用新查询。
+路径编译，执行真实引擎查询实现，覆盖条件组合、阈值边界、判断点、状态区分、坏数据、会话隔离与几何边界。
+现有 [区域报警示例](../../projects/modules/logic_roi_dwell_demo/README.md) 使用该查询接口。
 
 ```bash
 cmake -S engine -B build/engine -DBUILD_SDK_TESTS=ON

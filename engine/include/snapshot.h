@@ -56,40 +56,17 @@ struct ChannelLogicSnapshot
     std::map<std::string, std::vector<DrawCommand>> global_draw_commands_by_owner;
 
   public:
-    /**
-     * 全局 Logic 的便捷读取入口。读取失败统一返回 false：包括通道离线、尚未发布、
-     * 字段不存在、类型不匹配，以及设置了 max_age_ms 后数据已过期。
-     * 合法的 0、false 和空字符串仍返回 true。
+    /** @brief 检查已发布、在线且年龄非负的快照；max_age_ms<0 时不限制年龄。
+     * 示例：
+     * @code
+     * ChannelLogicSnapshot snapshot;
+     * bool fresh = snapshot.readable(500);
+     * @endcode
      */
     bool readable(int64_t max_age_ms = -1) const
     {
         return has_publication && online_state == CH_ONLINE && publication_age_ms >= 0 &&
                (max_age_ms < 0 || publication_age_ms <= max_age_ms);
-    }
-
-    bool read_string(const char *key, std::string *out, int64_t max_age_ms = -1) const
-    {
-        return readable(max_age_ms) && outputs && outputs->try_get_string(key, out);
-    }
-
-    bool read_number(const char *key, double *out, int64_t max_age_ms = -1) const
-    {
-        return readable(max_age_ms) && outputs && outputs->try_get_number(key, out);
-    }
-
-    bool read_int(const char *key, int64_t *out, int64_t max_age_ms = -1) const
-    {
-        return readable(max_age_ms) && outputs && outputs->try_get_int(key, out);
-    }
-
-    bool read_bool(const char *key, bool *out, int64_t max_age_ms = -1) const
-    {
-        return readable(max_age_ms) && outputs && outputs->try_get_bool(key, out);
-    }
-
-    bool read_json(const char *key, std::string *out, int64_t max_age_ms = -1) const
-    {
-        return readable(max_age_ms) && outputs && outputs->try_get_json(key, out);
     }
 };
 

@@ -30,7 +30,7 @@ chipName、chipLabel、controller 等字段。直接这样调用：
 - 无扰动枚举全部 GPIO，查看方向、线路名、占用者和可控状态；
 - 查询 RK3588 IO 电源域或设备树提供的标称高电平信息；
 - 按持久状态恢复全部输出；
-- 兼容旧版 GPIO 后台和原有 pin_* 调用。
+- 控制服务未运行时直接使用 libgpiod；服务错误会原样返回。
 
 接口定义全部位于 gpio.h，实现按“控制、状态、枚举/电压”分区集中在
 gpio.cpp。主程序已链接 libgpiod，逻辑模块直接包含 <gpio.h>。
@@ -80,7 +80,7 @@ gpio_read_input() 只允许读取输入线路。如果目标正在输出或被�
 三个来源含义不同：
 
 - currentValue：后台或本进程确认当前正在保持的输出；
-- runtimeValue：兼容旧后台的运行记录，不能单独保证仍是硬件现状；
+- runtimeValue：后台运行记录，不能单独保证仍是硬件现状；
 - savedValue：下次开机恢复使用的持久值，不代表当前电平。
 
 每个值都有对应的 has 标志。只有 hasCurrentValue=1 时 currentValue 才有效；
@@ -171,16 +171,6 @@ GPIO 字符设备只能读取逻辑 0/1，不能测出 2.87V 之类的实际电�
 - 引擎内部的 gpio_restore_outputs() 可以恢复全部已保存输出。
 
 保持开关关闭时仍可实时控制 GPIO，但不会读取、写入或删除原有开机恢复值。
-对 `gpio_set_output()`、`pin_out_val()`、`gpio_set_input()` 的调用方式没有变化；新版封装会优先
-使用统一状态协议，并在连接旧后台时自动进入兼容路径。
-
-## 兼容接口
-
-| 兼容函数 | 等价/语义 |
-| --- | --- |
-| pin_out_val(name, value) | gpio_set_output(name, value) |
-| pin_set_high(name) | 输出高电平 |
-| pin_set_low(name) | 输出低电平 |
-| read_pin_val(name) | 兼容读取，输出线路也可能读回输出值 |
-
-新代码读取外部输入时应使用 gpio_read_input()，不要用语义较宽的 read_pin_val()。
+`gpio_set_output()`、`gpio_set_input()` 使用统一状态协议；`gpio_read_input()` 严格读取输入。
+控制服务未运行时由本进程直接控制线路。服务返回操作或协议错误时停止，不尝试旧协议。
+SDK 只读取 `/var/lib/rk3588-gpio/GPIOx_Yz.state`，不迁移早期单引脚状态文件。

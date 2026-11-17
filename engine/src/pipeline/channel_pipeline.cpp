@@ -1,3 +1,4 @@
+#include "events/event_report.h"
 /**
  * @file channel_pipeline.cpp
  * @brief 通道结果处理管线
@@ -18,6 +19,7 @@
 #include <memory>
 #include <opencv2/opencv.hpp>
 #include <pthread.h>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -27,9 +29,9 @@
 #include "frame_transform.h"
 #include "pipeline_internal.h"
 #include "pipeline_runtime.h"
-#include "vision/tracking/bytetrack.h"
-#include "vision/tracking/tracker.h"
+#include <bytetrack.h>
 #include <channel.h>
+#include <tracker.h>
 
 /*======================== 跟踪器 (每通道一个实例) ========================*/
 
@@ -206,7 +208,7 @@ bool pipeline_publish_runtime_snapshot(const AppConfig &config, uint64_t generat
     if (!g_pCtrl)
         return false;
 
-    auto next = app_ctrl_build_runtime_snapshot(config, g_pCtrl->inputW, g_pCtrl->inputH, generation);
+    auto next = app_ctrl_build_runtime_snapshot(config, g_pCtrl->business_width, g_pCtrl->business_height, generation);
     if (!next)
         return false;
     auto previous = app_ctrl_get_runtime_snapshot();
@@ -278,10 +280,10 @@ bool pipeline_publish_runtime_snapshot(const AppConfig &config, uint64_t generat
 }
 
 /*======================== 当前视频帧的统一惰性访问 ========================*/
-static const cv::Mat *get_model_frame_bgr(void *opaque)
+static const cv::Mat *get_business_frame_bgr(void *opaque)
 {
     LazyVideoFrame *frame = static_cast<LazyVideoFrame *>(opaque);
-    return frame ? frame->model_frame() : nullptr;
+    return frame ? frame->business_frame() : nullptr;
 }
 
 static const cv::Mat *get_source_frame_bgr(void *opaque)
@@ -383,31 +385,14 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
 
     ChannelLogicFunc fn = channel_logic_get(logic_name.c_str());
     if (!fn)
-    {
-        if (raw_frame && raw_frame->lazy_frame)
-            raw_frame->lazy_frame->clear_borrowed_source();
-        auto media = make_publication_media(raw_frame, current_results, {}, runtime);
-        pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
-        ChannelState &state = g_pCtrl->channels_state[chnId];
-        state.last_lazy_frame = raw_frame ? raw_frame->lazy_frame : nullptr;
-        state.published_media = std::move(media);
-        state.logic_state.reset();
-        state.logic_outputs = empty_logic_output_snapshot();
-        state.last_results = current_results;
-        state.published_frame_seq = frame_id;
-        state.draw_cmds.clear();
-        state.logic_display_frame.release();
-        state.commit_publication(runtime, steady_now_ms(), timestamp_ms, unix_ms, infer_enabled,
-                                 raw_frame ? raw_frame->width : 0, raw_frame ? raw_frame->height : 0);
-        pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
-        return;
-    }
+        throw std::runtime_error("Channel logic is not registered: " + logic_name);
 
     ChannelState &ch_state = g_pCtrl->channels_state[chnId];
     std::shared_ptr<void> logic_state;
 
     /* 构造 ChannelContext（栈上，logic 函数只在本次调用内使用）*/
     ChannelContext ctx;
+    VisionContextAccess::bind_events(ctx, &event_report_runtime_sink());
     ctx.chnId = chnId;
     pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
     ctx.src_width = raw_frame && raw_frame->width > 0 ? raw_frame->width : ch_state.src_w_now;
@@ -435,7 +420,8 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
     /* model/source 两种尺寸共享同一个帧提供者，各自首次调用时才转换，且每帧最多一次。 */
     if (raw_frame && raw_frame->lazy_frame)
     {
-        VisionContextAccess::bind_frames(ctx, get_model_frame_bgr, get_source_frame_bgr, raw_frame->lazy_frame.get());
+        VisionContextAccess::bind_frames(ctx, get_business_frame_bgr, get_source_frame_bgr,
+                                         raw_frame->lazy_frame.get());
     }
 
     /* logic 在 chn_mtx 外运行。runtime shared_ptr 保证 config/ROI 在本帧全程有效；

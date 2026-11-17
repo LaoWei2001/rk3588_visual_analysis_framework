@@ -1,7 +1,8 @@
 # 公共 SDK
 
 业务代码的正式接口位于 `engine/include/`。当前 SDK 版本为 `0.1.0`，提供
-C++ 源码接口，依赖 C++11 或更高版本及 OpenCV。GPIO 和 JSON 头文件也可由 C 使用。
+C++ 源码接口，通常依赖 C++11 或更高版本及 OpenCV；模型检查接口仅使用标准 C++ 类型。
+GPIO 和 JSON 头文件也可由 C 使用。
 版本号以 `engine/include/version.h` 为准；本文说明源码接口，不承诺独立插件 ABI。
 
 按功能查找函数，直接打开 [engine/include/README.md](../../engine/include/README.md)。
@@ -35,7 +36,10 @@ C++ 源码接口，依赖 C++11 或更高版本及 OpenCV。GPIO 和 JSON 头文
 static void logic_person_count(ChannelContext *ctx)
 {
     if (!ctx) return;
-    ctx->publish_int("person_count", roi_count_target(ctx, "person", ROI_ALL));
+    TargetQuery query;
+    query.labels = {"person"};
+    query.roi = ROI_ALL;
+    ctx->publish_int("person_count", ctx->query_targets(query).count);
 }
 
 REGISTER_LOGIC(logic_person_count);
@@ -54,8 +58,11 @@ REGISTER_LOGIC(logic_person_count);
 | --- | --- |
 | `channel.h` | `ChannelContext`、ROI 查询、通道注册与动作注册 |
 | `global.h` | `GlobalContext`、有效通道输入、全局注册与动作注册 |
-| `types.h`、`coordinates.h` | 检测结果、ROI、绘图指令、时间与固定业务坐标 |
+| `types.h`、`coordinates.h` | 检测结果、ROI、绘图指令与固定业务坐标 |
+| `inference.h` | 独立图片/单帧多模型会话、统一结果与标注绘制；见[图片推理](image-inference.md) |
+| `model_inspection.h` | RKNN 元数据探测、纯 CPU 解码器兼容性检查；见[模型检查与画布调用流程](model-inspection.md) |
 | `drawing.h` | 绘图指令、显示画布辅助和 UTF-8 文字接口 |
+| `network.h` | 直接测量到摄像头 IP 的网络往返延迟；不启动视频或模型 |
 | `events.h` | `EventRequest`、字段和事件提交结果 |
 | `config_types.h` | 回调中借用的只读通道/全局配置数据，不包含加载和热更新实现 |
 | `snapshot.h`、`outputs.h` | 跨通道数据和同帧媒体快照；媒体所有权对业务不可访问 |
@@ -88,7 +95,7 @@ NPU 队列和运行快照实现不由 SDK 导出。上下文中的取帧、绘�
 ## 生命周期和性能约定
 
 - 回调中的上下文、配置、参数、输入和取帧返回指针仅在当前回调期间有效。
-- `business_frame()` / `model_frame()` 提供固定 640×640 业务图；`source_frame()`
+- `business_frame()` 提供固定 640×640 业务图；`source_frame()`
   提供源分辨率原图。仅在调用时转换，同一帧复用缓存。需要异步持有或修改图片时显式复制。
 - 跨帧状态使用 `ctx->get_state<T>()` / `gctx->get_state<T>()`，首次构造、后续复用，
   每个实例独立。同一模块的普通回调与 Action 保持同一种状态类型；借用指针不跨回调保存。
@@ -130,3 +137,26 @@ SDK 测试独立编译每个公开头文件和业务样例，检查全部业务�
 
 源码变更后需重新构建和部署应用。已经生成的应用发布包、离线包目录和压缩包不会随源码
 自动更新，按原有打包流程重新生成。
+
+## 实现与正式运行的对应关系
+
+SDK 源码版本为 **0.2.0**。本次接口收敛不保留旧名称；业务源码和独立测试须一起重新编译。
+
+| 公开能力 | 共用实现 | 正式调用方 |
+| --- | --- | --- |
+| 模型检查与类型目录 | `model_probe.cpp`、`model_compatibility.cpp`、`model_catalog.inc` | Web 检查 CLI、图片与视频模型工厂 |
+| 图片推理 | `ImageInferenceSession` → `FrameExecutor` | 视频 `inference_executor.cpp` 使用同一个执行器 |
+| 目标查询、业务帧、参数和绘图 | `target_query.cpp`、`channel_context.cpp`、`channel_drawing.cpp` | `channel_pipeline.cpp` 调用的业务函数及独立 `LogicSession` |
+| 跟踪 | `tracker.cpp`、`bytetrack.cpp` | `channel_pipeline.cpp` |
+| 渲染 | `result_renderer.cpp`、`text_overlay.cpp` | 实时显示、图片推理、事件图片和录像 |
+| 数据集规则与门控 | `dataset/rules.cpp` | `remote_dataset.cpp` |
+| 事件提交 | `event_submission.cpp` → `EventSink` | 正式事件流水线；离线会话使用收集器记录提交 |
+| 完整视频生命周期 | `video_runtime*.cpp` | 正式 `main.cpp` 和独立视频测试 |
+
+统一入口：业务图 `business_frame()`；目标筛选 `query_targets()`；模型目录
+`inference_model_types()`；GPIO `gpio_set_output()/gpio_set_input()/gpio_read_input()`。
+全局业务按 `input_count()/input_at()` 遍历有效输入，或用 `input(id)` 定位通道。
+
+`read_*()` 与 `get_*()` 分别提供严格类型检查和默认值，`source_frame()` 与 `business_frame()`
+分别提供原图和业务坐标图；这些具有不同契约。`LogicSession` 是正式回调的离线驱动，事件收集器
+仅记录提交，完整持久化、远端投递和媒体生命周期由 `VideoRuntime` 驱动。
