@@ -24,12 +24,15 @@ namespace
 void no_op(ChannelContext *)
 {
 }
-void throws_standard(ChannelContext *)
+std::atomic<int64_t> observed_video_time{-1};
+void throws_standard(ChannelContext *ctx)
 {
+    observed_video_time.store(ctx->video_time_ms);
     throw std::runtime_error("intentional channel failure");
 }
-void throws_unknown(ChannelContext *)
+void throws_unknown(ChannelContext *ctx)
 {
+    observed_video_time.store(ctx->video_time_ms);
     throw 42;
 }
 vision::VideoRuntime *observed_runtime = nullptr;
@@ -225,12 +228,14 @@ void status_transitions()
 
 void worker_failure(const char *logic, bool dispatch)
 {
+    observed_video_time.store(-1);
     Fixture fixture(logic);
     assert(app_ctrl_init(fixture.config.c_str()) == 0);
     assert(pipeline_init() == 0);
     ChannelRawFrame raw;
     raw.width = raw.height = 64;
     raw.frame_steady_ms = steady_now_ms();
+    raw.video_time_ms = 1250;
     raw.lazy_frame = std::make_shared<LazyVideoFrame>(0, nullptr, 64, 64, 64, 64, RK_FORMAT_YCbCr_420_SP, 640, 640);
     if (dispatch)
     {
@@ -247,6 +252,7 @@ void worker_failure(const char *logic, bool dispatch)
         result.frame = raw.lazy_frame;
         result.latest_seq = 1;
         result.frame_steady_ms = raw.frame_steady_ms;
+        result.video_time_ms = raw.video_time_ms; // 无检测框时也必须保留对应帧的位置。
         result.has_new = 1;
         g_inference.result_dispatch_pending[0] = 1;
     }
@@ -260,6 +266,7 @@ void worker_failure(const char *logic, bool dispatch)
     pipeline_request_stop();
     pthread_join(worker, nullptr);
     assert(stopped && g_pCtrl->worker_failed);
+    assert(observed_video_time.load() == 1250);
     assert(pthread_mutex_trylock(&g_process_mtx[0]) == 0); // Exception released the process lock.
     pthread_mutex_unlock(&g_process_mtx[0]);
     const auto status = app_ctrl_channel_status().at(0);
