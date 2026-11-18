@@ -168,7 +168,6 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
         }
         cJSON_AddItemToObject(source, "image_frames", image_frames);
     }
-    cJSON_AddItemToObject(source, "parameters", parse_object_or_empty(cfg.report_parameters_json));
     cJSON_AddItemToObject(root, "source", source);
 
     cJSON *data = cJSON_CreateObject();
@@ -457,7 +456,6 @@ EventReportResult RuntimeEventSink::report(GlobalContext &context, const EventRe
     /* 全局事件直接使用全局节点的上报配置，不借用任意通道充当事件身份。 */
     ChannelConfig report_config;
     report_config.report_policy_json = gctx->config->report_policy_json;
-    report_config.report_parameters_json = gctx->config->report_parameters_json;
     report_config.event_video = gctx->config->event_video;
 
     ChannelContext ctx{};

@@ -32,6 +32,7 @@ export default function StreamNode({ data, selected }: NodeProps) {
       <div className="rf-node-header header-stream">
         <span>◈</span>
         <span>视频流</span>
+        {d.enable != null && !d.enable && <span className="node-type-badge" style={{ color: '#f87171' }}>通道已停用</span>}
         <span className="node-type-badge"
           style={{ background: `${color}22`, color, border: `1px solid ${color}55` }}>
           {srcType ? (TYPE_LABELS[srcType] ?? srcType.toUpperCase()) : '未指定'}
@@ -55,6 +56,7 @@ export default function StreamNode({ data, selected }: NodeProps) {
         <span>{videoMissing ? '⚠ 视频文件不存在' : addr}</span>
       </div>
       <Handle type="source" position={Position.Right} id="stream-out" />
+      <Handle type="source" position={Position.Bottom} id="global-out" title="连接全局逻辑" />
     </div>
   )
 }

@@ -216,15 +216,6 @@ int main()
         }
     }
 
-    // swap_rb 路径的缓存仍为 BGR，停帧刷新不能额外交换红蓝。
-    runtime->config.channels[0].swap_rb = true;
-    state.tile_staging = base.clone();
-    state.tile_staging.copyTo(front);
-    state.performance_overlay = vision::OverlayCache{};
-    display_refresh_channel_overlays(0);
-    show_performance = 0;
-    display_refresh_channel_overlays(0);
-    assert(cv::norm(front, base, cv::NORM_INF) == 0);
     pthread_mutex_destroy(&g_pCtrl->chn_mtx[0]);
     delete g_pCtrl;
     g_pCtrl = nullptr;

@@ -10,7 +10,6 @@
     {
       "id": 0,
       "enable": true,
-      "infer_enable": false,
       "models": [],
       "stream": {
         "src_type": "rtsp",
@@ -27,7 +26,6 @@
     {
       "id": 1,
       "enable": true,
-      "infer_enable": false,
       "models": [],
       "stream": {
         "src_type": "rtsp",

@@ -295,7 +295,7 @@ void test_depth_background_and_overlay_order()
     channel.models[0].enable = false;
     assert(!channel_uses_depth_background(&channel));
     channel.models[0].enable = true;
-    channel.infer_enable = false;
+    channel.enable = false;
     assert(!channel_uses_depth_background(&channel));
 
     AlgoResult relative;

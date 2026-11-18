@@ -91,10 +91,7 @@ uint64_t display_buffer_offset(int chnId, int bytesPerPixel)
 static void write_channel_view(int chnId, cv::Mat &view)
 {
     render_channel_view(view, chnId, 0, &g_pCtrl->channels_state[chnId].performance_overlay);
-    auto runtime = app_ctrl_get_runtime_snapshot();
-    const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, chnId);
-    if (!channel || !channel->swap_rb)
-        cv::cvtColor(view, view, cv::COLOR_BGR2RGB);
+    cv::cvtColor(view, view, cv::COLOR_BGR2RGB);
     constexpr int screen_bpp = 3;
     char *front = *g_pCtrl->pDispBuffer;
     cv::Mat front_roi(view.rows, view.cols, CV_8UC3, front + display_buffer_offset(chnId, screen_bpp),
@@ -247,20 +244,17 @@ void display_refresh_channel_overlays(int chnId)
     cv::Mat view = cs.tile_staging(cv::Rect(0, 0, tile_w, tile_h));
     const cv::Rect bounds = vision::performance_overlay_bounds(view, params);
     cv::Mat footer = view(bounds);
-    const bool swap_rb = channel && channel->swap_rb;
     if (cache.background.empty())
     {
         // 停帧时刚打开性能显示：从当前显示帧取得背景，无需预先保存整帧。
         footer.copyTo(cache.background);
-        if (!swap_rb)
-            cv::cvtColor(cache.background, cache.background, cv::COLOR_RGB2BGR);
+        cv::cvtColor(cache.background, cache.background, cv::COLOR_RGB2BGR);
     }
     if (cache.background.size() != footer.size())
         return;
     cache.background.copyTo(footer);
     render_runtime_performance_overlay(view, params);
-    if (!swap_rb)
-        cv::cvtColor(footer, footer, cv::COLOR_BGR2RGB);
+    cv::cvtColor(footer, footer, cv::COLOR_BGR2RGB);
     constexpr int screen_bpp = 3;
     char *front = *g_pCtrl->pDispBuffer;
     cv::Mat front_roi(tile_h, tile_w, CV_8UC3, front + display_buffer_offset(chnId, screen_bpp),

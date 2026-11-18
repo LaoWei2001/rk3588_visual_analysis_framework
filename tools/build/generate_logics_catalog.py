@@ -130,8 +130,8 @@ def validate_parameter_schema(manifest_path: Path, schema: Any) -> Dict[str, Any
         for field in ("title", "description", "x-placeholder", "x-unit"):
             if field in spec and not isinstance(spec[field], str):
                 raise ManifestError(f"{prefix}.{field} must be a string")
-        if "x-ui-hidden" in spec and not isinstance(spec["x-ui-hidden"], bool):
-            raise ManifestError(f"{prefix}.x-ui-hidden must be a boolean")
+        if "x-ui-hidden" in spec:
+            raise ManifestError(f"{prefix}.x-ui-hidden is retired; runtime parameters must be visible in the editor")
         if "x-step" in spec:
             if schema_type not in {"number", "integer"}:
                 raise ManifestError(f"{prefix}.x-step requires a numeric type")
@@ -220,8 +220,6 @@ def schema_property_to_web_param(key: str, spec: Dict[str, Any]) -> Dict[str, An
 def web_params_from_schema(parameter_schema: Dict[str, Any]) -> List[Dict[str, Any]]:
     result: List[Dict[str, Any]] = []
     for key, spec in parameter_schema.get("properties", {}).items():
-        if spec.get("x-ui-hidden") is True:
-            continue
         result.append(schema_property_to_web_param(key, spec))
     return result
 

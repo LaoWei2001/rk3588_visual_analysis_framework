@@ -365,6 +365,60 @@ def test_application_and_service_autostart_follow_external_state(console, route,
     pw_api.expect(checkbox).to_be_checked(timeout=2500)
 
 
+def test_canvas_model_panel_has_no_image_inference_entry(console):
+    page, url, snapshots, _, requests = console
+    snapshots['/api/apps/demo/config'] = {'global': {}, 'channels': [{
+        'id': 0, 'stream': {'src_type': 'usb', 'device': '/dev/video0'},
+        'models': [{'id': 'model_0', 'enable': False, 'model_type': 'yolov8_det'}],
+    }]}
+    snapshots['/api/apps/demo/models/runtime'] = {'status': 'stopped', 'channels': []}
+    page.goto(url + '/editor/demo')
+    page.locator('.react-flow__node-model').click()
+    panel = page.locator('.ncp')
+    pw_api.expect(panel.get_by_text('启用 NPU 推理', exact=True)).to_be_visible()
+    pw_api.expect(panel).not_to_contain_text('图片推理')
+    pw_api.expect(panel).not_to_contain_text('在新标签页')
+    assert not any('/image-inference/' in path for _, path in requests)
+
+
+def test_model_switch_save_removes_hidden_channel_inference_override(console):
+    page, url, snapshots, _, _ = console
+    config_url = '/api/apps/demo/config'
+    snapshots[config_url] = {'global': {}, 'channels': [{
+        'id': 0, 'infer_enable': False,
+        'stream': {'src_type': 'usb', 'device': '/dev/video0'},
+        'models': [{'id': 'person', 'enable': False, 'model_type': 'yolov8_det',
+                    'model_path': 'assets/person.rknn', 'label_path': 'assets/person.txt'}],
+    }]}
+    snapshots['/api/apps/demo/assets'] = dict(models=['assets/person.rknn'], labels=['assets/person.txt'], videos=[])
+    snapshots['/api/apps/demo/models/runtime'] = dict(status='stopped', channels=[])
+    snapshots['/api/apps/demo/models/info'] = dict(ok=True, width=640, height=640)
+    saved = []
+
+    def config_request(route):
+        if route.request.method == 'POST':
+            snapshots[config_url] = route.request.post_data_json
+            saved.append(deepcopy(snapshots[config_url]))
+            route.fulfill(content_type='application/json', body='{"ok":true}')
+        else:
+            route.fulfill(content_type='application/json', body=json.dumps(snapshots[config_url]))
+
+    page.route('**' + config_url, config_request)
+    page.goto(url + '/editor/demo')
+    for enabled in (True, False, True):
+        page.locator('.react-flow__node-model').click()
+        checkbox = page.get_by_role('checkbox', name='启用 NPU 推理', exact=True)
+        checkbox.set_checked(enabled)
+        page.get_by_role('button', name='💾 保存', exact=True).click()
+        pw_api.expect(page.get_by_text('保存成功 ✓（config.json）', exact=True)).to_be_visible()
+        assert saved[-1]['channels'][0]['models'][0]['enable'] is enabled
+        assert 'infer_enable' not in saved[-1]['channels'][0]
+        page.reload()
+        page.locator('.react-flow__node-model').click()
+        pw_api.expect(checkbox).to_be_checked(checked=enabled)
+    assert len(saved) == 3
+
+
 def test_editor_and_application_integration_sync_files_and_protect_drafts(console):
     page, url, snapshots, _, _ = console
     page.goto(url + '/editor/demo')
@@ -725,16 +779,22 @@ def test_business_roi_balances_images_and_removes_empty_space_without_resizing_d
     assert_roi_content_fits_without_scrolling(dialog)
 
 
-def test_channel_switches_are_preserved_without_exposing_extra_controls(console):
+def test_channel_switches_are_visible_and_editable(console):
     page, url, snapshots, _, _ = console
     snapshots['/api/apps/demo/config']['channels'] = [dict(
-        id=0, enable=False, infer_enable=False, swap_rb=True, models=[],
+        id=0, enable=False, swap_rb=True, models=[],
         stream=dict(src_type='file', url='assets/isolated.mp4'))]
     page.goto(url + '/editor/demo')
     page.locator('.react-flow__node-stream').click()
     pw_api.expect(page.get_by_text('通道编号 (channel_id)', exact=True)).to_be_visible()
-    for label in ['启用通道', '允许模型推理', '显示红蓝互换']:
-        pw_api.expect(page.get_by_role('checkbox', name=label, exact=True)).to_have_count(0)
+    enabled = page.get_by_role('checkbox', name='启用通道', exact=True)
+    swap = page.get_by_role('checkbox', name='显示红蓝互换', exact=True)
+    pw_api.expect(enabled).not_to_be_checked()
+    pw_api.expect(swap).to_have_count(0)
+    pw_api.expect(page.get_by_text('通道已停用', exact=True)).to_be_visible()
+    enabled.check()
+    pw_api.expect(page.get_by_text('通道已停用', exact=True)).to_have_count(0)
+    pw_api.expect(page.get_by_role('checkbox', name='允许模型推理', exact=True)).to_have_count(0)
 
 
 def test_channel_threads_edit_save_reload_and_inherit_global(console):
@@ -743,7 +803,7 @@ def test_channel_threads_edit_save_reload_and_inherit_global(console):
     snapshots['/api/apps/demo/models/runtime'] = dict(status='stopped', config=None, channels=[])
     snapshots[config_url] = {
         'global': {'channel_threads': 3},
-        'channels': [dict(id=0, threads=2, enable=False, infer_enable=False, swap_rb=True,
+        'channels': [dict(id=0, threads=2, enable=False, swap_rb=True,
             stream=dict(src_type='rtsp', url='rtsp://example.invalid/cam', video_enc='h264'),
             models=[dict(id='person', enable=False, model_type='yolov8_det')])],
     }
@@ -770,8 +830,8 @@ def test_channel_threads_edit_save_reload_and_inherit_global(console):
     assert len(saved) == 1
     channel = saved[-1]['channels'][0]
     assert channel['threads'] == 7
-    assert channel['enable'] is False and channel['infer_enable'] is False
-    assert channel['swap_rb'] is True
+    assert channel['enable'] is False and 'infer_enable' not in channel
+    assert 'swap_rb' not in channel
     assert 'threads' not in channel['models'][0]
     assert saved[-1]['global']['channel_threads'] == 3
     page.reload()
@@ -786,3 +846,79 @@ def test_channel_threads_edit_save_reload_and_inherit_global(console):
     page.reload()
     page.locator('.react-flow__node-stream').click()
     pw_api.expect(threads).to_have_value('')
+
+
+def test_runtime_options_edit_save_and_reload(console):
+    page, url, snapshots, _, _ = console
+    path = '/api/apps/demo/config'
+    snapshots[path] = {'global': {'rtsp_codec': 'h265', 'rtsp_port': 9554, 'rtsp_path': '/camera',
+                                 'rtsp_bitrate': 2048, 'rtsp_encoder': 'hw', 'tracker_enable': 0},
+                      'channels': [{'id': 0, 'enable': False, 'swap_rb': True, 'tracker_enable': -1,
+                                    'stream': {'src_type': 'usb', 'device': '/dev/video0'}, 'models': []}]}
+    saved = []
+
+    def write(route):
+        if route.request.method == 'POST':
+            snapshots[path] = route.request.post_data_json
+            saved.append(deepcopy(snapshots[path]))
+            route.fulfill(content_type='application/json', body='{"ok":true}')
+        else:
+            route.fulfill(content_type='application/json', body=json.dumps(snapshots[path]))
+
+    page.route('**' + path, write)
+    page.goto(url + '/editor/demo')
+    pw_api.expect(page.get_by_label('RTSP 输出编码', exact=True)).to_have_value('h265')
+    pw_api.expect(page.get_by_label('RTSP 端口', exact=True)).to_have_value('9554')
+    pw_api.expect(page.get_by_label('RTSP 路径', exact=True)).to_have_value('/camera')
+    pw_api.expect(page.get_by_label('RTSP 编码器', exact=True)).to_have_value('hw')
+    page.get_by_label('RTSP 端口', exact=True).fill('8555')
+    page.get_by_label('RTSP 路径', exact=True).fill('/review')
+    page.get_by_label('RTSP 软件编码码率 (kbps)', exact=True).fill('3072')
+    page.get_by_label('RTSP 编码器', exact=True).select_option('auto')
+    page.get_by_role('checkbox', name='HDMI 空格键暂停', exact=True).check()
+    page.locator('.react-flow__node-stream').click()
+    pw_api.expect(page.get_by_text('当前生效：跟踪已关闭', exact=True)).to_be_visible()
+    page.get_by_role('checkbox', name='启用通道', exact=True).check()
+    page.get_by_role('button', name='💾 保存', exact=True).click()
+    pw_api.expect(page.get_by_text('保存成功 ✓（config.json）', exact=True)).to_be_visible()
+    assert saved[-1]['global']['rtsp_codec'] == 'h265'
+    assert saved[-1]['global']['rtsp_port'] == 8555
+    assert saved[-1]['global']['rtsp_path'] == '/review'
+    assert saved[-1]['global']['rtsp_bitrate'] == 3072
+    assert saved[-1]['global']['rtsp_encoder'] == 'auto'
+    assert saved[-1]['global']['enable_pause_key'] == 1
+    assert saved[-1]['channels'][0]['enable'] is True
+    assert 'swap_rb' not in saved[-1]['channels'][0]
+    page.reload()
+    pw_api.expect(page.get_by_label('RTSP 输出编码', exact=True)).to_have_value('h265')
+    pw_api.expect(page.get_by_role('checkbox', name='HDMI 空格键暂停', exact=True)).to_be_checked()
+    page.locator('.react-flow__node-stream').click()
+    pw_api.expect(page.get_by_role('checkbox', name='启用通道', exact=True)).to_be_checked()
+    pw_api.expect(page.get_by_role('checkbox', name='显示红蓝互换', exact=True)).to_have_count(0)
+
+
+def test_shared_report_options_are_editable_from_each_delivery(console):
+    page, url, snapshots, _, _ = console
+    path = '/api/apps/demo/config'
+    snapshots[path] = {'global': {}, 'channels': [{'id': 0,
+        'stream': {'src_type': 'usb', 'device': '/dev/video0'}, 'models': [], 'logic': 'logic_default',
+        'report_parameters': {'device': 'old'},
+        'report_policy': {'enabled': True, 'video_overlay': 'none', 'video_pre_sec': 3,
+                          'deliveries': [{'id': 'a', 'enabled': True, 'media': ['video']},
+                                         {'id': 'b', 'enabled': False, 'media': ['video']}]}}]}
+    snapshots['/api/apps/demo/logics']['channel_logics'] = [dict(name='logic_default', params=[])]
+    snapshots['/api/apps/demo/records'] = dict(records=[], count=0, total_bytes=0)
+    page.goto(url + '/editor/demo')
+    reports = page.locator('.react-flow__node-report')
+    reports.nth(1).click()
+    pw_api.expect(page.get_by_label('事件录像的叠加内容')).to_have_value('none')
+    page.get_by_label('事件录像的叠加内容').select_option('custom')
+    page.get_by_label('事件前时长（秒）').fill('9')
+    pw_api.expect(page.get_by_label('上报业务参数（JSON 对象）', exact=False)).to_have_count(0)
+    reports.nth(0).click()
+    pw_api.expect(page.get_by_label('事件录像的叠加内容')).to_have_value('custom')
+    pw_api.expect(page.get_by_label('事件前时长（秒）')).to_have_value('9')
+    pw_api.expect(page.get_by_label('上报业务参数（JSON 对象）', exact=False)).to_have_count(0)
+    pw_api.expect(page.get_by_role('checkbox', name='启用上报', exact=True)).to_be_checked()
+    reports.nth(1).click()
+    pw_api.expect(page.get_by_role('checkbox', name='启用上报', exact=True)).not_to_be_checked()

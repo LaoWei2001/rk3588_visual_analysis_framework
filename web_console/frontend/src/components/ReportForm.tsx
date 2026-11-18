@@ -440,7 +440,7 @@ export default function ReportForm({
     {delivery.media.includes('annotated_image') &&
       <div className="report-advanced-section">
         <Field label="带标注图片的叠加内容">
-          <select value={String(policy.image_overlay ?? 'custom')}
+          <select value={String(policy.image_overlay === 'all' ? 'custom' : policy.image_overlay ?? 'custom')}
             onChange={event => setPolicy({ image_overlay: event.target.value })}>
             <option value="none">不叠加</option>
             <option value="custom">与实时画面一致</option>
@@ -448,6 +448,12 @@ export default function ReportForm({
         </Field>
       </div>}
     {delivery.media.includes('video') && <div className="report-advanced-section">
+      <Field label="事件录像的叠加内容">
+        <select value={String(policy.video_overlay === 'all' ? 'custom' : policy.video_overlay ?? 'custom')}
+          onChange={event => setPolicy({ video_overlay: event.target.value })}>
+          <option value="none">不叠加</option><option value="custom">与实时画面一致</option>
+        </select>
+      </Field>
       <Field label="事件前时长（秒）">
         <NumberField min={0} max={120} step={0.5} def={3} value={policy.video_pre_sec ?? 3}
           onChange={value => setPolicy({ video_pre_sec: value ?? 3 })} />
@@ -469,6 +475,7 @@ export default function ReportForm({
       </Field>
     </div>
 
+    <div className="ncp-hint">同一逻辑下的上报节点共享图片、录像及事件合并参数；修改会同步到其他投递节点。</div>
     <details className="report-advanced-section report-debug-section">
       <summary>高级诊断：查看画布保存配置</summary>
       <div className="report-event-actions">

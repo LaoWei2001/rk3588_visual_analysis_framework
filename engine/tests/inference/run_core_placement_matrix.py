@@ -34,7 +34,7 @@ def make_case(base, models, case):
             # One physical USB input; remaining logical channels reuse RTSP.
             channel = copy.deepcopy(base['channels'][1 if index == 1 else 0])
             group = models if case == 'composite' else [models[index]]
-            channel.update(id=index, enable=True, infer_enable=True, models=copy.deepcopy(group))
+            channel.update(id=index, enable=True, models=copy.deepcopy(group))
             for model in channel['models']:
                 model.update(enable=True, npu_core=-1)
             config['channels'].append(channel)

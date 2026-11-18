@@ -225,10 +225,7 @@ void *rtsp_feeder_thread(void *arg)
                         {
                             channel_view = channel_staging(cv::Rect(0, 0, src_w, src_h));
                             render_channel_view(channel_view, state.channel_id);
-                            const auto runtime = app_ctrl_get_runtime_snapshot();
-                            const auto *channel = app_ctrl_runtime_channel_config(runtime, state.channel_id);
-                            if (!channel || !channel->swap_rb)
-                                cv::cvtColor(channel_view, channel_view, cv::COLOR_BGR2RGB);
+                            cv::cvtColor(channel_view, channel_view, cv::COLOR_BGR2RGB);
                             if (input != rendered_frame && !app_ctrl_get_enable_disp() &&
                                 !rtsp_streamer_has_active_client())
                                 g_pCtrl->channels_state[state.channel_id].preview_rate.tick();

@@ -124,6 +124,30 @@ void analysis_time_follows_video()
     assert(integer(session, "video_time_ms") == -1);
     assert(session.context().dt_ms == 0);
 }
+
+void frame_inference_state_controls_queries()
+{
+    vision::LogicSessionOptions options;
+    options.logic = inspect;
+    vision::LogicSession session(options);
+    std::vector<AlgoResult> results(1);
+    results[0].label = "person";
+    results[0].score = .95f;
+    results[0].box = {20, 30, 50, 100};
+    vision::LogicFrame frame;
+    frame.results = &results;
+    frame.inference_enabled = false;
+    session.run(frame);
+    assert(!session.context().infer_enabled && integer(session, "targets") == 0);
+    assert(session.drawing().empty());
+    frame.inference_enabled = true;
+    session.run(frame);
+    assert(session.context().infer_enabled && integer(session, "targets") == 1);
+    assert(session.drawing().size() == 1);
+    frame.inference_enabled = false;
+    session.run(frame);
+    assert(integer(session, "targets") == 0 && session.drawing().empty());
+}
 } // namespace
 
 int main()
@@ -150,6 +174,7 @@ int main()
 
     registry_owns_names();
     analysis_time_follows_video();
+    frame_inference_state_controls_queries();
     vision::LogicSessionOptions options;
     options.logic = inspect;
     options.action = clear;

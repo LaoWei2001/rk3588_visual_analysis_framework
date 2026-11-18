@@ -13,7 +13,6 @@ from services.image_inference.engine import EngineCatalog, JobError
 from services.image_inference.jobs import ImageJobs
 from services.image_inference.sources import scan_device_images
 from services.image_inference.storage import require_space
-from services.image_inference.preset import resolve_canvas_preset
 
 console_root = Path(os.environ.get('APPS_ROOT', '/opt/ai_apps')) / '_console'
 catalog = EngineCatalog(Path(os.environ.get('IMAGE_INFERENCE_RUNTIME', str(console_root / 'inference_runtime'))))
@@ -44,11 +43,6 @@ class UploadJob(BaseModel):
     files: List[UploadImage] = Field(min_length=1)
 
 
-class CanvasPreset(BaseModel):
-    app: str
-    settings: dict
-
-
 async def call(function, *args):
     try:
         return await run_in_threadpool(function, *args)
@@ -76,11 +70,6 @@ async def clear_completed_jobs():
 @router.get('/models/info')
 async def model_info(path: str, model_type: str):
     return await call(catalog.inspect_model, path, model_type)
-
-
-@router.post('/canvas-preset')
-async def canvas_preset(request: CanvasPreset):
-    return await call(resolve_canvas_preset, console_root.parent, request.app, request.settings)
 
 
 @router.post('/device-images')

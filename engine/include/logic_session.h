@@ -25,7 +25,7 @@ struct LogicFrame
     uint64_t timestamp_ms = 0; // 由调用方提供现实单调毫秒；未给 video_time_ms 时也作为分析时间
     uint64_t unix_ms = 0;
     bool inference_valid = true; // 接真实推理时传 FrameInferenceResult::succeeded()；空有效结果仍为 true
-    bool inference_enabled = true; // 与 channel.infer_enable 同时满足才开启
+    bool inference_enabled = true; // 调用方提供的本帧推理状态；不受通道配置中隐藏开关影响
     /** 当前帧在文件中的毫秒位置；-1 表示未提供。原样交给 ctx->video_time_ms。
      * 离线测试可自行填写，例如 frame.video_time_ms = 2000 表示视频第 2 秒。
      * 提供后，ctx->timestamp_ms/dt_ms 和结果时间自动按视频计算；倒退时重置业务状态。

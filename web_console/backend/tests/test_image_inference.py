@@ -549,22 +549,9 @@ def test_old_tasks_remain_viewable_without_the_original_program(console):
     assert restored.artifact(job_id, '000000/annotated.jpg').is_file()
 
 
-def test_canvas_preset_only_resolves_paths_and_needs_no_program_binary(console, tmp_path):
-    client, manager, _ = console
-    assets = tmp_path / 'apps/canvas-demo/assets'
-    assets.mkdir(parents=True)
-    (assets / 'model.rknn').write_bytes(b'model')
-    (assets / 'labels.txt').write_text('person\n')
-    value = settings(manager.catalog)
-    for model in value['models']:
-        model.update(model_path='assets/model.rknn', label_path='assets/labels.txt')
-    response = client.post(BASE + '/canvas-preset', json=dict(app='canvas-demo', settings=value))
-    assert response.status_code == 200, response.text
-    assert response.json()['models'][0]['model_path'] == str(assets / 'model.rknn')
-    assert response.json()['models'][1]['obj_thresh'] == .2
-    assert value['models'][0]['model_path'] == 'assets/model.rknn'
-    value['models'][0]['model_path'] = '../other.rknn'
-    assert client.post(BASE + '/canvas-preset', json=dict(app='canvas-demo', settings=value)).status_code == 422
+def test_removed_canvas_adapter_is_not_routed(console):
+    client, _, _ = console
+    assert client.post(BASE + '/canvas-preset', json={}).status_code == 404
 
 
 def label_batch(console, names=('first.jpg', 'second.png', 'empty.jpg', 'bad.jpg')):

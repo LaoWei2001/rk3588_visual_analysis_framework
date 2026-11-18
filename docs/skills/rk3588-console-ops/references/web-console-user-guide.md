@@ -64,7 +64,7 @@ Web 上传替换同名包时，`.data/<App>` 位于包外而保留；包内手�
 | YOLO 推理 | 该通道的 `models[]`；同一通道可连接多个模型 |
 | ROI 区域 | `channels[].roi_zones[]`；直接关联视频流 |
 | 逻辑函数 | 可选的 `channels[].logic` 与 `logic_parameters` |
-| 上报配置 | 通道或全局实例的 `report_policy/report_parameters` 中一条 delivery |
+| 上报配置 | 通道或全局实例的 `report_policy` 中一条 delivery |
 | 全局逻辑 | `global.global_logics[]`，输入通道来自画布连线 |
 
 业务 ROI 绘制同时展示原始画面和固定 640×640 业务画布。配置保存归一化坐标，运行时映射到
@@ -72,7 +72,7 @@ Web 上传替换同名包时，`.data/<App>` 位于包外而保留；包内手�
 业务 ROI 不随模型输入分辨率改变；推理 ROI 是独立的模型取景范围，检测结果先映射回完整画面。
 完整约定见[业务坐标](../../../reference/business-coordinates.md)。
 
-没有 YOLO 节点时仍是正常视频通道：`infer_enable=false`、`models=[]`；直接连接 logic 可做传统 CV
+没有 YOLO 节点时仍是正常视频通道：`models=[]`；直接连接 logic 可做传统 CV
 或无推理业务，logic 收到空 results。没有 logic 时仍显示/推理/系统绘制，只是不运行自定义业务。
 
 Logic 和参数选项来自 App 根 `logics.json`，不是前端硬编码。上报连接、接口模板和 OTA 参数从
@@ -104,7 +104,7 @@ Logic 和参数选项来自 App 根 `logics.json`，不是前端硬编码。上�
 
 上报节点中，开发者才需要的画布保存配置收进“高级诊断”折叠区。它会随画布修改实时刷新，并显示在完整
 配置中的目标路径。该预览和保存按钮使用同一次 `graphToConfig()` 序列化结果，因此同一 logic 下多个上报节点
-合并后的 `report_policy.deliveries`、`report_parameters` 和媒体策略都以最终写入值为准。“最终发送请求”则根据接口模板
+合并后的 `report_policy.deliveries` 和媒体策略都以最终写入值为准。“最终发送请求”则根据接口模板
 把一条告警记录转换为实际 HTTP 请求，与画布保存配置不是一类内容。
 
 “告警记录与发送”页默认以摘要形式展示算法字段和发送状态，不再要求用户直接阅读整份内部 JSON。媒体状态、

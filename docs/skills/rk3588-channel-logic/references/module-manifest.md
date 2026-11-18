@@ -28,7 +28,8 @@
 `array`、`object`。
 
 可用元数据包括 `title`、`description`、`minimum`、`maximum`、字符串 `enum`、`x-placeholder`、
-正数 `x-step`、`x-unit`、`x-ui-hidden`，以及字符串 textarea 的 `x-widget: "textarea"`。
+正数 `x-step`、`x-unit`，以及字符串 textarea 的 `x-widget: "textarea"`。
+运行参数必须全部出现在画布动态表单中；已禁止 `x-ui-hidden`。
 
 `x-hot-reload` 当前取值：
 

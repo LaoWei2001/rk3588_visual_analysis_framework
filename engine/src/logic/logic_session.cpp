@@ -64,7 +64,6 @@ struct LogicSession::Impl : EventSink
         context.chnId = config.id;
         context.config = &config;
         context.state = &state;
-        context.infer_enabled = config.infer_enable;
         VisionContextAccess::bind_parameters(context, &parameters);
         VisionContextAccess::bind_outputs(context, &outputs);
         VisionContextAccess::bind_drawing(context, &drawing);
@@ -142,7 +141,7 @@ void LogicSession::run(const LogicFrame &frame)
             result.timestamp_ms = analysis_time;
     self.context.rois = frame.rois ? frame.rois : &self.rois;
     self.context.inference_valid = frame.inference_valid;
-    self.context.infer_enabled = self.config.infer_enable && frame.inference_enabled;
+    self.context.infer_enabled = frame.inference_enabled;
     const cv::Mat *source = frame.source ? frame.source : frame.business;
     self.context.src_width = source ? source->cols : 0;
     self.context.src_height = source ? source->rows : 0;

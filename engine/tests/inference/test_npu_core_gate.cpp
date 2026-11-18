@@ -19,7 +19,7 @@ struct Model
 struct Channel
 {
     int id = 0;
-    bool enable = true, infer_enable = true;
+    bool enable = true;
     std::vector<Model> models{Model{}};
 };
 
@@ -61,12 +61,12 @@ void global_core_planning()
     channels[2].models[0].npu_core = 2;
     assert(npu::preferred_auto_core_pool(channels) == 7); // All cores pinned: safe sharing.
     channels[0].models.back().enable = false;
-    channels[1].infer_enable = false;
+    channels[1].models[0].enable = false;
     channels[2].enable = false;
     assert(npu::preferred_auto_core_pool(channels) == 7);
     assert(npu::has_automatic_models(channels[0]));
     assert(!npu::has_automatic_models(channels[1]));
-    channels[1].enable = channels[1].infer_enable = true;
+    channels[1].enable = channels[1].models[0].enable = true;
     channels[1].models[0].model_path.clear();
     assert(npu::preferred_auto_core_pool(channels) == 7); // Invalid/inactive entry does not reserve.
     std::vector<Channel> all_auto(6);
@@ -113,9 +113,9 @@ void global_core_planning()
     std::swap(mixed[0], mixed[1]);
     assert(npu::channel_auto_placement(mixed, 2).pool == 1);
     assert(npu::channel_auto_placement(mixed, 9).pool == 4);
-    mixed[1].infer_enable = false;
+    mixed[1].models[0].enable = false;
     assert(npu::channel_auto_placement(mixed, 2).pool == 5);
-    mixed[1].infer_enable = true;
+    mixed[1].models[0].enable = true;
     mixed[2].models[0].npu_core = 0;
     assert(npu::channel_auto_placement(mixed, 2).pool == 2); // Changed reservation.
     mixed[2].models[0].npu_core = 1;

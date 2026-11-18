@@ -36,6 +36,8 @@ bool ConfigRegistry::parse_field(cJSON *obj, const ConfigField &field, void *bas
     case ConfigType::INT:
         if (cJSON_IsNumber(item))
             *(int *)ptr = item->valueint;
+        else if (std::string(field.key) == "tracker_enable" && cJSON_IsBool(item))
+            *(int *)ptr = cJSON_IsTrue(item) ? 1 : 0;
         break;
     case ConfigType::FLOAT:
         if (cJSON_IsNumber(item))

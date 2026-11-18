@@ -28,8 +28,6 @@ ctx（ChannelContext *，本次通道回调的上下文）
 ├─ config : const ChannelConfig *        当前通道配置，只读
 │  ├─ id : int                           配置中的通道 ID
 │  ├─ enable : bool                      是否启用该通道
-│  ├─ infer_enable : bool                是否允许模型推理
-│  ├─ swap_rb : bool                     显示时是否交换红蓝通道
 │  ├─ stream : StreamConfig              视频源配置，见下方展开
 │  ├─ logic : string                     本通道绑定的业务模块名称
 │  ├─ models[] : ChannelModelConfig      本通道的模型配置列表
@@ -58,7 +56,6 @@ ctx（ChannelContext *，本次通道回调的上下文）
 │  ├─ bytetrack_low_thresh : float        ByteTrack 内部低分候选阈值
 │  ├─ bytetrack_low_iou_thresh : float    ByteTrack 第二轮匹配 IoU 阈值
 │  ├─ report_policy_json : string        事件上报策略 JSON
-│  ├─ report_parameters_json : string    事件上报参数 JSON
 │  └─ event_video : EventVideoRuntimeConfig
 │     ├─ enable : bool                   是否启用事件录像
 │     ├─ pre_sec : float                 事件前录像时长，秒

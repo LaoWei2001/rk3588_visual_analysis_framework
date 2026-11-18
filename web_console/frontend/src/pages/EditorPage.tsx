@@ -1,3 +1,4 @@
+import { sharedReportSettings, updateNodeConfiguration } from '../utils/reportSettings'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {
@@ -36,7 +37,6 @@ import {
   fetchConfigFiles, loadConfigFile, fetchAppLogics, fetchAssets, fetchConnections,
 } from '../api/client'
 import GlobalSettingsPanel, { GlobalSettingsData, DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
-import { channelImageSettings, openImageInference } from '../features/image-inference/preset'
 import NodeConfigPanel from '../components/NodeConfigPanel'
 import ConfigPreviewPanel from '../components/ConfigPreviewPanel'
 import AppIntegrationModal from '../components/AppIntegrationModal'
@@ -124,10 +124,9 @@ const NODE_DEFAULTS: Record<string, Record<string, unknown>> = {
         id: 'delivery_default', enabled: true, connection_id: '',
         contract_id: '', contract_revision: '', media: [],
       }],
-      parameters: [], image_overlay: 'custom', video_overlay: 'custom',
+      image_overlay: 'custom', video_overlay: 'custom',
       video_pre_sec: 3, video_post_sec: 3, video_fps: 15, merge_window_sec: 5,
     },
-    report_parameters: {},
   },
   globalLogic: {
     enable: true,
@@ -155,6 +154,7 @@ const channelInputForLogic = (
   nodes: Node[],
   edges: Edge[],
 ): { channelId: number; logic: string } | null => {
+  if (logicNode.type === 'stream') return { channelId: Number(logicNode.data.channel_id ?? 0), logic: '' }
   const logicInput = edges.find(edge =>
     edge.target === logicNode.id && edge.targetHandle === 'logic-in')
   const upstream = logicInput ? nodes.find(node => node.id === logicInput.source) : null
@@ -202,7 +202,6 @@ const reportConfigPreviewForNode = (
       instance_id: entry.instance_id,
       logic: entry.logic,
       report_policy: entry.report_policy,
-      report_parameters: entry.report_parameters,
     }
     for (const key of ['media_source_channel_id', 'event_video']) {
       if (entry[key] != null) fragment[key] = entry[key]
@@ -225,7 +224,6 @@ const reportConfigPreviewForNode = (
       id: entry.id,
       logic: entry.logic,
       report_policy: entry.report_policy,
-      report_parameters: entry.report_parameters,
     }, null, 2),
     path: `channels[id=${sourceInput.channelId}]`,
   }
@@ -463,7 +461,7 @@ export default function EditorPage() {
     const inputs = edges
       .filter(edge => edge.target === selectedNode.id && edge.targetHandle === 'global-in')
       .map(edge => nodes.find(node => node.id === edge.source))
-      .filter((node): node is Node => node?.type === 'logic')
+      .filter((node): node is Node => node?.type === 'logic' || node?.type === 'stream')
       .map(logicNode => channelInputForLogic(logicNode, nodes, edges))
       .filter((input): input is { channelId: number; logic: string } => input != null)
     return inputs.sort((a, b) => a.channelId - b.channelId)
@@ -491,7 +489,7 @@ export default function EditorPage() {
     return [...new Set(edges
       .filter(edge => edge.target === source.id && edge.targetHandle === 'global-in')
       .map(edge => nodes.find(node => node.id === edge.source))
-      .filter((node): node is Node => node?.type === 'logic')
+      .filter((node): node is Node => node?.type === 'logic' || node?.type === 'stream')
       .map(logicNode => channelInputForLogic(logicNode, nodes, edges)?.channelId)
       .filter((channelId): channelId is number => channelId != null))]
       .sort((a, b) => a - b)
@@ -512,57 +510,7 @@ export default function EditorPage() {
 
   // ── Update node data from config panel (outside ReactFlow context) ──
   const handleUpdateNodeData = useCallback((nodeId: string, patch: Record<string, unknown>) => {
-    const reportTargets = patch.logic == null ? new Set<string>() : new Set(
-      edgesRef.current.filter(edge => edge.source === nodeId && edge.targetHandle === 'report-in')
-        .map(edge => edge.target)
-    )
-    const mediaSourceTargets = new Set<string>()
-    const imageSelectionTargets = new Set<string>()
-    if (Object.prototype.hasOwnProperty.call(patch, 'media_source_channel_id')) {
-      const incoming = edgesRef.current.find(edge =>
-        edge.target === nodeId && edge.targetHandle === 'report-in')
-      const source = incoming ? nodesRef.current.find(node => node.id === incoming.source) : null
-      if (source?.type === 'globalLogic') {
-        edgesRef.current
-          .filter(edge => edge.source === source.id && edge.targetHandle === 'report-in')
-          .forEach(edge => mediaSourceTargets.add(edge.target))
-      }
-    }
-    const patchedPolicy = patch.report_policy && typeof patch.report_policy === 'object'
-      && !Array.isArray(patch.report_policy)
-      ? patch.report_policy as Record<string, unknown> : null
-    if (patchedPolicy && Object.prototype.hasOwnProperty.call(patchedPolicy, 'image_selection')) {
-      const incoming = edgesRef.current.find(edge =>
-        edge.target === nodeId && edge.targetHandle === 'report-in')
-      const source = incoming ? nodesRef.current.find(node => node.id === incoming.source) : null
-      if (source?.type === 'globalLogic') {
-        edgesRef.current
-          .filter(edge => edge.source === source.id && edge.targetHandle === 'report-in')
-          .forEach(edge => imageSelectionTargets.add(edge.target))
-      }
-    }
-    setNodes(prev => prev.map(n => {
-      if (n.id === nodeId || mediaSourceTargets.has(n.id))
-        return { ...n, data: { ...(n.data as Record<string, unknown>), ...patch } }
-      if (imageSelectionTargets.has(n.id)) {
-        const nodeData = n.data as Record<string, unknown>
-        const nodePolicy = nodeData.report_policy && typeof nodeData.report_policy === 'object'
-          && !Array.isArray(nodeData.report_policy)
-          ? nodeData.report_policy as Record<string, unknown> : {}
-        return {
-          ...n,
-          data: {
-            ...nodeData,
-            report_policy: { ...nodePolicy, image_selection: patchedPolicy?.image_selection },
-          },
-        }
-      }
-      if (reportTargets.has(n.id)) return {
-        ...n,
-        data: { ...(n.data as Record<string, unknown>), logic_name: String(patch.logic) },
-      }
-      return n
-    }))
+    setNodes(prev => updateNodeConfiguration(prev, edgesRef.current, nodeId, patch))
   }, [setNodes])
 
   // Sync appName to editorStore, load assets
@@ -738,8 +686,8 @@ export default function EditorPage() {
     if (params.sourceHandle === 'global-out' || params.targetHandle === 'global-in') {
       const sourceNode = nodesRef.current.find(node => node.id === params.source)
       const targetNode = nodesRef.current.find(node => node.id === params.target)
-      if (sourceNode?.type !== 'logic' || targetNode?.type !== 'globalLogic') {
-        showToast('全局逻辑的输入只能来自单通道逻辑节点', false)
+      if (!['logic', 'stream'].includes(sourceNode?.type ?? '') || targetNode?.type !== 'globalLogic') {
+        showToast('全局逻辑的输入只能来自视频流或单通道逻辑节点', false)
         return
       }
       const duplicated = edgesRef.current.some(edge =>
@@ -845,10 +793,18 @@ export default function EditorPage() {
       }
       const source = nodesRef.current.find(node => node.id === params.source)
       const logicName = String((source?.data as Record<string, unknown> | undefined)?.logic ?? '')
-      if (logicName) {
+      const siblingId = edgesRef.current.find(edge => edge.source === params.source
+        && edge.targetHandle === 'report-in')?.target
+      const sibling = nodesRef.current.find(node => node.id === siblingId)
+      const shared = sibling ? sharedReportSettings(sibling.data) : null
+      {
         setNodes(nodes => nodes.map(node => node.id === params.target
           ? { ...node, data: {
               ...(node.data as Record<string, unknown>),
+              ...(shared ? { ...shared, report_policy: {
+                ...(node.data.report_policy as Record<string, unknown>),
+                ...(shared.report_policy as Record<string, unknown>),
+              } } : {}),
               logic_name: logicName,
               logic_kind: source?.type === 'globalLogic' ? 'global' : 'channel',
             } }
@@ -901,9 +857,7 @@ export default function EditorPage() {
             contract_id: '', contract_revision: '',
             media: [],
           }],
-          parameters: [],
         }
-        data.report_parameters = {}
       }
       if (nodeType === 'globalLogic')
         data.instance_id = `global_${id}`
@@ -1717,10 +1671,6 @@ export default function EditorPage() {
             reportConfigJson={selectedReportConfig?.json ?? null}
             reportConfigPath={selectedReportConfig?.path ?? null}
             modelIdError={selectedModelIdError}
-            onImageInference={selectedNode?.type === 'model' ? () => {
-              try { openImageInference(appName ?? '', channelImageSettings(selectedNode, nodes, edges)) }
-              catch (error) { showToast(apiErrorMessage(error)) }
-            } : undefined}
             modelChannelId={selectedNode?.type === 'model' ? (() => {
               const edge = edges.find(item => item.target === selectedNode.id && item.targetHandle === 'stream-in')
               const stream = edge ? nodes.find(item => item.id === edge.source && item.type === 'stream') : undefined

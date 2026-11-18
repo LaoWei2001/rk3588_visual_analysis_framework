@@ -25,7 +25,7 @@
 
 bool channel_uses_depth_background(const ChannelConfig *channel)
 {
-    if (!channel || !channel->enable || !channel->infer_enable)
+    if (!channel || !channel->enable)
         return false;
     return std::any_of(channel->models.begin(), channel->models.end(), [](const ChannelModelConfig &model) {
         return model.enable && (model.model_type == "yolo26_depth" || model.model_type == "zip_depth") &&

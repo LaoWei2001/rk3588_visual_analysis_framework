@@ -39,8 +39,6 @@ void init_config_fields(AppConfig &cfg)
     // 通道配置
     REG_C("id", INT, id);
     REG_C("enable", BOOL, enable);
-    REG_C("infer_enable", BOOL, infer_enable);
-    REG_C("swap_rb", BOOL, swap_rb);
     REG_C("logic", STRING, logic);
     REG_C("logic_parameters", JSON, logic_parameters_json);
     REG_C("threads", INT, threads);
@@ -54,5 +52,4 @@ void init_config_fields(AppConfig &cfg)
     REG_C("bytetrack_low_iou_thresh", FLOAT, bytetrack_low_iou_thresh);
 
     REG_C("report_policy", JSON, report_policy_json);
-    REG_C("report_parameters", JSON, report_parameters_json);
 }

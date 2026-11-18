@@ -171,7 +171,6 @@ def test_disabled_models_and_empty_draft_need_no_probe(app, monkeypatch):
     disabled["channels"][0]["models"][0]["enable"] = False
     model_info.validate_model_config(app, disabled)
     disabled["channels"][0]["models"][0]["enable"] = True
-    disabled["channels"][0]["infer_enable"] = False
     with pytest.raises(ValueError):
         model_info.validate_model_config(app, disabled)
 
@@ -274,7 +273,7 @@ def test_engine_channel_switches_are_preserved_on_load_and_save(app, monkeypatch
     monkeypatch.setattr(model_info, "_probe", lambda *args: detector())
     requested = config("small")
     channel = requested["channels"][0]
-    channel.update(enable=False, infer_enable=False, swap_rb=True)
+    channel.update(enable=False)
     requested["global"] = {"enable_display": False}
     destination = app / "assets" / ("config.json" if target == "default" else "legacy.json")
     destination.write_text(json.dumps(requested))

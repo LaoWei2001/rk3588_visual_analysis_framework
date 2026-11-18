@@ -1,19 +1,33 @@
 import { Node, Edge } from '@xyflow/react'
 import { getSrcType } from './streamSource'
 import type { GlobalLogicEntry } from './globalLogic'
-import type { GlobalSettingsData } from '../components/GlobalSettingsPanel'
+import { NATIVE_GLOBAL_DEFAULTS, type GlobalSettingsData } from '../components/GlobalSettingsPanel'
 import type { Zone } from '../store/roiStore'
 import { normalizeRoiPolygon } from './roiPolygon'
 
 // 一个通道可有多个 ROI 区域: 区域名 + 多边形(归一化坐标)。(与 roiStore 的 Zone 同构)
 export type RoiZone = Zone
 
+const POLICY_FIELDS = ['enabled', 'deliveries', 'image_overlay', 'image_selection',
+  'video_overlay', 'video_pre_sec', 'video_post_sec', 'video_fps', 'merge_window_sec']
+const DELIVERY_FIELDS = ['id', 'enabled', 'connection_id', 'contract_id', 'contract_label',
+  'contract_revision', 'media', 'when']
+const pickFields = (value: Record<string, unknown>, fields: string[]) =>
+  Object.fromEntries(fields.filter(key => value[key] !== undefined).map(key => [key, value[key]]))
+
 function normalizedImageSelection(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value
   const selection = value as Record<string, unknown>
   return ['event_evidence', 'selected', 'connected'].includes(String(selection.mode ?? 'connected'))
-    ? selection
+    ? pickFields(selection, ['mode', 'channel_ids'])
     : { mode: 'connected' }
+}
+
+function reportPolicyFields(value: Record<string, unknown>): Record<string, unknown> {
+  const policy = pickFields(value, POLICY_FIELDS)
+  if (policy.image_selection != null)
+    policy.image_selection = normalizedImageSelection(policy.image_selection)
+  return policy
 }
 
 function buildStream(d: Record<string, unknown>): Record<string, unknown> {
@@ -26,7 +40,7 @@ function buildStream(d: Record<string, unknown>): Record<string, unknown> {
     if (uw > 0 && uh > 0) { s.usb_width = uw; s.usb_height = uh }
     return s
   }
-  if (t === 'file') return { src_type: 'file', url: d.url ?? '', loop: d.loop ?? true }
+  if (t === 'file') return { src_type: 'file', url: d.url ?? '', loop: d.loop ?? false }
   if (t === 'rtsp') return { src_type: 'rtsp', url: d.url ?? '', video_enc: d.video_enc ?? 'h264' }
   // 未指定 src_type：原样写出 url，但保留空 src_type → 后端配置校验会拒绝，提示用户补全
   return { src_type: '', url: d.url ?? '' }
@@ -100,6 +114,8 @@ export function graphToConfig(
       ? Number(streamData.channel_id)
       : idx
 
+    channelIdByLogicNode.set(streamNode.id, chId)
+
     // ── ROI：直接连接视频流，表示通道级区域配置，与模型/逻辑拓扑解耦。 ──
     const roiEdge = edges.find(e =>
       e.target === streamNode.id && e.targetHandle === 'roi-in')
@@ -126,7 +142,7 @@ export function graphToConfig(
       : []
     const reportData = reportNodes.map(n => n.data as Record<string, unknown>)
 
-    // 视频流节点就是通道；保留通道开关，推理还受 infer_enable 和模型开关控制。
+    // 视频流节点就是通道；保留通道开关，推理由模型节点开关控制。
     const ch: Record<string, unknown> = {
       id: chId,
       stream,
@@ -136,10 +152,10 @@ export function graphToConfig(
     // 不写 logic 字段即表示“不执行后处理模块”；模型检测结果仍由框架负责绘制。
     if (hasLogic) ch.logic = logic
 
-    // 通用告警策略：每个通道保存独立投递列表和动态参数表。
+    // 通用告警策略：每个通道保存独立投递列表。
     const reportPolicies = reportData.map((data, reportIndex) => {
       const policy = data.report_policy && typeof data.report_policy === 'object'
-        ? data.report_policy as Record<string, unknown> : {}
+        ? reportPolicyFields(data.report_policy as Record<string, unknown>) : {}
       const configured = Array.isArray(policy.deliveries)
         ? policy.deliveries as Record<string, unknown>[] : []
       const delivery = configured[0] ?? {
@@ -160,53 +176,20 @@ export function graphToConfig(
         ? configuredId : `delivery_${reportNodes[reportIndex].id}`
       usedDeliveryIds.add(id)
       const normalized: Record<string, unknown> = {
-        ...item.delivery,
+        ...pickFields(item.delivery, DELIVERY_FIELDS),
         id,
         enabled: item.enabled,
       }
-      delete normalized.mapping
-      delete normalized.request
-      delete normalized.success
-      delete normalized.adapter
+      if (normalized.when && typeof normalized.when === 'object')
+        normalized.when = pickFields(normalized.when as Record<string, unknown>, ['event_types'])
       return normalized
     })
     const reportPolicy: Record<string, unknown> = reportNodes.length > 0
       ? { ...(reportPolicies[0]?.policy ?? {}), enabled: reportEnabled, deliveries }
       : { enabled: false, deliveries: [] }
 
-    // 视频录制参数取自视频上报节点；图片/视频叠加选项分别取对应媒体节点。
-    const imagePolicy = reportPolicies.find(item =>
-      item.enabled && Array.isArray(item.delivery.media)
-      && (item.delivery.media.includes('annotated_image') || item.delivery.media.includes('raw_image'))
-    )?.policy
-    const videoPolicy = reportPolicies.find(item =>
-      item.enabled && Array.isArray(item.delivery.media) && item.delivery.media.includes('video')
-    )?.policy
-    if (imagePolicy?.image_overlay != null) reportPolicy.image_overlay = imagePolicy.image_overlay
-    if (imagePolicy?.image_selection != null) {
-      reportPolicy.image_selection = normalizedImageSelection(imagePolicy.image_selection)
-    }
-    if (videoPolicy) {
-      for (const key of ['video_overlay', 'video_pre_sec', 'video_post_sec', 'video_fps', 'merge_window_sec']) {
-        if (videoPolicy[key] != null) reportPolicy[key] = videoPolicy[key]
-      }
-    }
-
-    // 多个独立上报节点的参数定义最终仍汇总到通道级配置，按参数 ID 去重。
-    const parameterMap = new Map<string, Record<string, unknown>>()
-    reportPolicies.forEach(({ policy }, reportIndex) => {
-      const defs = Array.isArray(policy.parameters) ? policy.parameters as Record<string, unknown>[] : []
-      defs.forEach((def, defIndex) => {
-        const id = String(def.id ?? '')
-        parameterMap.set(id || `__anonymous_${reportIndex}_${defIndex}`, def)
-      })
-    })
-    reportPolicy.parameters = [...parameterMap.values()]
+    // Shared policy values are synchronized in the editor; deliveries only own routing/enabled.
     ch.report_policy = reportPolicy
-    ch.report_parameters = reportNodes.length > 0
-      ? Object.assign({}, ...reportData.map(data =>
-          data.report_parameters && typeof data.report_parameters === 'object' ? data.report_parameters : {}))
-      : {}
     const moduleParameters = l.logic_parameters && typeof l.logic_parameters === 'object' && !Array.isArray(l.logic_parameters)
       ? l.logic_parameters as Record<string, unknown> : {}
     if (hasLogic) ch.logic_parameters = moduleParameters
@@ -245,9 +228,7 @@ export function graphToConfig(
     if (trackerValue('bytetrack_low_iou_thresh') != null)
       ch.bytetrack_low_iou_thresh = trackerValue('bytetrack_low_iou_thresh')
     if (streamData.threads != null) ch.threads = streamData.threads
-    for (const key of ['enable', 'infer_enable', 'swap_rb']) {
-      if (streamData[key] != null) ch[key] = streamData[key]
-    }
+    if (streamData.enable != null) ch.enable = streamData.enable
 
     // ROI 唯一持久化入口；空数组明确表示本通道没有 ROI。
     ch.roi_zones = zones
@@ -268,7 +249,7 @@ export function graphToConfig(
     channels.push(ch)
   })
 
-  // ── Global logic ── 全局输入只来自画布上的 channel logic → global logic 连线。
+  // ── Global logic ── 输入来自视频流或单通道逻辑的显式连线。
   const globalLayout: Record<string, { x: number; y: number }> = {}
   const globalLogics: GlobalLogicEntry[] = nodes
     .filter(node => node.type === 'globalLogic')
@@ -288,7 +269,7 @@ export function graphToConfig(
       const reportData = reportNodes.map(node => node.data as Record<string, unknown>)
       const reportPolicies = reportData.map((item, reportIndex) => {
         const policy = item.report_policy && typeof item.report_policy === 'object'
-          ? item.report_policy as Record<string, unknown> : {}
+          ? reportPolicyFields(item.report_policy as Record<string, unknown>) : {}
         const configured = Array.isArray(policy.deliveries)
           ? policy.deliveries as Record<string, unknown>[] : []
         const delivery = configured[0] ?? {
@@ -309,44 +290,17 @@ export function graphToConfig(
           ? configuredId : `delivery_${reportNodes[reportIndex].id}`
         usedDeliveryIds.add(id)
         const normalized: Record<string, unknown> = {
-          ...item.delivery,
+          ...pickFields(item.delivery, DELIVERY_FIELDS),
           id,
           enabled: item.enabled,
         }
-        delete normalized.mapping
-        delete normalized.request
-        delete normalized.success
-        delete normalized.adapter
+        if (normalized.when && typeof normalized.when === 'object')
+          normalized.when = pickFields(normalized.when as Record<string, unknown>, ['event_types'])
         return normalized
       })
       const reportPolicy: Record<string, unknown> = reportNodes.length > 0
         ? { ...(reportPolicies[0]?.policy ?? {}), enabled: reportEnabled, deliveries }
         : { enabled: false, deliveries: [] }
-      const imagePolicy = reportPolicies.find(item =>
-        item.enabled && Array.isArray(item.delivery.media)
-        && (item.delivery.media.includes('annotated_image') || item.delivery.media.includes('raw_image')))?.policy
-      const videoPolicy = reportPolicies.find(item =>
-        item.enabled && Array.isArray(item.delivery.media)
-        && item.delivery.media.includes('video'))?.policy
-      if (imagePolicy?.image_overlay != null) reportPolicy.image_overlay = imagePolicy.image_overlay
-      if (imagePolicy?.image_selection != null) {
-        reportPolicy.image_selection = normalizedImageSelection(imagePolicy.image_selection)
-      }
-      if (videoPolicy) {
-        for (const key of ['video_overlay', 'video_pre_sec', 'video_post_sec', 'video_fps', 'merge_window_sec']) {
-          if (videoPolicy[key] != null) reportPolicy[key] = videoPolicy[key]
-        }
-      }
-      const parameterMap = new Map<string, Record<string, unknown>>()
-      reportPolicies.forEach(({ policy }, reportIndex) => {
-        const definitions = Array.isArray(policy.parameters)
-          ? policy.parameters as Record<string, unknown>[] : []
-        definitions.forEach((definition, definitionIndex) => {
-          const id = String(definition.id ?? '')
-          parameterMap.set(id || `__anonymous_${reportIndex}_${definitionIndex}`, definition)
-        })
-      })
-      reportPolicy.parameters = [...parameterMap.values()]
       const applicationChannelIds = channels.map(channel => Number(channel.id))
       const requestedMediaChannel = Number(reportData[0]?.media_source_channel_id ?? -1)
       const mediaSourceChannel = applicationChannelIds.includes(requestedMediaChannel)
@@ -367,43 +321,15 @@ export function graphToConfig(
           && !Array.isArray(data.logic_parameters)
           ? data.logic_parameters as Record<string, unknown> : {},
         report_policy: reportPolicy,
-        report_parameters: reportNodes.length > 0
-          ? Object.assign({}, ...reportData.map(item =>
-              item.report_parameters && typeof item.report_parameters === 'object'
-                ? item.report_parameters : {}))
-          : {},
         media_source_channel_id: mediaSourceChannel,
       }
     })
   if (Object.keys(globalLayout).length > 0) layout.global = globalLayout
 
   // ── Global config ──
-  const g = globalSettings
-  const globalCfg: Record<string, unknown> = {
-    enable_display:     g.enable_display     ?? 0,
-    disp_width:         g.disp_width         ?? 640,
-    disp_height:        g.disp_height        ?? 640,
-    tile_rows:          g.tile_rows          ?? 1,
-    tile_cols:          g.tile_cols          ?? 1,
-    max_fps:            g.max_fps            ?? 25,
-    queue_size:         g.queue_size         ?? 1,
-    channel_threads:    g.channel_threads    ?? 3,
-    tracker_enable:     g.tracker_enable     ?? 1,
-    tracker_type:       g.tracker_type       ?? 'sort',
-    tracker_iou_thresh: g.tracker_iou_thresh ?? 0.3,
-    tracker_max_miss:   g.tracker_max_miss   ?? 30,
-    tracker_min_hits:   g.tracker_min_hits   ?? 3,
-    bytetrack_low_thresh: g.bytetrack_low_thresh ?? 0.1,
-    bytetrack_low_iou_thresh: g.bytetrack_low_iou_thresh ?? 0.2,
-    performance_display: g.performance_display ?? 0,
-    enable_pause_key:   g.enable_pause_key   ?? 0,
-    enable_rtsp:        g.enable_rtsp        ?? 1,
-    rtsp_codec:         'h264',
-  }
-  // 透传 RTSP 端口/路径/码率/编码器；Web 预览统一使用可零转码播放的 H264。
-  for (const k of ['rtsp_port', 'rtsp_path', 'rtsp_bitrate', 'rtsp_encoder'] as const) {
-    if (g[k] !== undefined && g[k] !== null) globalCfg[k] = g[k]
-  }
+  const g = { ...NATIVE_GLOBAL_DEFAULTS, ...globalSettings }
+  // Only registered global options; defaults and persisted values share one path.
+  const globalCfg = pickFields(g, Object.keys(NATIVE_GLOBAL_DEFAULTS))
   if (globalLogics.length > 0) globalCfg.global_logics = globalLogics
 
   // Auto tile layout

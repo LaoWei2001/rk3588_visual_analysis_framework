@@ -47,13 +47,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -80,13 +77,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -112,13 +106,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -145,13 +136,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -178,13 +166,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -210,13 +195,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -243,13 +225,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -276,13 +255,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -308,13 +284,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -341,13 +314,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -374,13 +344,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -406,13 +373,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -439,13 +403,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -472,13 +433,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -504,13 +462,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -537,13 +492,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -570,13 +522,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     },
     {
@@ -602,13 +551,10 @@
       "logic": "logic_default",
       "report_policy": {
         "enabled": false,
-        "deliveries": [],
-        "parameters": []
+        "deliveries": []
       },
-      "report_parameters": {},
       "logic_parameters": {},
       "enable": true,
-      "infer_enable": true,
       "roi_zones": []
     }
   ],

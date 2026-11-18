@@ -26,7 +26,7 @@ def main():
     base = json.loads(args.config.read_text())
     assert len(base['channels']) == 3
     for index, channel in enumerate(base['channels']):
-        assert channel['id'] == index and channel['enable'] and channel['infer_enable']
+        assert channel['id'] == index and channel['enable']
         assert len(channel['models']) == 1
         channel['models'][0]['npu_core'] = index
     base['global']['rtsp_port'] = 18554

@@ -15,6 +15,7 @@ namespace
 struct Seen
 {
     std::atomic<int> calls{0}, state_calls{0};
+    std::atomic<int> inference_calls{0};
     std::atomic<uint64_t> timestamp{0}, real{0};
     std::atomic<int64_t> video{-1};
     std::atomic<int> dt{0};
@@ -38,6 +39,8 @@ void observe(ChannelContext *ctx)
         for (const auto &result : *ctx->results)
             assert(result.timestamp_ms == ctx->timestamp_ms);
     auto &out = seen[ctx->chnId];
+    if (ctx->infer_enabled && ctx->inference_valid)
+        ++out.inference_calls;
     out.timestamp = ctx->timestamp_ms;
     out.real = ctx->real_time_ms;
     out.video = ctx->video_time_ms;
@@ -87,8 +90,7 @@ int main(int argc, char **argv)
         {
             if (id)
                 out << ',';
-            out << R"({"id":)" << id << R"(,"enable":true,"infer_enable":)" << (argc == 4 && id == 0 ? "true" : "false")
-                << R"(,"max_fps":20,"models":[)";
+            out << R"({"id":)" << id << R"(,"enable":true,"max_fps":20,"models":[)";
             if (argc == 4 && id == 0)
                 out << R"({"id":"detector","enable":true,"model_type":"yolov8_det","model_path":")" << argv[2]
                     << R"(","label_path":")" << argv[3] << R"("})";
@@ -104,6 +106,8 @@ int main(int argc, char **argv)
     std::atomic<int> exit_code{-99};
     std::thread running([&] { exit_code = runtime.run(); });
     wait_for([&] { return status(runtime, 0).available && seen[0].calls >= 3 && seen[1].calls >= 3; });
+    assert((seen[0].inference_calls > 0) == (argc == 4));
+    assert(seen[1].inference_calls == 0); // No model: video and logic still run.
     assert(!runtime.seek_file(0, -1));
     assert(!runtime.set_file_paused(17, true));
     const auto pause_begin = std::chrono::steady_clock::now();

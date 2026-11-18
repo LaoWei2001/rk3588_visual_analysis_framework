@@ -226,8 +226,6 @@ struct ChannelConfig
 {
     int id = -1;
     bool enable = true;
-    bool infer_enable = true; /* false=不进 NPU；仍解码/显示，并在 max_fps 节流命中的业务帧以空 results 调用后处理 */
-    bool swap_rb = false; /* 仅显示: 1=该通道画面 R/B 互换显示(跳过显示前 BGR→RGB);不影响推理/上报 */
     StreamConfig stream;
     std::string logic = ""; /* 可选后处理模块；空=不执行模块，仅保留视频/模型结果绘制 */
     std::vector<ChannelModelConfig> models; /* 唯一模型配置入口；空表示该通道不做模型推理 */
@@ -250,7 +248,6 @@ struct ChannelConfig
 
     /* 通用告警配置：Web 直接保存对象/数组，C++ 以 JSON 文本解析，新增参数无需改结构体。 */
     std::string report_policy_json = "{}";
-    std::string report_parameters_json = "{}";
     EventVideoRuntimeConfig event_video; /* 仅运行时使用，不对应独立 JSON 字段 */
 };
 
@@ -266,7 +263,6 @@ struct GlobalLogicConfig
     std::string logic_parameters_json = "{}";
     /* 与 ChannelConfig 完全相同的统一事件上报配置，由画布上的上报节点生成。 */
     std::string report_policy_json = "{}";
-    std::string report_parameters_json = "{}";
     /* 事件视频的唯一预录来源；启用视频上报时必须明确设置。 */
     int media_source_channel_id = -1;
     EventVideoRuntimeConfig event_video;
@@ -283,7 +279,7 @@ inline bool operator==(const GlobalLogicConfig &a, const GlobalLogicConfig &b)
 {
     return a.instance_id == b.instance_id && a.enable == b.enable && a.logic == b.logic && a.channels == b.channels &&
            a.poll_interval_ms == b.poll_interval_ms && a.logic_parameters_json == b.logic_parameters_json &&
-           a.report_policy_json == b.report_policy_json && a.report_parameters_json == b.report_parameters_json &&
+           a.report_policy_json == b.report_policy_json &&
            a.media_source_channel_id == b.media_source_channel_id;
 }
 /** @brief 比较持久化配置字段；派生的 event_video 不单独参与，返回是否不同。

@@ -44,7 +44,6 @@ struct RawFrame
     int input_w = 0, input_h = 0;
     float disp_fps = 0.0f;
     int64_t result_frame_id = 0;
-    bool swap_rb = false;
     bool depth_background = false;
     InferenceRoiConfig inference_roi;
     std::vector<RoiZone> rois;
@@ -201,8 +200,6 @@ static void render_video_overlays(const RawFrame &raw, cv::Mat &bgr)
         params.draw_cmds = &raw.commands;
         render_runtime_overlays(bgr, params);
 
-        if (raw.swap_rb)
-            cv::cvtColor(bgr, bgr, cv::COLOR_BGR2RGB);
         return;
     }
 
@@ -689,7 +686,6 @@ void event_video_recorder_push_source_frame(int channel_id, const void *data, in
     raw.input_w = raw.input_h = 0;
     raw.disp_fps = 0.0f;
     raw.result_frame_id = 0;
-    raw.swap_rb = false;
     raw.depth_background = false;
     raw.inference_roi = InferenceRoiConfig{};
 
@@ -716,8 +712,6 @@ void event_video_recorder_push_source_frame(int channel_id, const void *data, in
 
         raw.input_w = g_pCtrl->business_width;
         raw.input_h = g_pCtrl->business_height;
-        if (channel)
-            raw.swap_rb = channel->swap_rb;
     }
 
     pthread_mutex_lock(&g_mtx);

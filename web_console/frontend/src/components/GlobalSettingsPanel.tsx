@@ -19,7 +19,7 @@ function NumField({ label, value, def, onChange, step, min, max }: {
     <div className="gs-field">
       <label>{label}</label>
       <input
-        type="number" step={step} min={min} max={max}
+        aria-label={label} type="number" step={step} min={min} max={max}
         value={text}
         onChange={e => { setText(e.target.value); if (e.target.value !== '') onChange(Number(e.target.value)) }}
         onBlur={() => { if (text === '' || isNaN(Number(text))) setText(value != null ? String(value) : String(def)) }}
@@ -50,17 +50,24 @@ export interface GlobalSettingsData {
   [key: string]: unknown
 }
 
-export const DEFAULT_GLOBAL_SETTINGS: GlobalSettingsData = {
-  enable_display: 0,
-  disp_width: 640, disp_height: 640,
-  tile_rows: 1, tile_cols: 1,
-  max_fps: 25, queue_size: 1,
-  channel_threads: 3,
+// Loading an existing file must use the same missing-field defaults as AppConfig.
+export const NATIVE_GLOBAL_DEFAULTS: GlobalSettingsData = {
+  enable_display: 1, disp_width: 1920, disp_height: 1080, tile_rows: 2, tile_cols: 2,
+  max_fps: 30, queue_size: 1, channel_threads: 1,
   tracker_enable: 1, tracker_type: 'sort', tracker_iou_thresh: 0.3,
-  tracker_max_miss: 30, tracker_min_hits: 3,
+  tracker_max_miss: 10, tracker_min_hits: 3,
   bytetrack_low_thresh: 0.1, bytetrack_low_iou_thresh: 0.2,
-  performance_display: 0, enable_pause_key: 0,
-  enable_rtsp: 1, rtsp_codec: 'h264',
+  performance_display: 1, enable_pause_key: 0, enable_rtsp: 0,
+  rtsp_port: 8554, rtsp_path: '/live', rtsp_bitrate: 4096,
+  rtsp_codec: 'h264', rtsp_encoder: 'auto',
+}
+
+// Explicit presets for a newly created canvas; never used to fill a loaded file.
+export const DEFAULT_GLOBAL_SETTINGS: GlobalSettingsData = {
+  ...NATIVE_GLOBAL_DEFAULTS,
+  enable_display: 0, disp_width: 640, disp_height: 640, tile_rows: 1, tile_cols: 1,
+  max_fps: 25, channel_threads: 3, tracker_max_miss: 30,
+  performance_display: 0, enable_rtsp: 1,
 }
 
 interface Props {
@@ -110,7 +117,29 @@ export default function GlobalSettingsPanel({ settings: s, onChange }: Props) {
             </>}
           </div>
 
+          <div className="gs-row">
+            <NumField label="RTSP 端口" value={s.rtsp_port} def={8554} min="1" max="65535" onChange={v => set('rtsp_port', v)} />
+            <label className="gs-field">RTSP 路径
+              <input value={String(s.rtsp_path ?? '/live')} onChange={e => set('rtsp_path', e.target.value)} />
+            </label>
+            <NumField label="RTSP 软件编码码率 (kbps)" value={s.rtsp_bitrate} def={4096} min="1" onChange={v => set('rtsp_bitrate', v)} />
+            <label className="gs-field">RTSP 输出编码
+              <select aria-label="RTSP 输出编码" value={String(s.rtsp_codec ?? 'h264')} onChange={e => set('rtsp_codec', e.target.value)}>
+                <option value="h264">H.264</option><option value="h265">H.265</option>
+              </select>
+            </label>
+            <label className="gs-field">RTSP 编码器
+              <select aria-label="RTSP 编码器" value={String(s.rtsp_encoder ?? 'auto')} onChange={e => set('rtsp_encoder', e.target.value)}>
+                <option value="auto">自动（优先硬件）</option><option value="hw">硬件</option>
+              </select>
+            </label>
+          </div>
+          {s.rtsp_codec === 'h265' && <div className="ncp-hint">浏览器实时预览需要 H.264；H.265 可用于支持该编码的外部播放器。</div>}
           <div className="gs-row gs-toggles">
+            <label className="gs-toggle">
+              <input type="checkbox" checked={!!s.enable_pause_key} onChange={e => set('enable_pause_key', e.target.checked ? 1 : 0)} />
+              HDMI 空格键暂停
+            </label>
             <label className="gs-toggle">
               <input type="checkbox" checked={!!s.tracker_enable} onChange={e => set('tracker_enable', e.target.checked ? 1 : 0)} />
               启用跟踪器

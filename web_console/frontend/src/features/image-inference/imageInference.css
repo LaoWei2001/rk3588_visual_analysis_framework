@@ -80,10 +80,10 @@
 .image-source-origin { overflow-wrap: anywhere; }
 .image-config .image-primary { width: 100%; background: #2868b4; color: #eef5ff; padding: 11px; font-size: 14px; }
 .image-config .image-primary:hover:not(:disabled) { background: #357bc9; color: white; }
-.image-error, .image-warning, .image-roi-note { line-height: 1.7; font-size: 12px; margin-bottom: 16px; overflow-wrap: anywhere; }
+.image-error, .image-warning { line-height: 1.7; font-size: 12px; margin-bottom: 16px; overflow-wrap: anywhere; }
 .image-error { color: #ffb0b0; }
-.image-warning, .image-roi-note { color: #dfc791; }
-.image-error button, .image-roi-note button { margin-left: 12px; }
+.image-warning { color: #dfc791; }
+.image-error button { margin-left: 12px; }
 .image-progress { display: flex; align-items: center; gap: 12px; padding-bottom: 16px; color: #9eb8d9; font-size: 12px; }
 .image-progress progress { flex: 1; min-width: 40px; height: 5px; accent-color: #82b5ff; }
 .image-item-list { display: flex; flex-direction: column; gap: 4px; max-height: clamp(144px, calc(100vh - 180px), 560px); overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: contain; scrollbar-gutter: stable; scrollbar-color: #607493 #131a25; padding-right: 4px; }

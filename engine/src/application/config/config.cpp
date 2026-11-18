@@ -52,10 +52,8 @@ bool is_supported_src_type(const std::string &src_type)
 
 bool is_channel_infer_enabled(const ChannelConfig &ch_cfg)
 {
-    /* 推理开启需同时满足：用户开关 infer_enable=true 且配置了模型(路径+类型)。
-     * infer_enable=false → 跳过 NPU 推理但仍解码/显示；若配置了后处理则以空结果逐帧调用。 */
-    if (!ch_cfg.infer_enable)
-        return false;
+    /* 模型节点开关是唯一推理配置开关。无启用且完整的模型时仍解码/显示，
+     * 已配置的后处理在业务帧以空结果运行。 */
     return std::any_of(ch_cfg.models.begin(), ch_cfg.models.end(), [](const ChannelModelConfig &model) {
         return model.enable && !model.model_path.empty() && !model.model_type.empty();
     });
@@ -107,6 +105,38 @@ bool validate_global_keys(cJSON *object)
             fprintf(stderr, "[Config] unknown field 'global.%s'\n", key ? key : "");
             return false;
         }
+    }
+    return true;
+}
+
+bool validate_report_policy(cJSON *policy, const std::string &path)
+{
+    if (!policy)
+        return true;
+    if (!validate_object_keys(policy,
+                              {"enabled", "deliveries", "image_overlay", "image_selection", "video_overlay",
+                               "video_pre_sec", "video_post_sec", "video_fps", "merge_window_sec"}, path))
+        return false;
+    cJSON *selection = cJSON_GetObjectItemCaseSensitive(policy, "image_selection");
+    if (selection && !validate_object_keys(selection, {"mode", "channel_ids"}, path + ".image_selection"))
+        return false;
+    cJSON *deliveries = cJSON_GetObjectItemCaseSensitive(policy, "deliveries");
+    if (deliveries && !cJSON_IsArray(deliveries))
+    {
+        fprintf(stderr, "[Config] '%s.deliveries' must be an array\n", path.c_str());
+        return false;
+    }
+    cJSON *delivery = nullptr;
+    size_t index = 0;
+    cJSON_ArrayForEach(delivery, deliveries)
+    {
+        const std::string where = path + ".deliveries[" + std::to_string(index++) + "]";
+        if (!validate_object_keys(delivery, {"id", "enabled", "connection_id", "contract_id", "contract_label",
+                                             "contract_revision", "media", "when"}, where))
+            return false;
+        cJSON *when = cJSON_GetObjectItemCaseSensitive(delivery, "when");
+        if (when && !validate_object_keys(when, {"event_types"}, where + ".when"))
+            return false;
     }
     return true;
 }
@@ -216,25 +246,9 @@ bool load_config(const std::string &path, AppConfig &cfg)
         return false;
     }
 
+    // A reload must not retain omitted options from the previous file.
+    cfg = AppConfig{};
     cfg.config_path = path;
-    cfg.channels.clear();
-
-    // 设置默认值
-    cfg.enable_display = true;
-    cfg.disp_width = 1920;
-    cfg.disp_height = 1080;
-    cfg.tile_cols = 2;
-    cfg.tile_rows = 2;
-    cfg.channel_threads = 1;
-    cfg.max_fps = 30;
-    cfg.queue_size = 1;
-    cfg.tracker_enable = 1;
-    cfg.tracker_type = "sort";
-    cfg.tracker_iou_thresh = 0.3f;
-    cfg.tracker_max_miss = 10;
-    cfg.tracker_min_hits = 3;
-    cfg.bytetrack_low_thresh = 0.1f;
-    cfg.bytetrack_low_iou_thresh = 0.2f;
 
     cJSON *global = cJSON_GetObjectItemCaseSensitive(root, "global");
     if (!cJSON_IsObject(global))
@@ -280,7 +294,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
             const size_t global_index = cfg.global_logics.size();
             if (!validate_object_keys(gl_item,
                                       {"instance_id", "enable", "logic", "channels", "poll_interval_ms",
-                                       "logic_parameters", "report_policy", "report_parameters",
+                                       "logic_parameters", "report_policy",
                                        "media_source_channel_id"},
                                       "global.global_logics[" + std::to_string(global_index) + "]"))
             {
@@ -314,6 +328,8 @@ bool load_config(const std::string &path, AppConfig &cfg)
             cJSON *gl_enable = cJSON_GetObjectItemCaseSensitive(gl_item, "enable");
             if (cJSON_IsBool(gl_enable))
                 gl_cfg.enable = cJSON_IsTrue(gl_enable);
+            else if (cJSON_IsNumber(gl_enable))
+                gl_cfg.enable = gl_enable->valueint != 0;
 
             cJSON *gl_logic = cJSON_GetObjectItemCaseSensitive(gl_item, "logic");
             if (cJSON_IsString(gl_logic) && gl_logic->valuestring)
@@ -357,6 +373,12 @@ bool load_config(const std::string &path, AppConfig &cfg)
             }
 
             cJSON *gl_report_policy = cJSON_GetObjectItemCaseSensitive(gl_item, "report_policy");
+            if (!validate_report_policy(gl_report_policy,
+                                        "global.global_logics[" + std::to_string(global_index) + "].report_policy"))
+            {
+                cJSON_Delete(root);
+                return false;
+            }
             if (gl_report_policy)
             {
                 if (!cJSON_IsObject(gl_report_policy))
@@ -375,26 +397,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 gl_cfg.report_policy_json = policy_text;
                 cJSON_free(policy_text);
                 gl_cfg.event_video = event_video_from_report_policy(gl_report_policy);
-            }
-
-            cJSON *gl_report_parameters = cJSON_GetObjectItemCaseSensitive(gl_item, "report_parameters");
-            if (gl_report_parameters)
-            {
-                if (!cJSON_IsObject(gl_report_parameters))
-                {
-                    fprintf(stderr, "[Config] global_logic[%zu].report_parameters must be an object\n",
-                            cfg.global_logics.size());
-                    cJSON_Delete(root);
-                    return false;
-                }
-                char *parameters_text = cJSON_PrintUnformatted(gl_report_parameters);
-                if (!parameters_text)
-                {
-                    cJSON_Delete(root);
-                    return false;
-                }
-                gl_cfg.report_parameters_json = parameters_text;
-                cJSON_free(parameters_text);
             }
 
             cJSON *gl_media_channel = cJSON_GetObjectItemCaseSensitive(gl_item, "media_source_channel_id");
@@ -493,6 +495,8 @@ bool load_config(const std::string &path, AppConfig &cfg)
             cJSON *loop = cJSON_GetObjectItemCaseSensitive(stream_obj, "loop");
             if (cJSON_IsBool(loop))
                 ch.stream.loop = cJSON_IsTrue(loop);
+            else if (cJSON_IsNumber(loop))
+                ch.stream.loop = loop->valueint != 0;
             cJSON *uw = cJSON_GetObjectItemCaseSensitive(stream_obj, "usb_width");
             if (cJSON_IsNumber(uw))
                 ch.stream.usb_width = uw->valueint;
@@ -627,6 +631,11 @@ bool load_config(const std::string &path, AppConfig &cfg)
         }
 
         cJSON *report_policy_item = cJSON_GetObjectItemCaseSensitive(item, "report_policy");
+        if (!validate_report_policy(report_policy_item, "channels[" + std::to_string(seq_idx) + "].report_policy"))
+        {
+            cJSON_Delete(root);
+            return false;
+        }
         if (report_policy_item && !cJSON_IsObject(report_policy_item))
         {
             fprintf(stderr, "[Config] channel %d report_policy must be a JSON object\n", ch.id);
@@ -664,6 +673,8 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "enable");
                 if (cJSON_IsBool(v))
                     model.enable = cJSON_IsTrue(v);
+                else if (cJSON_IsNumber(v))
+                    model.enable = v->valueint != 0;
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "model_type");
                 if (cJSON_IsString(v) && v->valuestring)
                     model.model_type = v->valuestring;
@@ -743,7 +754,7 @@ bool load_config(const std::string &path, AppConfig &cfg)
 
         /* 跟踪字段逐项继承：允许某一路只覆盖 tracker_type 或某一个阈值，
          * 不要求为了保留该覆盖而重复写 tracker_enable。 */
-        if (!cJSON_GetObjectItemCaseSensitive(item, "tracker_enable"))
+        if (!cJSON_GetObjectItemCaseSensitive(item, "tracker_enable") || ch.tracker_enable < 0)
             ch.tracker_enable = cfg.tracker_enable;
         if (!cJSON_GetObjectItemCaseSensitive(item, "tracker_type") || ch.tracker_type.empty())
             ch.tracker_type = cfg.tracker_type;

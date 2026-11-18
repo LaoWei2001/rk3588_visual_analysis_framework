@@ -1,7 +1,7 @@
 import { Node, Edge, MarkerType } from '@xyflow/react'
 import type { GlobalLogicEntry } from './globalLogic'
 import type { GlobalSettingsData } from '../components/GlobalSettingsPanel'
-import { DEFAULT_GLOBAL_SETTINGS } from '../components/GlobalSettingsPanel'
+import { NATIVE_GLOBAL_DEFAULTS } from '../components/GlobalSettingsPanel'
 import type { Zone as RoiZone } from '../store/roiStore'
 import { normalizeRoiPolygon } from './roiPolygon'
 
@@ -65,23 +65,21 @@ export function configToGraph(
   const rawGL = (global.global_logics as Record<string, unknown>[]) ?? []
   const globalLogics: GlobalLogicEntry[] = rawGL.map(gl => ({
     instance_id:      String(gl.instance_id ?? ''),
-    enable:           configBool(gl.enable, true),
+    enable:           configBool(gl.enable, false),
     logic:            (gl.logic           as string)  ?? 'global_default',
     channels:         (gl.channels        as number[]) ?? [],
-    poll_interval_ms: (gl.poll_interval_ms as number) ?? 200,
+    poll_interval_ms: (gl.poll_interval_ms as number) ?? 100,
     logic_parameters: gl.logic_parameters && typeof gl.logic_parameters === 'object' &&
       !Array.isArray(gl.logic_parameters)
       ? gl.logic_parameters as Record<string, unknown> : {},
     report_policy: gl.report_policy && typeof gl.report_policy === 'object' &&
       !Array.isArray(gl.report_policy) ? gl.report_policy as Record<string, unknown> : undefined,
-    report_parameters: gl.report_parameters && typeof gl.report_parameters === 'object' &&
-      !Array.isArray(gl.report_parameters) ? gl.report_parameters as Record<string, unknown> : undefined,
     media_source_channel_id: typeof gl.media_source_channel_id === 'number'
       ? gl.media_source_channel_id : undefined,
   }))
 
   const { global_logics: _gl, ...rawGD } = global
-  const globalSettings: GlobalSettingsData = { ...DEFAULT_GLOBAL_SETTINGS, ...rawGD }
+  const globalSettings: GlobalSettingsData = { ...NATIVE_GLOBAL_DEFAULTS, ...rawGD }
 
   // Layout constants
   const STREAM_X  = 60
@@ -92,6 +90,7 @@ export function configToGraph(
   const ROW_H     = 360  // leave room for the ROI card above each stream
 
   const channelLogicNodes = new Map<number, string>()
+  const channelStreamNodes = new Map<number, string>()
   channels.forEach((ch, idx) => {
     const y      = idx * ROW_H + 60
     const origId = (ch.id as number) ?? idx
@@ -112,18 +111,18 @@ export function configToGraph(
     // 通道号 (channel_id) 唯一。每个通道使用独立 StreamNode；同一 StreamNode 可连接多个模型。
     // 即使两个通道 URL 相同，也仍然分别创建各自的视频流节点。
     const streamId = uid('stream')
+    channelStreamNodes.set(origId, streamId)
     const streamData: Record<string, unknown> = {
       ...stream,
+      loop: stream.loop ?? false,
       channel_id: origId,
     }
     if (ch.inference_roi && typeof ch.inference_roi === 'object' && !Array.isArray(ch.inference_roi))
       streamData.inference_roi = ch.inference_roi
     if (ch.max_fps != null) streamData.max_fps = ch.max_fps
     if (ch.threads != null) streamData.threads = ch.threads
-    // 引擎仍支持这些通道选项；即使面板未提供入口，也不能在配置往返时丢失。
-    for (const key of ['enable', 'infer_enable', 'swap_rb']) {
-      if (ch[key] != null) streamData[key] = ch[key]
-    }
+    // 通道选项由视频流面板编辑，并在节点上显示禁用状态。
+    if (ch.enable != null) streamData.enable = ch.enable
     TRACKER_KEYS.forEach(key => {
       if (ch[key] != null) streamData[key] = ch[key]
     })
@@ -136,7 +135,7 @@ export function configToGraph(
     // 逻辑参数只来自 logic_parameters，模型参数只来自 models[]。
     const {
       stream: _s, logic: _lg, logic_parameters: _logicParameters,
-      report_policy: _reportPolicy, report_parameters: _reportParameters,
+      report_policy: _reportPolicy,
     } = ch
 
     // ── Model node (仅 YOLO 通道) ──
@@ -238,7 +237,6 @@ export function configToGraph(
             video_post_sec: policyObj?.video_post_sec ?? 3,
             video_fps: policyObj?.video_fps ?? 15,
           },
-          report_parameters: (_reportParameters && typeof _reportParameters === 'object') ? _reportParameters : {},
         }
         const role = reportIndex === 0 ? 'report' : `report_${reportIndex}`
         const baseX = hasModel ? REPORT_X : LOGIC_X
@@ -274,7 +272,7 @@ export function configToGraph(
       },
     })
     inputChannels.forEach(channelId => {
-      const sourceId = channelLogicNodes.get(channelId)
+      const sourceId = channelLogicNodes.get(channelId) ?? channelStreamNodes.get(channelId)
       if (sourceId)
         edges.push(edge(sourceId, 'global-out', globalId, 'global-in', '#06b6d4'))
     })
@@ -313,7 +311,6 @@ export function configToGraph(
               video_post_sec: policy?.video_post_sec ?? 3,
               video_fps: policy?.video_fps ?? 15,
             },
-            report_parameters: entry.report_parameters ?? {},
           },
         })
         edges.push(edge(globalId, 'report-out', reportId, 'report-in', '#ef4444'))

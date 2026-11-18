@@ -61,7 +61,7 @@ struct Fixture
             file
                 << R"(,"global_logics":[{"instance_id":"failure_test","enable":true,"logic":"throws_global","channels":[0],"logic_parameters":{}}])";
         file
-            << R"(},"channels":[{"id":0,"enable":true,"infer_enable":false,"models":[],"stream":{"src_type":"file","url":")"
+            << R"(},"channels":[{"id":0,"enable":true,"models":[],"stream":{"src_type":"file","url":")"
             << source << R"("},"logic":")" << logic
             << R"(","logic_parameters":{},"report_policy":{"enabled":false,"deliveries":[]}}]})";
         file.close();
@@ -153,7 +153,7 @@ void device_ownership()
     inference_deinit();
     ChannelConfig channel;
     channel.id = 0;
-    channel.enable = channel.infer_enable = true;
+    channel.enable = true;
     ChannelModelConfig model;
     model.enable = true;
     model.model_type = "yolov8_det";
@@ -185,7 +185,7 @@ void device_ownership()
     channel.threads = 1;
     assert(!inference_reload_channel_model(0, channel, npu::AutoCorePlacement{}));
     assert(!g_inference.model_groups_per_chn[0][0] && !g_inference.worker_started[0]);
-    channel.infer_enable = false;
+    channel.models[0].enable = false;
     assert(inference_reload_channel_model(0, channel, npu::AutoCorePlacement{}));
     assert(g_inference.model_groups_per_chn[0].size() == 1 && !g_inference.model_groups_per_chn[0][0]);
     assert(!g_inference.worker_started[0]); // No worker may construct FrameExecutor with a null model.
@@ -241,7 +241,6 @@ void worker_failure(const char *logic, bool dispatch)
     {
         // Inject only the dispatch input; no NPU model is created by this test.
         auto &channel = g_pCtrl->config.channels[0];
-        channel.infer_enable = true;
         ChannelModelConfig model;
         model.enable = true;
         model.model_type = "yolov8_det";
@@ -301,7 +300,13 @@ void runtime_failure()
     observer.join();
     assert(result == 7 && !runtime.is_running());
     assert(runtime.last_error().find("intentional global failure") != std::string::npos);
-    assert(runtime.channel_status().at(0).state == vision::VideoChannelState::Stopped);
+    const auto status = runtime.channel_status().at(0);
+    // Global failure can stop startup before capture is attempted. If capture
+    // wins that race, this fixture's empty MP4 fails and retains its source error.
+    if (status.state == vision::VideoChannelState::Failed)
+        assert(status.error.find("视频源启动失败") != std::string::npos);
+    else
+        assert(status.state == vision::VideoChannelState::Stopped && status.error.empty());
     assert(g_pCtrl == nullptr);
 }
 } // namespace

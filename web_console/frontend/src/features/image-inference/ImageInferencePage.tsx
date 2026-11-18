@@ -1,26 +1,24 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { useSearchParams } from 'react-router-dom'
 import { fetchApps, uploadAsset, type AppInfo } from '../../api/apps'
 import { apiErrorMessage } from '../../api/http'
 import {
-  resolveCanvasImageSettings,
   cancelImageJob, clearCompletedImageJobs, createImageJob, createDeviceImageJob, fetchImageCapabilities, fetchCurrentImageJob,
   canExportImageLabels, downloadImageLabels, imageJobFinished, type ImageCapabilities, type ImageJob, type ImageSettings,
 } from '../../api/imageInference'
 import ModelEditor from './ModelEditor'
 import ResultView, { statusText } from './ResultView'
 import SourcePicker, { type SourceChoice } from './SourcePicker'
-import { imageModel, readImagePreset } from './preset'
 import useConfigSidebar from './useConfigSidebar'
 import useModelChecks from './useModelChecks'
 import './imageInference.css'
 
 export default function ImageInferencePage() {
-  const [query] = useSearchParams()
-  const presetId = query.get('preset')
   const [apps, setApps] = useState<AppInfo[]>([])
   const [capabilities, setCapabilities] = useState<ImageCapabilities | null>(null)
-  const [settings, setSettings] = useState<ImageSettings>({ models: [imageModel({})] })
+  const [settings, setSettings] = useState<ImageSettings>({ models: [{
+    id: 'model_1', model_type: 'yolov8_det', model_path: '', label_path: '',
+    obj_thresh: .3, nms_thresh: .45, npu_core: -1, detect_classes: [],
+  }] })
   const modelChecks = useModelChecks(settings.models)
   const [files, setFiles] = useState<File[]>([])
   const [source, setSource] = useState<SourceChoice>({ kind: 'upload', path: '', recursive: false })
@@ -35,7 +33,6 @@ export default function ImageInferencePage() {
   const [exporting, setExporting] = useState(false)
   const [selected, setSelected] = useState<number[]>([])
   const selectAllRef = useRef<HTMLInputElement>(null)
-  const [presetLoading, setPresetLoading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [revision, setRevision] = useState(0)
   const { collapsed: configCollapsed, width: configWidth, resizing, workspaceRef, separatorProps, toggle: toggleConfig } = useConfigSidebar()
@@ -53,18 +50,6 @@ export default function ImageInferencePage() {
     if (selectAllRef.current) selectAllRef.current.indeterminate = chosen.length > 0 && !allSelected
   }, [chosen.length, allSelected])
 
-  useEffect(() => {
-    let stale = false
-    const preset = readImagePreset(presetId)
-    setError('')
-    if (!preset) { setPresetLoading(false); setSettings({ models: [imageModel({})] }); return }
-    setPresetLoading(true)
-    const load = preset.app ? resolveCanvasImageSettings(preset.app, preset.settings) : Promise.resolve(preset.settings)
-    void load.then(value => { if (!stale) setSettings(value) })
-      .catch(error => { if (!stale) setError(apiErrorMessage(error)) })
-      .finally(() => { if (!stale) setPresetLoading(false) })
-    return () => { stale = true }
-  }, [presetId])
   useEffect(() => {
     let stale = false
     setCapabilities(null); setApps([]); setCatalogError('')
@@ -112,7 +97,7 @@ export default function ImageInferencePage() {
   }
   const start = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!capabilities || !hasInput || submitting || clearing || importing || presetLoading || !modelChecks.ready) return
+    if (!capabilities || !hasInput || submitting || clearing || importing || !modelChecks.ready) return
     setError('')
     if (new Set(settings.models.map(m => m.id)).size !== settings.models.length) { setError('各模型 ID 必须唯一。'); return }
     if (settings.models.some(m => !Number.isFinite(m.obj_thresh) || !Number.isFinite(m.nms_thresh))) {
@@ -175,7 +160,7 @@ export default function ImageInferencePage() {
       return { path: `${app.path}/${result.path}`, renamed: result.renamed }
     } finally { setImporting(false) }
   }
-  const editingDisabled = submitting || clearing || importing || presetLoading
+  const editingDisabled = submitting || clearing || importing
   return <div className="image-inference-page" role="region" aria-label="图片推理工作区" tabIndex={0}>
     <div className="image-page-content">
       <header className="image-page-header"><h1>图片推理</h1></header>
@@ -204,15 +189,10 @@ export default function ImageInferencePage() {
             parent = parent.parentElement
           }
         }}>
-          {capabilities ? <ModelEditor key={presetId ?? "default"} models={settings.models} capabilities={capabilities} apps={apps}
+          {capabilities ? <ModelEditor models={settings.models} capabilities={capabilities} apps={apps}
             checks={modelChecks.checks} onRetryCheck={modelChecks.retry}
             disabled={editingDisabled} onImport={importModel}
             onChange={models => setSettings(current => ({ ...current, models }))} /> : <p className="image-note">{catalogError ? '模型暂不可用' : '加载模型…'}</p>}
-          {settings.inference_roi?.mode && <div className="image-roi-note">
-            已使用通道推理区域
-            <button type="button" disabled={editingDisabled} onClick={() => setSettings(current => ({ ...current, inference_roi: undefined }))}>改为整图</button>
-          </div>}
-          {presetLoading && <p className="image-note" role="status">读取参数…</p>}
           <SourcePicker source={source} files={files} availableBytes={capabilities?.upload_available_bytes} disabled={editingDisabled} onChange={setSource}
             onFiles={chooseFiles} onClear={() => setFiles([])} />
           <button className="image-primary" type="submit" aria-label={`开始推理 · ${settings.models.length} 个模型`}

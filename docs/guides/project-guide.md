@@ -540,7 +540,6 @@ BGR 缓存；只有读取像素时才转换。`ctx->source_frame()` 保留原图
     {
       "id": 0,
       "enable": true,
-      "infer_enable": true,
       "stream": {
         "src_type": "rtsp",
         "url": "rtsp://192.168.1.10/live",

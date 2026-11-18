@@ -218,7 +218,6 @@ function templateRequestPreview(
       requested_image_channel_ids: [0, 2],
       image_channel_ids: [0, 2],
       missing_image_channel_ids: [],
-      parameters: {},
     },
     fields,
     media: {

@@ -30,7 +30,6 @@
     {
       "id": 0,
       "enable": true,
-      "infer_enable": false,
       "stream": {
         "src_type": "rtsp",
         "url": "rtsp://camera/live",
@@ -39,8 +38,7 @@
       "models": [],
       "roi_zones": [],
       "logic_parameters": {},
-      "report_policy": {"enabled": false, "deliveries": []},
-      "report_parameters": {}
+      "report_policy": {"enabled": false, "deliveries": []}
     }
   ]
 }
@@ -57,12 +55,12 @@
 - RTSP 输出：`enable_rtsp`、`rtsp_port`、`rtsp_path`、`rtsp_bitrate`、`rtsp_codec`、
   `rtsp_encoder`；
 - 管线：`channel_threads`、`max_fps`、`queue_size`；
-- tracker 默认：`tracker_enable`、`tracker_iou_thresh`、`tracker_max_miss`、
-  `tracker_min_hits`；
+- tracker 默认：`tracker_enable`、`tracker_type`、`tracker_iou_thresh`、`tracker_max_miss`、
+  `tracker_min_hits`、`bytetrack_low_thresh`、`bytetrack_low_iou_thresh`；
 - 全局业务：`global_logics[]`。
 
 `disp_width/height`、tile rows/cols、max_fps 必须为正数；开启显示时网格容量不能小于
-有效通道数。Web 配置生成器固定 `rtsp_codec: "h264"` 以满足浏览器零转码预览。
+有效通道数。Web 支持编辑 H.264/H.265 并原样保存；浏览器零转码预览要求 H.264，选择 H.265 时面板会提示。
 
 `performance_display` 统一控制性能统计显示和调试日志输出，支持 `0/1` 或
 `false/true`。Web「全局配置 → 性能显示」可切换，保存到运行中的配置文件后支持
@@ -97,18 +95,17 @@
 
 字段分组：
 
-- 身份/开关：`id`、`enable`、`infer_enable`、`swap_rb`；
+- 身份/开关：`id`、`enable`；
 - 输入：`stream`；
 - 推理：`models[]`；
 - 业务：可选 `logic`、`logic_parameters`、`roi_zones[]`；
 - 调度：`threads`、`max_fps`。本地文件按原始 PTS 实时播放，推理和业务逻辑也统一由 `max_fps` 节流；
-- tracker override：四个 `tracker_*` 字段；
-- 事件：`report_policy`、`report_parameters`。
+- tracker override：与全局相同的五个 `tracker_*` 字段及两个 `bytetrack_*` 字段；
+- 事件：`report_policy`。
 
-`swap_rb` 不影响推理和事件图片；它影响实时显示，并且当前在 `video_overlay` 为 `custom`/`all` 时也
-会应用到事件视频。`config.h` 中“不影响上报”的旧行内注释未覆盖这条 recorder 实际分支。
-`logic` 省略/空表示没有业务后处理。`infer_enable=false` 仍解码/显示，并在 max_fps 节拍以空 results
-运行已配置 logic。
+`logic` 省略/空表示没有业务后处理。模型节点的 `models[].enable` 是唯一推理配置开关；
+没有启用模型（或 `models=[]`）时仍解码/显示，并在 max_fps 节拍以空 results 运行已配置 logic。
+通道级 `infer_enable` 已删除，旧配置需移除此字段；画布加载旧文件后保存时也会去掉它。
 
 ### `stream`
 
@@ -164,7 +161,7 @@ delivery 见[事件与上报开发](../../rk3588-console-ops/references/event-re
 - `channels`（非空时限定画布输入；空时当前调度器使用全部应用通道）；
 - `poll_interval_ms`，最低 10，仅表示没有通道新发布时的兜底周期，不是固定回调周期；
 - `logic_parameters`；
-- `report_policy`、`report_parameters`；
+- `report_policy`；
 - `media_source_channel_id`。
 
 channels 和媒体来源 ID 必须存在。启用视频 delivery 的全局实例必须显式给有效
@@ -172,9 +169,15 @@ channels 和媒体来源 ID 必须存在。启用视频 delivery 的全局实例
 
 ## 严格字段校验
 
-根对象、`global`、`global_logics[]`、通道、视频源、模型和 ROI 都使用当前字段白名单；任何未知字段
+根对象、`global`、`global_logics[]`、通道、视频源、模型、ROI、上报策略及投递项都使用当前字段白名单；任何未知字段
 都会让整份配置加载失败，不再为历史字段维护单独的兼容分支。根对象只额外允许 Web 编辑器使用的
-`_editor_layout` 元数据。模块自己的动态参数继续由对应 `logic.json` Schema 校验。
+`_editor_layout` 元数据。Web 保存接口同样检查这些字段，并返回不支持字段的完整路径，避免保存后才在启动时失败。
+
+`report_policy.parameters` 已删除：它原为旧表单参数定义，运行引擎和现有上报表单均不再使用。
+实际业务参数位于 `logic_parameters`；上报动态值来自算法事件字段，固定值由接口模板的常量映射配置。
+`swap_rb` 和通道/全局逻辑的 `report_parameters` 已删除，旧字段会被配置校验拒绝；画布读取旧文件后保存会清除它们。
+投递项仅保存契约引用及媒体选择；`mapping/request/success/adapter` 来自所引用的契约模板，
+不能再嵌入启动配置。模块自己的动态参数继续由对应 `logic.json` Schema 校验。
 
 ## 热重载事务
 
@@ -194,3 +197,34 @@ channels 和媒体来源 ID 必须存在。启用视频 delivery 的全局实例
 - stream 逐通道停止/重建，新源失败时尽力恢复旧源，失败的新 stream 不写入最终运行快照。
 
 成功读取配置文件不等于所有子系统都接受新值；必须以 config monitor 各阶段日志和最终运行快照为准。
+
+## 画布入口与配置一致性
+
+所有已注册的运行选项都必须有编辑入口或明确的画布结构。禁止通过模块 Schema 的
+`x-ui-hidden` 隐藏运行参数，清单生成器会拒绝该字段。
+
+| 配置范围 | 画布入口 / 生成规则 |
+| --- | --- |
+| `global` 显示、暂停键、RTSP、线程、队列、帧率、跟踪器 | 底部全局配置；RTSP 端口、路径、软件码率、编码和编码器均可编辑 |
+| 通道 `enable`、线程、帧率、跟踪覆盖 | 视频流面板；禁用通道显示“通道已停用”，模型开关只控制模型推理 |
+| `stream` | 视频流面板按输入类型展示，USB 支持预设和自定义宽高 |
+| `models[]` | 模型节点，包含稳定 ID、OTA 版本、启用、模型/标签、阈值、类别和核心 |
+| `inference_roi`、`roi_zones` | 视频流推理区域编辑器、业务 ROI 节点 |
+| `logic`、`logic_parameters` | 逻辑节点及模块 Schema 动态表单，全部属性必须可见 |
+| `global_logics[]` | 全局逻辑节点；实例 ID、启用、周期、模块参数可编辑；输入通道由视频流/单通道逻辑连线生成 |
+| `report_policy` | 上报节点；媒体由接口模板确定，图片/录像叠加、时长、帧率、合并窗口可编辑 |
+| 投递 ID、接口 ID/标签/版本、媒体、事件过滤 | 节点自动生成投递 ID，选择连接和模板、事件类型后生成其余值 |
+| 全局媒体来源、图片来源通道 | 全局上报节点的来源选择器 |
+| `_editor_layout` | 画布位置自动生成，不参与运行控制 |
+
+同一逻辑的上报节点对应同一个策略，只有投递开关、连接、接口模板和事件过滤独立。
+图片、录像、合并窗口和全局录像来源在兄弟节点间同步；新连入的投递继承已有策略。
+保存时父策略 `enabled` 由各投递开关汇总，图片和录像不再按投递顺序选取另一份设置。
+
+加载已有文件采用 C++ `AppConfig` 默认值；新建画布预设与加载缺省值分开。
+例如缺省文件播放不循环、缺省全局逻辑禁用且周期为 100 ms，保存不会将其静默改为另一行为。
+C++ 重载会重置所有缺省值，删除 RTSP/暂停等配置项后不再遗留上一份配置的值。
+通道 `tracker_enable=-1` 表示继承全局，前后端保持一致。
+
+回归检查覆盖原生字段与前端入口、前后端默认值、模块完整表单、保存/刷新、共享上报策略、
+禁用状态和旧字段拒绝。新增原生字段时必须同时补齐对应入口和测试。

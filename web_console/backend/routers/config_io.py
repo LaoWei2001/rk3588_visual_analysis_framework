@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.concurrency import run_in_threadpool
 from services.model_info import validate_model_config, MODEL_TYPES
 from services.app_paths import application_directory, config_target
+from services.config_fields import validate_config_fields
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 
@@ -164,6 +165,7 @@ async def get_config(name: str):
 async def save_config(name: str, body: Dict[str, Any]):
     app_dir    = _app_dir(name)
     try:
+        validate_config_fields(body)
         await run_in_threadpool(validate_model_config, app_dir, body)
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -183,6 +185,7 @@ async def save_config_file(name: str, path: str, body: Dict[str, Any]):
     app_dir = _app_dir(name)
     target  = _safe_config_target(app_dir, path)
     try:
+        validate_config_fields(body)
         await run_in_threadpool(validate_model_config, app_dir, body)
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

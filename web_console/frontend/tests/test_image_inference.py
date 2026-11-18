@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import re
 import socket
-import subprocess
 import threading
 import time
 import uuid
@@ -60,15 +59,6 @@ def console(tmp_path, monkeypatch):
                         if f'assets/{path.name}' not in package['models']]
             result.append(dict(package, models=package['models'] + uploaded))
         return state.get('packages', result)
-
-    @app.post(BASE + '/canvas-preset')
-    async def preset(request: Request):
-        data = await request.json()
-        state['preset'] = data
-        for model in data['settings']['models']:
-            for field in ['model_path', 'label_path']:
-                if model.get(field): model[field] = '/canvas/' + model[field]
-        return data['settings']
 
     @app.get(BASE + '/capabilities')
     def capabilities(): return dict(models=[dict(type=t, result_kind='detection', requires_labels=True) for t in ['yolov8_det', 'yolov5']],
@@ -486,37 +476,6 @@ def test_device_folder_preview_submission_and_reload(console):
         browser.close()
 
 
-def test_canvas_preset_includes_all_enabled_channel_models():
-    script = r"""
-const assert = require('node:assert/strict'), fs = require('node:fs'), ts = require('typescript');
-require.extensions['.ts'] = (m, name) => m._compile(ts.transpileModule(fs.readFileSync(name, 'utf8'), {
- compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020}}).outputText, name);
-const {channelImageSettings} = require('./src/features/image-inference/preset.ts');
-const roi = {mode:'roi_only', resize_mode:'letterbox', polygon:[[0,0],[1,0],[1,1]]};
-const nodes = [{id:'s1',type:'stream',data:{inference_roi:roi}}, {id:'s2',type:'stream',data:{}},
- {id:'m1',type:'model',data:{id:'person',obj_thresh:.9}},
- {id:'m2',type:'model',data:{id:'pose',model_type:'yolov8_pose',obj_thresh:.6}},
- {id:'m3',type:'model',data:{id:'disabled',enable:false}},
- {id:'m4',type:'model',data:{id:'other'}}];
-const edges = ['m1','m2','m3','m4'].map((target,i) => ({source:i===3?'s2':'s1', target, sourceHandle:'stream-out',targetHandle:'stream-in'}));
-const settings = channelImageSettings(nodes[2], nodes, edges);
-assert.deepEqual(settings.models.map(m=>m.id), ['person','pose']);
-assert.deepEqual(settings.models.map(m=>m.obj_thresh), [.9,.6]);
-assert.deepEqual(settings.inference_roi, roi);
-assert.equal(nodes[2].data.obj_thresh, .9);
-global.localStorage = {getItem(key) {return this[key] || null}, setItem(key,value) {this[key]=value}, removeItem(key) {delete this[key]}};
-let opened;
-global.window = {open(url) {opened=url}};
-const {openImageInference,readImagePreset} = require('./src/features/image-inference/preset.ts');
-openImageInference('canvas-demo', settings);
-const query = new URL(opened, 'http://console').searchParams;
-assert.equal(query.has('app'), false);
-assert.equal(readImagePreset(query.get('preset')).app, 'canvas-demo');
-assert.deepEqual(readImagePreset(query.get('preset')).settings.models.map(m=>m.id), ['person','pose']);
-"""
-    subprocess.run(['node', '-e', script], cwd=FRONTEND, check=True, timeout=30)
-
-
 def test_model_selection_validation_retry_and_late_response(console):
     url, state = console
     expect = playwright.expect
@@ -591,7 +550,7 @@ def test_model_selection_validation_retry_and_late_response(console):
         browser.close()
 
 
-def test_package_selection_and_optional_canvas_adapter(console):
+def test_package_selection(console):
     url, state = console
     expect = playwright.expect
     with playwright.sync_playwright() as pw:
@@ -609,14 +568,6 @@ def test_package_selection_and_optional_canvas_adapter(console):
         page.get_by_role('button', name='开始推理 · 1 个模型', exact=True).click()
         expect(page.locator('.image-objects')).to_contain_text('0.55')
         assert state['settings']['models'][0]['model_path'] == '/packages/demo/assets/first.rknn'
-        preset = dict(app='canvas-demo', settings=dict(models=[dict(state['settings']['models'][0],
-            model_path='assets/canvas.rknn', label_path='assets/canvas.txt', obj_thresh=.9)]), created=time.time()*1000)
-        page.evaluate('(value) => localStorage.setItem("rk3588.image-preset.example", JSON.stringify(value))', preset)
-        page.goto(url + '/image-inference?preset=example')
-        expect(page.get_by_label('模型 1 程序包', exact=True)).to_have_value('canvas-demo')
-        expect(page.get_by_label('模型 1 文件', exact=True)).to_have_value('/canvas/assets/canvas.rknn')
-        expect(page.get_by_label('模型 1 置信度阈值', exact=True)).to_have_value('0.9')
-        assert state['preset']['app'] == 'canvas-demo'
         expect(page.get_by_label('推理程序', exact=True)).to_have_count(0)
         assert state.get('app_requests', 0) >= 1
         assert errors == []

@@ -78,7 +78,7 @@ bool pipeline_publication_rollback()
     const int config_size = std::snprintf(config, sizeof(config), R"json({
       "global": {"enable_display":false, "enable_rtsp":false, "tracker_enable":0},
       "channels": [{
-        "id":0, "enable":true, "infer_enable":false,
+        "id":0, "enable":true,
         "stream":{"src_type":"file", "url":"%s"},
         "models":[], "logic":"", "logic_parameters":{}
       }]

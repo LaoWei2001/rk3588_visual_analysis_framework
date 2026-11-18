@@ -47,7 +47,7 @@ def main(binary):
                 '-t', '2', '-an', '-c:v', 'libx264', '-threads', '2', '-preset', 'ultrafast',
                 '-pix_fmt', 'yuv420p', str(video),
             ], check=True, timeout=30)
-            channels.append(dict(id=index, enable=True, infer_enable=False, models=[], max_fps=10,
+            channels.append(dict(id=index, enable=True, models=[], max_fps=10,
                                  stream=dict(src_type='file', url=str(video), loop=True), logic='',
                                  report_policy=dict(enabled=False, deliveries=[])))
         config = root / 'config.json'

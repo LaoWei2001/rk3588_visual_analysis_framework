@@ -9,8 +9,8 @@
  *   1. FPS 节流 + 交错调度（phase-offset）：按 max_fps 决定本帧是否"处理"（推理通道与传统算法通道都限频）
  *   2. 只传递稳定的 DMA-BUF 引用；Logic 调用 business_frame()/source_frame() 时才生成 BGR
  *   3. 分流：
- *      - 推理通道(infer_enable 且配置了模型)：inference_process_source → TaskQueue → infer_worker
- *      - 传统算法通道(infer_enable=false)：发布最新帧给独立 logic worker
+ *      - 推理通道(存在启用且配置完整的模型)：inference_process_source → TaskQueue → infer_worker
+ *      - 传统算法通道(无启用模型)：发布最新帧给独立 logic worker
  *      - 显示：不论是否推理，均将最新解码帧推入 g_display_queues（单槽覆盖）
  *
  * 每 5 秒打印一次每通道的 recv/throttle/enq/replace/drop 统计。
@@ -126,7 +126,7 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
     }
 
     /* ---- FPS 节流（phase-offset 交错调度）----
-     * 对推理通道与传统算法通道(infer_enable=false)都生效：后者也要按 max_fps 限频跑 logic
+     * 对推理通道与传统算法通道(无启用模型)都生效：后者也要按 max_fps 限频跑 logic
      * (需要 640 BGR 帧)，而不是每解码帧都跑。是否真正进 NPU 另由 infer_enabled 单独控制。*/
     int will_process = 0;
     uint64_t throttle_period_us = 0;

@@ -43,7 +43,6 @@ interface Props {
   reportConfigPath?: string | null
   modelIdError?: string | null
   modelChannelId?: number
-  onImageInference?: () => void
   globalTrackerType?: string
   globalTrackerEnable?: number
 }
@@ -69,7 +68,7 @@ const HEADER_CLASS: Record<string, string> = {
 
 export default function NodeConfigPanel({
   node, onUpdate, channelIds = [], allChannelIds = [], globalInputs = [],
-  reportConfigJson = null, reportConfigPath = null, modelIdError = null, modelChannelId, onImageInference,
+  reportConfigJson = null, reportConfigPath = null, modelIdError = null, modelChannelId,
   globalTrackerType = 'sort', globalTrackerEnable = 1,
 }: Props) {
   if (!node) {
@@ -96,7 +95,7 @@ export default function NodeConfigPanel({
         {node.type === 'stream' && <StreamForm node={node} onUpdate={onUpdate}
           globalTrackerType={globalTrackerType} globalTrackerEnable={globalTrackerEnable} />}
         {node.type === 'model'  && <ModelForm   node={node} onUpdate={onUpdate}
-          duplicateIdError={modelIdError} channelId={modelChannelId} onImageInference={onImageInference} />}
+          duplicateIdError={modelIdError} channelId={modelChannelId} />}
         {node.type === 'logic'  && <LogicForm   node={node} onUpdate={onUpdate} />}
         {node.type === 'globalLogic' &&
           <GlobalLogicForm node={node} onUpdate={onUpdate} inputs={globalInputs} />}
@@ -162,6 +161,10 @@ function GlobalLogicForm({ node, onUpdate, inputs }: {
         onChange={event => onUpdate(node.id, { enable: event.target.checked })} />
       启用此全局逻辑
     </label>
+    <F label="全局逻辑实例 ID">
+      <input value={String(data.instance_id ?? '')}
+        onChange={event => onUpdate(node.id, { instance_id: event.target.value })} />
+    </F>
     <F label="全局逻辑（从当前应用动态读取）">
       <select value={logic} disabled={definitions.length === 0}
         onChange={event => selectLogic(event.target.value)}>
@@ -290,7 +293,7 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
   const set = (k: string, v: unknown) => onUpdate(node.id, { [k]: v })
   const configuredTrackerType = String(d.tracker_type ?? '')
   const effectiveTrackerType = configuredTrackerType || globalTrackerType || 'sort'
-  const effectiveTrackerEnabled = d.tracker_enable == null
+  const effectiveTrackerEnabled = d.tracker_enable == null || Number(d.tracker_enable) < 0
     ? !!globalTrackerEnable : Number(d.tracker_enable) !== 0
 
   const deleteAsset_ = useAssetDelete(String(d.url ?? ''), v => set('url', v))
@@ -315,6 +318,12 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
 
   return (
     <div className="ncp-form">
+      <label className="node-toggle ncp-top-toggle">
+        <input type="checkbox" checked={d.enable == null || !!d.enable}
+          onChange={e => set('enable', e.target.checked)} />
+        启用通道
+      </label>
+      <div className="ncp-hint">关闭后整路视频、模型和业务逻辑停止；仅关闭推理请使用模型节点开关。</div>
       <F label="通道编号 (channel_id)">
         <NumberField min="0" def={0} value={d.channel_id} onChange={v => set('channel_id', v ?? 0)} />
       </F>
@@ -332,7 +341,7 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
           min={1}
           step={1}
           placeholder="继承全局最大 FPS"
-          value={d.max_fps}
+          value={d.max_fps == null || Number(d.max_fps) <= 0 ? undefined : d.max_fps}
           onChange={v => set('max_fps', v)}
         />
       </F>
@@ -379,6 +388,8 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
               const [w, h] = e.target.value.split('x').map(Number)
               onUpdate(node.id, { usb_width: w, usb_height: h })
             }}>
+            {!['0x0', '1280x720', '640x480', '1280x960', '1920x1080'].includes(`${Number(d.usb_width ?? 0)}x${Number(d.usb_height ?? 0)}`) &&
+              <option value={`${Number(d.usb_width ?? 0)}x${Number(d.usb_height ?? 0)}`}>自定义</option>}
             <option value="0x0">自动（1280×720 @ 15 FPS）</option>
             <option value="1280x720">1280×720 @ 15 FPS</option>
             <option value="640x480">640×480 @ 30 FPS</option>
@@ -386,6 +397,10 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
             <option value="1920x1080">1920×1080 @ 5 FPS</option>
           </select>
         </F>
+        <div className="node-row">
+          <F label="USB 自定义宽度（0=自动）"><NumberField min={0} integerOnly value={d.usb_width ?? 0} onChange={v => set('usb_width', v ?? 0)} /></F>
+          <F label="USB 自定义高度（0=自动）"><NumberField min={0} integerOnly value={d.usb_height ?? 0} onChange={v => set('usb_height', v ?? 0)} /></F>
+        </div>
       </>}
 
       {srcType === 'file' && <>
@@ -416,7 +431,7 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
       <div className="ncp-section-label">本视频流 Tracker（空 = 使用全局）</div>
       <div className="node-row">
         <F label="跟踪开关">
-          <select value={d.tracker_enable == null ? '' : String(d.tracker_enable)}
+          <select value={d.tracker_enable == null || Number(d.tracker_enable) < 0 ? '' : String(Number(d.tracker_enable))}
             onChange={e => set('tracker_enable', e.target.value === '' ? undefined : Number(e.target.value))}>
             <option value="">使用全局</option>
             <option value="1">开启</option>
@@ -492,12 +507,11 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
 // ─────────────────────────────────────────────────────────────────────────────
 // Model form
 // ─────────────────────────────────────────────────────────────────────────────
-function ModelForm({ node, onUpdate, duplicateIdError, channelId, onImageInference }: {
+function ModelForm({ node, onUpdate, duplicateIdError, channelId }: {
   node: Node
   onUpdate: Props['onUpdate']
   duplicateIdError?: string | null
   channelId?: number
-  onImageInference?: () => void
 }) {
   const appName = useEditorStore(s => s.appName)
   const assets     = useEditorStore(s => s.assets)
@@ -518,11 +532,6 @@ function ModelForm({ node, onUpdate, duplicateIdError, channelId, onImageInferen
 
   return (
     <div className="ncp-form">
-      {onImageInference && <button type="button" className="btn btn-secondary" onClick={onImageInference}>
-        图片推理 · 带入本通道启用的模型
-      </button>}
-      <div className="ncp-hint">在新标签页用图片验证当前模型配置，支持同一通道的多个模型。</div>
-
       <label className="node-toggle ncp-top-toggle">
         <input type="checkbox" checked={d.enable !== false} onChange={e => set('enable', e.target.checked)} />
         启用 NPU 推理
@@ -543,6 +552,9 @@ function ModelForm({ node, onUpdate, duplicateIdError, channelId, onImageInferen
       </F>
       {modelIdError && <div className="ncp-field-error">⚠ {modelIdError}</div>}
 
+      <F label="模型版本（OTA）">
+        <input value={String(d.version ?? '')} onChange={e => set('version', e.target.value)} />
+      </F>
       <div className="node-row">
         <F label="NPU 核心">
           <select value={String(d.npu_core ?? -1)} onChange={e => set('npu_core', +e.target.value)}>

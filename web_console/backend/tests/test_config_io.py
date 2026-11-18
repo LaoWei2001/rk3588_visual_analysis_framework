@@ -118,17 +118,17 @@ def test_other_storage_errors_have_readable_detail(environment, monkeypatch, cod
 
 @pytest.mark.parametrize("filename", ["config.json", "custom.json"])
 @pytest.mark.parametrize("switches", [
-    dict(enable=False, infer_enable=False, swap_rb=True),
-    dict(enable=True, infer_enable=True, swap_rb=False),
-    dict(enable=0, infer_enable=0, swap_rb=1),
+    dict(enable=False),
+    dict(enable=True),
+    dict(enable=0),
     {},
 ])
 def test_channel_settings_survive_load_and_save(environment, filename, switches):
     request, assets = environment
     target = assets / filename
-    payload = {"global": {"enable": False}, "channels": [
+    payload = {"global": {"enable_display": False}, "channels": [
         {"id": 0, "threads": 2, **switches, "models": [{"enable": False}]},
-        {"id": 1, "threads": 4, "enable": True, "infer_enable": True, "swap_rb": False},
+        {"id": 1, "threads": 4, "enable": True},
     ]}
     target.write_text(json.dumps(payload))
     url = "/apps/demo/config" if filename == "config.json" else "/apps/demo/config-file?path=assets/custom.json"

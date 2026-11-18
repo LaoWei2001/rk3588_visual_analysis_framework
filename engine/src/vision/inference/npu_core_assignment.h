@@ -17,7 +17,7 @@ template <typename Model> inline bool active_core_model(const Model &model)
 
 template <typename Channel> inline bool has_automatic_models(const Channel &channel)
 {
-    if (!channel.enable || !channel.infer_enable)
+    if (!channel.enable)
         return false;
     for (const auto &model : channel.models)
         if (active_core_model(model) && model.npu_core == -1)
@@ -34,7 +34,7 @@ template <typename Channels> inline int explicitly_assigned_cores(const Channels
     int assigned = 0;
     for (const auto &channel : channels)
     {
-        if (!channel.enable || !channel.infer_enable)
+        if (!channel.enable)
             continue;
         for (const auto &model : channel.models)
             if (active_core_model(model) && model.npu_core >= 0 && model.npu_core < 3)

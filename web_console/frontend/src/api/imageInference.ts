@@ -148,6 +148,3 @@ export async function downloadImageLabels(id: string, indices: number[]): Promis
     throw error
   }
 }
-
-export const resolveCanvasImageSettings = (app: string, settings: ImageSettings) =>
-  api.post<ImageSettings>(`${base}/canvas-preset`, { app, settings }).then(r => r.data)
