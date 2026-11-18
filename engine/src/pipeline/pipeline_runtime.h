@@ -30,6 +30,8 @@ extern "C"
         int dataSize;
         int fd;
         void *source_buffer; /* 借用的 GstBuffer；异步消费者入队前必须增加引用。 */
+        bool single_frame = false;  /* 暂停跳转的预览帧必须经过一次完整分析。 */
+        int64_t video_time_ms = -1; /* 当前文件帧的位置；非文件源或时间未知为 -1。 */
     } FrameInputDesc;
 
     /** @brief 结果分发线程 — 等 NPU 完成 → process_channel_results → channel_logic */

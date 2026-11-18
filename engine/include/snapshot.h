@@ -33,6 +33,8 @@ struct ChannelLogicSnapshot
     /* 产生当前 outputs/frame 的业务帧双时钟；状态清空版本没有帧，二者为 0。 */
     uint64_t frame_steady_ms = 0;
     uint64_t frame_unix_ms = 0;
+    bool file_paused = false; ///< 文件正在暂停或已暂停；不能作为新的实时输入参与联合判断。
+    uint64_t file_timeline = 0; ///< 文件跳转或重新打开后改变，供框架重置依赖它的全局业务状态。
     /* 产生当前 outputs 的不可变运行配置代。 */
     uint64_t config_generation = 0;
     int64_t publication_age_ms = -1;

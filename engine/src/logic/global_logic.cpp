@@ -9,7 +9,6 @@
 
 #include "application/control/logic_control.h"
 #include "application/runtime/app_ctrl.h"
-#include "application/runtime/pause_ctrl.h"
 #include "application/runtime/publication_signal.h"
 #include "application/runtime/runtime_status.h"
 #include "application/runtime/service_watchdog.h"
@@ -40,6 +39,10 @@ struct GlobalLogicThread
     LogicParameterSet logic_parameters;
     int64_t tick_id;
     uint64_t last_tick_steady_ms;
+    uint64_t pause_since_ms = 0;
+    uint64_t paused_ms = 0;
+    std::map<int, uint64_t> file_timelines;
+    std::map<int, uint64_t> paused_publications;
 
     std::vector<int> channel_ids;
     std::vector<ChannelLogicSnapshot> channel_snapshots;
@@ -181,7 +184,6 @@ try
     service_watchdog::Progress watchdog_progress("global logic");
     while (t->running.load())
     {
-        pause_ctrl::wait_if_paused(&t->running);
         if (!t->running.load())
             break;
 
@@ -191,9 +193,6 @@ try
         const uint64_t observed_publication = publication_signal_sequence();
         const uint64_t tick_begin_ms = steady_now_ms();
         const uint64_t tick_unix_ms = system_now_ms();
-        const float dt_ms =
-            t->last_tick_steady_ms == 0 ? 0.0f : static_cast<float>(tick_begin_ms - t->last_tick_steady_ms);
-        t->last_tick_steady_ms = tick_begin_ms;
 
         t->channel_snapshots.clear();
         VisionContextAccess::overlays(t->gctx).clear();
@@ -208,13 +207,63 @@ try
             t->channel_snapshots.push_back(std::move(snapshot));
         }
 
+        bool file_paused = false;
+        bool timeline_changed = false;
+        for (const auto &snapshot : t->channel_snapshots)
+        {
+            if (!t->config.channels.empty() && std::find(t->config.channels.begin(), t->config.channels.end(),
+                                                         snapshot.channel_id) == t->config.channels.end())
+                continue;
+            file_paused = file_paused || snapshot.file_paused;
+            const auto paused = t->paused_publications.find(snapshot.channel_id);
+            if (snapshot.file_paused)
+                t->paused_publications[snapshot.channel_id] = snapshot.publication_seq;
+            else if (paused != t->paused_publications.end())
+            {
+                // 恢复后先等一帧新结果，避免把暂停前的旧快照误判成断流。
+                if (snapshot.online_state == CH_ONLINE && snapshot.publication_seq == paused->second)
+                    file_paused = true;
+                else
+                    t->paused_publications.erase(paused);
+            }
+            const auto previous = t->file_timelines.find(snapshot.channel_id);
+            if (previous != t->file_timelines.end() && previous->second != snapshot.file_timeline)
+                timeline_changed = true;
+            t->file_timelines[snapshot.channel_id] = snapshot.file_timeline;
+        }
+        if (timeline_changed)
+        {
+            t->state.reset();
+            t->last_tick_steady_ms = 0;
+        }
+        if (file_paused)
+        {
+            if (!t->pause_since_ms)
+                t->pause_since_ms = tick_begin_ms;
+            t->channel_snapshots.clear();
+            t->ready_inputs.clear();
+            watchdog_progress.end();
+            publication_signal_wait(observed_publication, 50);
+            continue;
+        }
+        if (t->pause_since_ms)
+        {
+            t->paused_ms += tick_begin_ms - t->pause_since_ms;
+            t->pause_since_ms = 0;
+        }
+        const uint64_t analysis_ms = tick_begin_ms - t->paused_ms;
+        const float dt_ms = t->last_tick_steady_ms && analysis_ms >= t->last_tick_steady_ms
+                                ? static_cast<float>(analysis_ms - t->last_tick_steady_ms)
+                                : 0.0f;
+        t->last_tick_steady_ms = analysis_ms;
         prepare_ready_inputs(t, input_timeout_ms);
 
         const auto runtime = app_ctrl_get_runtime_snapshot();
         t->gctx.config = &t->config;
         t->gctx.state = &t->state;
         VisionContextAccess::bind_parameters(t->gctx, &t->logic_parameters);
-        t->gctx.timestamp_ms = tick_begin_ms;
+        t->gctx.timestamp_ms = analysis_ms;
+        t->gctx.real_time_ms = tick_begin_ms;
         t->gctx.unix_ms = tick_unix_ms;
         t->gctx.dt_ms = dt_ms;
         t->gctx.tick_id = t->tick_id++;
@@ -331,7 +380,6 @@ static void stop_one(GlobalLogicThread *t)
     t->stop_requested.store(true);
     t->running.store(false);
     publication_signal_notify();
-    pause_ctrl::notify_waiters();
     pthread_join(t->tid, nullptr);
     app_ctrl_clear_all_global_draw_commands(t->config.instance_id);
 }

@@ -170,20 +170,20 @@ def _close_session(key: tuple[str, str], session: _StreamSession) -> None:
     session.done.set()
 
 
-async def _preview_command(name: str, action: str, channel_id: int = -1, lease: str = "", preview_height: int = 1080):
+async def _preview_command(name: str, action: str, channel_id: int = -1, lease: str = ""):
     directory = application_directory(APPS_ROOT, name)
     return await asyncio.to_thread(send_action, directory / "run.control.sock", {
-        "scope": "preview", "action": action, "channel_id": channel_id, "lease": lease, "preview_height": preview_height,
+        "scope": "preview", "action": action, "channel_id": channel_id, "lease": lease,
     })
 
 
-async def _renew_preview(name: str, channel_id: int, lease: str, session: _StreamSession, preview_height: int = 1080):
+async def _renew_preview(name: str, channel_id: int, lease: str, session: _StreamSession):
     try:
         while not session.stop.is_set():
             await asyncio.sleep(10)
             if session.stop.is_set():
                 break
-            await _preview_command(name, "acquire", channel_id, lease, preview_height)
+            await _preview_command(name, "acquire", channel_id, lease)
     except HTTPException:
         session.stop.set()
         if session.viewer is not None:
@@ -198,11 +198,11 @@ async def stream_capabilities(name: str):
         supported = response.get("protocol") == "channel-preview-v1" and response.get("supported") is True
     except HTTPException:
         supported = False
-    return {"channel_preview": supported, "preview_resolutions": response.get("preview_resolutions", [1080]) if supported else []}
+    return {"channel_preview": supported}
 
 
 async def _fmp4_stream(request: Request, name: str, rtsp_url: str,
-                       channel_id: Optional[int] = None, lease: str = "", preview_height: int = 1080):
+                       channel_id: Optional[int] = None, lease: str = ""):
     requested_id = request.query_params.get("client_id", "")
     # 老版本页面没有 client_id 时，每个请求独立，避免旧标签页抢断新版预览。
     client_id = requested_id if re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", requested_id) else uuid.uuid4().hex
@@ -216,7 +216,7 @@ async def _fmp4_stream(request: Request, name: str, rtsp_url: str,
     try:
         await _replace_session(name, client_id, session)
         if channel_id is not None:
-            renewal = asyncio.create_task(_renew_preview(name, channel_id, lease, session, preview_height))
+            renewal = asyncio.create_task(_renew_preview(name, channel_id, lease, session))
         session.source, session.viewer = _stream_pool.subscribe(name, rtsp_url, _build_ffmpeg_args(rtsp_url))
         log.info("[LiveStream][%s] viewer joined: viewers=%d", name, len(session.source.viewers))
         # StreamingResponse cancels this generator on disconnect. Polling the
@@ -239,7 +239,7 @@ async def _fmp4_stream(request: Request, name: str, rtsp_url: str,
             # outside its cancellation scope; engine TTL also covers Web crashes.
             async def release():
                 try:
-                    await _preview_command(name, "release", channel_id, lease, preview_height)
+                    await _preview_command(name, "release", channel_id, lease)
                 except HTTPException:
                     pass
             task = asyncio.create_task(release())
@@ -251,8 +251,7 @@ async def _fmp4_stream(request: Request, name: str, rtsp_url: str,
 
 
 @router.get("/apps/{name}/stream")
-async def stream_app(name: str, request: Request, channel_id: Annotated[Optional[int], Query(ge=0)] = None,
-                     preview_height: Annotated[int, Query(ge=480, le=1080)] = 1080):
+async def stream_app(name: str, request: Request, channel_id: Annotated[Optional[int], Query(ge=0)] = None):
     application_directory(APPS_ROOT, name)
     if shutil.which("ffmpeg") is None:
         raise HTTPException(500, "未找到 ffmpeg，无法将 RTSP 安全封装为网页实时流")
@@ -273,19 +272,17 @@ async def stream_app(name: str, request: Request, channel_id: Annotated[Optional
         state = {key.removeprefix("retry_"): request.query_params.get(key, "")[:32] for key in fields}
         log.warning("[LiveStream][%s] client retry: cause=%s state=%r", name, cause, state)
 
-    if preview_height not in (480, 720, 1080):
-        raise HTTPException(422, "预览分辨率仅支持 480p、720p、1080p")
     lease = ""
     if channel_id is not None:
         lease = uuid.uuid4().hex
-        response = await _preview_command(name, "acquire", channel_id, lease, preview_height)
+        response = await _preview_command(name, "acquire", channel_id, lease)
         if response.get("protocol") != "channel-preview-v1":
             raise HTTPException(409, "当前程序尚未提供独立高清预览")
         # Use only the local engine's validated route; never accept a client URL.
         rtsp_url = f"rtsp://127.0.0.1:{int(response['port'])}{response['path']}"
 
     return StreamingResponse(
-        _fmp4_stream(request, name, rtsp_url, channel_id, lease, preview_height),
+        _fmp4_stream(request, name, rtsp_url, channel_id, lease),
         media_type="video/mp4",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",

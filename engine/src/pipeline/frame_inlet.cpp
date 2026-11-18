@@ -23,8 +23,8 @@
 #include <pthread.h>
 #include <utility>
 
-#include "application/runtime/pause_ctrl.h"
 #include "common/logging.h"
+#include "common/pthread_lock.h"
 #include "frame_source_owner.h"
 #include "frame_transform.h"
 #include "media/recorder/event_video_recorder.h"
@@ -69,8 +69,6 @@ void feed_stats_reset(int chnId)
 
 int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
 {
-    if (pause_ctrl::is_paused())
-        return 0;
     if (!app_ctrl_has_channel(imgDesc.chnId))
         return -1;
 
@@ -191,6 +189,15 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
     raw_frame.height = imgDesc.height;
     raw_frame.frame_steady_ms = frame_steady_ms;
     raw_frame.frame_unix_ms = frame_unix_ms;
+    raw_frame.video_time_ms = imgDesc.video_time_ms;
+    if (imgDesc.single_frame)
+        will_process = 1;
+    if (will_process && channel_config->stream.src_type == "file")
+    {
+        PthreadLock lock(g_pCtrl->chn_mtx[ch]);
+        const auto &state = g_pCtrl->channels_state[ch];
+        raw_frame.activity = std::make_shared<FrameActivity>(state.pending_analysis, state.playback_wakeup);
+    }
     const bool manual_capture = remote_dataset_manual_active(ch);
     if ((!infer_enabled && will_process) || manual_capture)
     {
@@ -231,10 +238,10 @@ int pipeline_submit_frame(char *imgData, FrameInputDesc imgDesc)
      * NPU 与传统 CV 都在预览整帧拷贝之前发布，可与后续显示处理重叠执行。 */
     if (will_process && infer_enabled)
     {
-        const int enq_ret =
-            inference_process_source(ch, imgData, imgDesc.fd, imgDesc.width, imgDesc.height, fmt_int, imgDesc.horStride,
-                                     imgDesc.verStride, current_frame_seq, raw_frame.frame_steady_ms,
-                                     raw_frame.frame_unix_ms, retain_frame_source_buffer(imgDesc.source_buffer));
+        const int enq_ret = inference_process_source(
+            ch, imgData, imgDesc.fd, imgDesc.width, imgDesc.height, fmt_int, imgDesc.horStride, imgDesc.verStride,
+            current_frame_seq, raw_frame.frame_steady_ms, raw_frame.frame_unix_ms, raw_frame.video_time_ms,
+            retain_frame_source_buffer(imgDesc.source_buffer), raw_frame.activity);
         if (enq_ret > 0)
         {
             g_feed[ch].enq++;

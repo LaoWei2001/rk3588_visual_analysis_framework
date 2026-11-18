@@ -11,6 +11,7 @@
  *     两条路径: 推理通道 (new_results 非空) / 非推理异步 logic worker
  */
 
+#include "common/pthread_lock.h"
 #include "logic/context_access.h"
 #include "logic/logic_registry.h"
 #include <algorithm>
@@ -348,7 +349,9 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
         sample.results = &current_results;
         sample.frame_id = frame_id;
         sample.timestamp_ms = timestamp_ms;
+        sample.real_time_ms = raw_frame ? raw_frame->frame_steady_ms : steady_now_ms();
         sample.unix_ms = unix_ms;
+        sample.video_time_ms = raw_frame ? raw_frame->video_time_ms : -1;
         sample.infer_enabled = infer_enabled;
         sample.inference_valid = inference_valid;
         if (raw_frame && raw_frame->lazy_frame)
@@ -377,8 +380,10 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
         ch_state.published_frame_seq = frame_id;
         ch_state.draw_cmds.clear();
         ch_state.logic_display_frame.release();
-        ch_state.commit_publication(runtime, steady_now_ms(), timestamp_ms, unix_ms, infer_enabled,
-                                    raw_frame ? raw_frame->width : 0, raw_frame ? raw_frame->height : 0);
+        ch_state.published_video_time_ms = raw_frame ? raw_frame->video_time_ms : -1;
+        ch_state.commit_publication(runtime, steady_now_ms(), raw_frame ? raw_frame->frame_steady_ms : steady_now_ms(),
+                                    unix_ms, infer_enabled, raw_frame ? raw_frame->width : 0,
+                                    raw_frame ? raw_frame->height : 0);
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
         return;
     }
@@ -402,6 +407,8 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
     pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
     ctx.frame_id = frame_id;
     ctx.timestamp_ms = timestamp_ms;
+    ctx.real_time_ms = raw_frame ? raw_frame->frame_steady_ms : steady_now_ms();
+    ctx.video_time_ms = raw_frame ? raw_frame->video_time_ms : -1;
     /* RTSP/USB/文件统一透传业务帧进入分析管线时的墙钟，异步推理不会把完成时间误当帧时间。 */
     ctx.unix_ms = unix_ms;
     ctx.dt_ms = dt_ms;
@@ -490,8 +497,10 @@ static void invoke_channel_logic(int chnId, std::vector<AlgoResult> &current_res
         {
             ch_state.logic_display_frame.release();
         }
-        ch_state.commit_publication(runtime, steady_now_ms(), timestamp_ms, unix_ms, infer_enabled,
-                                    raw_frame ? raw_frame->width : 0, raw_frame ? raw_frame->height : 0);
+        ch_state.published_video_time_ms = raw_frame ? raw_frame->video_time_ms : -1;
+        ch_state.commit_publication(runtime, steady_now_ms(), raw_frame ? raw_frame->frame_steady_ms : steady_now_ms(),
+                                    unix_ms, infer_enabled, raw_frame ? raw_frame->width : 0,
+                                    raw_frame ? raw_frame->height : 0);
         pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
     }
 }
@@ -519,7 +528,16 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
         return {};
 
     const uint64_t now_ms = steady_now_ms();
-    const uint64_t logic_time_ms = raw_frame.frame_steady_ms != 0 ? raw_frame.frame_steady_ms : now_ms;
+    const bool file_source = channel_config->stream.src_type == "file";
+    if (file_source && raw_frame.video_time_ms < 0)
+    {
+        PthreadLock lock(g_pCtrl->chn_mtx[chnId]);
+        ch_state.file_playback.error = "当前文件帧没有有效视频时间，已跳过分析";
+        return {};
+    }
+    const uint64_t logic_time_ms =
+        VisionContextAccess::analysis_time(raw_frame.frame_steady_ms != 0 ? raw_frame.frame_steady_ms : now_ms,
+                                           file_source ? raw_frame.video_time_ms : -1);
 
     int infer_enabled = config_utils::is_channel_infer_enabled(*channel_config) ? 1 : 0;
     if (infer_enabled)
@@ -544,6 +562,16 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
     if (!infer_enabled && new_results)
         return {};
 
+    // 文件时间倒退表示新的连续片段；不能让旧计时发生无符号下溢。
+    if (file_source && ch_state.logic_frame_id > 0 && logic_time_ms < ch_state.last_logic_ts_ms)
+    {
+        PthreadLock lock(g_pCtrl->chn_mtx[chnId]);
+        ch_state.logic_state.reset();
+        ch_state.logic_frame_id = 0;
+        ++ch_state.file_timeline;
+        g_trackers[chnId].clear();
+    }
+
     /* ---- 路径1：非推理通道 / 无结果直通 ---- */
     if (!new_results)
     {
@@ -567,6 +595,8 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
 
     /* ---- 路径2：推理通道 ---- */
     std::vector<AlgoResult> results = *new_results;
+    for (auto &result : results)
+        result.timestamp_ms = logic_time_ms;
 
     float dt_ms = 0.0f;
     pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
@@ -581,9 +611,7 @@ std::vector<AlgoResult> process_channel_results(int chnId, const ChannelRawFrame
     update_tracking_results(chnId, channel_config, results);
 
     const int64_t frame_seq = result_frame_id;
-    const uint64_t frame_ts = raw_frame.frame_steady_ms != 0
-                                  ? raw_frame.frame_steady_ms
-                                  : (!results.empty() ? results.front().timestamp_ms : now_ms);
+    const uint64_t frame_ts = logic_time_ms;
     const uint64_t frame_unix_ms = raw_frame.frame_unix_ms != 0 ? raw_frame.frame_unix_ms : system_now_ms();
 
     std::vector<AlgoResult> out = std::move(results);

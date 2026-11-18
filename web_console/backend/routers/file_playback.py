@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 from services import process_manager as pm
 from services.app_paths import application_directory
@@ -20,7 +20,11 @@ _DURATION_CACHE: Dict[str, tuple[int, int, int]] = {}
 
 
 class SeekRequest(BaseModel):
-    position_ms: int = Field(ge=0)
+    position_ms: int = Field(ge=0, le=9007199254740)
+
+
+class PauseRequest(BaseModel):
+    paused: StrictBool
 
 
 def _app_dir(name: str) -> Path:
@@ -125,6 +129,17 @@ async def get_file_playback(name: str):
 
 @router.post("/apps/{name}/file-playback/{channel_id}/seek")
 async def seek_file_playback(name: str, channel_id: int, request: SeekRequest):
+    return await _control_file_playback(name, channel_id, {"command": "seek", "position_ms": request.position_ms})
+
+
+@router.post("/apps/{name}/file-playback/{channel_id}/pause")
+async def pause_file_playback(name: str, channel_id: int, request: PauseRequest):
+    return await _control_file_playback(name, channel_id, {"command": "pause", "paused": request.paused})
+
+
+async def _control_file_playback(name: str, channel_id: int, command: Dict[str, Any]):
+    if channel_id < 0:
+        raise HTTPException(status_code=422, detail="通道编号无效")
     app_dir = _app_dir(name)
     if pm.get_status(name).get("status") != "running":
         raise HTTPException(status_code=409, detail="程序未运行")
@@ -134,8 +149,8 @@ async def seek_file_playback(name: str, channel_id: int, request: SeekRequest):
     response = await asyncio.to_thread(
         _socket_request,
         socket_path,
-        {"command": "seek", "channel_id": channel_id, "position_ms": request.position_ms},
+        {**command, "channel_id": channel_id},
     )
     if not response.get("ok"):
-        raise HTTPException(status_code=409, detail=response.get("message") or "视频跳转失败")
+        raise HTTPException(status_code=409, detail=response.get("message") or "文件播放控制失败")
     return response

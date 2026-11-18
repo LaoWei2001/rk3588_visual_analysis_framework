@@ -93,6 +93,7 @@ int pipeline_init(void)
         pthread_cond_init(&g_display_queues[channel_id].cv, nullptr);
         g_display_queues[channel_id].has_task = 0;
         g_display_queues[channel_id].reset_fps_pending = true;
+        g_display_queues[channel_id].refresh_pending = false;
         g_display_queues[channel_id].pool.init();
     }
     g_pipeline_initialized = true;
@@ -226,6 +227,8 @@ void pipeline_channel_offline(int chnId)
         pthread_mutex_lock(&g_process_mtx[chnId]);
         pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
         ch.online_state = CH_OFFLINE;
+        if (channel_config && channel_config->stream.src_type == "file")
+            ++ch.file_timeline;
         if (ch.capture_state != vision::VideoChannelState::Failed)
         {
             ch.capture_state = vision::VideoChannelState::Disconnected;
@@ -244,6 +247,7 @@ void pipeline_channel_offline(int chnId)
         ch.logic_frame_id = 0;
         ch.last_logic_ts_ms = ts;
         ch.published_frame_seq = 0;
+        ch.published_video_time_ms = -1;
         ch.accept_results_after_seq = ch.input_frame_seq;
         const int effective_infer =
             channel_config && config_utils::is_channel_infer_enabled(*channel_config) && ch.infer_runtime_enable;
@@ -293,6 +297,7 @@ void pipeline_channel_online(int chnId)
         ch.logic_frame_id = 0;
         ch.last_logic_ts_ms = ts;
         ch.published_frame_seq = 0;
+        ch.published_video_time_ms = -1;
         ch.accept_results_after_seq = ch.input_frame_seq;
         const int effective_infer =
             channel_config && config_utils::is_channel_infer_enabled(*channel_config) && ch.infer_runtime_enable;

@@ -122,13 +122,24 @@ void LogicSession::run(const LogicFrame &frame)
     validate_image(frame.business, true);
     Impl &self = *impl_;
     // 回放也可故意提供倒退时间，验证业务防御逻辑；dt 不允许 unsigned 下溢。
-    self.context.dt_ms = self.has_frame && frame.timestamp_ms >= self.context.timestamp_ms
-                             ? static_cast<float>(frame.timestamp_ms - self.context.timestamp_ms)
+    const uint64_t analysis_time = VisionContextAccess::analysis_time(frame.timestamp_ms, frame.video_time_ms);
+    const bool timeline_changed =
+        self.has_frame && ((frame.video_time_ms >= 0) != (self.input.video_time_ms >= 0) ||
+                           (frame.video_time_ms >= 0 && frame.video_time_ms < self.input.video_time_ms));
+    if (timeline_changed)
+        self.state.reset();
+    self.context.dt_ms = self.has_frame && !timeline_changed && analysis_time >= self.context.timestamp_ms
+                             ? static_cast<float>(analysis_time - self.context.timestamp_ms)
                              : 0.0f;
     self.context.frame_id = frame.frame_id >= 0 ? frame.frame_id : self.context.frame_id + 1;
-    self.context.timestamp_ms = frame.timestamp_ms;
+    self.context.timestamp_ms = analysis_time;
+    self.context.real_time_ms = frame.timestamp_ms;
     self.context.unix_ms = frame.unix_ms;
+    self.context.video_time_ms = frame.video_time_ms;
     self.context.results = frame.results;
+    if (frame.video_time_ms >= 0 && frame.results)
+        for (auto &result : *frame.results)
+            result.timestamp_ms = analysis_time;
     self.context.rois = frame.rois ? frame.rois : &self.rois;
     self.context.inference_valid = frame.inference_valid;
     self.context.infer_enabled = self.config.infer_enable && frame.inference_enabled;

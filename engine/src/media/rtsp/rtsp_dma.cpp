@@ -76,6 +76,8 @@ static std::shared_ptr<DmaFrameSlot> allocate_dma_slot(int heap_fd, size_t size,
     slot->fd = dma_fd;
     slot->mapped = mapped;
     slot->size = size;
+    slot->stride_w = stride_w;
+    slot->stride_h = stride_h;
     slot->rga = std::move(imported);
     return slot;
 }
@@ -93,22 +95,24 @@ std::shared_ptr<DmaFramePool> DmaFramePool::create(int source_width, int source_
     auto pool = std::make_shared<DmaFramePool>();
     pool->src_w = source_width;
     pool->src_h = source_height;
-    pool->out_stride_w = output_width;
-    pool->out_stride_h = output_height;
-    pool->rgb_source = allocate_dma_slot(heap_fd, static_cast<size_t>(source_width) * source_height * 3, source_width,
-                                         source_height, source_width, source_height, RK_FORMAT_RGB_888);
-    const size_t nv12_size = static_cast<size_t>(output_width) * output_height * 3 / 2;
+    pool->out_stride_w = (output_width + 15) & ~15;
+    pool->out_stride_h = (output_height + 15) & ~15;
+    const int rgb_stride_w = (source_width + 15) & ~15;
+    const int rgb_stride_h = (source_height + 15) & ~15;
+    pool->rgb_source = allocate_dma_slot(heap_fd, static_cast<size_t>(rgb_stride_w) * rgb_stride_h * 3, source_width,
+                                         source_height, rgb_stride_w, rgb_stride_h, RK_FORMAT_RGB_888);
+    const size_t y_size = static_cast<size_t>(pool->out_stride_w) * pool->out_stride_h;
+    const size_t nv12_size = y_size * 3 / 2;
     for (size_t index = 0; pool->rgb_source && index < RTSP_DMA_OUTPUT_SLOTS; ++index)
     {
-        auto output = allocate_dma_slot(heap_fd, nv12_size, output_width, output_height, output_width, output_height,
-                                        RK_FORMAT_YCbCr_420_SP);
+        auto output = allocate_dma_slot(heap_fd, nv12_size, output_width, output_height, pool->out_stride_w,
+                                        pool->out_stride_h, RK_FORMAT_YCbCr_420_SP);
         if (!output)
             break;
         if (!dma_buf_sync_cpu(output->fd, true))
             break;
-        memset(output->mapped, 0, static_cast<size_t>(output_width) * output_height);
-        memset(static_cast<unsigned char *>(output->mapped) + static_cast<size_t>(output_width) * output_height, 128,
-               nv12_size - static_cast<size_t>(output_width) * output_height);
+        memset(output->mapped, 0, y_size);
+        memset(static_cast<unsigned char *>(output->mapped) + y_size, 128, nv12_size - y_size);
         if (!dma_buf_sync_cpu(output->fd, false))
             break;
         pool->nv12_outputs.push_back(std::move(output));
@@ -165,9 +169,9 @@ GstBuffer *make_dmabuf_video_buffer(GstAllocator *allocator, const std::shared_p
 
     gsize offsets[GST_VIDEO_MAX_PLANES] = {0};
     gint strides[GST_VIDEO_MAX_PLANES] = {0};
-    offsets[1] = static_cast<gsize>(width) * height;
-    strides[0] = width;
-    strides[1] = width;
+    offsets[1] = static_cast<gsize>(slot->stride_w) * slot->stride_h;
+    strides[0] = slot->stride_w;
+    strides[1] = slot->stride_w;
     gst_buffer_add_video_meta_full(buffer, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_NV12, width, height, 2, offsets,
                                    strides);
 

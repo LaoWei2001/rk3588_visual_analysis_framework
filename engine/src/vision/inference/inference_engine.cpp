@@ -23,7 +23,6 @@
 #include <vector>
 
 #include "application/runtime/app_ctrl.h"
-#include "application/runtime/pause_ctrl.h"
 #include "common/logging.h"
 #include "inference_engine.h"
 #include "inference_internal.h"
@@ -104,13 +103,16 @@ InferenceRoiMode resolve_inference_source_roi(int channel_id, int source_width, 
 /*======================== 取结果（dispatch_worker 调用）========================*/
 
 bool inference_take_results(int chnId, std::vector<AlgoResult> &out, std::shared_ptr<LazyVideoFrame> &out_frame,
-                            int64_t &out_frame_id, uint64_t &out_frame_steady_ms, uint64_t &out_frame_unix_ms)
+                            int64_t &out_frame_id, uint64_t &out_frame_steady_ms, uint64_t &out_frame_unix_ms,
+                            int64_t &out_video_time_ms, std::shared_ptr<FrameActivity> &out_activity)
 {
     out.clear();
     out_frame.reset();
     out_frame_id = 0;
     out_frame_steady_ms = 0;
     out_frame_unix_ms = 0;
+    out_video_time_ms = -1;
+    out_activity.reset();
     if (chnId < 0 || chnId >= MAX_CHANNEL_NUM)
         return false;
 
@@ -122,6 +124,8 @@ bool inference_take_results(int chnId, std::vector<AlgoResult> &out, std::shared
         out_frame_id = g_inference.channel_results[chnId].latest_seq;
         out_frame_steady_ms = g_inference.channel_results[chnId].frame_steady_ms;
         out_frame_unix_ms = g_inference.channel_results[chnId].frame_unix_ms;
+        out_video_time_ms = g_inference.channel_results[chnId].video_time_ms;
+        out_activity = std::move(g_inference.channel_results[chnId].activity);
         g_inference.channel_results[chnId].has_new = 0;
         pthread_mutex_unlock(&g_inference.channel_results[chnId].mtx);
         return true;
@@ -406,6 +410,7 @@ void inference_deinit()
     {
         g_inference.channel_results[i].data.clear();
         g_inference.channel_results[i].frame.reset();
+        g_inference.channel_results[i].activity.reset();
         g_inference.channel_results[i].has_new = 0;
         pthread_mutex_destroy(&g_inference.channel_results[i].mtx);
         pthread_mutex_destroy(&g_inference.result_ready_mtx[i]);
@@ -422,7 +427,8 @@ void inference_deinit()
 
 int inference_process_source(int chnId, void *source_data, int fd, int srcW, int srcH, int srcFmt, int srcStrH,
                              int srcStrV, int64_t frame_seq, uint64_t frame_steady_ms, uint64_t frame_unix_ms,
-                             std::shared_ptr<void> source_owner)
+                             int64_t video_time_ms, std::shared_ptr<void> source_owner,
+                             std::shared_ptr<FrameActivity> activity)
 {
     if (!g_inference.running)
         return -1;
@@ -486,6 +492,8 @@ int inference_process_source(int chnId, void *source_data, int fd, int srcW, int
                 task.frame_seq = frame_seq > 0 ? frame_seq : g_fps[chnId].next_frame_seq();
                 task.frame_steady_ms = frame_steady_ms;
                 task.frame_unix_ms = frame_unix_ms;
+                task.video_time_ms = video_time_ms;
+                task.activity = std::move(activity);
                 task.src_buf = std::move(imported);
                 task.srcW = srcW;
                 task.srcH = srcH;
@@ -524,7 +532,7 @@ int inference_process_source(int chnId, void *source_data, int fd, int srcW, int
 
 float inference_get_infer_fps(int chnId)
 {
-    if (chnId < 0 || chnId >= MAX_CHANNEL_NUM || pause_ctrl::is_paused())
+    if (chnId < 0 || chnId >= MAX_CHANNEL_NUM)
         return 0.0f;
     return g_fps[chnId].value();
 }
@@ -752,6 +760,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
             pthread_mutex_lock(&g_inference.channel_results[chnId].mtx);
             g_inference.channel_results[chnId].data.clear();
             g_inference.channel_results[chnId].frame.reset();
+            g_inference.channel_results[chnId].activity.reset();
             g_inference.channel_results[chnId].has_new = 0;
             pthread_mutex_unlock(&g_inference.channel_results[chnId].mtx);
         }

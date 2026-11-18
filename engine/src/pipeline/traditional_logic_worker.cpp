@@ -10,7 +10,6 @@
 #include "pipeline_internal.h"
 #include "pipeline_runtime.h"
 
-#include "application/runtime/pause_ctrl.h"
 #include "application/runtime/runtime_status.h"
 #include "application/runtime/service_watchdog.h"
 #include "common/pthread_lock.h"
@@ -87,7 +86,7 @@ try
         queue.has_task = false;
         pthread_mutex_unlock(&queue.mtx);
 
-        if (pause_ctrl::is_paused() || !task.raw_frame.lazy_frame)
+        if (!task.raw_frame.lazy_frame)
             continue;
 
         /* 与热更新、在线状态切换和同通道 NPU 在途结果串行。

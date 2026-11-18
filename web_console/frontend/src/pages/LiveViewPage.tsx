@@ -8,6 +8,7 @@ import {
   loadConfigFile,
   sendChannelAction,
   seekFilePlayback,
+  setFilePaused,
   sendGlobalLogicAction,
   streamUrl,
   type AppInfo,
@@ -148,11 +149,6 @@ export default function LiveViewPage() {
   const [videoLayout, setVideoLayout] = useState<VideoLayout | null>(null)
   const [channelPreview, setChannelPreview] = useState(false)
   const [previewMode, setPreviewMode] = useState(() => storedPreview('previewMode', 'independent') === 'zoom' ? 'zoom' : 'independent')
-  const [previewHeight, setPreviewHeight] = useState(() => {
-    const height = Number(storedPreview('previewHeight', '1080'))
-    return [480, 720, 1080].includes(height) ? height : 1080
-  })
-  const [previewResolutions, setPreviewResolutions] = useState<number[]>([1080])
   const [videoSize, setVideoSize] = useState({ width: 0, height: 0 })
   const [focusedChannel, setFocusedChannel] = useState<number | null>(null)
   const [pictureBounds, setPictureBounds] = useState({ left: 0, top: 0, width: 0, height: 0 })
@@ -173,6 +169,10 @@ export default function LiveViewPage() {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const seekDraftsRef = useRef<Record<number, number>>({})
   const seekBusyRef = useRef(new Set<number>())
+  const playbackVersionRef = useRef(0)
+  const pendingFileControlsRef = useRef(new Set<number>())
+  const refreshFilePlaybackRef = useRef<(() => void) | null>(null)
+  const catchUpPreviewRef = useRef<((channels: number[]) => void) | null>(null)
   const fileTimelineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fileTimelinePointerRef = useRef<{ pointerId: number; channelId: number } | null>(null)
   const sideResizeRef = useRef<{
@@ -261,7 +261,6 @@ export default function LiveViewPage() {
   const fileTimelineEnabled = !!appName && rtspEnabled && !streamLoading && !streamErr
   const independentPreview = channelPreview && previewMode === 'independent'
   const streamChannel = independentPreview ? focusedChannel : null
-  const streamResolution = streamChannel === null ? 0 : previewResolutions.includes(previewHeight) ? previewHeight : 1080
   const focusedTile = videoLayout?.tiles.find(tile => tile.channelId === focusedChannel) ?? null
   const viewTiles = useMemo(() => focusedTile
     ? [{ ...focusedTile, left: 0, top: 0, width: 1, height: 1 }]
@@ -291,8 +290,6 @@ export default function LiveViewPage() {
         if (response.ok) {
           const capabilities = await response.json()
           supported = capabilities.channel_preview === true
-          if (!disposed) setPreviewResolutions(Array.isArray(capabilities.preview_resolutions)
-            ? capabilities.preview_resolutions.filter((height: number) => [480, 720, 1080].includes(height)) : [1080])
         }
       } catch { /* The control socket may still be starting. */ }
       if (disposed) return
@@ -629,19 +626,50 @@ export default function LiveViewPage() {
     const requested = seekDraftsRef.current[owner]
     if (!fileTimelineEnabled || requested === undefined || seekBusyRef.current.has(owner)) return
     seekBusyRef.current.add(owner)
+    playbackVersionRef.current += 1
+    pendingFileControlsRef.current.add(owner)
     setSeekBusy(previous => ({ ...previous, [owner]: true }))
     try {
       const response = await seekFilePlayback(appName, owner, requested)
+      catchUpPreviewRef.current?.(source.channel_ids)
       clearSeekDraft(owner)
       setFileSources(previous => previous.map(item => item.owner_channel_id === owner
-        ? { ...item, position_ms: response.position_ms, ended: false, playing: true }
+        ? { ...item, position_ms: response.position_ms, ended: false, busy: true, error: '' }
         : item))
     } catch (error) {
+      pendingFileControlsRef.current.delete(owner)
       clearSeekDraft(owner)
       showToast(`视频跳转失败：${errMsg(error)}`, 'err')
     } finally {
       seekBusyRef.current.delete(owner)
+      playbackVersionRef.current += 1
       setSeekBusy(previous => ({ ...previous, [owner]: false }))
+      refreshFilePlaybackRef.current?.()
+    }
+  }
+
+  const toggleFilePause = async (source: FilePlaybackSource) => {
+    const owner = source.owner_channel_id
+    if (source.busy || seekBusyRef.current.has(owner)) return
+    const paused = !(source.pause_requested ?? source.paused)
+    seekBusyRef.current.add(owner)
+    playbackVersionRef.current += 1
+    pendingFileControlsRef.current.add(owner)
+    setSeekBusy(previous => ({ ...previous, [owner]: true }))
+    setFileSources(previous => previous.map(item => item.owner_channel_id === owner
+      ? { ...item, pause_requested: paused, busy: true, error: '' } : item))
+    try {
+      await setFilePaused(appName, owner, paused)
+      catchUpPreviewRef.current?.(source.channel_ids)
+    } catch (error) {
+      pendingFileControlsRef.current.delete(owner)
+      setFileSources(previous => previous.map(item => item.owner_channel_id === owner ? source : item))
+      showToast(`文件播放控制失败：${errMsg(error)}`, 'err')
+    } finally {
+      seekBusyRef.current.delete(owner)
+      playbackVersionRef.current += 1
+      setSeekBusy(previous => ({ ...previous, [owner]: false }))
+      refreshFilePlaybackRef.current?.()
     }
   }
 
@@ -739,23 +767,43 @@ export default function LiveViewPage() {
     }
     let disposed = false
     let requestPending = false
+    let refreshRequested = false
+    let timer: ReturnType<typeof setTimeout> | undefined
     const loadPlayback = async () => {
-      if (requestPending) return
+      if (requestPending) { refreshRequested = true; return }
+      clearTimeout(timer)
       requestPending = true
+      refreshRequested = false
+      const version = playbackVersionRef.current
+      let busy = false
       try {
         const response = await fetchFilePlayback(appName)
-        if (!disposed) setFileSources(Array.isArray(response.sources) ? response.sources : [])
+        if (!disposed && version === playbackVersionRef.current && seekBusyRef.current.size === 0) {
+          const sources = Array.isArray(response.sources) ? response.sources : []
+          for (const source of sources) {
+            if (!source.busy && pendingFileControlsRef.current.delete(source.owner_channel_id)) {
+              catchUpPreviewRef.current?.(source.channel_ids)
+            }
+          }
+          busy = sources.some(source => source.busy)
+          setFileSources(sources)
+        }
       } catch {
-        if (!disposed) setFileSources([])
+        // 短暂网络错误不撤掉正在操作的时间条，下次查询再校正。
       } finally {
         requestPending = false
+        if (!disposed) timer = setTimeout(loadPlayback, refreshRequested ? 0
+          : busy || pendingFileControlsRef.current.size > 0 ? 50 : 750)
       }
     }
-    loadPlayback()
-    const timer = setInterval(loadPlayback, 750)
+    refreshFilePlaybackRef.current = () => { void loadPlayback() }
+    void loadPlayback()
     return () => {
       disposed = true
-      clearInterval(timer)
+      clearTimeout(timer)
+      playbackVersionRef.current += 1
+      pendingFileControlsRef.current.clear()
+      refreshFilePlaybackRef.current = null
     }
   }, [appName, fileTimelineEnabled])
 
@@ -807,6 +855,7 @@ export default function LiveViewPage() {
     let playbackStarted = false
     const playbackBuffer = new LivePlaybackBuffer()
     let lastTrimAt = 0
+    let controlCatchup = false
     video.playbackRate = 1
     const syncLivePosition = () => {
       if (!sourceBuffer || disposed || video.seeking || sourceBuffer.updating || !sourceBuffer.buffered.length) return
@@ -817,13 +866,23 @@ export default function LiveViewPage() {
         if (!playbackBuffer.resume(end - video.currentTime)) return
         resumed = true
       }
-      const target = livePlaybackTarget(video.currentTime, sourceBuffer.buffered.start(last), end, playbackStarted, playbackBuffer.targetSeconds)
+      const start = sourceBuffer.buffered.start(last)
+      // 文件操作后主动追到最新可解码画面，避免把操作前的缓冲继续播放完。
+      const target = controlCatchup && end - video.currentTime > playbackBuffer.targetSeconds + 0.05
+        ? Math.max(start, end - playbackBuffer.targetSeconds)
+        : livePlaybackTarget(video.currentTime, start, end, playbackStarted, playbackBuffer.targetSeconds)
+      controlCatchup = false
       if (target !== null) {
         video.currentTime = target
         if (!playbackStarted) void video.play().catch(() => {})
       }
       video.playbackRate = playbackStarted ? livePlaybackRate(video.currentTime, end, playbackBuffer.targetSeconds) : 1
       if (resumed) void video.play().catch(() => {})
+    }
+    catchUpPreviewRef.current = channels => {
+      if (streamChannel !== null && !channels.includes(streamChannel)) return
+      controlCatchup = true
+      syncLivePosition()
     }
 
     const append = async (bytes: Uint8Array) => {
@@ -860,7 +919,6 @@ export default function LiveViewPage() {
       const query = new URLSearchParams({ t: String(streamNonce), client_id: streamClientId, ...streamRetryDiagnosticsRef.current })
       if (streamChannel !== null) {
         query.set('channel_id', String(streamChannel))
-        query.set('preview_height', String(streamResolution))
       }
       const response = await fetch(`${streamUrl(appName)}?${query}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
@@ -1002,6 +1060,7 @@ export default function LiveViewPage() {
 
     return () => {
       disposed = true
+      catchUpPreviewRef.current = null
       clearTimeout(startupTimer)
       clearInterval(playbackWatchdog)
       if (frameRequest !== null && typeof video.cancelVideoFrameCallback === 'function') video.cancelVideoFrameCallback(frameRequest)
@@ -1019,7 +1078,7 @@ export default function LiveViewPage() {
       video.load()
       URL.revokeObjectURL(objectUrl)
     }
-  }, [appName, rtspEnabled, streamNonce, streamErr, streamChannel, streamResolution]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [appName, rtspEnabled, streamNonce, streamErr, streamChannel]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => () => {
     clearStreamRetry()
@@ -1087,15 +1146,10 @@ export default function LiveViewPage() {
                 <option value="zoom">直接放大</option>
                 <option value="independent">独立显示</option>
               </select></label>
-              {previewMode === 'independent' && <label>预览分辨率<select aria-label="独立预览分辨率" value={previewResolutions.includes(previewHeight) ? previewHeight : 1080}
-                disabled={!channelPreview} onChange={event => {setPreviewHeight(Number(event.target.value)); savePreview('previewHeight', event.target.value); setStreamErr(false); setStreamErrorDetail('')}}>
-                {[480, 720, 1080].map(height => <option key={height} value={height} disabled={!previewResolutions.includes(height)}>{height}p</option>)}
-              </select></label>}
               <span>{previewMode === 'independent' && !channelPreview ? '当前程序暂不支持独立预览，点击画面将直接放大。'
                 : focusedTile ? `正在查看视频通道 ${focusedTile.channelId}${independentPreview && videoSize.width ? ` · ${videoSize.width}×${videoSize.height}` : ''}，再次点击画面返回。`
                 : '点击任意视频画面查看，再次点击返回拼接。'}
-                {previewMode === 'independent' && channelPreview ? ' 保持原始比例，不超过源视频清晰度。' : ''}
-                {previewMode === 'independent' && channelPreview && previewResolutions.length === 1 ? ' 重启更新后的视觉程序可启用更多分辨率。' : ''}</span>
+                {previewMode === 'independent' && channelPreview ? ' 按视频源分辨率显示。' : ''}</span>
             </div>
             <div
               className="live-view-video-frame"
@@ -1121,7 +1175,7 @@ export default function LiveViewPage() {
                           width: pictureBounds.width, height: pictureBounds.height } : undefined}>
                       <video
                         ref={videoRef}
-                        key={`${appName}-${streamNonce}-${streamChannel ?? "grid"}-${streamResolution}`}
+                        key={`${appName}-${streamNonce}-${streamChannel ?? "grid"}`}
                         className="live-view-video"
                         style={{ ...cropStyle, visibility: streamLoading && !snapshotReady ? 'hidden' : undefined }}
                         muted
@@ -1213,7 +1267,8 @@ export default function LiveViewPage() {
                     const owner = source.owner_channel_id
                     const value = seekDrafts[owner] ?? source.position_ms
                     const duration = Math.max(0, source.duration_ms)
-                    const disabled = !source.available || !source.seekable || duration <= 0 || !!seekBusy[owner]
+                    const busy = source.busy || !!seekBusy[owner]
+                    const disabled = !source.available || !source.seekable || duration <= 0 || busy
                     const sharedChannels = source.channel_ids.filter(id => id !== channelId)
                     return (
                       <div
@@ -1241,28 +1296,44 @@ export default function LiveViewPage() {
                             通道 {channelId} · {sourceFileName(source.location)}
                             {sharedChannels.length > 0 ? ' · 共用进度' : ''}
                             {source.ended ? ' · 已播完' : ''}
+                            {source.paused ? ' · 已暂停' : ''}
                           </span>
                           <span className="live-view-file-time">
                             {formatPlaybackTime(value)} / {formatPlaybackTime(duration)}
                           </span>
                         </div>
-                        <input
-                          type="range"
-                          min={0}
-                          max={Math.max(1, duration)}
-                          step={100}
-                          value={Math.min(value, Math.max(1, duration))}
-                          disabled={disabled}
-                          aria-label={`通道 ${channelId} ${sourceFileName(source.location)} 播放进度`}
-                          onChange={event => setSeekDraft(owner, Number(event.target.value))}
-                          onPointerUp={() => { void commitSeek(source) }}
-                          onKeyUp={event => {
-                            if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
-                              void commitSeek(source)
-                            }
-                          }}
-                          onBlur={() => { void commitSeek(source) }}
-                        />
+                        {source.error && <div className="live-view-file-error" role="status">{source.error}</div>}
+                        <div className="live-view-file-controls">
+                          <button type="button" className="live-view-file-pause"
+                            aria-label={`通道 ${channelId} ${source.pause_requested ? '继续' : '暂停'}播放和分析`}
+                            title={source.pause_requested ? '继续播放和分析' : '暂停播放和分析'}
+                            aria-busy={!!busy}
+                            disabled={!source.available || source.ended || busy}
+                            onClick={() => { void toggleFilePause(source) }}>
+                            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                              {source.pause_requested
+                                ? <path d="M7 4.5v15L19 12Z" />
+                                : <><rect x="6" y="4" width="4" height="16" rx=".6" /><rect x="14" y="4" width="4" height="16" rx=".6" /></>}
+                            </svg>
+                          </button>
+                          <input
+                            type="range"
+                            min={0}
+                            max={Math.max(1, duration)}
+                            step={100}
+                            value={Math.min(value, Math.max(1, duration))}
+                            disabled={disabled}
+                            aria-label={`通道 ${channelId} ${sourceFileName(source.location)} 播放进度`}
+                            onChange={event => setSeekDraft(owner, Number(event.target.value))}
+                            onPointerUp={() => { void commitSeek(source) }}
+                            onKeyUp={event => {
+                              if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+                                void commitSeek(source)
+                              }
+                            }}
+                            onBlur={() => { void commitSeek(source) }}
+                          />
+                        </div>
                       </div>
                     )
                   })}

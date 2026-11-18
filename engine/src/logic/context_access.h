@@ -5,6 +5,11 @@
 /* Engine-only bindings. No allocation, copying or synchronization is added. */
 struct VisionContextAccess
 {
+    static uint64_t analysis_time(uint64_t steady_ms, int64_t video_ms)
+    {
+        // 业务常用 0 表示“尚未开始”；文件时钟从 1 起，时间差仍与视频完全一致。
+        return video_ms >= 0 ? static_cast<uint64_t>(video_ms) + 1 : steady_ms;
+    }
     static void bind_frames(ChannelContext &ctx, ChannelFrameGetter business, ChannelFrameGetter source, void *opaque)
     {
         ctx.business_frame_getter = business;

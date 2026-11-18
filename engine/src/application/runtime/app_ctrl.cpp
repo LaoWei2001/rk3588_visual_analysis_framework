@@ -12,7 +12,6 @@
 #include "vision/inference/npu_core_assignment.h"
 
 #include "application/config/config_registry.h"
-#include "application/runtime/pause_ctrl.h"
 #include "application/runtime/service_watchdog.h"
 #include "pipeline/frame_transform.h"
 #include "pipeline/pipeline_runtime.h"
@@ -922,7 +921,7 @@ int app_ctrl_get_performance_display(void)
 /*======================== 通道数据查询 ========================*/
 float app_ctrl_get_disp_fps(int chnId)
 {
-    if (!app_ctrl_has_channel(chnId) || pause_ctrl::is_paused())
+    if (!app_ctrl_has_channel(chnId))
         return 0.0f;
     pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
     float v = g_pCtrl->channels_state[chnId].preview_rate.value();
@@ -952,6 +951,8 @@ static void fill_channel_logic_snapshot_locked(int chnId, const ChannelState &st
     out->published_steady_ms = state.published_steady_ms;
     out->frame_steady_ms = state.frame_steady_ms;
     out->frame_unix_ms = state.frame_unix_ms;
+    out->file_paused = state.file_playback.pause_requested || state.file_playback.paused;
+    out->file_timeline = state.file_timeline;
     out->config_generation = state.published_config_generation;
     if (state.published_steady_ms != 0)
     {

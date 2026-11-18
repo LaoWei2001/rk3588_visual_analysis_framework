@@ -55,14 +55,19 @@ try
         int64_t result_frame_id = 0;
         uint64_t result_frame_steady_ms = 0;
         uint64_t result_frame_unix_ms = 0;
-        const int has_new = inference_take_results(chnId, current_results, lazy_frame, result_frame_id,
-                                                   result_frame_steady_ms, result_frame_unix_ms);
+        int64_t result_video_time_ms = -1;
+        std::shared_ptr<FrameActivity> activity;
+        const int has_new =
+            inference_take_results(chnId, current_results, lazy_frame, result_frame_id, result_frame_steady_ms,
+                                   result_frame_unix_ms, result_video_time_ms, activity);
         if (!has_new)
             continue;
 
         /* 组装与推理结果严格同帧的帧引用及元信息。 */
         ChannelRawFrame raw;
         raw.lazy_frame = std::move(lazy_frame);
+        raw.video_time_ms = result_video_time_ms;
+        raw.activity = std::move(activity);
         if (raw.lazy_frame)
         {
             raw.width = raw.lazy_frame->source_width();

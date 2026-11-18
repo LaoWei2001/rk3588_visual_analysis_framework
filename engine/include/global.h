@@ -262,8 +262,10 @@ struct GlobalContext
     /** 本全局 logic 实例配置，实例存活期间稳定。 */
     const GlobalLogicConfig *config = nullptr;
 
-    /** 本 tick 的单调时间、墙钟时间及距上个 tick 的真实间隔。字段名与 ChannelContext 一致。 */
+    /** 本次分析时间及间隔；依赖的文件暂停时，本全局逻辑等待且分析计时停止。
+     * real_time_ms 是持续前进的系统单调毫秒，用于实际硬件时长；unix_ms 用于日期。 */
     uint64_t timestamp_ms = 0;
+    uint64_t real_time_ms = 0;
     uint64_t unix_ms = 0;
     float dt_ms = 0.0f;
 

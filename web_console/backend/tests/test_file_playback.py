@@ -2,6 +2,9 @@ import asyncio
 import json
 import socket
 import threading
+import pytest
+from fastapi import HTTPException
+from pydantic import ValidationError
 
 from routers import file_playback
 
@@ -110,3 +113,34 @@ def test_status_fills_missing_duration_from_probe(tmp_path, monkeypatch):
     thread.join(timeout=2)
 
     assert result["sources"][0]["duration_ms"] == 123456
+
+
+@pytest.mark.parametrize('paused', [True, False])
+def test_pause_forwards_explicit_desired_state(tmp_path, monkeypatch, paused):
+    app_dir = _app(tmp_path)
+    (app_dir / 'run.playback.sock').touch()
+    monkeypatch.setattr(file_playback, 'APPS_ROOT', tmp_path)
+    monkeypatch.setattr(file_playback.pm, 'get_status', lambda _: {'status': 'running'})
+    received = []
+    def command(path, message):
+        received.append(message)
+        return {'ok': True, 'busy': True, 'pause_requested': paused}
+    monkeypatch.setattr(file_playback, '_socket_request', command)
+    result = asyncio.run(file_playback.pause_file_playback('demo', 2, file_playback.PauseRequest(paused=paused)))
+    assert received == [{'command': 'pause', 'channel_id': 2, 'paused': paused}]
+    assert result['busy'] is True
+
+
+def test_pause_rejects_invalid_boolean_and_propagates_native_error(tmp_path, monkeypatch):
+    for value in ('false', 1, None):
+        with pytest.raises(ValidationError):
+            file_playback.PauseRequest(paused=value)
+    app_dir = _app(tmp_path)
+    (app_dir / 'run.playback.sock').touch()
+    monkeypatch.setattr(file_playback, 'APPS_ROOT', tmp_path)
+    monkeypatch.setattr(file_playback.pm, 'get_status', lambda _: {'status': 'running'})
+    monkeypatch.setattr(file_playback, '_socket_request', lambda *_: {'ok': False, 'message': '只有视频文件支持暂停和跳转'})
+    with pytest.raises(HTTPException) as rejected:
+        asyncio.run(file_playback.pause_file_playback('demo', 0, file_playback.PauseRequest(paused=True)))
+    assert rejected.value.status_code == 409
+    assert rejected.value.detail == '只有视频文件支持暂停和跳转'

@@ -1,4 +1,5 @@
 #pragma once
+#include "common/frame_activity.h"
 #include "pipeline/frame_transform.h"
 #include <chrono>
 #include <config_types.h>
@@ -19,6 +20,8 @@ struct InferenceTask
     int64_t frame_seq;
     uint64_t frame_steady_ms;
     uint64_t frame_unix_ms;
+    int64_t video_time_ms = -1;
+    std::shared_ptr<FrameActivity> activity;
     std::shared_ptr<RgaImportedBuffer> src_buf;
     int srcW, srcH, srcFmt, srcStrH, srcStrV;
     InferenceRoiMode roi_mode = InferenceRoiMode::FullFrame;

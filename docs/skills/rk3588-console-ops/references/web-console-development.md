@@ -69,6 +69,7 @@ Logic 列表、参数、outputs、事件和 Action 来自程序包 `logics.json`
   相同流共用生产者，每个观众独立接收。同一 `client_id` 的新连接替换自己的旧连接。
 - 单路查看有本地裁剪和独立预览两种模式。`LiveViewPage.tsx` 查询 `channel-preview-v1` 能力；
   独立预览通过引擎控制 socket 获取、续租和释放通道流，不支持时回退本地裁剪。
+  每个通道按源视频尺寸输出，同一通道共用编码流；前后端不传递预览分辨率选项。
   本地裁剪复用 `videoTimelineLayout.ts` 的通道排序和 tile 规则；切换独立通道则需要改变视频连接。
 - 原始程序日志由 journald 保存；共享运行库 `log_buffer.py` 维护有界内存 tail 和订阅队列。
   HTTP 日志接口和 `/ws/logs/{name}` 使用该缓冲，不能把它当完整历史档案。

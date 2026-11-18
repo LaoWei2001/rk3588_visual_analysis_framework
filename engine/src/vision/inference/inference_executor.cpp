@@ -1,6 +1,5 @@
 /** Video scheduling and publication. Frame execution is shared with image sessions. */
 #include "application/runtime/app_ctrl.h"
-#include "application/runtime/pause_ctrl.h"
 #include "application/runtime/service_watchdog.h"
 #include "common/logging.h"
 #include "frame_executor.h"
@@ -58,8 +57,6 @@ void *inference_worker_thread(void *arg)
             pthread_mutex_unlock(&tq_ptr->mtx);
         }
 
-        if (pause_ctrl::is_paused())
-            continue;
         if (!g_inference.running || g_inference.chn_reload_stop[chnId])
             break;
 
@@ -114,6 +111,8 @@ void *inference_worker_thread(void *arg)
                     g_inference.channel_results[task.chnId].frame = task.frame;
                     g_inference.channel_results[task.chnId].frame_steady_ms = ts_ms;
                     g_inference.channel_results[task.chnId].frame_unix_ms = task.frame_unix_ms;
+                    g_inference.channel_results[task.chnId].video_time_ms = task.video_time_ms;
+                    g_inference.channel_results[task.chnId].activity = task.activity;
                     g_inference.channel_results[task.chnId].latest_seq = seq;
                     g_inference.channel_results[task.chnId].has_new = 1;
                     wrote_new = 1;

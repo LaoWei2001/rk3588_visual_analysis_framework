@@ -345,8 +345,10 @@ void remote_dataset_observe(ChannelContext &ctx, const std::shared_ptr<const App
     if (!task->enabled || expired(*task) ||
         (task->limit && task->saved + task->encoding + task->images.size() >= task->limit))
         return;
-    if (!ctx.infer_enabled || !ctx.inference_valid || !ctx.results || !ctx.timestamp_ms ||
-        ctx.timestamp_ms > steady_ms() || steady_ms() - ctx.timestamp_ms > task->gap)
+    const uint64_t received_ms = ctx.real_time_ms ? ctx.real_time_ms : ctx.timestamp_ms;
+    const uint64_t now_ms = steady_ms();
+    if (!ctx.infer_enabled || !ctx.inference_valid || !ctx.results || !received_ms || received_ms > now_ms ||
+        now_ms - received_ms > task->gap)
     {
         task->gate->reset();
         task->status = "等待有效推理结果";

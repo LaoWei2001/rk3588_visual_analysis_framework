@@ -226,6 +226,7 @@ struct DisplayQueue
     /* 由生产者在预览重新开始时置位，由 display_worker 随下一帧消费并清零。
      * FPS 状态仍只由 display_worker 修改，避免解码线程与显示线程并发写 ChannelState。 */
     bool reset_fps_pending = true;
+    bool refresh_pending = false; // 暂停状态改变时立即显示最终分析帧。
     DisplayTask task;      /* 元数据：6 个整数 */
     DisplayFramePool pool; /* 帧像素：三槽预分配缓冲 */
 };

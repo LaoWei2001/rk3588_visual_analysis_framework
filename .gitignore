@@ -29,6 +29,8 @@ playwright-report/
 /engine/sdk_standalone_tests/drawing/drawing-result.png
 /engine/sdk_standalone_tests/drawing-result.png
 /engine/sdk_standalone_tests/multi_stream/multi_stream
+/engine/sdk_standalone_tests/network_rtt/network_rtt
+/engine/sdk_standalone_tests/test/test
 /engine/sdk_standalone_tests/analysis/analysis
 /engine/sdk_standalone_tests/video_runtime/video_runtime
 /services/framework/gpio_state/build/

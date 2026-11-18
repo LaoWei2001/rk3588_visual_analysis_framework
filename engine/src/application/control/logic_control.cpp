@@ -175,10 +175,8 @@ void handle_client(int client_fd)
     if (strcmp(scope, "preview") == 0)
     {
         const cJSON *lease = cJSON_GetObjectItemCaseSensitive(root, "lease");
-        const cJSON *height = cJSON_GetObjectItemCaseSensitive(root, "preview_height");
         send_all(client_fd,
-                 rtsp_streamer_preview_control(action_name, channel_id, cJSON_IsString(lease) ? lease->valuestring : "",
-                                               cJSON_IsNumber(height) ? height->valueint : 1080) +
+                 rtsp_streamer_preview_control(action_name, channel_id, cJSON_IsString(lease) ? lease->valuestring : "") +
                      "\n");
         cJSON_Delete(root);
         return;

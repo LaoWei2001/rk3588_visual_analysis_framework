@@ -37,8 +37,8 @@ RtspStreamer g_st;
 std::mutex g_channel_previews_mutex;
 // Serialize lifecycle operations without blocking per-frame map readers.
 std::mutex g_preview_operations_mutex;
-std::map<std::pair<int, int>, std::shared_ptr<RtspStreamer>> g_channel_previews;
-// Number of active resolution variants; decode callbacks never wait on the control lock to query it.
+std::map<int, std::shared_ptr<RtspStreamer>> g_channel_previews;
+// Decode callbacks never wait on the control lock to query client activity.
 std::array<std::atomic<int>, MAX_CHANNEL_NUM> g_channel_preview_active{};
 std::atomic<bool> g_preview_ready{false};
 GSource *g_preview_expiry_source = nullptr;
@@ -96,8 +96,8 @@ int rtsp_streamer_init(void)
         fprintf(stderr, "[RTSP] invalid disp size %dx%d, abort\n", g_st.width, g_st.height);
         return -1;
     }
-    /* MPP 硬件编码器要求宽高对齐到 16 (1080 这类非 16 对齐高度会吐绿)。
-     * 向上对齐, 源画面贴左上, 右/下补黑边。 */
+    /* 拼接流沿用已有的对齐画布尺寸；独立通道直接使用源视频尺寸。
+     * DMA 存储的行宽与可见画面尺寸分别处理。 */
     g_st.enc_w = (g_st.width + 15) & ~15;
     g_st.enc_h = (g_st.height + 15) & ~15;
     if (g_st.enc_w != g_st.width || g_st.enc_h != g_st.height)

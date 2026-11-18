@@ -28,6 +28,8 @@
 
 #include "display_worker.h"
 #include "application/runtime/service_watchdog.h"
+#include "common/pthread_lock.h"
+#include "frame_transform.h"
 #include "media/display/display_render.h"
 #include "media/rtsp/rtsp_streamer.h"
 #include "pipeline_internal.h"
@@ -40,6 +42,8 @@ extern "C" void *display_worker_thread(void *arg)
     const int chnId = (int)(intptr_t)arg;
     DisplayQueue &dq = g_display_queues[chnId];
     bool had_performance_display = false;
+    std::shared_ptr<LazyVideoFrame> frozen_frame;
+    cv::Mat frozen_image;
     service_watchdog::Progress watchdog_progress("display", chnId);
 
     while (g_pCtrl && g_pCtrl->isRunning)
@@ -58,7 +62,7 @@ extern "C" void *display_worker_thread(void *arg)
                 deadline.tv_nsec -= 1000000000;
             }
             pthread_mutex_lock(&dq.mtx);
-            while (!dq.has_task && g_pCtrl && g_pCtrl->isRunning)
+            while (!dq.has_task && !dq.refresh_pending && g_pCtrl && g_pCtrl->isRunning)
             {
                 if (pthread_cond_timedwait(&dq.cv, &dq.mtx, &deadline) == ETIMEDOUT)
                     break;
@@ -69,6 +73,7 @@ extern "C" void *display_worker_thread(void *arg)
                 break;
             }
             has_frame = dq.has_task;
+            dq.refresh_pending = false;
             if (has_frame)
             {
                 task = dq.task;
@@ -82,6 +87,35 @@ extern "C" void *display_worker_thread(void *arg)
 
         service_watchdog::Scope watchdog_scope(watchdog_progress);
         const bool show_perf = app_ctrl_get_performance_display();
+        bool paused = false;
+        std::shared_ptr<LazyVideoFrame> final_frame;
+        {
+            PthreadLock lock(g_pCtrl->chn_mtx[chnId]);
+            paused = g_pCtrl->channels_state[chnId].file_playback.paused;
+            if (paused)
+                final_frame = g_pCtrl->channels_state[chnId].last_lazy_frame;
+        }
+        if (paused && final_frame)
+        {
+            if (frozen_frame != final_frame)
+            {
+                frozen_frame = final_frame;
+                const auto *source = frozen_frame->source_frame();
+                frozen_image = source ? source->clone() : cv::Mat{};
+            }
+            if (!frozen_image.empty())
+            {
+                rtsp_streamer_submit_channel_frame(chnId, frozen_image.data, RK_FORMAT_BGR_888, frozen_image.cols,
+                                                   frozen_image.rows, frozen_image.cols, frozen_image.rows);
+                if (app_ctrl_get_enable_disp() || rtsp_streamer_has_active_client())
+                    display_commit_frame(chnId, frozen_image.data, RK_FORMAT_BGR_888, frozen_image.cols,
+                                         frozen_image.rows, frozen_image.cols, frozen_image.rows);
+                g_pCtrl->channels_state[chnId].preview_rate.reset();
+            }
+            continue;
+        }
+        frozen_frame.reset();
+        frozen_image.release();
         if (!has_frame)
         {
             const bool consumer_active =

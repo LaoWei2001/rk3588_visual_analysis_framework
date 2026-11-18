@@ -37,6 +37,7 @@ struct DmaFrameSlot
     int fd{-1};
     void *mapped{MAP_FAILED};
     size_t size{0};
+    int stride_w{0}, stride_h{0}; // 内存行宽、行数；不改变视频可见尺寸。
     std::shared_ptr<RgaImportedBuffer> rga;
     std::atomic<bool> in_use{false};
     ~DmaFrameSlot();

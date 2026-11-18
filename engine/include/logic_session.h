@@ -22,10 +22,15 @@ struct LogicFrame
     std::vector<AlgoResult> *results = nullptr;
     const std::vector<RoiZone> *rois = nullptr; // nullptr 使用 options.channel.roi_zones
     int64_t frame_id = -1;                      // -1 由 session 递增
-    uint64_t timestamp_ms = 0;                  // 由调用方控制，可直接快进模拟时间
+    uint64_t timestamp_ms = 0; // 由调用方提供现实单调毫秒；未给 video_time_ms 时也作为分析时间
     uint64_t unix_ms = 0;
     bool inference_valid = true; // 接真实推理时传 FrameInferenceResult::succeeded()；空有效结果仍为 true
     bool inference_enabled = true; // 与 channel.infer_enable 同时满足才开启
+    /** 当前帧在文件中的毫秒位置；-1 表示未提供。原样交给 ctx->video_time_ms。
+     * 离线测试可自行填写，例如 frame.video_time_ms = 2000 表示视频第 2 秒。
+     * 提供后，ctx->timestamp_ms/dt_ms 和结果时间自动按视频计算；倒退时重置业务状态。
+     * 不会自动从图像或 timestamp_ms 推算。 */
+    int64_t video_time_ms = -1;
 };
 
 struct LogicSessionOptions

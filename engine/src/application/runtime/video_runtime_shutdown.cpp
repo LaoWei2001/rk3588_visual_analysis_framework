@@ -3,7 +3,6 @@
 #include "application/control/file_playback_control.h"
 #include "application/control/logic_control.h"
 #include "application/runtime/app_ctrl.h"
-#include "application/runtime/pause_ctrl.h"
 #include "application/runtime/runtime_status.h"
 #include "application/runtime/service_watchdog.h"
 #include "application/runtime/shutdown_status.h"
@@ -28,7 +27,6 @@ int VideoRuntime::Impl::shutdown(int exit_code)
     shutdown_status_stage("stop_requested");
     if (ctrl_initialized)
         app_ctrl_request_stop();
-    pause_ctrl::resume_all();
     shutdown_status_stage("control_connections");
     logic_control_deinit();
     file_playback_control_deinit();

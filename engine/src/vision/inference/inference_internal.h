@@ -41,6 +41,8 @@ struct InferenceChannelResult
     std::shared_ptr<LazyVideoFrame> frame;
     uint64_t frame_steady_ms{0};
     uint64_t frame_unix_ms{0};
+    int64_t video_time_ms{-1};
+    std::shared_ptr<FrameActivity> activity;
     pthread_mutex_t mtx;
     int64_t latest_seq{0};
     int has_new{0};

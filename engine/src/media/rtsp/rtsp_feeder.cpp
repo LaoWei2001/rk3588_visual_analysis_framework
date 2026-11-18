@@ -43,6 +43,8 @@ void set_encoder_int_if_supported(GstElement *encoder, const char *property, int
         g_value_set_int64(&typed_value, value);
     else if (G_VALUE_HOLDS_UINT64(&typed_value))
         g_value_set_uint64(&typed_value, static_cast<guint64>(std::max(0, value)));
+    else if (G_VALUE_HOLDS_ENUM(&typed_value))
+        g_value_set_enum(&typed_value, value);
     else
     {
         g_value_unset(&typed_value);
@@ -97,6 +99,11 @@ void on_media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, gpoin
         set_encoder_int_if_supported(encoder, "gop", std::max(1, state.fps));
         set_encoder_int_if_supported(encoder, "key-int-max", std::max(1, state.fps));
         set_encoder_int_if_supported(encoder, "bps", std::max(1, state.bitrate) * 1000);
+        if (state.channel_id >= 0)
+        {
+            const int64_t blocks = int64_t((state.enc_w + 15) / 16) * ((state.enc_h + 15) / 16);
+            set_encoder_int_if_supported(encoder, "level", blocks > 8192 || blocks * state.fps > 245760 ? 51 : 40);
+        }
         gst_object_unref(encoder);
     }
 
@@ -243,8 +250,8 @@ void *rtsp_feeder_thread(void *arg)
                 bool frame_ready = output && dma_pool->begin_rgb_write();
                 if (frame_ready)
                 {
-                    frame_ready = copy_rgb(static_cast<unsigned char *>(dma_pool->rgb_source->mapped), dma_pool->src_w,
-                                           dma_pool->src_h);
+                    frame_ready = copy_rgb(static_cast<unsigned char *>(dma_pool->rgb_source->mapped),
+                                           dma_pool->rgb_source->stride_w, dma_pool->rgb_source->stride_h);
                     if (!dma_pool->end_rgb_write())
                         frame_ready = false;
                 }
@@ -322,9 +329,7 @@ std::string build_launch_string(RtspStreamer &state)
         use_hw = hw_available;
     if (use_hw)
     {
-        state.dma_pool =
-            DmaFramePool::create(state.channel_id >= 0 ? state.enc_w : state.width,
-                                 state.channel_id >= 0 ? state.enc_h : state.height, state.enc_w, state.enc_h);
+        state.dma_pool = DmaFramePool::create(state.width, state.height, state.enc_w, state.enc_h);
         if (!state.dma_pool)
         {
             if (state.channel_id >= 0)

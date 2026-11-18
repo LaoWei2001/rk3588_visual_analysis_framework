@@ -57,6 +57,5 @@ extern "C"
 int rtsp_streamer_has_channel_client(int channel_id);
 void rtsp_streamer_submit_channel_frame(int channel_id, const void *data, int format, int width, int height,
                                         int horizontal_stride, int vertical_stride);
-std::string rtsp_streamer_preview_control(const char *action, int channel_id, const char *lease,
-                                          int preview_height = 1080);
+std::string rtsp_streamer_preview_control(const char *action, int channel_id, const char *lease);
 #endif

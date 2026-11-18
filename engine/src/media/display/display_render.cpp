@@ -18,7 +18,6 @@
 
 #include "display_render.h"
 #include "application/runtime/app_ctrl.h"
-#include "application/runtime/pause_ctrl.h"
 #include "display.h"
 #include "pipeline/frame_transform.h"
 #include "pipeline/image_convert.h"
@@ -233,9 +232,12 @@ void display_refresh_channel_overlays(int chnId)
     params.show_network_rtt = channel && channel->stream.src_type == "rtsp";
     pthread_mutex_lock(&g_pCtrl->chn_mtx[chnId]);
     params.network_rtt_ms = cs.network_rtt_ms;
+    if (cs.file_playback.paused)
+    {
+        params.disp_fps = 0.0f;
+        params.infer_fps = 0.0f;
+    }
     pthread_mutex_unlock(&g_pCtrl->chn_mtx[chnId]);
-    if (pause_ctrl::is_paused())
-        params.disp_fps = params.infer_fps = 0.0f;
     if (show_perf == cache.visible &&
         (!show_perf || (params.disp_fps == cache.render_fps && params.infer_fps == cache.infer_fps &&
                         params.show_network_rtt == cache.show_network_rtt &&

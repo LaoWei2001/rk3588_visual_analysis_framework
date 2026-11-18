@@ -65,7 +65,18 @@ void rtsp_detail::expire_channel_previews_locked()
                     lease = leases.erase(lease);
                 else
                     ++lease;
-            if (leases.empty() || !app_ctrl_has_channel(it->second->channel_id))
+            const auto &state = *it->second;
+            bool size_changed = false;
+            if (app_ctrl_has_channel(state.channel_id))
+            {
+                pthread_mutex_lock(&g_pCtrl->chn_mtx[state.channel_id]);
+                const auto &channel = g_pCtrl->channels_state[state.channel_id];
+                size_changed = channel.src_w_now > 0 && channel.src_h_now > 0 &&
+                               (channel.src_w_now != state.width || channel.src_h_now != state.height);
+                pthread_mutex_unlock(&g_pCtrl->chn_mtx[state.channel_id]);
+            }
+            // 源视频切换尺寸后重建编码流，网页重连即可取得新的原始尺寸。
+            if (leases.empty() || !app_ctrl_has_channel(state.channel_id) || size_changed)
             {
                 retired.push_back(it->second);
                 it = g_channel_previews.erase(it);
@@ -109,14 +120,14 @@ void rtsp_streamer_submit_channel_frame(int channel_id, const void *data, int fo
         bytes = pixels * 3;
     if (!bytes || bytes > 64 * 1024 * 1024)
         return;
-    std::vector<std::shared_ptr<RtspStreamer>> states;
+    std::shared_ptr<RtspStreamer> state;
     {
         std::lock_guard<std::mutex> lock(g_channel_previews_mutex);
-        for (const auto &entry : g_channel_previews)
-            if (entry.second->channel_id == channel_id && entry.second->preview_client_active.load())
-                states.push_back(entry.second);
+        const auto found = g_channel_previews.find(channel_id);
+        if (found != g_channel_previews.end() && found->second->preview_client_active.load())
+            state = found->second;
     }
-    if (states.empty())
+    if (!state || state->width != width || state->height != height)
         return;
     try
     {
@@ -130,7 +141,6 @@ void rtsp_streamer_submit_channel_frame(int channel_id, const void *data, int fo
         input->stride_h = vertical_stride;
         input->bytes.resize(static_cast<size_t>(bytes));
         memcpy(input->bytes.data(), data, input->bytes.size());
-        for (const auto &state : states)
         {
             std::lock_guard<std::mutex> lock(state->frame_mutex);
             if (!state->retired.load())
@@ -153,17 +163,11 @@ std::string rtsp_detail::preview_reply(bool ok, const char *message, const RtspS
     cJSON_AddStringToObject(root, "message", message);
     cJSON_AddBoolToObject(root, "supported", supported);
     cJSON_AddNumberToObject(root, "max_channels", 4);
-    cJSON_AddNumberToObject(root, "max_width", 1920);
-    cJSON_AddNumberToObject(root, "max_height", 1080);
-    const int resolutions[] = {480, 720, 1080};
-    cJSON_AddItemToObject(root, "preview_resolutions", cJSON_CreateIntArray(resolutions, 3));
     if (state)
     {
         cJSON_AddNumberToObject(root, "channel_id", state->channel_id);
         cJSON_AddNumberToObject(root, "width", state->enc_w);
         cJSON_AddNumberToObject(root, "height", state->enc_h);
-        cJSON_AddNumberToObject(root, "content_width", state->width);
-        cJSON_AddNumberToObject(root, "content_height", state->height);
         cJSON_AddStringToObject(root, "path", state->path.c_str());
         cJSON_AddNumberToObject(root, "port", state->port);
     }
@@ -175,7 +179,7 @@ std::string rtsp_detail::preview_reply(bool ok, const char *message, const RtspS
     return result;
 }
 
-std::string rtsp_streamer_preview_control(const char *action, int channel_id, const char *lease, int preview_height)
+std::string rtsp_streamer_preview_control(const char *action, int channel_id, const char *lease)
 {
     std::lock_guard<std::mutex> operation(g_preview_operations_mutex);
     if (!action)
@@ -192,10 +196,7 @@ std::string rtsp_streamer_preview_control(const char *action, int channel_id, co
         return rtsp_detail::preview_reply(false, "RTSP 预览尚未就绪");
     if (!lease || !*lease || strlen(lease) > 64)
         return rtsp_detail::preview_reply(false, "Invalid preview lease");
-    if (preview_height != 480 && preview_height != 720 && preview_height != 1080)
-        return rtsp_detail::preview_reply(false, "预览分辨率仅支持 480p、720p、1080p");
-    const auto key = std::make_pair(channel_id, preview_height);
-    auto found = g_channel_previews.find(key);
+    auto found = g_channel_previews.find(channel_id);
     if (strcmp(action, "release") == 0)
     {
         if (found != g_channel_previews.end())
@@ -212,7 +213,7 @@ std::string rtsp_streamer_preview_control(const char *action, int channel_id, co
     if (!app_ctrl_has_channel(channel_id))
         return rtsp_detail::preview_reply(false, "未知视频通道");
     rtsp_detail::expire_channel_previews_locked();
-    found = g_channel_previews.find(key);
+    found = g_channel_previews.find(channel_id);
     if (found == g_channel_previews.end())
     {
         if (g_channel_previews.size() >= 4)
@@ -230,17 +231,13 @@ std::string rtsp_streamer_preview_control(const char *action, int channel_id, co
             state = std::make_shared<RtspStreamer>();
             state->channel_id = channel_id;
             state->port = g_st.port;
-            state->path = g_st.path + "/channel/" + std::to_string(channel_id) + "/" + std::to_string(preview_height);
+            state->path = g_st.path + "/channel/" + std::to_string(channel_id);
             state->fps = constants::PREVIEW_MAX_FPS;
             state->bitrate = 6000;
             state->encoder = "hw";
             state->codec = "h264";
-            const double scale =
-                std::min(1.0, std::min((preview_height * 16.0 / 9.0) / width, double(preview_height) / height));
-            state->width = std::max(16, int(width * scale) / 2 * 2);
-            state->height = std::max(16, int(height * scale) / 2 * 2);
-            state->enc_w = (state->width + 15) & ~15;
-            state->enc_h = (state->height + 15) & ~15;
+            state->width = state->enc_w = width;
+            state->height = state->enc_h = height;
             const auto launch = build_launch_string(*state);
             if (launch.empty())
                 return rtsp_detail::preview_reply(false, "MPP 高清编码或 DMA 缓冲区暂不可用");
@@ -259,7 +256,7 @@ std::string rtsp_streamer_preview_control(const char *action, int channel_id, co
             state->feeder_running = true;
             {
                 std::lock_guard<std::mutex> lock(g_channel_previews_mutex);
-                found = g_channel_previews.emplace(key, state).first;
+                found = g_channel_previews.emplace(channel_id, state).first;
             }
         }
         catch (const std::exception &error)

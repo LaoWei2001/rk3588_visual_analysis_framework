@@ -247,40 +247,48 @@ def test_cancelled_waiter_preserves_lock_for_other_waiters(monkeypatch):
     asyncio.run(exercise())
 
 
-@pytest.mark.parametrize('height', [480, 720, 1080])
-def test_independent_resolution_acquire_and_release(tmp_path, monkeypatch, mux, height):
+def test_independent_source_preview_acquire_and_release(tmp_path, monkeypatch, mux):
     (tmp_path / 'demo').mkdir()
     monkeypatch.setattr(stream, 'APPS_ROOT', tmp_path)
     monkeypatch.setattr(stream.shutil, 'which', lambda _: '/usr/bin/ffmpeg')
     calls = []
-    async def command(name, action, channel_id=-1, lease='', preview_height=1080):
-        calls.append((name, action, channel_id, lease, preview_height))
-        return {'protocol':'channel-preview-v1', 'path':f'/live/channel/{channel_id}/{preview_height}', 'port':8554}
+    async def command(name, action, channel_id=-1, lease=''):
+        calls.append((name, action, channel_id, lease))
+        return {'protocol':'channel-preview-v1', 'path':f'/live/channel/{channel_id}', 'port':8554}
     monkeypatch.setattr(stream, '_preview_command', command)
     async def exercise():
         request = Request({'type':'http', 'query_string':b'', 'headers':[]})
-        response = await stream.stream_app('demo', request, channel_id=2, preview_height=height)
+        response = await stream.stream_app('demo', request, channel_id=2)
         iterator = response.body_iterator
         assert await iterator.__anext__() == INIT
-        assert any(f'/channel/2/{height}' in key[1] for key in stream._stream_pool.sources)
+        assert any(key[1] == 'rtsp://127.0.0.1:8554/live/channel/2' for key in stream._stream_pool.sources)
         await iterator.aclose()
         await asyncio.sleep(0)
         assert calls[0][1:3] == ('acquire', 2)
         assert calls[-1][1:3] == ('release', 2)
-        assert calls[-1][3:] == calls[0][3:] == (calls[0][3], height)
+        assert calls[-1][3] == calls[0][3] != ''
         await stream._stream_pool.shutdown()
     asyncio.run(exercise())
 
 
-def test_resolution_validation_and_capability_compatibility(tmp_path, monkeypatch):
-    from fastapi import HTTPException
+@pytest.mark.parametrize('supported', [True, False])
+def test_preview_capability(tmp_path, monkeypatch, supported):
     (tmp_path / 'demo').mkdir()
     monkeypatch.setattr(stream, 'APPS_ROOT', tmp_path)
-    monkeypatch.setattr(stream.shutil, 'which', lambda _: '/usr/bin/ffmpeg')
-    async def command(*args): return {'protocol':'channel-preview-v1', 'supported':True}
+    async def command(*args): return {'protocol':'channel-preview-v1', 'supported':supported}
     monkeypatch.setattr(stream, '_preview_command', command)
-    request = Request({'type':'http', 'query_string':b'', 'headers':[]})
-    with pytest.raises(HTTPException) as error:
-        asyncio.run(stream.stream_app('demo', request, channel_id=2, preview_height=600))
-    assert error.value.status_code == 422
-    assert asyncio.run(stream.stream_capabilities('demo')) == {'channel_preview':True, 'preview_resolutions':[1080]}
+    assert asyncio.run(stream.stream_capabilities('demo')) == {'channel_preview':supported}
+
+
+def test_preview_control_only_sends_channel_and_lease(tmp_path, monkeypatch):
+    (tmp_path / 'demo').mkdir()
+    monkeypatch.setattr(stream, 'APPS_ROOT', tmp_path)
+    calls = []
+    def send(path, command):
+        calls.append((path, command))
+        return {'ok': True}
+    monkeypatch.setattr(stream, 'send_action', send)
+    asyncio.run(stream._preview_command('demo', 'acquire', 2, 'viewer'))
+    assert calls == [(tmp_path / 'demo/run.control.sock', {
+        'scope': 'preview', 'action': 'acquire', 'channel_id': 2, 'lease': 'viewer',
+    })]

@@ -1,7 +1,6 @@
 // RK3588 板端绘制微基准：使用真实 RGA 和显示代码，不运行采集、推理或 RTSP。
 // 配置/推理 FPS 查询为固定桩；输出 JSON 行，耗时不代表完整视频管线。
 #include "application/runtime/app_ctrl.h"
-#include "application/runtime/pause_ctrl.h"
 #include "media/display/display_render.h"
 #include "pipeline/frame_transform.h"
 #include <algorithm>
@@ -76,7 +75,6 @@ int main(int argc, char **argv)
     g_pCtrl->business_width = 640;
     g_pCtrl->business_height = 640;
     runtime->config.channels.resize(4);
-    pause_ctrl::init(true);
     cv::Mat front(1280, 1920, CV_8UC3, cv::Scalar(0));
     char *front_data = reinterpret_cast<char *>(front.data);
     g_pCtrl->pDispBuffer = &front_data;

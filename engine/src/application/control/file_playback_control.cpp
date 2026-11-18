@@ -16,8 +16,10 @@
 #include <unistd.h>
 
 #include "application/runtime/app_ctrl.h"
-#include "media/capture/decode_channel.h"
+#include "common/pthread_lock.h"
+#include <cmath>
 #include <json.h>
+#include <limits>
 
 namespace
 {
@@ -27,27 +29,6 @@ std::thread g_server_thread;
 int g_server_fd = -1;
 ControlConnection g_connection;
 std::string g_socket_path;
-
-class CapturerGuard
-{
-  public:
-    CapturerGuard()
-    {
-        if (g_pCtrl)
-        {
-            pthread_mutex_lock(&g_pCtrl->capturer_mtx);
-            locked_ = true;
-        }
-    }
-    ~CapturerGuard()
-    {
-        if (locked_)
-            pthread_mutex_unlock(&g_pCtrl->capturer_mtx);
-    }
-
-  private:
-    bool locked_ = false;
-};
 
 std::string default_socket_path()
 {
@@ -100,61 +81,50 @@ cJSON *status_response()
     if (!g_pCtrl)
         return root;
 
-    CapturerGuard guard;
-    for (int owner = 0; owner < APP_CTRL_MAX_CAPTURERS; ++owner)
+    for (const auto &status : file_playback_status())
     {
-        DecChannel *capturer = g_pCtrl->capturers[owner];
-        if (!capturer || !capturer->isFileSource())
-            continue;
-
-        FilePlaybackStatus status;
-        capturer->queryFilePlayback(status);
         cJSON *item = cJSON_CreateObject();
-        cJSON_AddNumberToObject(item, "owner_channel_id", capturer->channelId());
+        cJSON_AddNumberToObject(item, "owner_channel_id", status.channel_id);
         cJSON *channels = cJSON_AddArrayToObject(item, "channel_ids");
-        for (int channel_id : capturer->channelIds())
-            cJSON_AddItemToArray(channels, cJSON_CreateNumber(channel_id));
-        cJSON_AddStringToObject(item, "location", capturer->sourceLocation().c_str());
-        cJSON_AddBoolToObject(item, "available", status.available ? 1 : 0);
-        cJSON_AddBoolToObject(item, "seekable", status.seekable ? 1 : 0);
-        cJSON_AddBoolToObject(item, "playing", status.playing ? 1 : 0);
-        cJSON_AddBoolToObject(item, "ended", capturer->isFileEos() ? 1 : 0);
+        cJSON_AddItemToArray(channels, cJSON_CreateNumber(status.channel_id));
+        cJSON_AddStringToObject(item, "location", status.location.c_str());
+        cJSON_AddBoolToObject(item, "available", status.available);
+        cJSON_AddBoolToObject(item, "seekable", status.seekable);
+        cJSON_AddBoolToObject(item, "playing", status.playing);
+        cJSON_AddBoolToObject(item, "paused", status.paused);
+        cJSON_AddBoolToObject(item, "pause_requested", status.pause_requested);
+        cJSON_AddBoolToObject(item, "busy", status.busy);
+        cJSON_AddBoolToObject(item, "ended", status.ended);
         cJSON_AddNumberToObject(item, "position_ms", static_cast<double>(status.position_ms));
         cJSON_AddNumberToObject(item, "duration_ms", static_cast<double>(status.duration_ms));
+        cJSON_AddStringToObject(item, "error", status.error.c_str());
         cJSON_AddItemToArray(sources, item);
     }
     return root;
 }
 
-cJSON *seek_response(int channel_id, int64_t position_ms)
+cJSON *command_response(int channel_id, int64_t position_ms, const bool *paused)
 {
-    if (!g_pCtrl)
-        return error_response("runtime is not ready");
-    CapturerGuard guard;
-    DecChannel *target = nullptr;
-    for (int owner = 0; owner < APP_CTRL_MAX_CAPTURERS; ++owner)
-    {
-        DecChannel *capturer = g_pCtrl->capturers[owner];
-        if (capturer && capturer->isFileSource() && capturer->hasChannel(channel_id))
-        {
-            target = capturer;
-            break;
-        }
-    }
-    if (!target)
-        return error_response("local file source not found for channel");
-
-    int64_t actual_ms = 0;
     std::string error;
-    if (!target->seekFilePlayback(position_ms, actual_ms, error))
+    const bool accepted = paused ? file_playback_set_paused(channel_id, *paused, &error)
+                                 : file_playback_seek(channel_id, position_ms, &error);
+    if (!accepted)
         return error_response(error.c_str());
-
     cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", 1);
+    cJSON_AddBoolToObject(root, "ok", true);
     cJSON_AddNumberToObject(root, "channel_id", channel_id);
-    cJSON_AddNumberToObject(root, "position_ms", static_cast<double>(actual_ms));
-    cJSON_AddStringToObject(root, "message", "seek completed");
+    cJSON_AddBoolToObject(root, "busy", true);
+    if (paused)
+        cJSON_AddBoolToObject(root, "pause_requested", *paused);
+    else
+        cJSON_AddNumberToObject(root, "position_ms", static_cast<double>(position_ms));
     return root;
+}
+
+bool valid_channel(const cJSON *item)
+{
+    return cJSON_IsNumber(item) && std::isfinite(item->valuedouble) && item->valuedouble >= 0 &&
+           item->valuedouble < MAX_CHANNEL_NUM && std::floor(item->valuedouble) == item->valuedouble;
 }
 
 void handle_client(int client_fd)
@@ -184,10 +154,26 @@ void handle_client(int client_fd)
     {
         const cJSON *channel_item = cJSON_GetObjectItemCaseSensitive(request, "channel_id");
         const cJSON *position_item = cJSON_GetObjectItemCaseSensitive(request, "position_ms");
-        if (!cJSON_IsNumber(channel_item) || !cJSON_IsNumber(position_item) || position_item->valuedouble < 0)
+        if (!valid_channel(channel_item) || !cJSON_IsNumber(position_item) ||
+            !std::isfinite(position_item->valuedouble) || position_item->valuedouble < 0 ||
+            position_item->valuedouble > 9007199254740991.0 ||
+            std::floor(position_item->valuedouble) != position_item->valuedouble)
             response = error_response("seek requires channel_id and non-negative position_ms");
         else
-            response = seek_response(channel_item->valueint, static_cast<int64_t>(position_item->valuedouble));
+            response =
+                command_response(channel_item->valueint, static_cast<int64_t>(position_item->valuedouble), nullptr);
+    }
+    else if (std::strcmp(command, "pause") == 0)
+    {
+        const auto *channel = cJSON_GetObjectItemCaseSensitive(request, "channel_id");
+        const auto *value = cJSON_GetObjectItemCaseSensitive(request, "paused");
+        if (!valid_channel(channel) || !cJSON_IsBool(value))
+            response = error_response("pause requires channel_id and boolean paused");
+        else
+        {
+            const bool paused = cJSON_IsTrue(value);
+            response = command_response(channel->valueint, 0, &paused);
+        }
     }
     else
     {
@@ -224,6 +210,80 @@ void server_loop()
     }
 }
 } // namespace
+
+std::vector<vision::FilePlaybackStatus> file_playback_status()
+{
+    std::vector<vision::FilePlaybackStatus> statuses;
+    const auto runtime = app_ctrl_get_runtime_snapshot();
+    if (!g_pCtrl || !runtime)
+        return statuses;
+    for (const auto &channel : runtime->config.channels)
+    {
+        if (!channel.enable || channel.stream.src_type != "file")
+            continue;
+        PthreadLock lock(g_pCtrl->chn_mtx[channel.id]);
+        auto status = g_pCtrl->channels_state[channel.id].file_playback;
+        status.channel_id = channel.id;
+        status.location = channel.stream.url;
+        statuses.push_back(std::move(status));
+    }
+    return statuses;
+}
+
+static bool request_file_control(int channel_id, const bool *paused, int64_t position, std::string *error)
+{
+    if (error)
+        error->clear();
+    const auto fail = [&](const char *message) {
+        if (error)
+            *error = message;
+        return false;
+    };
+    if (!g_pCtrl || !g_pCtrl->isRunning || !app_ctrl_has_channel(channel_id))
+        return fail("视频通道未运行");
+    const auto runtime = app_ctrl_get_runtime_snapshot();
+    const auto *channel = app_ctrl_runtime_channel_config(runtime, channel_id);
+    if (!channel || channel->stream.src_type != "file")
+        return fail("只有视频文件支持暂停和跳转");
+    std::function<void()> wakeup;
+    {
+        PthreadLock lock(g_pCtrl->chn_mtx[channel_id]);
+        auto &state = g_pCtrl->channels_state[channel_id];
+        auto &status = state.file_playback;
+        if (!status.available)
+            return fail("文件播放尚未就绪");
+        if (paused)
+        {
+            if (status.ended)
+                return fail("文件已播放结束，请先跳转到需要的位置");
+            status.pause_requested = *paused;
+        }
+        else
+        {
+            if (position < 0 || position > INT64_MAX / 1000000 || !status.seekable)
+                return fail("文件不支持跳转或位置无效");
+            state.playback_seek_ms = position;
+        }
+        ++state.playback_request;
+        status.busy = true;
+        status.error.clear();
+        wakeup = state.playback_wakeup;
+    }
+    if (wakeup)
+        wakeup();
+    publication_signal_notify();
+    return true;
+}
+
+bool file_playback_set_paused(int channel_id, bool paused, std::string *error)
+{
+    return request_file_control(channel_id, &paused, 0, error);
+}
+
+bool file_playback_seek(int channel_id, int64_t position_ms, std::string *error)
+{
+    return request_file_control(channel_id, nullptr, position_ms, error);
+}
 
 int file_playback_control_init(void)
 {

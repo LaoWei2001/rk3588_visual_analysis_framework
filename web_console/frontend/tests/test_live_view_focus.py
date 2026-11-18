@@ -154,23 +154,78 @@ def test_file_timeline_and_recovery_preserve_focus(playback):
     assert state['requests'] == requests + 1
 
 
+def test_file_pause_resume_and_paused_seek_keep_preview_connected(playback, tmp_path):
+    page, _, state = playback
+    source = dict(owner_channel_id=9, channel_ids=[9], location='/test/sample.mp4',
+        available=True, seekable=True, playing=True, paused=False, pause_requested=False,
+        busy=False, ended=False, position_ms=1000, duration_ms=60000)
+    state['sources'] = [source]
+    requests = configure(page, state)
+    commands = []
+    def pause(route):
+        value = route.request.post_data_json['paused']
+        commands.append(value)
+        source.update(paused=value, pause_requested=value, playing=not value, busy=False)
+        route.fulfill(json={'ok': True, 'busy': True, 'pause_requested': value})
+    def seek(route):
+        source['position_ms'] = route.request.post_data_json['position_ms']
+        route.fulfill(json={'ok': True, 'busy': True, 'position_ms': source['position_ms']})
+    page.route('**/file-playback/9/pause', pause)
+    page.route('**/file-playback/9/seek', seek)
+    page.get_by_role('button', name='单独查看通道 9', exact=True).hover()
+    pause_button = page.get_by_role('button', name='通道 9 暂停播放和分析', exact=True)
+    pause_button.wait_for(state='visible')
+    button_box, slider_box = pause_button.bounding_box(), page.get_by_role('slider').bounding_box()
+    assert button_box['x'] + button_box['width'] <= slider_box['x']
+    assert abs(button_box['y'] + button_box['height']/2 - slider_box['y'] - slider_box['height']/2) < 2
+    assert pause_button.inner_text() == '' and pause_button.locator('svg rect').count() == 2
+    page.locator('.live-view-file-timeline').screenshot(path=str(tmp_path / 'file-controls.png'))
+    # 模拟已经积压的预览；文件操作应主动追到新画面，复用原来的连接。
+    page.evaluate('''() => {
+        const v = document.querySelector('video');
+        v.currentTime = v.buffered.end(v.buffered.length - 1) - .45;
+    }''')
+    page.wait_for_function('!document.querySelector("video").seeking')
+    pause_button.click()
+    resume = page.get_by_role('button', name='通道 9 继续播放和分析', exact=True)
+    from playwright.sync_api import expect
+    expect(resume).to_be_enabled(timeout=600)
+    assert resume.locator('svg path').count() == 1
+    # 浏览器也可能在点击前就自动追上；验证剩余延迟，而不是强制要求再跳一次。
+    page.wait_for_function('''() => {
+        const v = document.querySelector('video');
+        return !v.seeking && v.buffered.end(v.buffered.length - 1) - v.currentTime <= .35;
+    }''', timeout=1000)
+    expect(page.locator('.live-view-file-meta')).to_contain_text('已暂停')
+    page.get_by_role('slider').click()
+    expect(resume).to_be_enabled()
+    assert source['paused'] is True
+    resume.click()
+    expect(page.get_by_role('button', name='通道 9 暂停播放和分析', exact=True)).to_be_enabled()
+    assert commands == [True, False]
+    assert state['requests'] == requests
+    page.wait_for_function('document.querySelector("video") === originalVideo && !originalVideo.paused && !originalVideo.seeking', timeout=1500)
+    # 实时输入没有文件时间条，也不会出现暂停分析按钮。
+    page.get_by_role('button', name='单独查看通道 2', exact=True).hover()
+    expect(page.get_by_role('button', name='通道 2 暂停播放和分析', exact=True)).to_have_count(0)
+
+
 def test_hidden_tiles_and_preview_preferences(playback):
     page, _, state = playback
     page.route('**/stream/capabilities', lambda route: route.fulfill(json={
-        'channel_preview':True, 'preview_resolutions':[480,720,1080]}))
+        'channel_preview':True}))
     configure(page, state)
     target = page.get_by_role('button', name='单独查看通道 2', exact=True)
     target.hover()
     style = target.evaluate('(e) => { const s = getComputedStyle(e); return [s.backgroundColor, s.boxShadow, getComputedStyle(e.querySelector("span")).opacity] }')
     assert style == ['rgba(0, 0, 0, 0)', 'none', '0']
-    page.get_by_label('独立预览分辨率').select_option('720')
+    from playwright.sync_api import expect
+    expect(page.get_by_label('独立预览分辨率')).to_have_count(0)
     target.click()
     page.wait_for_function("document.querySelector('video')?.currentTime > 1")
     assert state['queries'][-1]['channel_id'] == ['2']
-    assert state['queries'][-1]['preview_height'] == ['720']
-    page.get_by_label('独立预览分辨率').select_option('480')
-    page.wait_for_function("document.querySelector('video')?.currentTime > 1")
-    assert state['queries'][-1]['preview_height'] == ['480']
+    assert 'preview_height' not in state['queries'][-1]
+    assert page.locator('video').evaluate('(v) => [v.videoWidth, v.videoHeight]') == [320, 180]
     # Returning to local zoom restores the mosaic stream, preserving focus.
     page.get_by_label('点击画面后的显示方式').select_option('zoom')
     page.wait_for_function("document.querySelector('video')?.currentTime > 1")
@@ -181,4 +236,4 @@ def test_hidden_tiles_and_preview_preferences(playback):
     page.get_by_label('点击画面后的显示方式').wait_for()
     assert page.get_by_label('点击画面后的显示方式').input_value() == 'zoom'
     page.get_by_label('点击画面后的显示方式').select_option('independent')
-    assert page.get_by_label('独立预览分辨率').input_value() == '480'
+    expect(page.get_by_label('独立预览分辨率')).to_have_count(0)

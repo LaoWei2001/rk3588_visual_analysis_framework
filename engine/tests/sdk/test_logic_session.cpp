@@ -91,6 +91,39 @@ void registry_owns_names()
         assert(integer(session, "visits") == 1);
     }
 }
+
+void analysis_time_follows_video()
+{
+    vision::LogicSessionOptions options;
+    options.logic = [](ChannelContext *ctx) { ctx->publish_int("video_time_ms", ctx->video_time_ms); };
+    vision::LogicSession session(options);
+    vision::LogicFrame frame;
+    std::vector<AlgoResult> results(1);
+    frame.results = &results;
+    session.run(frame);
+    assert(integer(session, "video_time_ms") == -1);
+    frame.video_time_ms = 0; // 文件开头的 0 是有效时间。
+    frame.timestamp_ms = 10000;
+    session.run(frame);
+    assert(integer(session, "video_time_ms") == 0);
+    assert(session.context().dt_ms == 0);
+    // 现实时间跨过一分钟，业务仍沿用 timestamp_ms/dt_ms，只计视频经过的一帧。
+    frame.video_time_ms = 33;
+    frame.timestamp_ms = 70033;
+    session.run(frame);
+    assert(integer(session, "video_time_ms") == 33);
+    assert(session.context().timestamp_ms == 34 && session.context().dt_ms == 33);
+    assert(session.context().real_time_ms == 70033);
+    assert(results.front().timestamp_ms == session.context().timestamp_ms);
+    frame.video_time_ms = 0; // 跳回文件开头时原样传递，不伪造递增时间。
+    session.run(frame);
+    assert(integer(session, "video_time_ms") == 0);
+    assert(session.context().dt_ms == 0);
+    frame.video_time_ms = -1; // 后一帧未提供时不能残留前一帧的位置。
+    session.run(frame);
+    assert(integer(session, "video_time_ms") == -1);
+    assert(session.context().dt_ms == 0);
+}
 } // namespace
 
 int main()
@@ -98,6 +131,7 @@ int main()
     // A default context is deterministic and cannot dereference an unbound canvas.
     ChannelContext unbound;
     assert(unbound.frame_id == 0 && unbound.timestamp_ms == 0 && unbound.dt_ms == 0);
+    assert(unbound.video_time_ms == -1);
     assert(unbound.config == nullptr && unbound.infer_fps == 0 && unbound.disp_fps == 0);
     assert(unbound.business_frame() == nullptr && unbound.source_frame() == nullptr);
     bool canvas_rejected = false;
@@ -115,6 +149,7 @@ int main()
     assert(!unbound.replace_display_frame(cv::Mat(2, 2, CV_8UC3)));
 
     registry_owns_names();
+    analysis_time_follows_video();
     vision::LogicSessionOptions options;
     options.logic = inspect;
     options.action = clear;

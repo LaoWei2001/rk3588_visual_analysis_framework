@@ -20,7 +20,7 @@ struct SrcCfg_t
     int usb_height = 0;       // USB 显式采集高度，0=自动
 };
 
-struct FilePlaybackStatus
+struct CaptureFilePosition
 {
     bool available = false;
     bool seekable = false;
@@ -104,7 +104,10 @@ class DecChannel
         return mGstChn.chnIds;
     }
     /** 本地文件播放控制是采集层的独立能力，不依赖任何业务 Logic。 */
-    bool queryFilePlayback(FilePlaybackStatus &status) const;
+    bool queryFilePlayback(CaptureFilePosition &status) const;
+    void updateFilePlayback(GstElement *pipeline);
+    bool fileControlIdle() const;
+    bool consumeSeekPreview(GstSample *sample);
     bool seekFilePlayback(int64_t position_ms, int64_t &actual_position_ms, std::string &error);
     /** bus 线程释放管道前撤销公开指针，防止控制线程取得悬空对象。 */
     void detachPipeline(GstElement *pipeline);
@@ -136,6 +139,9 @@ class DecChannel
     int mRecoverFailCount;
     bool mIsFileSrc;                         // 是否为文件源
     bool mIsUsbSrc;                          // 是否为USB摄像头源
+    uint64_t mAppliedPlaybackRequest = 0;
+    bool mSeekInProgress = false;
+    std::atomic<GstClockTime> mSeekPreviewPts{GST_CLOCK_TIME_NONE};
     bool mLoop;                              // 文件播放循环
     std::atomic<bool> mStopRequested{false}; // Written by shutdown/reload, read by capture.
     std::atomic<bool> mFileEos{false};       // 非循环文件已播到末尾，保留管道供 Web 回拖

@@ -1,5 +1,4 @@
 #include "application/runtime/app_ctrl.h"
-#include "application/runtime/pause_ctrl.h"
 #include "media/display/display_render.h"
 
 #include <cassert>
@@ -66,8 +65,8 @@ int main()
     g_pCtrl->business_width = 640;
     g_pCtrl->business_height = 160;
     runtime->config.channels.emplace_back();
+    runtime->config.channels[0].stream.src_type = "file";
     pthread_mutex_init(&g_pCtrl->chn_mtx[0], nullptr);
-    pause_ctrl::init(true);
     cv::Mat front(160, 640, CV_8UC3);
     char *front_data = reinterpret_cast<char *>(front.data);
     g_pCtrl->pDispBuffer = &front_data;
@@ -89,11 +88,22 @@ int main()
     assert(state.preview_rate.value() == 25);
     assert(cv::norm(active, front, cv::NORM_INF) == 0);
 
-    pause_ctrl::toggle();
+    // 其他通道暂停不影响本通道的帧率显示。
+    g_pCtrl->channels_state[1].file_playback.paused = true;
+    display_refresh_channel_overlays(0);
+    assert(cv::norm(active, front, cv::NORM_INF) == 0);
+    g_pCtrl->channels_state[1].file_playback.paused = false;
+
+    // 模拟底层确认本通道已暂停；绘制测试不启动文件解码和暂停控制服务。
+    state.file_playback.paused = true;
     display_refresh_channel_overlays(0);
     const cv::Mat paused = front.clone();
     assert(cv::norm(active, paused, cv::NORM_INF) > 0);
-    pause_ctrl::toggle();
+    assert(state.performance_overlay.render_fps == 0 && state.performance_overlay.infer_fps == 0);
+    assert(state.preview_rate.value() == 25 && infer_rate.value() == 10);
+    state.file_playback.paused = false;
+    display_refresh_channel_overlays(0);
+    assert(cv::norm(active, front, cv::NORM_INF) == 0);
     state.preview_rate.reset();
     infer_rate.reset();
     // 模拟已过期的帧；刷新应显示与暂停时相同的两个零值。

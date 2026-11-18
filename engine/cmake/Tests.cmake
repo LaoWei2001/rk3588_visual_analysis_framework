@@ -225,6 +225,13 @@ if(BUILD_SDK_TESTS)
     add_test(NAME runtime_design_regression COMMAND runtime_design_tests)
     set_tests_properties(runtime_design_regression PROPERTIES TIMEOUT 30)
 
+    add_executable(file_playback_tests tests/runtime/test_file_playback.cpp)
+    target_compile_options(file_playback_tests PRIVATE -UNDEBUG)
+    target_link_libraries(file_playback_tests PRIVATE Vision::Runtime)
+    add_test(NAME file_playback_regression COMMAND ${PYTHON3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/runtime/run_file_playback.py $<TARGET_FILE:file_playback_tests>)
+    set_tests_properties(file_playback_regression PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
+
     add_executable(logic_config_tests tests/runtime/test_logic_config.cpp)
     target_include_directories(logic_config_tests PRIVATE ${custom_inc} ${api_inc})
     target_compile_options(logic_config_tests PRIVATE -UNDEBUG)
@@ -278,6 +285,9 @@ if(BUILD_RTSP_TESTS)
     target_link_libraries(rtsp_live_source_tests PRIVATE ${GSTOPT_LIBS} Threads::Threads)
     add_test(NAME rtsp_live_source_regression COMMAND rtsp_live_source_tests)
     set_tests_properties(rtsp_live_source_regression PROPERTIES TIMEOUT 10)
+    add_test(NAME rtsp_source_preview_regression COMMAND "${PYTHON3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/rtsp/test_source_preview.py" $<TARGET_FILE:vision_analysis>)
+    set_tests_properties(rtsp_source_preview_regression PROPERTIES TIMEOUT 120 LABELS hardware RESOURCE_LOCK video)
 endif()
 
 option(BUILD_PERFORMANCE_TESTS "Build standalone performance counter regression tests" OFF)
@@ -295,7 +305,6 @@ if(BUILD_PERFORMANCE_TESTS)
         src/media/display/display.cpp
         src/media/display/result_renderer.cpp
         src/media/display/text_overlay.cpp
-        src/application/runtime/pause_ctrl.cpp
         src/application/runtime/service_watchdog.cpp
     )
     target_include_directories(display_metrics_tests PRIVATE ${custom_inc} ${api_inc})
@@ -313,7 +322,6 @@ if(BUILD_PERFORMANCE_BENCHMARKS)
         src/media/display/display.cpp
         src/media/display/result_renderer.cpp
         src/media/display/text_overlay.cpp
-        src/application/runtime/pause_ctrl.cpp
         src/application/runtime/service_watchdog.cpp
         src/pipeline/frame_transform.cpp
         src/pipeline/image_convert.cpp

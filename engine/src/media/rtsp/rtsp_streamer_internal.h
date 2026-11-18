@@ -46,9 +46,9 @@ struct RtspStreamer
     std::string codec = "h264";
     std::string encoder = "auto"; /* "auto"/"hw"/"sw" */
     bool use_hw = false;
-    int width = 0; /* 源拼接大图尺寸 (= disp_width/disp_height) */
+    int width = 0; /* 拼接画布尺寸，或独立通道的原始视频尺寸 */
     int height = 0;
-    int enc_w = 0; /* 送编码器/RTSP 的尺寸: 向上对齐到 16, 规避 MPP 编码器非对齐绿屏 */
+    int enc_w = 0; /* 编码画面尺寸；DMA 内存的对齐由 DmaFramePool 单独处理 */
     int enc_h = 0;
 
     /* GStreamer / GLib */
@@ -74,7 +74,7 @@ struct RtspStreamer
 extern RtspStreamer g_st;
 extern std::mutex g_channel_previews_mutex;
 extern std::mutex g_preview_operations_mutex;
-extern std::map<std::pair<int, int>, std::shared_ptr<RtspStreamer>> g_channel_previews;
+extern std::map<int, std::shared_ptr<RtspStreamer>> g_channel_previews;
 extern std::array<std::atomic<int>, MAX_CHANNEL_NUM> g_channel_preview_active;
 extern std::atomic<bool> g_preview_ready;
 extern GSource *g_preview_expiry_source;

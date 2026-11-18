@@ -1,10 +1,11 @@
 #include "decode_channel.h"
 #include "application/runtime/app_ctrl.h"
-#include "application/runtime/pause_ctrl.h"
 #include "application/runtime/runtime_status.h"
 #include "application/runtime/service_watchdog.h"
 #include "common/logging.h"
+#include "common/pthread_lock.h"
 #include "gst_opt.h"
+#include "pipeline/pipeline_internal.h"
 #include "pipeline/pipeline_runtime.h"
 #include <algorithm>
 #include <cerrno>
@@ -165,13 +166,9 @@ static void file_decodebin_element_added(GstBin *bin, GstElement *element, gpoin
             gst_plugin_feature_get_name(GST_PLUGIN_FEATURE(factory)), klass);
 }
 
-/* appsink new-sample 回调：送帧到分析管线 */
-static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
+/* 播放帧和暂停跳转得到的单帧共用一个入口。sample 由本函数释放。 */
+static GstFlowReturn submit_sample(GstSample *sample, GstChannel_t *data, bool single_frame = false)
 {
-    GstChannel_t *data = (GstChannel_t *)user_data;
-    GstSample *sample;
-    g_signal_emit_by_name(sink, "pull-sample", &sample);
-
     if (!sample)
         return GST_FLOW_OK;
 
@@ -195,6 +192,15 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
         gst_sample_unref(sample);
         return GST_FLOW_OK;
     }
+    // 使用这一帧的时间，而非查询已向前播放的管道位置；异步推理后仍对应同一张图。
+    int64_t video_time_ms = -1;
+    const GstSegment *segment = gst_sample_get_segment(sample);
+    if (data->is_file && segment && segment->format == GST_FORMAT_TIME && GST_BUFFER_PTS_IS_VALID(buffer))
+    {
+        const GstClockTime position = gst_segment_to_stream_time(segment, GST_FORMAT_TIME, GST_BUFFER_PTS(buffer));
+        if (GST_CLOCK_TIME_IS_VALID(position))
+            video_time_ms = static_cast<int64_t>(position / GST_MSECOND);
+    }
     GstMapInfo map;
     if (gst_buffer_map(buffer, &map, GST_MAP_READ))
     {
@@ -209,6 +215,8 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
             imgDesc.dataSize = map.size;
             imgDesc.fd = stFrameDesc.fd; /* DMA-BUF 零拷贝句柄 */
             imgDesc.source_buffer = buffer;
+            imgDesc.video_time_ms = video_time_ms;
+            imgDesc.single_frame = single_frame;
             snprintf(imgDesc.fmt, sizeof(imgDesc.fmt), "%s", stFrameDesc.strFmt);
             pipeline_submit_frame((char *)map.data, imgDesc);
         }
@@ -220,6 +228,19 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
     }
     gst_sample_unref(sample);
     return GST_FLOW_OK;
+}
+
+static GstFlowReturn new_sample(GstElement *sink, gpointer user_data)
+{
+    auto *data = static_cast<GstChannel_t *>(user_data);
+    GstSample *sample = nullptr;
+    g_signal_emit_by_name(sink, "pull-sample", &sample);
+    if (sample && data->owner && data->owner->consumeSeekPreview(sample))
+    {
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
+    }
+    return submit_sample(sample, data);
 }
 
 /* ==================== Bus 监听线程 ==================== */
@@ -251,6 +272,17 @@ static void *busListen(void *para)
             break;
         }
         /* bus 消息监听见文件顶部注释: 使用 gst_bus_timed_pop_filtered 主动轮询。*/
+        if (pThis && pThis->isFileSource() && g_pCtrl)
+        {
+            // 请求和最后一帧分析结束都直接唤醒 bus，避免等待轮询周期。
+            const auto playback_bus =
+                std::shared_ptr<GstBus>(GST_BUS(gst_object_ref(bus)), [](GstBus *value) { gst_object_unref(value); });
+            PthreadLock lock(g_pCtrl->chn_mtx[pThis->channelId()]);
+            g_pCtrl->channels_state[pThis->channelId()].playback_wakeup = [playback_bus] {
+                gst_bus_post(playback_bus.get(),
+                             gst_message_new_application(nullptr, gst_structure_new_empty("file-playback-wakeup")));
+            };
+        }
 
         gboolean terminate = FALSE;
         gboolean need_reconnect = FALSE;
@@ -259,10 +291,12 @@ static void *busListen(void *para)
 
         do
         {
-            /* 使用 500ms 超时轮询，以便检测退出信号 */
-            msg = gst_bus_timed_pop_filtered(bus, 500 * GST_MSECOND,
+            if (pThis && !pThis->isStopRequested() && g_pCtrl && g_pCtrl->isRunning)
+                pThis->updateFilePlayback(pPipeLine);
+            msg = gst_bus_timed_pop_filtered(bus, 100 * GST_MSECOND,
                                              (GstMessageType)(GST_MESSAGE_STATE_CHANGED | GST_MESSAGE_WARNING |
-                                                              GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
+                                                              GST_MESSAGE_ERROR | GST_MESSAGE_EOS |
+                                                              GST_MESSAGE_APPLICATION));
 
             /* 退出检测（无论是否收到消息） */
             if ((g_pCtrl && !g_pCtrl->isRunning) || pThis->isStopRequested())
@@ -280,46 +314,10 @@ static void *busListen(void *para)
                                                             std::chrono::steady_clock::now().time_since_epoch())
                                                             .count());
 
-                /* ---- 文件源暂停/恢复: 让 GStreamer pipeline 真正停在当前位置 ----
-                 *
-                 * 仅对文件源 (is_file=true) 且暂停键功能已启用时生效。
-                 * busListen 每 500ms 轮询一次，在此检测 pause_ctrl 状态变化
-                 * 并同步 GStreamer pipeline 状态：
-                 *
-                 *   is_paused() && PLAYING  → 设为 GST_STATE_PAUSED
-                 *     GStreamer 停在当前帧，不再解码新帧，不再触发 new_sample
-                 *
-                 *   !is_paused() && PAUSED  → 设为 GST_STATE_PLAYING
-                 *     从断点继续，update last_sample_seen_us 防 watchdog 误判
-                 *
-                 * RTSP/USB 不在此处理，保持原有丢帧行为。
-                 */
-                if (pThis && pThis->mGstChn.is_file && pause_ctrl::g_enabled.load(std::memory_order_relaxed))
+                if (pThis && pThis->isFileSource() && pThis->fileControlIdle())
                 {
-                    GstState cur = GST_STATE_VOID_PENDING;
-                    gst_element_get_state(pPipeLine, &cur, NULL, 0); /* 非阻塞查询 */
-
-                    if (pause_ctrl::is_paused())
-                    {
-                        if (cur == GST_STATE_PLAYING)
-                        {
-                            gst_element_set_state(pPipeLine, GST_STATE_PAUSED);
-                        }
-                        /* 暂停期间持续刷新 last_sample_seen_us，防止 watchdog
-                         * 误判"无新帧"并触发重连——pipeline 是我们主动暂停的，
-                         * 不是卡死，不应该重连。 */
-                        pThis->mGstChn.last_sample_seen_us.store(now_us, std::memory_order_relaxed);
-                        continue;
-                    }
-                    else
-                    {
-                        if (cur == GST_STATE_PAUSED)
-                        {
-                            gst_element_set_state(pPipeLine, GST_STATE_PLAYING);
-                            /* 恢复后重置时间戳，给 watchdog 一个干净的起点 */
-                            pThis->mGstChn.last_sample_seen_us.store(now_us, std::memory_order_relaxed);
-                        }
-                    }
+                    pThis->mGstChn.last_sample_seen_us.store(now_us, std::memory_order_relaxed);
+                    continue;
                 }
 
                 /* ---- 静默断流 watchdog ----
@@ -543,6 +541,17 @@ DecChannel::DecChannel(std::vector<int> channel_ids, const SrcCfg_t &cfg)
     for (auto it = mGstChn.chnIds.begin(); it != mGstChn.chnIds.end(); ++it)
         if (*it < 0 || *it >= MAX_CHANNEL_NUM || std::find(mGstChn.chnIds.begin(), it, *it) != it)
             throw std::invalid_argument("capture channel IDs must be valid and unique");
+    if (g_pCtrl)
+        for (int id : mGstChn.chnIds)
+            if (app_ctrl_has_channel(id))
+            {
+                PthreadLock lock(g_pCtrl->chn_mtx[id]);
+                auto &state = g_pCtrl->channels_state[id];
+                state.file_playback = {};
+                state.playback_wakeup = {};
+                state.playback_request = 0;
+                state.playback_seek_ms = -1;
+            }
     mGstChn.owner = this;
     mGstChn.pipeline = nullptr;
     mGstChn.source = nullptr;
@@ -625,7 +634,6 @@ void DecChannel::stop()
             requested_shutdown = true;
             raise(SIGTERM);
             app_ctrl_request_stop();
-            pause_ctrl::resume_all();
         }
         if (result != ETIMEDOUT)
             std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -1020,12 +1028,21 @@ void DecChannel::detachPipeline(GstElement *pipeline)
 {
     std::lock_guard<std::mutex> lock(mPipelineMutex);
     if (mGstChn.pipeline == pipeline)
-        mGstChn.pipeline = NULL;
+    {
+        mGstChn.pipeline = nullptr;
+        if (g_pCtrl && mIsFileSrc)
+        {
+            PthreadLock channel_lock(g_pCtrl->chn_mtx[channelId()]);
+            auto &status = g_pCtrl->channels_state[channelId()].file_playback;
+            status.available = status.playing = status.paused = status.busy = false;
+            g_pCtrl->channels_state[channelId()].playback_wakeup = {};
+        }
+    }
 }
 
-bool DecChannel::queryFilePlayback(FilePlaybackStatus &status) const
+bool DecChannel::queryFilePlayback(CaptureFilePosition &status) const
 {
-    status = FilePlaybackStatus{};
+    status = CaptureFilePosition{};
     if (!mIsFileSrc)
         return false;
 
@@ -1065,6 +1082,121 @@ bool DecChannel::queryFilePlayback(FilePlaybackStatus &status) const
     status.playing = current == GST_STATE_PLAYING;
     gst_object_unref(pipeline);
     return true;
+}
+
+bool DecChannel::consumeSeekPreview(GstSample *sample)
+{
+    const auto expected = mSeekPreviewPts.exchange(GST_CLOCK_TIME_NONE);
+    const auto *buffer = gst_sample_get_buffer(sample);
+    return GST_CLOCK_TIME_IS_VALID(expected) && buffer && GST_BUFFER_PTS(buffer) == expected;
+}
+
+bool DecChannel::fileControlIdle() const
+{
+    if (!mIsFileSrc || !g_pCtrl)
+        return false;
+    PthreadLock lock(g_pCtrl->chn_mtx[channelId()]);
+    const auto &status = g_pCtrl->channels_state[channelId()].file_playback;
+    return status.pause_requested || status.busy || status.ended;
+}
+
+void DecChannel::updateFilePlayback(GstElement *pipeline)
+{
+    if (!mIsFileSrc || !g_pCtrl)
+        return;
+    auto &state = g_pCtrl->channels_state[channelId()];
+    bool desired;
+    uint64_t request;
+    int64_t seek;
+    {
+        PthreadLock lock(g_pCtrl->chn_mtx[channelId()]);
+        desired = state.file_playback.pause_requested;
+        request = state.playback_request;
+        seek = state.playback_seek_ms;
+    }
+    GstState current = GST_STATE_NULL, pending = GST_STATE_VOID_PENDING;
+    const auto transition = gst_element_get_state(pipeline, &current, &pending, 0);
+    std::string error;
+    const bool must_stop = desired || seek >= 0 || mSeekInProgress || isFileEos();
+    const GstState wanted = must_stop ? GST_STATE_PAUSED : GST_STATE_PLAYING;
+    if (transition == GST_STATE_CHANGE_FAILURE)
+        error = "文件播放状态切换失败";
+    else if (current != wanted && pending != wanted)
+    {
+        if (gst_element_set_state(pipeline, wanted) == GST_STATE_CHANGE_FAILURE)
+            error = "无法切换文件播放状态";
+    }
+    const bool source_stopped = current == GST_STATE_PAUSED && pending == GST_STATE_VOID_PENDING;
+    bool analysis_idle = state.pending_analysis->load() == 0;
+    if (error.empty() && source_stopped && analysis_idle && seek >= 0 && !mSeekInProgress)
+    {
+        // 先停取帧并等旧任务结束，避免旧时间段的结果覆盖跳转后的状态。
+        {
+            PthreadLock lock(g_pCtrl->chn_mtx[channelId()]);
+            if (state.playback_request == request)
+                state.playback_seek_ms = -1;
+        }
+        int64_t actual = 0;
+        if (seekFilePlayback(seek, actual, error))
+        {
+            mSeekInProgress = true;
+            GstSample *sample = nullptr;
+            g_signal_emit_by_name(mGstChn.vSink, "try-pull-preroll", guint64(0), &sample);
+            if (sample)
+            {
+                const auto *buffer = gst_sample_get_buffer(sample);
+                mSeekPreviewPts.store(buffer ? GST_BUFFER_PTS(buffer) : GST_CLOCK_TIME_NONE);
+                submit_sample(sample, &mGstChn, true);
+            }
+            else
+                error = "跳转后未取得预览帧";
+        }
+        analysis_idle = state.pending_analysis->load() == 0;
+    }
+    if (mSeekInProgress && analysis_idle)
+        mSeekInProgress = false;
+    CaptureFilePosition position;
+    queryFilePlayback(position);
+    bool refresh_display = false;
+    {
+        PthreadLock lock(g_pCtrl->chn_mtx[channelId()]);
+        auto &status = state.file_playback;
+        const bool was_paused = status.paused;
+        status.channel_id = channelId();
+        status.location = mCfg.location;
+        status.available = position.available;
+        status.seekable = position.seekable;
+        status.duration_ms = position.duration_ms;
+        status.ended = isFileEos();
+        status.playing = position.playing;
+        status.paused = desired && source_stopped && analysis_idle && !mSeekInProgress && seek < 0;
+        refresh_display = status.paused != was_paused;
+        if (!must_stop && current == GST_STATE_PLAYING && pending == GST_STATE_VOID_PENDING)
+            mAppliedPlaybackRequest = request;
+        if (status.paused)
+            mAppliedPlaybackRequest = request;
+        status.busy = state.playback_request != mAppliedPlaybackRequest || mSeekInProgress;
+        status.position_ms =
+            status.paused && state.published_video_time_ms >= 0 ? state.published_video_time_ms : position.position_ms;
+        if (!error.empty())
+        {
+            mSeekInProgress = false;
+            mAppliedPlaybackRequest = request;
+            status.busy = state.playback_request != request;
+            if (!status.busy)
+            {
+                status.error = error;
+                state.playback_seek_ms = -1;
+            }
+        }
+    }
+    if (refresh_display)
+    {
+        auto &display = g_display_queues[channelId()];
+        PthreadLock lock(display.mtx);
+        display.refresh_pending = true;
+        pthread_cond_signal(&display.cv);
+    }
 }
 
 bool DecChannel::seekFilePlayback(int64_t position_ms, int64_t &actual_position_ms, std::string &error)
@@ -1116,8 +1248,6 @@ bool DecChannel::seekFilePlayback(int64_t position_ms, int64_t &actual_position_
     if (ok)
     {
         setFileEos(false);
-        if (!pause_ctrl::is_paused())
-            gst_element_set_state(pipeline, GST_STATE_PLAYING);
     }
     mGstChn.last_sample_seen_us.store(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
                                                                 std::chrono::steady_clock::now().time_since_epoch())

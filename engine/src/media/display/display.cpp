@@ -92,6 +92,7 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms, 
     float network_rtt_ms = -1.0f;
     int64_t result_frame_id = 0;
     uint64_t logic_ts_ms = 0;
+    bool file_paused = false;
 
     pthread_mutex_lock(&g_pCtrl->chn_mtx[chn_id]);
     const ChannelState &state = g_pCtrl->channels_state[chn_id];
@@ -103,6 +104,7 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms, 
     network_rtt_ms = state.network_rtt_ms;
     result_frame_id = state.published_frame_seq;
     logic_ts_ms = state.logic_display_ts_ms;
+    file_paused = state.file_playback.paused;
     pthread_mutex_unlock(&g_pCtrl->chn_mtx[chn_id]);
 
     const uint64_t current_ms = frame_timestamp_ms != 0
@@ -111,7 +113,7 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms, 
                                                                 std::chrono::steady_clock::now().time_since_epoch())
                                                                 .count());
 
-    if (!logic_frame.empty() && current_ms >= logic_ts_ms && current_ms - logic_ts_ms < 1000)
+    if (!logic_frame.empty() && (file_paused || (current_ms >= logic_ts_ms && current_ms - logic_ts_ms < 1000)))
         cv::resize(logic_frame, bgr, bgr.size());
 
     vision::OverlayOptions params;
@@ -120,8 +122,8 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms, 
     params.inputH = g_pCtrl->business_height;
     if (params.inputW <= 0 || params.inputH <= 0)
         return;
-    params.disp_fps = pause_ctrl::is_paused() ? 0.0f : disp_fps;
-    params.infer_fps = pause_ctrl::is_paused() ? 0.0f : inference_get_infer_fps(chn_id);
+    params.disp_fps = file_paused ? 0.0f : disp_fps;
+    params.infer_fps = file_paused ? 0.0f : inference_get_infer_fps(chn_id);
     params.show_network_rtt = channel->stream.src_type == "rtsp";
     params.network_rtt_ms = network_rtt_ms;
     params.result_frame_id = result_frame_id;
@@ -221,7 +223,7 @@ static std::string g_win_title;
 
 /**
  * GTK key-press-event 回调.
- * 仅在 pause_ctrl::g_enabled 为 true 时生效 (由 toggle() 内部判断).
+ * 仅在 暂停键配置开启 时生效 (由 toggle() 内部判断).
  * 按下空格键切换暂停/运行状态，并同步更新窗口标题以提示用户。
  */
 static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer user_data)
@@ -236,7 +238,7 @@ static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer use
         {
             if (pause_ctrl::is_paused())
             {
-                std::string t = g_win_title + " [PAUSED - SPACE to resume]";
+                std::string t = g_win_title + " [FILES PAUSED - SPACE to resume]";
                 gtk_window_set_title(GTK_WINDOW(g_main_window), t.c_str());
             }
             else

@@ -80,4 +80,4 @@ cmake --build build/engine -j4
 ```
 
 需要匹配的 RK3588 BSP、平台库和开发依赖；详细条件见[快速开始](../README.md#快速开始)。
-打包入口仍是根目录 `build.sh`。回归入口及清理命令见[贡献指南](../CONTRIBUTING.md)。
+打包入口仍是根目录 `build.sh`。

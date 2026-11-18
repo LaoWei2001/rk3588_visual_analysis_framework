@@ -19,7 +19,9 @@ ctx（ChannelContext *，本次通道回调的上下文）
 ├─ src_width : int                       视频源原始宽度；首帧前可能为 0
 ├─ src_height : int                      视频源原始高度；首帧前可能为 0
 ├─ frame_id : int64_t                     当前业务帧号
-├─ timestamp_ms : uint64_t                当前业务帧进入分析管线时的单调时钟毫秒
+├─ timestamp_ms : uint64_t                当前业务帧的分析时间，文件暂停不累计
+├─ video_time_ms : int64_t                当前帧在文件中的毫秒位置；未知/RTSP/USB 为 -1
+├─ real_time_ms : uint64_t               帧进入板端管线时的系统单调毫秒，供实际耗时判断
 ├─ unix_ms : uint64_t                     同一业务帧的 Unix 时间戳，毫秒
 ├─ dt_ms : float                         当前业务帧与上一业务帧的间隔，毫秒
 │
@@ -135,7 +137,7 @@ r（AlgoResult，来自 *ctx->results 中的一个元素）
 ├─ track_id : int                      跟踪 ID，-1 表示未分配
 ├─ chn_id : int                        来源通道 ID
 ├─ frame_id : int64_t                  来源帧号
-├─ timestamp_ms : uint64_t             来源帧的单调时钟毫秒
+├─ timestamp_ms : uint64_t             来源帧的分析时间，与该帧 ctx->timestamp_ms 一致
 ├─ model_id : string                   来源模型 ID
 ├─ model_type : string                 来源模型类型
 ├─ model_index : int                   在本次有效模型列表中的顺序

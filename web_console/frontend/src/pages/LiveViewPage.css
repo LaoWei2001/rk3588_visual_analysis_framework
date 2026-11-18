@@ -398,7 +398,7 @@
   font-size: 11px;
 }
 
-.live-view-file-meta > span:first-child {
+.live-view-file-meta > span:not(.live-view-file-time) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -410,7 +410,9 @@
 }
 
 .live-view-file-timeline input[type='range'] {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
+  width: 0;
   height: 18px;
   margin: 0;
   cursor: pointer;
@@ -429,6 +431,31 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+.live-view-file-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.live-view-file-pause {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  padding: 5px;
+  color: #fff;
+  background: transparent;
+  cursor: pointer;
+}
+.live-view-file-pause svg { width: 22px; height: 22px; fill: currentColor; }
+.live-view-file-pause:hover:not(:disabled) { background: rgba(255, 255, 255, .15); }
+.live-view-file-pause:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+.live-view-file-pause:disabled { opacity: .55; cursor: default; }
+.live-view-file-error { color: #ffb4b4; font-size: 12px; margin: 3px 0; }
 
 .live-view-loading {
   position: absolute;

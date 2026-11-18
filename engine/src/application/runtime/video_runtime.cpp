@@ -1,5 +1,6 @@
 #include "video_runtime_internal.h"
 
+#include "application/control/file_playback_control.h"
 #include "application/runtime/app_ctrl.h"
 #include "application/runtime/pause_ctrl.h"
 #include "application/runtime/process_signals.h"
@@ -77,6 +78,32 @@ std::string VideoRuntime::last_error() const
             return g_pCtrl->worker_error;
     }
     return impl_->error;
+}
+
+std::vector<FilePlaybackStatus> VideoRuntime::file_playback() const
+{
+    std::lock_guard<std::mutex> lock(impl_->control_mutex);
+    return impl_->ctrl_initialized ? file_playback_status() : std::vector<FilePlaybackStatus>{};
+}
+
+bool VideoRuntime::set_file_paused(int channel_id, bool paused, std::string *error)
+{
+    std::lock_guard<std::mutex> lock(impl_->control_mutex);
+    if (impl_->ctrl_initialized)
+        return file_playback_set_paused(channel_id, paused, error);
+    if (error)
+        *error = "视频程序尚未启动或已经退出";
+    return false;
+}
+
+bool VideoRuntime::seek_file(int channel_id, int64_t position_ms, std::string *error)
+{
+    std::lock_guard<std::mutex> lock(impl_->control_mutex);
+    if (impl_->ctrl_initialized)
+        return file_playback_seek(channel_id, position_ms, error);
+    if (error)
+        *error = "视频程序尚未启动或已经退出";
+    return false;
 }
 
 int VideoRuntime::run()

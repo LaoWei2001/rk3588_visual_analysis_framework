@@ -1,0 +1,10 @@
+{
+  "label": "测试：暂停计时示例",
+  "event_types": [],
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "report_fields": []
+}

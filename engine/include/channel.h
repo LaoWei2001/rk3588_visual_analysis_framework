@@ -166,11 +166,28 @@ struct ChannelContext
   public:
     // 当前处理的画面编号
     int64_t frame_id = 0;
-    /* 用来计算经过了多久，单位毫秒；显示日期请用 time_str()。 */
+    /* 当前帧的分析时间（毫秒），用来计算目标持续多久。文件暂停不计时，摄像头按实时推进。
+     * 起点由框架选择，只用于同一通道的时间差；跳转时框架重置业务状态。 */
     uint64_t timestamp_ms = 0;
+    /* 帧进入板端分析管线时的现实时间（单调毫秒），供通信超时等实际耗时判断。
+     * 普通视频业务计时仍用 timestamp_ms；显示日期用 unix_ms。 */
+    uint64_t real_time_ms = 0;
     uint64_t unix_ms = 0; /* 当前画面的日期时间，按毫秒记录，time_str() 会把它转成文字。 */
-    // 当前一帧与上一帧的间隔(毫秒)
+    // 本次与上次处理画面的分析时间差（毫秒）；文件暂停期间不累计。
     float dt_ms = 0.0f;
+    /** 当前帧在视频文件中的位置，单位毫秒，0 表示文件开头。
+     * 文件播放暂停时不推进；跳转或循环播放时可能倒退，不能跨跳转直接计算持续时间。
+     * RTSP、USB 或文件没有有效时间时为 -1；普通持续时间判断直接用 timestamp_ms。
+     * 示例：
+     * @code
+     * if (ctx->video_time_ms >= 0)
+     * {
+     *     double seconds = ctx->video_time_ms / 1000.0;
+     *     // seconds 是当前画面在文件中的秒数。
+     * }
+     * @endcode
+     */
+    int64_t video_time_ms = -1;
     /* 当前画面的检测结果，已经按模型设置的分数、类别等条件筛选过。
      * 可以继续筛选自己关心的目标，但这里无法找回先前被过滤掉的目标。 */
     std::vector<AlgoResult> *results = nullptr;

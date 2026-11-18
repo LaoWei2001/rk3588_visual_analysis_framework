@@ -33,9 +33,26 @@ struct VideoChannelStatus
 struct VideoRuntimeOptions
 {
     std::string config_path;
-    /** 接管 SIGINT/SIGTERM 停止、SIGUSR1 暂停、SIGPIPE 忽略；run() 结束后恢复。
+    /** 接管 SIGINT/SIGTERM 停止、SIGUSR1 切换文件暂停、SIGPIPE 忽略；run() 结束后恢复。
      * 嵌入已有宿主时默认关闭；独立命令行程序可开启并用 Ctrl+C 退出。 */
     bool install_signal_handlers = false;
+};
+
+/** 一路文件的播放状态；暂停只影响这一路文件，摄像头不出现在此列表中。 */
+struct FilePlaybackStatus
+{
+    int channel_id = -1;
+    std::string location;
+    bool available = false; ///< 文件已打开，可以接收控制。
+    bool seekable = false;  ///< 支持拖动进度。
+    bool playing = false;
+    bool paused = false;          ///< 播放与已接收帧的分析都已经停下。
+    bool pause_requested = false; ///< 用户希望暂停；busy 时可能还在处理最后几帧。
+    bool busy = false;            ///< 正在执行暂停、继续或跳转。
+    bool ended = false;
+    int64_t position_ms = 0;
+    int64_t duration_ms = 0;
+    std::string error;
 };
 
 /** 使用正式视频链路：采集/多模型推理/跟踪/业务回调/绘图/事件/录像/RTSP/数据集。
@@ -140,6 +157,35 @@ class VideoRuntime
      * @endcode
      */
     std::vector<VideoChannelStatus> channel_status() const;
+
+    /** 查看各路文件的位置和暂停状态。可从控制线程或业务回调中调用。
+     * @code
+     * for (const auto &file : runtime.file_playback())
+     *     std::cout << file.channel_id << ": " << file.position_ms << " ms\n";
+     * @endcode
+     */
+    std::vector<FilePlaybackStatus> file_playback() const;
+
+    /** 请求暂停或继续一路文件，立即返回，不阻塞业务回调。
+     * true 表示请求已接收；实际完成后 file_playback() 中 busy=false。
+     * 通道不是文件、尚未就绪或已经结束时返回 false；error 可接收原因。
+     * 暂停保留业务状态；继续后的 timestamp_ms、dt_ms 不包含暂停时间。
+     * @code
+     * std::string error;
+     * if (!runtime.set_file_paused(0, true, &error))
+     *     std::cerr << error << '\n';
+     * // 继续时传 false。
+     * @endcode
+     */
+    bool set_file_paused(int channel_id, bool paused, std::string *error = nullptr);
+
+    /** 请求跳到文件的指定毫秒位置。跳转会重置该路业务状态和跟踪。
+     * 暂停时跳转只分析新位置的一帧，随后保持暂停。返回值和 error 同 set_file_paused()。
+     * @code
+     * runtime.seek_file(0, 10000); // 跳到第 10 秒
+     * @endcode
+     */
+    bool seek_file(int channel_id, int64_t position_ms, std::string *error = nullptr);
 
     /** @brief 取得导致整个运行时退出的错误；没有错误时返回空字符串。
      * 可在运行中或 run() 返回后调用；单路断流原因请看 channel_status() 中的 error。

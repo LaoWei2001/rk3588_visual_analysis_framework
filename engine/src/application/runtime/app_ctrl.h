@@ -23,6 +23,7 @@
 
 #include "application/config/config.h"
 #include "application/runtime/publication_signal.h"
+#include "common/frame_activity.h"
 #include "common/performance_metrics.h"
 #include "media/display/display.h"
 #include <atomic>
@@ -61,7 +62,9 @@ struct ChannelRawFrame
     /* 同一业务帧进入 pipeline_submit_frame 时采集的双时钟；异步 NPU 路径随任务原样透传。 */
     uint64_t frame_steady_ms = 0;
     uint64_t frame_unix_ms = 0;
+    int64_t video_time_ms = -1; // 当前文件帧的位置；随同一帧传递，不能使用系统时间兜底。
     std::shared_ptr<LazyVideoFrame> lazy_frame;
+    std::shared_ptr<FrameActivity> activity;
 };
 
 /*================================================================
@@ -98,6 +101,14 @@ struct ChannelPublicationMedia
  *================================================================*/
 struct ChannelState
 {
+    // 文件控制请求只在 chn_mtx 下写入；由采集器自己的 bus 线程执行。
+    vision::FilePlaybackStatus file_playback;
+    uint64_t playback_request = 0;
+    int64_t playback_seek_ms = -1;
+    std::function<void()> playback_wakeup; // 持有独立通知对象，不借用采集器指针。
+    std::shared_ptr<std::atomic<unsigned>> pending_analysis = std::make_shared<std::atomic<unsigned>>(0);
+    int64_t published_video_time_ms = -1;
+    uint64_t file_timeline = 0;
     /* 图像由 display_worker 独占；计数器内部同步，查询会自动淘汰过期样本。 */
     cv::Mat tile_staging;
     vision::OverlayCache performance_overlay; /* FPS 底部背景，仅在显示性能文字时缓存 */
