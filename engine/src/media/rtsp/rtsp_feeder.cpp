@@ -302,12 +302,11 @@ void *rtsp_feeder_thread(void *arg)
  * 注意 launch 字符串需用 ( ) 包裹, 且 payloader 必须命名为 pay0。*/
 std::string build_launch_string(RtspStreamer &state)
 {
-    const bool h265 = (state.codec == "h265" || state.codec == "hevc");
-    const char *enc_hw = h265 ? "mpph265enc" : "mpph264enc";
-    const char *parse_elem = h265 ? "h265parse" : "h264parse";
-    const char *pay_elem = h265 ? "rtph265pay" : "rtph264pay";
+    const char *enc_hw = "mpph264enc";
+    const char *parse_elem = "h264parse";
+    const char *pay_elem = "rtph264pay";
 
-    /* "hw" 强制硬件编码；"auto" 优先硬件，不可用时回退软件编码。 */
+    // All output is H.264, preferring hardware with software fallback for the grid.
     bool hw_available = false;
     GstElementFactory *hw_factory = gst_element_factory_find(enc_hw);
     if (hw_factory)
@@ -319,11 +318,7 @@ std::string build_launch_string(RtspStreamer &state)
     // Optional HD views must not silently consume CPU with a software encoder.
     if (state.channel_id >= 0 && !hw_available)
         return {};
-    bool use_hw;
-    if (state.encoder == "hw")
-        use_hw = true;
-    else
-        use_hw = hw_available;
+    bool use_hw = hw_available;
     if (use_hw)
     {
         state.dma_pool = DmaFramePool::create(state.width, state.height, state.enc_w, state.enc_h);
@@ -348,18 +343,18 @@ std::string build_launch_string(RtspStreamer &state)
                  "! video/x-raw,format=NV12 ! %s name=video_encoder "
                  "! %s ! %s name=pay0 pt=96 config-interval=1 )",
                  enc_hw, parse_elem, pay_elem);
-        printf("[RTSP] encoder: HW %s (mode=%s, hw_available=%d)\n", enc_hw, state.encoder.c_str(),
+        printf("[RTSP] encoder: HW %s (hw_available=%d)\n", enc_hw,
                hw_available ? 1 : 0);
     }
     else
     {
-        const char *enc_sw = h265 ? "x265enc" : "x264enc";
+        const char *enc_sw = "x264enc";
         snprintf(launch, sizeof(launch),
                  "( appsrc name=mysrc ! queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream "
                  "! videoconvert ! %s name=video_encoder tune=zerolatency speed-preset=ultrafast bitrate=%d "
                  "! %s ! %s name=pay0 pt=96 config-interval=1 )",
                  enc_sw, state.bitrate, parse_elem, pay_elem);
-        printf("[RTSP] encoder: SW %s (mode=%s, hw_available=%d, %dkbps)\n", enc_sw, state.encoder.c_str(),
+        printf("[RTSP] encoder: SW %s (hw_available=%d, %dkbps)\n", enc_sw,
                hw_available ? 1 : 0, state.bitrate);
     }
     return std::string(launch);

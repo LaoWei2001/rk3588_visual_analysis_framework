@@ -8,6 +8,12 @@ import pytest
 from starlette.requests import Request
 
 from routers import stream
+from services import process_manager as pm
+
+
+@pytest.fixture(autouse=True)
+def isolated_app_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(pm, "APPS_ROOT", tmp_path)
 
 
 def test_build_ffmpeg_args_uses_zero_transcode_fragmented_mp4():
@@ -26,7 +32,7 @@ def test_build_ffmpeg_args_uses_zero_transcode_fragmented_mp4():
     assert args[-1] == "pipe:1"
 
 
-def test_rtsp_info_reads_active_runtime_config(tmp_path, monkeypatch):
+def test_rtsp_url_reads_active_runtime_config(tmp_path, monkeypatch):
     app_dir = tmp_path / "demo"
     assets_dir = app_dir / "assets"
     assets_dir.mkdir(parents=True)
@@ -37,7 +43,6 @@ def test_rtsp_info_reads_active_runtime_config(tmp_path, monkeypatch):
                 "global": {
                     "rtsp_port": 9554,
                     "rtsp_path": "preview",
-                    "rtsp_codec": "H264",
                 }
             }
         ),
@@ -45,7 +50,7 @@ def test_rtsp_info_reads_active_runtime_config(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(stream, "APPS_ROOT", tmp_path)
 
-    assert stream._rtsp_info("demo") == ("rtsp://127.0.0.1:9554/preview", "h264")
+    assert stream._rtsp_url("demo") == "rtsp://127.0.0.1:9554/preview"
 
 
 @pytest.mark.parametrize('cause', ['playback-stall', 'buffer-timeout', 'initialization-timeout', '', 'unrecognized-event'])
@@ -57,6 +62,8 @@ def test_client_retry_logs_only_known_events_and_playback_state(tmp_path, monkey
                        'retry_ahead_ms': '300', 'retry_ready_state': '2',
                        'retry_paused': 'false', 'retry_seeking': 'false', 'token': 'do-not-log'})
     request = Request({'type': 'http', 'query_string': query.encode(), 'headers': []})
+    # Other test fixtures may start Uvicorn with propagation disabled.
+    monkeypatch.setattr(stream.log, 'handlers', [caplog.handler])
     with caplog.at_level(logging.WARNING, logger='uvicorn.error'):
         response = asyncio.run(stream.stream_app('demo', request))
     assert response.media_type == 'video/mp4'

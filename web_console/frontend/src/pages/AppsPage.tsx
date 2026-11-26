@@ -73,7 +73,7 @@ export default function AppsPage() {
 
       // Update previous running set
       prevRunningRef.current = new Set(
-        data.filter(a => a.status === 'running' && a.recovery_state !== 'stopping').map(a => a.name)
+        data.filter(a => a.status === 'running' && a.recovery_state !== 'stopping' && a.launch_source !== 'command_line').map(a => a.name)
       )
 
       setApps(data)
@@ -194,7 +194,7 @@ export default function AppsPage() {
       <div className="apps-header">
         <h2>程序管理</h2>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="reload-btn" disabled={!!uploading}
+          <button className="reload-btn upload-app-btn" disabled={!!uploading}
             onClick={() => fileRef.current?.click()}>上传程序</button>
           <button className="reload-btn" onClick={load}>刷新</button>
         </div>
@@ -285,6 +285,7 @@ export default function AppsPage() {
           {apps.map(app => {
             // 程序可选的启动配置文件名，以及当前选中的配置。
             const cfgOpts = app.config_files.map(cfgName)
+            const fromTerminal = app.launch_source === 'command_line'
             // 优先级：手动选择 > 编辑器最后保存 > 上次启动 > config.json > 第一项。
             const lastCfg = loadLastConfig(app.name)
             const effCfg  = cfgSel[app.name]
@@ -293,12 +294,15 @@ export default function AppsPage() {
                   : cfgOpts.includes('config.json')     ? 'config.json'
                   : cfgOpts[0] ?? 'config.json')
             const blockedByOtherApp = !!launchBlockerName && launchBlockerName !== app.name
+            const displayedConfig = app.status === 'running' && app.config && cfgOpts.includes(app.config)
+              ? app.config : effCfg
             return (
             <div key={app.name} className={`app-card ${app.status}`}>
               <div className="card-top">
                 <div className="app-name">{app.name}</div>
                 <span className={`status-badge ${app.status}`}>
                   {app.recovery_state === 'stopping' ? `正在停止：${shutdownLabels[app.shutdown_stage || ''] || '等待收尾'}` : app.recovery_state === 'restarting' ? '自动恢复中' : app.status === 'running' ? '运行中' : '已停止'}
+                  {fromTerminal && ' · 命令行启动'}
                 </span>
               </div>
 
@@ -320,13 +324,11 @@ export default function AppsPage() {
               </div>
 
               {/* 始终显示启动配置；程序运行时禁用修改，保持卡片布局稳定。 */}
-              {cfgOpts.length >= 1 && (
+              {cfgOpts.length >= 1 && (!fromTerminal || app.config) && (
                 <div className="config-row">
                   <label>启动配置</label>
                   <select
-                    value={app.status === 'running'
-                      ? (cfgOpts.includes(app.config ?? '') ? (app.config as string) : effCfg)
-                      : effCfg}
+                    value={displayedConfig}
                     disabled={app.status === 'running'}
                     onChange={e => setCfgSel(s => ({ ...s, [app.name]: e.target.value }))}
                   >
@@ -355,6 +357,8 @@ export default function AppsPage() {
                     >
                       {busy[app.name] ? '...' : '启动'}
                     </button>
+                  ) : fromTerminal ? (
+                    <span>请在终端停止</span>
                   ) : (
                     <button
                       className="action-btn stop"
@@ -367,7 +371,7 @@ export default function AppsPage() {
 
                   <button
                     className="action-btn edit"
-                    onClick={() => navigate(`/editor/${app.name}?config=${encodeURIComponent(effCfg)}`)}
+                    onClick={() => navigate(`/editor/${app.name}?config=${encodeURIComponent(displayedConfig)}`)}
                   >配置</button>
 
                   <button
@@ -382,9 +386,8 @@ export default function AppsPage() {
                   >待上报记录（{app.unreported ?? 0}条）</button>
 
                   <button
-                    className="action-btn"
-                    style={{ background: '#7f1d1d', color: '#fff' }}
-                    disabled={!!busy[app.name]}
+                    className="action-btn delete"
+                    disabled={!!busy[app.name] || fromTerminal}
                     onClick={() => setDeleteTarget(app.name)}
                     title="停止并删除该程序包"
                   >删除</button>

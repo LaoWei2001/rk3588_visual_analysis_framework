@@ -34,7 +34,7 @@ fi
 # 仓库可能携带在 Debian 上编译的调试二进制；它不代表 Ubuntu 环境缺包。
 # 制包器下一步会在 Ubuntu 上重新编译，并以新 ELF 识别真实依赖。
 # install_deps.sh 会更新 APT 索引并安装运行、编译、Python、Node.js 和前端依赖。
-bash "$PROJECT_ROOT/install_deps.sh" --skip-app-check
+bash "$PROJECT_ROOT/tools/setup/install_deps.sh" --skip-app-check
 
 # dpkg-dev 通常随 build-essential 安装；dpkg-repack 是收集 BSP 本地包所需的
 # 制包专用工具。复用 install_deps.sh 刚更新的索引，不再重复 apt-get update。

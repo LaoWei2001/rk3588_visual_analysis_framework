@@ -151,7 +151,6 @@ void YoloSeg::query_model_info()
     model_io::validate_io(io_num);
     if (io_num.n_output != 7)
         throw std::runtime_error("Unsupported yoloseg output count");
-    io_num_in_ = io_num.n_input;
     io_num_out_ = io_num.n_output;
 
     memset(&in_attr_, 0, sizeof(in_attr_));
@@ -299,8 +298,8 @@ cv::Mat YoloSeg::preprocess(cv::Mat &img, LetterBoxInfo &lb)
     return canvas;
 }
 
-int YoloSeg::process_i8(rknn_output *all_input, int input_id, const int *anchor, int grid_h, int grid_w, int height,
-                        int width, int stride, int class_num, std::vector<float> &boxes, std::vector<float> &segments,
+int YoloSeg::process_i8(rknn_output *all_input, int input_id, const int *anchor, int grid_h, int grid_w,
+                        int stride, int class_num, std::vector<float> &boxes, std::vector<float> &segments,
                         float *proto, std::vector<float> &objProbs, std::vector<int> &classId, float threshold)
 {
     int validCount = 0;
@@ -397,8 +396,8 @@ int YoloSeg::process_i8(rknn_output *all_input, int input_id, const int *anchor,
     return validCount;
 }
 
-int YoloSeg::process_fp32(rknn_output *all_input, int input_id, const int *anchor, int grid_h, int grid_w, int height,
-                          int width, int stride, int class_num, std::vector<float> &boxes, std::vector<float> &segments,
+int YoloSeg::process_fp32(rknn_output *all_input, int input_id, const int *anchor, int grid_h, int grid_w,
+                          int stride, int class_num, std::vector<float> &boxes, std::vector<float> &segments,
                           float *proto, std::vector<float> &objProbs, std::vector<int> &classId, float threshold)
 {
     int validCount = 0;
@@ -519,13 +518,13 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
 
         if (is_quant_)
         {
-            validCount += process_i8(outputs, i, ANCHORS[i / 2], grid_h, grid_w, model_h_, model_w_, stride,
+            validCount += process_i8(outputs, i, ANCHORS[i / 2], grid_h, grid_w, stride,
                                      num_classes_, filterBoxes, filterSegments, proto, objProbs, classId, obj_thresh_);
         }
         else
         {
             validCount +=
-                process_fp32(outputs, i, ANCHORS[i / 2], grid_h, grid_w, model_h_, model_w_, stride, num_classes_,
+                process_fp32(outputs, i, ANCHORS[i / 2], grid_h, grid_w, stride, num_classes_,
                              filterBoxes, filterSegments, proto, objProbs, classId, obj_thresh_);
         }
     }
@@ -533,10 +532,10 @@ int YoloSeg::post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_wi
     const int proto_grid_h = out_attrs_[6].dims[2];
     const int proto_grid_w = out_attrs_[6].dims[3];
     if (is_quant_)
-        process_i8(outputs, 6, nullptr, proto_grid_h, proto_grid_w, model_h_, model_w_, 1, num_classes_, filterBoxes,
+        process_i8(outputs, 6, nullptr, proto_grid_h, proto_grid_w, 1, num_classes_, filterBoxes,
                    filterSegments, proto, objProbs, classId, obj_thresh_);
     else
-        process_fp32(outputs, 6, nullptr, proto_grid_h, proto_grid_w, model_h_, model_w_, 1, num_classes_, filterBoxes,
+        process_fp32(outputs, 6, nullptr, proto_grid_h, proto_grid_w, 1, num_classes_, filterBoxes,
                      filterSegments, proto, objProbs, classId, obj_thresh_);
 
     if (validCount <= 0)

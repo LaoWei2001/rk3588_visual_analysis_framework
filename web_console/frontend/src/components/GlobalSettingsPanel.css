@@ -2,7 +2,6 @@
   background: var(--surface);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
-  max-height: 200px;
   overflow-y: auto;
 }
 
@@ -59,7 +58,8 @@
   text-transform: uppercase;
   letter-spacing: 0.4px;
   margin: 0;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .gs-field input,

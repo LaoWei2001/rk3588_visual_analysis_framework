@@ -84,7 +84,7 @@ void mkdir_checked(const std::string &path)
 class StorageFull : public std::runtime_error
 {
 public:
-    StorageFull() : std::runtime_error("存储空间不足：需保留超过 100 MB，已停止图片推理") {}
+    StorageFull() : std::runtime_error("存储空间不足：需保留超过 100 MB，请清理空间后继续") {}
 };
 void require_space(const std::string &path, size_t incoming = 0)
 {
@@ -353,10 +353,23 @@ int image_inference_cli(const char *job_path)
         if (output.empty())
             throw std::invalid_argument("output_dir is required");
         mkdir_checked(output);
-        if (std::ifstream(output + "/progress.json").good())
-            throw std::invalid_argument("Output already contains a job");
+        std::ifstream previous(output + "/progress.json");
+        if (previous.good())
+        {
+            if (!cJSON_IsTrue(field(job.get(), "resume")))
+                throw std::invalid_argument("Output already contains a job");
+            std::string saved((std::istreambuf_iterator<char>(previous)), {});
+            Json restored(cJSON_Parse(saved.c_str()), cJSON_Delete);
+            if (!restored || !cJSON_IsArray(field(restored.get(), "items")) ||
+                cJSON_GetArraySize(field(restored.get(), "items")) != count)
+                throw std::invalid_argument("Invalid resume progress");
+            progress = std::move(restored);
+        }
         progress_path = output + "/progress.json";
-        auto items = cJSON_AddArrayToObject(progress.get(), "items");
+        auto items = field(progress.get(), "items");
+        const bool resuming = items != nullptr;
+        if (!items)
+            items = cJSON_AddArrayToObject(progress.get(), "items");
         std::vector<const cJSON *> inputs;
         const cJSON *input;
         cJSON_ArrayForEach(input, images)
@@ -364,13 +377,29 @@ int image_inference_cli(const char *job_path)
         std::vector<cJSON *> statuses;
         for (int i = 0; i < count; ++i)
         {
-            auto item = cJSON_CreateObject();
+            auto item = resuming ? cJSON_GetArrayItem(items, i) : cJSON_CreateObject();
             statuses.push_back(item);
-            cJSON_AddItemToArray(items, item);
-            cJSON_AddNumberToObject(item, "index", i);
-            text(item, "name", string(inputs[i], "name"));
-            text(item, "status", "pending");
+            if (resuming)
+            {
+                if (number(item, "index", -1) != i || string(item, "name") != string(inputs[i], "name"))
+                    throw std::invalid_argument("Resume image list changed");
+                const auto state = string(item, "status");
+                if (state != "success" && state != "partial" && state != "failed")
+                {
+                    cJSON_ReplaceItemInObjectCaseSensitive(item, "status", cJSON_CreateString("pending"));
+                    cJSON_DeleteItemFromObjectCaseSensitive(item, "error");
+                }
+            }
+            else
+            {
+                cJSON_AddItemToArray(items, item);
+                cJSON_AddNumberToObject(item, "index", i);
+                text(item, "name", string(inputs[i], "name"));
+                text(item, "status", "pending");
+            }
         }
+        cJSON_DeleteItemFromObjectCaseSensitive(progress.get(), "status");
+        cJSON_DeleteItemFromObjectCaseSensitive(progress.get(), "error");
         text(progress.get(), "status", "loading");
         write_json(progress_path, progress.get());
         cv::setNumThreads(2);
@@ -380,6 +409,13 @@ int image_inference_cli(const char *job_path)
         for (int i = 0; i < count && !cancelled; ++i)
         {
             auto item = statuses[i];
+            const auto state = string(item, "status");
+            if (state == "success" || state == "partial" || state == "failed")
+            {
+                if (state != "success")
+                    ++failures;
+                continue;
+            }
             cJSON_ReplaceItemInObjectCaseSensitive(item, "status", cJSON_CreateString("running"));
             write_json(progress_path, progress.get());
             try
@@ -413,6 +449,8 @@ int image_inference_cli(const char *job_path)
             }
             catch (const std::exception &error)
             {
+                // A write may exhaust storage after the preflight check.
+                require_space(output + "/result");
                 ++failures;
                 cJSON_ReplaceItemInObjectCaseSensitive(item, "status", cJSON_CreateString("failed"));
                 text(item, "error", error.what());
@@ -438,7 +476,8 @@ int image_inference_cli(const char *job_path)
         if (!progress_path.empty())
         {
             cJSON_DeleteItemFromObjectCaseSensitive(progress.get(), "status");
-            text(progress.get(), "status", cancelled ? "cancelled" : "failed");
+            text(progress.get(), "status", dynamic_cast<const StorageFull *>(&error) ? "paused_storage"
+                                                                                    : cancelled ? "cancelled" : "failed");
             text(progress.get(), "error", error.what());
             try
             {

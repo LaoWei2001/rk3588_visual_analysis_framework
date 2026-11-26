@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import './GlobalSettingsPanel.css'
 
 // 数字输入框：允许整个清空后重填，不会因为删空而跳回 0；支持小数自由输入（如 "0." 不被改写）。
@@ -45,7 +45,6 @@ export interface GlobalSettingsData {
   bytetrack_low_thresh: number
   bytetrack_low_iou_thresh: number
   performance_display: number
-  enable_pause_key: number
   enable_rtsp: number
   [key: string]: unknown
 }
@@ -57,9 +56,8 @@ export const NATIVE_GLOBAL_DEFAULTS: GlobalSettingsData = {
   tracker_enable: 1, tracker_type: 'sort', tracker_iou_thresh: 0.3,
   tracker_max_miss: 10, tracker_min_hits: 3,
   bytetrack_low_thresh: 0.1, bytetrack_low_iou_thresh: 0.2,
-  performance_display: 1, enable_pause_key: 0, enable_rtsp: 0,
+  performance_display: 1, enable_rtsp: 0,
   rtsp_port: 8554, rtsp_path: '/live', rtsp_bitrate: 4096,
-  rtsp_codec: 'h264', rtsp_encoder: 'auto',
 }
 
 // Explicit presets for a newly created canvas; never used to fill a loaded file.
@@ -73,16 +71,28 @@ export const DEFAULT_GLOBAL_SETTINGS: GlobalSettingsData = {
 interface Props {
   settings: GlobalSettingsData
   onChange: (s: GlobalSettingsData) => void
+  onContentHeightChange?: (height: number) => void
 }
 
-export default function GlobalSettingsPanel({ settings: s, onChange }: Props) {
+export default function GlobalSettingsPanel({ settings: s, onChange, onContentHeightChange }: Props) {
   const [collapsed, setCollapsed] = useState(false)
+  const contentRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const content = contentRef.current
+    if (!content || !onContentHeightChange) return
+    const measure = () => onContentHeightChange(Math.ceil(content.getBoundingClientRect().height) + 1)
+    const observer = new ResizeObserver(measure)
+    observer.observe(content)
+    measure()
+    return () => observer.disconnect()
+  }, [onContentHeightChange])
 
   const set = (key: string, value: unknown) =>
     onChange({ ...s, [key]: value })
 
   return (
     <div className="gs-panel">
+      <div className="gs-content" ref={contentRef}>
       <div className="gs-header" onClick={() => setCollapsed(v => !v)}>
         <span>⬡ 全局配置</span>
         <span className="gs-collapse-icon">{collapsed ? '▲' : '▼'}</span>
@@ -123,23 +133,8 @@ export default function GlobalSettingsPanel({ settings: s, onChange }: Props) {
               <input value={String(s.rtsp_path ?? '/live')} onChange={e => set('rtsp_path', e.target.value)} />
             </label>
             <NumField label="RTSP 软件编码码率 (kbps)" value={s.rtsp_bitrate} def={4096} min="1" onChange={v => set('rtsp_bitrate', v)} />
-            <label className="gs-field">RTSP 输出编码
-              <select aria-label="RTSP 输出编码" value={String(s.rtsp_codec ?? 'h264')} onChange={e => set('rtsp_codec', e.target.value)}>
-                <option value="h264">H.264</option><option value="h265">H.265</option>
-              </select>
-            </label>
-            <label className="gs-field">RTSP 编码器
-              <select aria-label="RTSP 编码器" value={String(s.rtsp_encoder ?? 'auto')} onChange={e => set('rtsp_encoder', e.target.value)}>
-                <option value="auto">自动（优先硬件）</option><option value="hw">硬件</option>
-              </select>
-            </label>
           </div>
-          {s.rtsp_codec === 'h265' && <div className="ncp-hint">浏览器实时预览需要 H.264；H.265 可用于支持该编码的外部播放器。</div>}
           <div className="gs-row gs-toggles">
-            <label className="gs-toggle">
-              <input type="checkbox" checked={!!s.enable_pause_key} onChange={e => set('enable_pause_key', e.target.checked ? 1 : 0)} />
-              HDMI 空格键暂停
-            </label>
             <label className="gs-toggle">
               <input type="checkbox" checked={!!s.tracker_enable} onChange={e => set('tracker_enable', e.target.checked ? 1 : 0)} />
               启用跟踪器
@@ -159,6 +154,7 @@ export default function GlobalSettingsPanel({ settings: s, onChange }: Props) {
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }

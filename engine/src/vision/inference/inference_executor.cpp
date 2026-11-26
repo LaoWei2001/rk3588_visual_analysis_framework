@@ -78,18 +78,9 @@ void *inference_worker_thread(void *arg)
         if (ret)
         {
             auto filter_begin = std::chrono::steady_clock::now();
-            const float obj_thresh = g_inference.obj_thresh[task.chnId].load(std::memory_order_relaxed);
-            const float nms_thresh = g_inference.nms_thresh[task.chnId].load(std::memory_order_relaxed);
-            std::shared_ptr<const std::set<int>> allowed_classes;
-            {
-                pthread_mutex_lock(&g_inference.detect_classes_mtx);
-                allowed_classes = g_inference.detect_classes[task.chnId];
-                pthread_mutex_unlock(&g_inference.detect_classes_mtx);
-            }
-            static const std::set<int> all_classes;
+            const auto filters = std::atomic_load(&g_inference.filters[task.chnId]);
             std::vector<AlgoResult> filtered = std::move(results);
-            filter_inference_results(filtered, *model, obj_thresh, nms_thresh,
-                                     allowed_classes ? *allowed_classes : all_classes);
+            filter_inference_results(filtered, *model, filters->obj_thresh, filters->nms_thresh, filters->classes);
             auto filter_end = std::chrono::steady_clock::now();
 
             const uint64_t ts_ms = task.frame_steady_ms != 0 ? task.frame_steady_ms : inference_steady_now_ms();

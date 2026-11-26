@@ -43,8 +43,6 @@ struct RtspStreamer
     std::string path = "/live";
     int fps = 15;
     int bitrate = 4096; /* kbps；硬编在插件支持 bps 属性时同样应用 */
-    std::string codec = "h264";
-    std::string encoder = "auto"; /* "auto"/"hw"/"sw" */
     bool use_hw = false;
     int width = 0; /* 拼接画布尺寸，或独立通道的原始视频尺寸 */
     int height = 0;

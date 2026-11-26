@@ -19,7 +19,6 @@
   "global": {
     "enable_display": false,
     "enable_rtsp": true,
-    "rtsp_codec": "h264",
     "disp_width": 1280,
     "disp_height": 720,
     "tile_cols": 1,
@@ -51,16 +50,16 @@
 当前注册字段：
 
 - 显示：`enable_display`、`disp_width`、`disp_height`、`tile_cols`、`tile_rows`、
-  `performance_display`、`enable_pause_key`；
-- RTSP 输出：`enable_rtsp`、`rtsp_port`、`rtsp_path`、`rtsp_bitrate`、`rtsp_codec`、
-  `rtsp_encoder`；
+  `performance_display`；
+- RTSP 输出：`enable_rtsp`、`rtsp_port`、`rtsp_path`、`rtsp_bitrate`；
 - 管线：`channel_threads`、`max_fps`、`queue_size`；
 - tracker 默认：`tracker_enable`、`tracker_type`、`tracker_iou_thresh`、`tracker_max_miss`、
   `tracker_min_hits`、`bytetrack_low_thresh`、`bytetrack_low_iou_thresh`；
 - 全局业务：`global_logics[]`。
 
 `disp_width/height`、tile rows/cols、max_fps 必须为正数；开启显示时网格容量不能小于
-有效通道数。Web 支持编辑 H.264/H.265 并原样保存；浏览器零转码预览要求 H.264，选择 H.265 时面板会提示。
+有效通道数。RTSP 输出固定为 H.264，自动优先硬件编码；不再提供输出编码或编码器配置字段。
+视频源输入编码 `stream.video_enc` 仍可设置 H.264/H.265。
 
 `performance_display` 统一控制性能统计显示和调试日志输出，支持 `0/1` 或
 `false/true`。Web「全局配置 → 性能显示」可切换，保存到运行中的配置文件后支持
@@ -112,15 +111,14 @@
 `src_type` 必填，仅为 `rtsp`、`file`、`usb`，不再根据 URL 自动推断。
 
 - RTSP/file 使用 `url`；USB 使用 `device` 且必须以 `/dev/video` 开头；
-- 启用的 RTSP 通道经过完整验证时，`video_enc` 必须为 `h264` 或 `h265`；file/USB 不校验该字段；
+- RTSP 和 RTSPS 地址的 `video_enc` 为 `h264` 或 `h265`（默认 `h264`）；
 - file 的 `url` 必须指向已存在的普通文件；
 - `loop` 只用于 file；
 - `usb_width/usb_height` 省略时使用 1280×720 @ 15 FPS；显式分辨率对应固定采集档位，且不随处理 `max_fps` 改变。
 
-file path 可相对 App 工作目录或使用绝对路径。当前初始验证器的 `is_valid_url()` 实际接受
-`rtsp://`、`rtsps://`、`http://`、`https://` 或绝对路径，虽然失败提示只写 RTSP/RTSPS；这是一处校验
-过宽的实现边界。`src_type: "rtsp"` 的可运行配置仍应使用 `rtsp://` 或 `rtsps://`，不能把验证通过
-误当成 GStreamer 的 RTSP 源一定可启动。
+`src_type: "rtsp"` 支持五种地址。RTSP 和 RTSPS 按指定的 H.264/H.265 编码接收；
+HTTP 和 HTTPS 使用 GStreamer 自动识别媒体格式，地址应直接返回可解码的视频。
+本地绝对路径按文件播放，支持 `loop` 和进度控制。显式选择 `file` 时也可使用相对 App 工作目录的路径。
 
 ### `models[]`
 
@@ -185,7 +183,7 @@ channels 和媒体来源 ID 必须存在。启用视频 delivery 的全局实例
 在任何模型/流副作用前结束：
 
 - 有效通道数、排序后的 id/enable 拓扑；
-- `enable_display/enable_rtsp`、显示尺寸/网格、pause key、RTSP 端口/路径/码率/codec/encoder；
+- `enable_display/enable_rtsp`、显示尺寸/网格、RTSP 端口/路径/码率；
 - 任一模块参数的 `x-hot-reload: restart_required`。
 
 其余变化分阶段应用：
@@ -205,7 +203,7 @@ channels 和媒体来源 ID 必须存在。启用视频 delivery 的全局实例
 
 | 配置范围 | 画布入口 / 生成规则 |
 | --- | --- |
-| `global` 显示、暂停键、RTSP、线程、队列、帧率、跟踪器 | 底部全局配置；RTSP 端口、路径、软件码率、编码和编码器均可编辑 |
+| `global` 显示、RTSP、线程、队列、帧率、跟踪器 | 底部全局配置；RTSP 端口、路径、软件码率可编辑；输出固定 H.264，编码器自动优先硬件 |
 | 通道 `enable`、线程、帧率、跟踪覆盖 | 视频流面板；禁用通道显示“通道已停用”，模型开关只控制模型推理 |
 | `stream` | 视频流面板按输入类型展示，USB 支持预设和自定义宽高 |
 | `models[]` | 模型节点，包含稳定 ID、OTA 版本、启用、模型/标签、阈值、类别和核心 |
@@ -223,8 +221,16 @@ channels 和媒体来源 ID 必须存在。启用视频 delivery 的全局实例
 
 加载已有文件采用 C++ `AppConfig` 默认值；新建画布预设与加载缺省值分开。
 例如缺省文件播放不循环、缺省全局逻辑禁用且周期为 100 ms，保存不会将其静默改为另一行为。
-C++ 重载会重置所有缺省值，删除 RTSP/暂停等配置项后不再遗留上一份配置的值。
+C++ 重载会重置所有缺省值，删除 RTSP 端口/路径等配置项后不再遗留上一份配置的值。
 通道 `tracker_enable=-1` 表示继承全局，前后端保持一致。
 
 回归检查覆盖原生字段与前端入口、前后端默认值、模块完整表单、保存/刷新、共享上报策略、
 禁用状态和旧字段拒绝。新增原生字段时必须同时补齐对应入口和测试。
+
+HDMI 空格暂停及其配套信号暂停功能已删除；视频文件的 Web/SDK 暂停、继续与跳转保留。
+`rtsp_codec`、`rtsp_encoder`、`enable_pause_key` 不再注册、解析或参与重载；带旧字段的配置会被拒绝。
+画布加载旧配置时只读取当前全局字段，保存结果不会携带旧字段。
+
+画布底部全局配置默认按实际内容高度自适应，包括文字换行和条件参数变化。
+上下拖动分隔线或使用方向键可手动调整高度，双击分隔线恢复自适应。
+视口空间不足时保留滚动，以便继续使用上方画布。

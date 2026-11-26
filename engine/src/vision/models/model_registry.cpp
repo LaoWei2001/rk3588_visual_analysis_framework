@@ -96,7 +96,7 @@ std::shared_ptr<ModelGroup> create_model_group(const std::vector<ModelBuildSpec>
     for (const auto &resolved : specs)
     {
         const auto &spec = resolved.config;
-        if (!spec.enable || spec.model_path.empty() || spec.model_type.empty())
+        if (!npu::active_core_model(spec))
             continue;
         const int index = static_cast<int>(entries.size());
         const int core = npu::assigned_core_mask(spec.npu_core, channel_id, worker_index, index, auto_core_pool);

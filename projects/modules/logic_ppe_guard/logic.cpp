@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "ppe_guard.h"
+#include "machine/presence.h"
 
 namespace
 {
@@ -23,10 +24,21 @@ namespace
 struct GuardState
 {
     ppe_guard::Guard guard;
+    machine_presence::State machine;
     int unmatched_frames = 0;    /* 有检测结果却没有一个人命中 person_labels 的连续帧数 */
     float score_override = 0.0f; /* 现场按钮调过的灵敏度；0 表示跟随配置 */
-    bool debug_visible = true;   /* 画面左上角调试信息是否显示 */
+    bool debug_visible = false;   /* 画面左上角调试信息是否显示 */
 };
+
+const cv::Scalar neutral(238, 238, 238);
+const cv::Scalar amber(64, 195, 255);
+const cv::Scalar alarm_red(92, 100, 255);
+
+void draw_status_line(ChannelContext *ctx, int row, const std::string &text, const cv::Scalar &color)
+{
+    draw_text(ctx, text.c_str(), {ctx->business_size().width - 114, 23 + 21 * row}, color, 0.43, 1,
+              DrawCommand::ALL, true);
+}
 
 void publish_idle(ChannelContext *ctx)
 {
@@ -99,15 +111,20 @@ static void logic_ppe_guard(ChannelContext *ctx)
 {
     if (!ctx || !ctx->state || !ctx->results)
         return;
+    for (AlgoResult &result : *ctx->results)
+        result.show_detection_box = false;
     if (!*ctx->state)
         *ctx->state = std::make_shared<GuardState>();
     GuardState &state = *std::static_pointer_cast<GuardState>(*ctx->state);
 
+    const bool machine_enabled = ctx->param_bool("machine_enabled");
+    if (machine_enabled)
+        machine_presence::update(ctx, state.machine);
+
     if (!ctx->infer_enabled)
     {
         publish_idle(ctx);
-        draw_text(ctx, "PPE穿戴检测: 推理已关闭", cv::Point(12, 24), cv::Scalar(180, 180, 180), 0.45, 1,
-                  DrawCommand::ALL, true);
+        draw_status_line(ctx, 0, "检测已暂停", amber);
         return;
     }
 
@@ -117,8 +134,14 @@ static void logic_ppe_guard(ChannelContext *ctx)
     {
         /* 区域名写错时不做“整帧兜底”，避免把全画面的人都算进作业区。 */
         publish_idle(ctx);
-        draw_text(ctx, "作业区域不存在: 请检查 roi_name", cv::Point(12, 24), cv::Scalar(0, 165, 255), 0.45, 1,
-                  DrawCommand::ALL, true);
+        draw_status_line(ctx, 0, "作业区域未找到", amber);
+        return;
+    }
+
+    if (!ctx->inference_valid)
+    {
+        publish_idle(ctx);
+        draw_status_line(ctx, 0, "等待推理结果", amber);
         return;
     }
 
@@ -147,40 +170,83 @@ static void logic_ppe_guard(ChannelContext *ctx)
     const ppe_guard::Outcome outcome = state.guard.update(*results, ctx->timestamp_ms, config);
 
     int confirmed_people = 0;
+    int helmet_people = 0;
+    int workwear_people = 0;
+    int glove_people = 0;
+    bool has_localized_alarm = false;
     for (const ppe_guard::Evaluation &person : outcome.people)
     {
-        char badge[48];
-        std::snprintf(badge, sizeof(badge), "#%d H%c T%c L%c R%c", person.track_id,
-                      ppe_guard::status_char(person.status[ppe_guard::PART_HELMET]),
-                      ppe_guard::status_char(person.status[ppe_guard::PART_WORKWEAR]),
-                      ppe_guard::status_char(person.status[ppe_guard::PART_HAND_LEFT]),
-                      ppe_guard::status_char(person.status[ppe_guard::PART_HAND_RIGHT]));
-
-        bool any_candidate = false;
-        for (int part = 0; part < ppe_guard::PART_COUNT; ++part)
-            any_candidate = any_candidate || person.status[static_cast<size_t>(part)] == ppe_guard::PART_CANDIDATE;
-
-        const cv::Scalar color = person.violation ? cv::Scalar(0, 0, 255)
-                                 : any_candidate  ? cv::Scalar(0, 165, 255)
-                                                  : cv::Scalar(0, 220, 0);
-        draw_rect(ctx, person.box, color, 2);
-        /* 徽标画在框的下边缘外侧：引擎在框顶画了 "ID x 类别"，不能被徽标压住。 */
-        draw_text(ctx, badge, cv::Point(person.box.x, person.box.y + person.box.height + 13), color, 0.4, 1,
-                  DrawCommand::ALL, true);
-
+        for (const ppe_guard::AlarmRegion &region : person.regions)
+        {
+            const cv::Scalar color = region.inferred ? cv::Scalar(0, 165, 255) : cv::Scalar(0, 0, 255);
+            std::string label = "#" + std::to_string(person.track_id) + " " + ppe_guard::part_full_name(region.part);
+            if (region.inferred)
+                label += "（推断）";
+            draw_rect(ctx, region.box, color, 2);
+            draw_text(ctx, label.c_str(), {region.box.x, std::max(15, region.box.y - 3)}, color,
+                      0.45, 1, DrawCommand::ALL, true);
+        }
         if (!person.violation)
             continue;
         ++confirmed_people;
+        has_localized_alarm = has_localized_alarm || !person.regions.empty();
+        if (person.status[ppe_guard::PART_HELMET] == ppe_guard::PART_VIOLATION)
+            ++helmet_people;
+        if (person.status[ppe_guard::PART_WORKWEAR] == ppe_guard::PART_VIOLATION)
+            ++workwear_people;
+        if (person.gloves_unsided || person.status[ppe_guard::PART_HAND_LEFT] == ppe_guard::PART_VIOLATION ||
+            person.status[ppe_guard::PART_HAND_RIGHT] == ppe_guard::PART_VIOLATION)
+            ++glove_people;
+    }
 
-        /* 先画后报：证据图带着本帧标注；同一会话只提交一次。 */
+    if (confirmed_people > 0)
+        draw_status_line(ctx, 0, has_localized_alarm ? "已确认违规" : "违规部位待定位", alarm_red);
+    else if (outcome.candidate_people > 0)
+        draw_status_line(ctx, 0, "疑似违规核验中", amber);
+    else if (std::none_of(config.enabled.begin(), config.enabled.end(), [](bool enabled) { return enabled; }))
+        draw_status_line(ctx, 0, "穿戴检查已关闭", amber);
+    else
+        draw_status_line(ctx, 0, outcome.people.empty() ? "未检出人员" : "监测中 · 暂无报警", neutral);
+
+    draw_status_line(ctx, 1, "当前人数 " + std::to_string(outcome.people.size()), neutral);
+    draw_status_line(ctx, 2, "候选人数 " + std::to_string(outcome.candidate_people),
+                     outcome.candidate_people > 0 ? amber : neutral);
+    draw_status_line(ctx, 3, "报警人数 " + std::to_string(confirmed_people), confirmed_people > 0 ? alarm_red : neutral);
+    int row = 4;
+    if (helmet_people > 0)
+        draw_status_line(ctx, row++, "未戴安全帽 " + std::to_string(helmet_people) + "人", alarm_red);
+    if (workwear_people > 0)
+        draw_status_line(ctx, row++, "工装异常 " + std::to_string(workwear_people) + "人", alarm_red);
+    if (glove_people > 0)
+        draw_status_line(ctx, row, "未戴手套 " + std::to_string(glove_people) + "人", alarm_red);
+
+    // report_event snapshots this frame's drawing commands at submission.
+    for (const ppe_guard::Evaluation &person : outcome.people)
+    {
         if (!person.report_due)
             continue;
+        std::string regions = "[";
+        for (const ppe_guard::AlarmRegion &region : person.regions)
+        {
+            if (regions.size() > 1)
+                regions += ",";
+            char item[256];
+            std::snprintf(item, sizeof(item),
+                          R"({"part":"%s","source":"%s","x":%d,"y":%d,"w":%d,"h":%d})",
+                          ppe_guard::part_full_name(region.part), region.inferred ? "inferred" : "detected",
+                          region.box.x, region.box.y, region.box.width, region.box.height);
+            regions += item;
+        }
+        regions += "]";
         EventRequest request;
         request.event_type = "logic_ppe_violation";
         request.message = "人员安全穿戴违规: " + person.violation_types;
         request.fields = {event_field("track_id", person.track_id),
                           event_field("violation_types", person.violation_types),
-                          event_field("part_states", person.part_states), event_field("person_score", person.score)};
+                          event_field("part_states", person.part_states), event_field("person_score", person.score),
+                          event_field("frame_id", ctx->frame_id), event_field("video_time_ms", ctx->video_time_ms),
+                          event_field("frame_width", ctx->business_size().width),
+                          event_field("frame_height", ctx->business_size().height), event_json_field("regions", regions)};
         if (report_event(ctx, request).accepted())
             state.guard.mark_reported(person.track_id);
     }
@@ -201,16 +267,17 @@ static void logic_ppe_guard(ChannelContext *ctx)
         ctx->publish_int("tracked_people", static_cast<int64_t>(outcome.people.size()));
         return;
     }
-    draw_text(ctx, summary, cv::Point(12, 24), summary_color, 0.45, 1, DrawCommand::ALL, true);
+    const int debug_y = machine_enabled ? 295 : 24;
+    draw_text(ctx, summary, cv::Point(12, debug_y), summary_color, 0.45, 1, DrawCommand::ALL, true);
 
     char counters[192];
     std::snprintf(counters, sizeof(counters), "丢弃%d 去重%d 否决%d", outcome.rejected_observations,
                   outcome.duplicate_observations, outcome.vetoed_observations);
-    draw_text(ctx, counters, cv::Point(12, 44), summary_color, 0.45, 1, DrawCommand::ALL, true);
+    draw_text(ctx, counters, cv::Point(12, debug_y + 20), summary_color, 0.45, 1, DrawCommand::ALL, true);
 
     char tuning[192];
     std::snprintf(tuning, sizeof(tuning), "灵敏度%.2f", static_cast<double>(config.violation_min_score));
-    draw_text(ctx, tuning, cv::Point(12, 64), cv::Scalar(180, 220, 255), 0.4, 1, DrawCommand::ALL, true);
+    draw_text(ctx, tuning, cv::Point(12, debug_y + 40), cv::Scalar(180, 220, 255), 0.4, 1, DrawCommand::ALL, true);
 
     /* 类别名自检：模型换了 label_path 没换时，这里能一眼看出对不上。 */
     if (!outcome.people.empty())
@@ -218,7 +285,7 @@ static void logic_ppe_guard(ChannelContext *ctx)
     else if (!results->empty())
         ++state.unmatched_frames;
     if (state.unmatched_frames > 25)
-        draw_text(ctx, "有检测框但没有人员类别: 检查 person_labels 与模型 label_path", cv::Point(12, 84),
+        draw_text(ctx, "有检测框但没有人员类别: 检查 person_labels 与模型 label_path", cv::Point(12, debug_y + 60),
                   cv::Scalar(0, 0, 255), 0.45, 1, DrawCommand::ALL, true);
 
     /* 本帧实际出现的类别名与数量：判断类名是否和权重对得上。 */

@@ -126,20 +126,12 @@ bool ConfigValidator::file_exists(const std::string &path)
     return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
-bool ConfigValidator::is_valid_url(const std::string &url)
+static bool validate_network_url(const std::string &url, const std::string &prefix,
+                                 std::vector<ConfigValidator::ValidationError> &errors)
 {
-    if (url.empty())
-        return false;
-    if (url.substr(0, 7) == "rtsp://")
+    if (config_utils::is_rtsp_url(url) || config_utils::is_http_url(url))
         return true;
-    if (url.substr(0, 8) == "rtsps://")
-        return true;
-    if (url.substr(0, 7) == "http://")
-        return true;
-    if (url.substr(0, 8) == "https://")
-        return true;
-    if (url[0] == '/')
-        return true; // 本地文件绝对路径
+    errors.push_back({prefix + ".stream.url", "请输入 RTSP、RTSPS、HTTP、HTTPS 视频地址或本地文件绝对路径"});
     return false;
 }
 
@@ -182,11 +174,6 @@ bool ConfigValidator::validate_global(const AppConfig &cfg, std::vector<Validati
     if (cfg.max_fps <= 0)
     {
         errors.push_back({"global.max_fps", "必须 > 0"});
-        valid = false;
-    }
-    if (cfg.rtsp_encoder != "auto" && cfg.rtsp_encoder != "hw")
-    {
-        errors.push_back({"global.rtsp_encoder", "必须是auto或hw"});
         valid = false;
     }
     return valid;
@@ -294,12 +281,7 @@ bool ConfigValidator::validate_channels(const AppConfig &cfg, std::vector<Valida
         }
         else if (src_type == "rtsp")
         {
-            // RTSP 需要合法的 URL scheme
-            if (!is_valid_url(stream_location))
-            {
-                errors.push_back({prefix + ".stream.url", "RTSP地址必须以 rtsp:// 或 rtsps:// 开头"});
-                valid = false;
-            }
+            valid &= validate_network_url(stream_location, prefix, errors);
         }
         else if (src_type == "file" && !file_exists(stream_location))
         {
@@ -308,7 +290,8 @@ bool ConfigValidator::validate_channels(const AppConfig &cfg, std::vector<Valida
         }
 
         // 视频编码仅 RTSP 需要校验
-        if (src_type == "rtsp" && ch.stream.video_enc != "h264" && ch.stream.video_enc != "h265")
+        if (src_type == "rtsp" && config_utils::is_rtsp_url(stream_location) && ch.stream.video_enc != "h264" &&
+            ch.stream.video_enc != "h265")
         {
             errors.push_back({prefix + ".stream.video_enc", "必须是h264或h265"});
             valid = false;
@@ -395,6 +378,9 @@ bool ConfigValidator::validate_channels_critical(const AppConfig &cfg, std::vect
     {
         const auto &ch = cfg.channels[i];
         std::string prefix = "channels[" + std::to_string(i) + "]";
+
+        if (config_utils::normalize_src_type(ch.stream) == "rtsp")
+            valid &= validate_network_url(ch.stream.url, prefix, errors);
 
         for (size_t zone_index = 0; zone_index < ch.roi_zones.size(); ++zone_index)
             if (!valid_business_polygon(ch.roi_zones[zone_index].polygon))

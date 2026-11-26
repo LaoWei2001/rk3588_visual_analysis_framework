@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstddef>
-#include <functional>
 #include <json.h>
 #include <string>
 #include <vector>
@@ -41,20 +40,10 @@ class ConfigRegistry
     bool is_global_field(const char *key) const;
     bool is_channel_field(const char *key) const;
     bool sync_fields(void *dst, const void *src, bool is_global) const;
-    void add_reload_callback(std::function<void()> cb)
-    {
-        callbacks.push_back(cb);
-    }
-    void trigger_reload()
-    {
-        for (auto &cb : callbacks)
-            cb();
-    }
 
   private:
     std::vector<ConfigField> global_fields;
     std::vector<ConfigField> channel_fields;
-    std::vector<std::function<void()>> callbacks;
     bool parse_field(cJSON *obj, const ConfigField &field, void *base) const;
 };
 

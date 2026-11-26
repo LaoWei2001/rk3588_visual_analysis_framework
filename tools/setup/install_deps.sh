@@ -2,11 +2,11 @@
 # ============================================================================
 # RK3588 第三方环境一键配置（Debian / Ubuntu / Armbian）
 #
-#   bash install_deps.sh              安装运行、C/C++ 编译环境并预构建 Web 前端
-#   bash install_deps.sh --runtime-only    只安装运行环境
-#   bash install_deps.sh --check      不联网、不修改系统，验收默认完整环境
-#   bash install_deps.sh --check --runtime-only   只验收运行环境
-#   bash install_deps.sh --skip-app-check  准备制包机时忽略从其他系统复制来的旧二进制
+#   bash tools/setup/install_deps.sh              安装运行、C/C++ 编译环境并预构建 Web 前端
+#   bash tools/setup/install_deps.sh --runtime-only    只安装运行环境
+#   bash tools/setup/install_deps.sh --check      不联网、不修改系统，验收默认完整环境
+#   bash tools/setup/install_deps.sh --check --runtime-only   只验收运行环境
+#   bash tools/setup/install_deps.sh --skip-app-check  准备制包机时忽略从其他系统复制来的旧二进制
 #
 # 正常安装必须在盒子仍能访问 APT、PyPI/npm 镜像时执行。断网设备请先在同版本
 # 有网 ARM64 制作机上运行对应发行版的 create_bundle.sh；现场直接运行统一安装入口。
@@ -37,7 +37,7 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 
-PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FRONTEND_DIR="$PROJ/web_console/frontend"
 SYSTEM_ID="$(. /etc/os-release; printf '%s' "${ID:-unknown}")"
 SYSTEM_VERSION_ID="$(. /etc/os-release; printf '%s' "${VERSION_ID:-unknown}")"
@@ -718,7 +718,7 @@ PY
     if "$check_python" -m pip check; then
         check_pass "pip 依赖关系无冲突。"
     else
-        check_fail "pip 报告依赖缺失或版本冲突；断网机请重新运行 tools/offline_dev_install/debian/install_offline.sh。"
+        check_fail "pip 报告依赖缺失或版本冲突；断网机请重新运行 完整离线包中的 install_offline.sh。"
     fi
 
     local dpkg_audit_output=""
@@ -881,6 +881,14 @@ check_one_binary() {
     local actual_sha=""
 
     [ -x "$binary" ] || return
+    # 新包的公开入口是启动脚本，实际引擎与入口同目录并带 .bin 后缀。
+    if [ "$require_bundled_rknn" = true ] && { [ -e "$binary.bin" ] || [ -L "$binary.bin" ]; }; then
+        binary="$binary.bin"
+        if [ ! -f "$binary" ] || [ ! -x "$binary" ]; then
+            check_fail "$label 的引擎文件缺失或不可执行: $binary"
+            return
+        fi
+    fi
     binary_dir="$(cd "$(dirname "$binary")" && pwd)"
     lib_dir="$binary_dir/libs"
     if command -v readelf >/dev/null 2>&1; then
@@ -1051,7 +1059,7 @@ else
     [ "$CHECK_WARNINGS" -eq 0 ] \
         || echo "  仍有 $CHECK_WARNINGS 项兼容性警告，请查看上方提示并完成硬件冒烟测试。"
     echo "  到达断网现场后，可运行以下命令复检环境："
-    echo "    bash install_deps.sh --check$([ "$WANT_BUILD" = false ] && echo ' --runtime-only' || true)"
+    echo "    bash tools/setup/install_deps.sh --check$([ "$WANT_BUILD" = false ] && echo ' --runtime-only' || true)"
     echo "  继续统一部署或升级 Web 控制台与 GPIO 服务："
     echo "    sudo ./install.sh offline"
 fi

@@ -33,6 +33,7 @@
 #include "media/display/display_render.h"
 #include "media/rtsp/rtsp_streamer.h"
 #include "pipeline_internal.h"
+#include "vision/inference/npu_core_gate.h"
 #include <cerrno>
 #include <ctime>
 #include <pthread.h>
@@ -42,6 +43,8 @@ extern "C" void *display_worker_thread(void *arg)
     const int chnId = (int)(intptr_t)arg;
     DisplayQueue &dq = g_display_queues[chnId];
     bool had_performance_display = false;
+    bool repainted_after_failure = false;
+    DisplayTask task; // Describes the retained front slot until the next swap.
     std::shared_ptr<LazyVideoFrame> frozen_frame;
     cv::Mat frozen_image;
     service_watchdog::Progress watchdog_progress("display", chnId);
@@ -49,7 +52,6 @@ extern "C" void *display_worker_thread(void *arg)
     while (g_pCtrl && g_pCtrl->isRunning)
     {
         /* 新帧到达立即处理；停帧时每 250ms 更新性能文字。 */
-        DisplayTask task;
         bool reset_fps = false;
         bool has_frame = false;
         {
@@ -120,7 +122,14 @@ extern "C" void *display_worker_thread(void *arg)
         {
             const bool consumer_active =
                 app_ctrl_get_enable_disp() || (app_ctrl_get_enable_rtsp() && rtsp_streamer_has_active_client());
-            if (consumer_active && (show_perf || had_performance_display))
+            if (task.chnId >= 0 && !repainted_after_failure && npu::CoreLease::failed())
+            {
+                // The encoder reuses this tile on reconnect. Remove baked-in boxes even while no viewer is attached.
+                display_commit_frame(chnId, dq.pool.front_buf(), task.srcFmt, task.srcWidth, task.srcHeight,
+                                     task.srcHStride, task.srcVStride, false);
+                repainted_after_failure = true;
+            }
+            else if (consumer_active && (show_perf || had_performance_display))
                 display_refresh_channel_overlays(chnId);
             had_performance_display = show_perf;
             continue;

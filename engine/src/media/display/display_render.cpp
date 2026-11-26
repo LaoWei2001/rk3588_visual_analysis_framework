@@ -22,6 +22,7 @@
 #include "pipeline/frame_transform.h"
 #include "pipeline/image_convert.h"
 #include "vision/inference/inference_engine.h"
+#include "vision/inference/npu_core_gate.h"
 #include <channel.h> /* DrawCommand, vision::OverlayOptions */
 
 #include <algorithm>
@@ -183,10 +184,9 @@ bool display_prepare_source_frame(int chnId, const void *pSrcData, int srcFmt, i
 }
 
 void display_commit_frame(int chnId, const void *pSrcData, int srcFmt, int srcWidth, int srcHeight, int srcHStride,
-                          int srcVStride)
+                          int srcVStride, bool new_preview_frame)
 {
-    char *pFront = *g_pCtrl->pDispBuffer;
-    if (!pFront)
+    if (!g_pCtrl->pDispBuffer || !*g_pCtrl->pDispBuffer)
         return;
 
     if (!pSrcData || srcWidth <= 0 || srcHeight <= 0 || srcHStride <= 0 || srcVStride <= 0)
@@ -207,7 +207,8 @@ void display_commit_frame(int chnId, const void *pSrcData, int srcFmt, int srcWi
     cv::Mat staging_view = cs.tile_staging(cv::Rect(0, 0, tile_w, tile_h));
 
     write_channel_view(chnId, staging_view);
-    cs.preview_rate.tick();
+    if (new_preview_frame)
+        cs.preview_rate.tick();
 }
 
 void display_refresh_channel_overlays(int chnId)
@@ -223,7 +224,7 @@ void display_refresh_channel_overlays(int chnId)
     vision::OverlayOptions params;
     params.chnId = chnId;
     params.disp_fps = app_ctrl_get_disp_fps(chnId);
-    params.infer_fps = inference_get_infer_fps(chnId);
+    params.infer_fps = npu::CoreLease::failed() ? 0.0f : inference_get_infer_fps(chnId);
     const auto runtime = app_ctrl_get_runtime_snapshot();
     const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, chnId);
     params.show_network_rtt = channel && channel->stream.src_type == "rtsp";

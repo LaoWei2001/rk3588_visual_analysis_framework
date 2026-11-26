@@ -123,7 +123,7 @@ void *persistence_worker(void *)
     return nullptr;
 }
 
-bool ensure_workers_locked(bool need_image_worker)
+bool ensure_workers_locked()
 {
     if (!g_persist_started)
     {
@@ -140,7 +140,7 @@ bool ensure_workers_locked(bool need_image_worker)
         g_persist_started = true;
     }
 
-    if (need_image_worker && !g_worker_started)
+    if (!g_worker_started)
     {
         g_running = true;
         if (pthread_create(&g_worker_tid, nullptr, image_worker, nullptr) != 0)

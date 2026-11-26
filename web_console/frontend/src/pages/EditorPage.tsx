@@ -1,4 +1,5 @@
 import { sharedReportSettings, updateNodeConfiguration } from '../utils/reportSettings'
+import { isAxiosError } from 'axios'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {
@@ -51,12 +52,26 @@ import ConfigSyncNotice from '../components/ConfigSyncNotice'
 
 const RIGHT_PANEL_STORAGE_KEY = 'rk3588.editor.rightPanelWidth'
 const BOTTOM_PANEL_STORAGE_KEY = 'rk3588.editor.bottomPanelHeight'
+const BOTTOM_PANEL_MODE_KEY = 'rk3588.editor.bottomPanelMode'
 const RIGHT_PANEL_DEFAULT = 360
 const RIGHT_PANEL_MIN = 260
 const RIGHT_PANEL_MAX = 900
-const BOTTOM_PANEL_DEFAULT = 220
-const BOTTOM_PANEL_MIN = 150
+const BOTTOM_PANEL_DEFAULT = 150
+const BOTTOM_PANEL_MIN = 34
 const BOTTOM_PANEL_MAX = 900
+
+async function readBoardConfig(app: string, path: string) {
+  if (path === 'assets/config.json') return fetchConfig(app)
+  try { return await loadConfigFile(app, path) }
+  catch (error) {
+    if (isAxiosError(error) && error.response?.status === 404) return null
+    throw error
+  }
+}
+
+function openDialog(element: HTMLDialogElement | null) {
+  if (element && !element.open) element.showModal()
+}
 
 function storedPanelSize(key: string, fallback: number, min: number, max: number): number {
   try {
@@ -315,12 +330,36 @@ export default function EditorPage() {
   const [globalSettings, setGlobalSettings] = useState<GlobalSettingsData>(DEFAULT_GLOBAL_SETTINGS)
   const [importFiles,    setImportFiles]   = useState<string[]>([])
   const [showImport,     setShowImport]    = useState(false)
-  const [leavePrompt,    setLeavePrompt]    = useState(false)   // 未保存退出时的「是否保存配置」弹窗
+  const [leavePrompt, setLeavePrompt] = useState<{
+    action: '离开' | '切换'; destination: string; proceed: () => void | Promise<void>
+  } | null>(null)
+  const [switching, setSwitching] = useState(false)
+  const [mobilePanel, setMobilePanel] = useState<'global' | 'json' | null>(null)
+  const guardDraft = (action: '离开' | '切换', destination: string, proceed: () => void | Promise<void>) => {
+    if (dirtyRef.current) { setToast(null); setLeavePrompt({ action, destination, proceed }) }
+    else void proceed()
+  }
   const [showIntegrations, setShowIntegrations] = useState(false)
   const [rightPanelWidth, setRightPanelWidth] = useState(() =>
     storedPanelSize(RIGHT_PANEL_STORAGE_KEY, RIGHT_PANEL_DEFAULT, RIGHT_PANEL_MIN, RIGHT_PANEL_MAX))
+  const [bottomPanelAuto, setBottomPanelAuto] = useState(() => {
+    try { return window.localStorage.getItem(BOTTOM_PANEL_MODE_KEY) !== 'manual' }
+    catch { return true }
+  })
+  const bottomContentHeight = useRef(BOTTOM_PANEL_DEFAULT)
   const [bottomPanelHeight, setBottomPanelHeight] = useState(() =>
     storedPanelSize(BOTTOM_PANEL_STORAGE_KEY, BOTTOM_PANEL_DEFAULT, BOTTOM_PANEL_MIN, BOTTOM_PANEL_MAX))
+  const fitBottomContent = useCallback((height: number) => {
+    bottomContentHeight.current = height
+    if (!bottomPanelAuto || panelResizeRef.current?.axis === 'bottom') return
+    const available = (editorPageRef.current?.clientHeight ?? window.innerHeight) - 220
+    setBottomPanelHeight(Math.min(Math.max(BOTTOM_PANEL_MIN, available), BOTTOM_PANEL_MAX,
+      Math.max(BOTTOM_PANEL_MIN, height)))
+  }, [bottomPanelAuto])
+  const setBottomMode = useCallback((automatic: boolean) => {
+    setBottomPanelAuto(automatic)
+    try { window.localStorage.setItem(BOTTOM_PANEL_MODE_KEY, automatic ? 'auto' : 'manual') } catch { /* storage unavailable */ }
+  }, [])
   // 当前正在编辑/将保存到的配置文件（相对 app 目录）。导入/另存为后会切到对应文件，
   // 之后「保存」写到这里 —— 这样可以在副本上改而不动 config.json。
   const [currentFile,    setCurrentFile]   = useState('assets/config.json')
@@ -344,18 +383,21 @@ export default function EditorPage() {
       const bottomMax = Math.min(BOTTOM_PANEL_MAX, Math.max(BOTTOM_PANEL_MIN,
         (editorPageRef.current?.clientHeight ?? window.innerHeight) - 220))
       setRightPanelWidth(value => Math.min(value, rightMax))
-      setBottomPanelHeight(value => Math.min(value, bottomMax))
+      setBottomPanelHeight(value => Math.min(bottomPanelAuto ? bottomContentHeight.current : value, bottomMax))
     }
     fitPanelSizes()
     window.addEventListener('resize', fitPanelSizes)
     return () => {
       window.removeEventListener('resize', fitPanelSizes)
-      const drag = panelResizeRef.current
-      if (drag) {
-        document.body.style.cursor = drag.previousCursor
-        document.body.style.userSelect = drag.previousUserSelect
-        panelResizeRef.current = null
-      }
+    }
+  }, [bottomPanelAuto])
+
+  useEffect(() => () => {
+    const drag = panelResizeRef.current
+    if (drag) {
+      document.body.style.cursor = drag.previousCursor
+      document.body.style.userSelect = drag.previousUserSelect
+      panelResizeRef.current = null
     }
   }, [])
 
@@ -366,6 +408,7 @@ export default function EditorPage() {
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
     const isRight = axis === 'right'
+    if (!isRight) setBottomMode(false)
     panelResizeRef.current = {
       axis,
       pointerId: event.pointerId,
@@ -377,7 +420,7 @@ export default function EditorPage() {
     }
     document.body.style.cursor = isRight ? 'col-resize' : 'row-resize'
     document.body.style.userSelect = 'none'
-  }, [rightPanelWidth, bottomPanelHeight])
+  }, [rightPanelWidth, bottomPanelHeight, setBottomMode])
 
   const movePanelResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const drag = panelResizeRef.current
@@ -430,6 +473,7 @@ export default function EditorPage() {
       setRightPanelWidth(next)
       savePanelSize(RIGHT_PANEL_STORAGE_KEY, next)
     } else {
+      setBottomMode(false)
       const available = (editorPageRef.current?.clientHeight ?? window.innerHeight) - 220
       const max = Math.min(BOTTOM_PANEL_MAX, Math.max(BOTTOM_PANEL_MIN, available))
       const next = Math.min(max, Math.max(BOTTOM_PANEL_MIN,
@@ -437,7 +481,7 @@ export default function EditorPage() {
       setBottomPanelHeight(next)
       savePanelSize(BOTTOM_PANEL_STORAGE_KEY, next)
     }
-  }, [rightPanelWidth, bottomPanelHeight])
+  }, [rightPanelWidth, bottomPanelHeight, setBottomMode])
 
   // ── 撤销/恢复 历史栈 (Ctrl+Z / Ctrl+Y) ──
   const gsRef   = useRef(globalSettings)
@@ -624,7 +668,7 @@ export default function EditorPage() {
 
   const configSyncError = useAutoSync(async () => {
     if (!appName) throw new Error('未选择程序')
-    const cfg = currentFile === 'assets/config.json' ? await fetchConfig(appName) : await loadConfigFile(appName, currentFile)
+    const cfg = await readBoardConfig(appName, currentFile)
     if (!cfg && remoteConfig.current?.signature !== configSignature(null)) throw new Error('当前配置文件已不存在，请重新选择文件或另存为')
     return cfg as Record<string, unknown> | null
   }, cfg => {
@@ -635,7 +679,7 @@ export default function EditorPage() {
       remoteConfig.current = { signature: remoteConfig.current?.signature ?? configSignature(null), value: cfg }
       setConfigConflict(true)
     } else applyConfig(cfg)
-  }, { enabled: !!appName && configReady && !saving, scope: `${appName}/${currentFile}`, immediate: false })
+  }, { enabled: !!appName && configReady && !saving && !switching, scope: `${appName}/${currentFile}`, immediate: false })
   const resourceSyncError = useAutoSync(() => Promise.all([fetchAssets(appName!), fetchConnections(appName!), fetchConfigFiles(appName!), fetchAppLogics(appName!)]),
     ([nextAssets, connections, files, logics]) => {
       if (useEditorStore.getState().appName !== appName) return
@@ -826,18 +870,11 @@ export default function EditorPage() {
     event.dataTransfer.dropEffect = 'copy'
   }, [])
 
-  const onDrop = useCallback((event: React.DragEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
-    const nodeType = event.dataTransfer.getData('application/reactflow')
-      || event.dataTransfer.getData('text/plain')
-      || dragNodeTypeRef.current
-      || ''
-    dragNodeTypeRef.current = null
+  const addPaletteNode = useCallback((nodeType: string, point: { x: number; y: number }) => {
     if (!nodeType || !rfInstance) return
     // 白名单防御：只接受主画布 palette 注册过的类型。
     if (!(nodeType in NODE_DEFAULTS)) return
-    const position = rfInstance.screenToFlowPosition({ x: event.clientX, y: event.clientY })
+    const position = rfInstance.screenToFlowPosition(point)
     const id = uid(nodeType)
     setNodes(ns => {
       const data = { ...(NODE_DEFAULTS[nodeType] ?? {}) }
@@ -864,6 +901,17 @@ export default function EditorPage() {
       return [...ns, { id, type: nodeType, position, data } as Node]
     })
   }, [rfInstance, setNodes])
+
+  const onDrop = (event: React.DragEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const nodeType = event.dataTransfer.getData('application/reactflow')
+      || event.dataTransfer.getData('text/plain')
+      || dragNodeTypeRef.current
+      || ''
+    dragNodeTypeRef.current = null
+    addPaletteNode(nodeType, { x: event.clientX, y: event.clientY })
+  }
 
   // ── 复制 / 剪切 / 粘贴 选中节点 (Ctrl+C / X / V) ──
   const copySelection = useCallback((): number => {
@@ -1022,7 +1070,7 @@ export default function EditorPage() {
       toastTimer.current = setTimeout(() => { setToast(null); toastTimer.current = null }, 1500)
     }
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || document.querySelector('dialog[open]')) return
       // 在输入框/下拉里打字时不抢快捷键
       const t = e.target as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
@@ -1053,6 +1101,7 @@ export default function EditorPage() {
   const handleImportFile = async (filePath: string) => {
     if (!appName) return
     setShowImport(false)
+    setSwitching(true)
     try {
       const cfg = await loadConfigFile(appName, filePath)
       // ROI 与画布布局都从当前配置文件恢复，每份配置互不串用。
@@ -1061,7 +1110,7 @@ export default function EditorPage() {
       showToast(`已加载 ${filePath}（保存将写入此文件）`)
     } catch (e: unknown) {
       showToast(`加载失败: ${e instanceof Error ? e.message : String(e)}`, false)
-    }
+    } finally { setSwitching(false) }
   }
 
   // ── 从操作电脑导入 JSON：只加载到画布，点击“保存/另存为”后才写入板端 ──
@@ -1071,7 +1120,6 @@ export default function EditorPage() {
     // 清空选择值，允许用户修正文件后再次选择同一个文件名。
     input.value = ''
     if (!file) return
-    if (dirtyRef.current && !window.confirm('当前画布有未保存改动，确定用本地配置替换吗？')) return
 
     try {
       const parsed: unknown = JSON.parse(await file.text())
@@ -1086,10 +1134,21 @@ export default function EditorPage() {
       let fileName = file.name.replace(/\\/g, '/').split('/').pop() || 'config_imported.json'
       if (!fileName.toLowerCase().endsWith('.json')) fileName += '.json'
       // ROI 只从 channels[].roi_zones 恢复。
-      applyConfig(cfg, false)
-      setCurrentFile(`assets/${fileName}`)
-      setShowImport(false)
-      showToast(`已从电脑导入 ${fileName}，尚未写入板端；请点击保存或另存为`)
+      if (!appName) return
+      const path = `assets/${fileName}`
+      guardDraft('切换', fileName, async () => {
+        setSwitching(true)
+        try {
+          const baseline = await readBoardConfig(appName, path)
+          remoteConfig.current = { signature: configSignature(baseline), value: baseline ?? {} }
+          setConfigConflict(false)
+          applyConfig(cfg, false)
+          setCurrentFile(path)
+          setShowImport(false)
+          showToast(`已从电脑导入 ${fileName}，尚未写入板端；请点击保存或另存为`)
+        } catch (error) { showToast(`读取板端目标文件失败：${apiErrorMessage(error)}`, false) }
+        finally { setSwitching(false) }
+      })
     } catch (e: unknown) {
       showToast(`本地配置导入失败: ${e instanceof Error ? e.message : String(e)}`, false)
     }
@@ -1107,16 +1166,19 @@ export default function EditorPage() {
     if (importFiles.includes(path) || path === 'assets/config.json') {
       if (!window.confirm(`${fname} 已存在，覆盖为一个空配置？`)) return
     }
-    setSaving(true)
-    try {
-      const r = await saveConfigFile(appName, path, {})
-      applyConfig({})                    // 空白画布
-      setCurrentFile(r.path)             // 之后「保存」写到新文件
-      setShowImport(false)
-      showToast(`已新建 ${fname}，现在编辑的是空配置`)
-    } catch (e: unknown) {
-      showToast(`新建失败: ${e instanceof Error ? e.message : String(e)}`, false)
-    } finally { setSaving(false) }
+    setShowImport(false)
+    guardDraft('切换', fname, async () => {
+      setSwitching(true)
+      try {
+        const r = await saveConfigFile(appName, path, {})
+        applyConfig({})                    // 空白画布
+        setCurrentFile(r.path)             // 之后「保存」写到新文件
+        setShowImport(false)
+        showToast(`已新建 ${fname}，现在编辑的是空配置`)
+      } catch (e: unknown) {
+        showToast(`新建失败: ${e instanceof Error ? e.message : String(e)}`, false)
+      } finally { setSwitching(false) }
+    })
   }
 
   // ── 删除一个配置文件 ──
@@ -1156,11 +1218,10 @@ export default function EditorPage() {
       return null
     }
 
-    // 本地资源必须来自当前程序实际扫描到的 assets/ 文件。配置中的失效旧路径
-    // 可以留在画布上供用户修复，但不能再次保存为看似有效的配置。
+    // 板端绝对路径直接交给文件播放通道。只有包内资源需要核对 assets/ 清单。
     const modelNodes = nodes.filter(n => n.type === 'model')
-    const hasLocalAssetReference = streamNodes.some(node =>
-      String((node.data as Record<string, unknown>).src_type ?? '') === 'file')
+    const hasLocalAssetReference = streamNodes.some(({ data }) =>
+      data.src_type === 'file' && !!data.url && !String(data.url).startsWith('/'))
       || modelNodes.some(node => {
         const data = node.data as Record<string, unknown>
         return data.enable !== false
@@ -1180,11 +1241,11 @@ export default function EditorPage() {
       const channelId = Number(data.channel_id ?? 0)
       const path = String(data.url ?? '')
       if (!path) {
-        showToast(`Ch.${channelId} 尚未选择视频文件，不能保存`, false)
+        showToast(`Ch.${channelId} 请填写板端视频路径或选择程序内的视频`, false)
         return null
       }
-      if (!assets.videos.includes(path)) {
-        showToast(`Ch.${channelId} 的视频文件不存在：${path}。请重新选择或导入后再保存`, false)
+      if (!path.startsWith('/') && !assets.videos.includes(path)) {
+        showToast(`Ch.${channelId} 的程序内视频不存在：${path}。板端其他目录请填写以 / 开头的绝对路径`, false)
         return null
       }
     }
@@ -1405,7 +1466,7 @@ export default function EditorPage() {
     const writtenSignature = histSig(makeHistorySnap())
     setSaving(true)
     try {
-      const latest = currentFile === 'assets/config.json' ? await fetchConfig(appName) : await loadConfigFile(appName, currentFile)
+      const latest = await readBoardConfig(appName, currentFile)
       if (remoteConfig.current && configSignature(latest) !== remoteConfig.current.signature) {
         if (latest) remoteConfig.current.value = latest as Record<string, unknown>
         setConfigConflict(true)
@@ -1475,8 +1536,7 @@ export default function EditorPage() {
 
   // 返回程序管理：有未保存改动 → 弹「是否保存配置」(保存并离开 / 不保存离开 / 取消)
   const handleBack = () => {
-    if (dirty) { setLeavePrompt(true); return }
-    navigate('/')
+    guardDraft('离开', '程序管理', () => navigate('/'))
   }
 
   const nodeColor = (n: Node) => {
@@ -1490,6 +1550,8 @@ export default function EditorPage() {
 
   return (
     <div className="editor-page" ref={editorPageRef}>
+      {switching && <dialog ref={openDialog} className="import-dialog draft-dialog" aria-label="正在切换配置"
+        onCancel={event => event.preventDefault()}>正在切换配置…</dialog>}
       {toast && (
         <div className={`editor-toast ${toast.ok ? 'ok' : 'err'}`}>
           <span>{toast.msg}</span>
@@ -1511,7 +1573,10 @@ export default function EditorPage() {
               ? <div className="import-empty">未找到 JSON 文件</div>
               : importFiles.map(f => (
                   <div key={f} className="import-file-row">
-                    <button className="import-file-btn" onClick={() => handleImportFile(f)}>{cfgBase(f)}</button>
+                    <button className="import-file-btn" onClick={() => {
+                      setShowImport(false)
+                      guardDraft('切换', cfgBase(f), () => handleImportFile(f))
+                    }}>{cfgBase(f)}</button>
                     <button className="import-del-btn" title="删除该配置文件"
                             onClick={() => handleDeleteFile(f)}>🗑</button>
                   </div>
@@ -1522,27 +1587,26 @@ export default function EditorPage() {
         </div>
       )}
 
-      {/* 未保存退出确认: 保存并离开 / 不保存离开 / 取消 */}
       {leavePrompt && (
-        <div className="import-overlay" onClick={() => setLeavePrompt(false)}>
-          <div className="import-dialog" onClick={e => e.stopPropagation()} style={{ maxWidth: 440 }}>
-            <div className="import-header">
-              有未保存的改动 — 是否保存配置？
-              <button onClick={() => setLeavePrompt(false)}>✕</button>
+        <dialog ref={openDialog} className="import-dialog draft-dialog" aria-label="有未保存的改动"
+          onCancel={event => { event.preventDefault(); if (!saving) setLeavePrompt(null) }}>
+            <div className="import-header">有未保存的改动</div>
+            <p style={{ padding: '0 16px' }}>当前文件 <b>{cfgBase(currentFile)}</b> 有未保存的修改。前往 {leavePrompt.destination} 前是否保存？</p>
+            {toast && !toast.ok && <p className="draft-error" role="alert">{toast.msg}</p>}
+            <div className="draft-actions">
+              <button className="tb-btn" autoFocus disabled={saving} onClick={() => setLeavePrompt(null)}>取消</button>
+              <button className="tb-btn" disabled={saving} onClick={() => {
+                setLeavePrompt(null)
+                void leavePrompt.proceed()
+              }}>不保存{leavePrompt.action}</button>
+              <button className="tb-btn save" disabled={saving} onClick={async () => {
+                if (await handleSave()) {
+                  setLeavePrompt(null)
+                  await leavePrompt.proceed()
+                }
+              }}>{saving ? '保存中…' : `保存并${leavePrompt.action}`}</button>
             </div>
-            <div style={{ padding: '16px 18px', fontSize: 13, lineHeight: 1.6 }}>
-              画布有未保存的修改。离开前是否保存到 <b>{cfgBase(currentFile)}</b>？
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', padding: '0 16px 16px' }}>
-              <button className="tb-btn" onClick={() => setLeavePrompt(false)}>取消</button>
-              <button className="tb-btn" onClick={() => { setLeavePrompt(false); navigate('/') }}>不保存离开</button>
-              <button className="tb-btn save" disabled={saving}
-                onClick={async () => { setLeavePrompt(false); if (await handleSave()) navigate('/') }}>
-                {saving ? '保存中…' : '保存并离开'}
-              </button>
-            </div>
-          </div>
-        </div>
+        </dialog>
       )}
 
       {/* Toolbar */}
@@ -1556,7 +1620,7 @@ export default function EditorPage() {
         />
         <button className="tb-btn" onClick={handleBack}>← 返回</button>
         <span className="tb-title">
-          {appName ? `配置: ${appName}` : '流程编辑器'}
+          <span className="tb-app-name">{appName ? `配置: ${appName}` : '流程编辑器'}</span>
           {appName && <span className="tb-file" title={`当前编辑的文件：${currentFile}`}>📄 {cfgBase(currentFile)}</span>}
           {dirty && <span className="tb-dirty" title="有未保存的改动">● 未保存</span>}
         </span>
@@ -1569,10 +1633,10 @@ export default function EditorPage() {
           </button>
           <button className="tb-btn" onClick={handleExport} disabled={saving}>⬇ 导出</button>
           <button className="tb-btn" onClick={handleSaveAs} disabled={saving}>🗐 另存为</button>
-          <button className="tb-btn save"   onClick={handleSave} disabled={saving}>
-            {saving ? '保存中…' : '💾 保存'}
-          </button>
         </div>
+        <button className="tb-btn save" onClick={handleSave} disabled={saving}>
+          {saving ? '保存中…' : '💾 保存'}
+        </button>
       </div>
 
       <ConfigSyncNotice error={configSyncError || resourceSyncError} conflict={configConflict} onReload={() => {
@@ -1580,12 +1644,16 @@ export default function EditorPage() {
       }} />
       {/* Draggable node palette */}
       <div className="node-palette">
-        <span className="palette-label">拖拽到画布：</span>
+        <span className="palette-label">点击添加或拖入画布：</span>
         {PALETTE_NODES.map(p => (
-          <div
+          <button type="button"
             key={p.type}
             className={`palette-chip ${p.cls}`}
             draggable
+            onClick={() => {
+              const bounds = editorMainRef.current?.querySelector('.flow-container')?.getBoundingClientRect()
+              if (bounds) addPaletteNode(p.type, { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 })
+            }}
             onDragStart={e => {
               dragNodeTypeRef.current = p.type
               e.dataTransfer.setData('application/reactflow', p.type)
@@ -1595,7 +1663,7 @@ export default function EditorPage() {
             onDragEnd={() => { dragNodeTypeRef.current = null }}
           >
             {p.icon} {p.label}
-          </div>
+          </button>
         ))}
       </div>
 
@@ -1614,7 +1682,7 @@ export default function EditorPage() {
             onConnect={onConnect}
             onInit={setRfInstance}
             nodeTypes={nodeTypes}
-            deleteKeyCode="Delete"
+            deleteKeyCode={leavePrompt || switching ? null : 'Delete'}
             proOptions={{ hideAttribution: true }}
             selectionOnDrag={true}
             selectionMode={SelectionMode.Partial}
@@ -1644,7 +1712,7 @@ export default function EditorPage() {
         </div>
 
         {/* Right config sidebar */}
-        <div className="editor-sidebar" style={{ width: rightPanelWidth }}>
+        <div className={`editor-sidebar${selectedNode ? ' has-selection' : ''}`} style={{ width: rightPanelWidth }}>
           <div
             className="editor-panel-resizer editor-panel-resizer-right"
             role="separator"
@@ -1662,6 +1730,8 @@ export default function EditorPage() {
             onLostPointerCapture={endPanelResize}
             onKeyDown={event => resizePanelByKeyboard('right', event)}
           />
+          <button className="tb-btn mobile-inspector-close" onClick={() =>
+            setNodes(ns => ns.map(node => node.selected ? { ...node, selected: false } : node))}>收起节点属性</button>
           <NodeConfigPanel
             node={selectedNode}
             onUpdate={handleUpdateNodeData}
@@ -1695,7 +1765,8 @@ export default function EditorPage() {
         aria-valuemax={BOTTOM_PANEL_MAX}
         aria-valuenow={Math.round(bottomPanelHeight)}
         tabIndex={0}
-        title="上下拖拽调整底部栏高度"
+        title="上下拖拽调整高度；双击恢复内容自适应"
+        onDoubleClick={() => setBottomMode(true)}
         onPointerDown={event => beginPanelResize('bottom', event)}
         onPointerMove={movePanelResize}
         onPointerUp={endPanelResize}
@@ -1703,8 +1774,14 @@ export default function EditorPage() {
         onLostPointerCapture={endPanelResize}
         onKeyDown={event => resizePanelByKeyboard('bottom', event)}
       />
-      <div className="editor-bottom" style={{ height: bottomPanelHeight }}>
-        <GlobalSettingsPanel settings={globalSettings} onChange={setGlobalSettings} />
+      <div className="editor-mobile-tabs">
+        {(['global', 'json'] as const).map(panel => <button key={panel} className="tb-btn"
+          aria-expanded={mobilePanel === panel} onClick={() => setMobilePanel(value => value === panel ? null : panel)}>
+          {panel === 'global' ? '全局设置' : '配置 JSON'}
+        </button>)}
+      </div>
+      <div className="editor-bottom" data-mobile-panel={mobilePanel ?? 'closed'} data-sizing={bottomPanelAuto ? 'auto' : 'manual'} style={{ height: bottomPanelHeight }}>
+        <GlobalSettingsPanel settings={globalSettings} onChange={setGlobalSettings} onContentHeightChange={fitBottomContent} />
         <ConfigPreviewPanel fileName={cfgBase(currentFile)} json={previewJson} />
       </div>
     </div>

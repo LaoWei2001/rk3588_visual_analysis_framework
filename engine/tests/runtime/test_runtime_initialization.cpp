@@ -27,8 +27,12 @@ bool inference_allocation_rollback()
     AppConfig config;
     config.enable_display = false;
     config.enable_rtsp = false;
+    // Exercise configured channels. Unused slots share one immutable default filter.
+    config.channels.resize(MAX_CHANNEL_NUM);
+    for (int id = 0; id < MAX_CHANNEL_NUM; ++id)
+        config.channels[id].id = id;
     int failure_cases = 0;
-    for (int point = 0; point < MAX_CHANNEL_NUM + 16; ++point)
+    for (int point = 0; ; ++point)
     {
         allocations_before_failure = point;
         allocation_failed = false;
@@ -37,7 +41,7 @@ bool inference_allocation_rollback()
             if (inference_init(config) != 0)
             {
                 allocations_before_failure = -1;
-                return require(false, "empty inference configuration should initialize");
+                return require(false, "model-free channels should initialize");
             }
         }
         catch (const std::bad_alloc &)

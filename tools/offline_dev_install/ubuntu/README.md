@@ -59,6 +59,8 @@ cd /userdata/full-bundle
 sudo bash install_offline.sh
 ```
 
+Web 端口由目标板在安装时选择。首次安装可省略，默认 8080；更新时省略会沿用原端口。要使用 9090，在包目录运行 `sudo bash install_offline.sh --port 9090`，完成后访问 `http://设备IP:9090`。
+
 该一键安装同时安装 GPIO 实时控制与电平保持服务；首次安装会自动把继电器
 `GPIO6_A2` 设置为低电平，无需再进入 `services/framework/gpio_state/`。
 

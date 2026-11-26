@@ -83,7 +83,7 @@
   transition: border-color 0.15s;
 }
 
-.app-card.running { border-color: #166534; }
+.app-card.running { border-color: #63b694; }
 .app-card:hover { border-color: var(--accent); }
 
 /* 亚克力程序卡片：背后的点阵渐变会透过来、被柔化，立体感更强 */

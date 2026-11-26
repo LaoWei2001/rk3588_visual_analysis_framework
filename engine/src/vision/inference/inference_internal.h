@@ -87,17 +87,21 @@ struct FpsTracker
 
 /*======================== 推理引擎主状态（模块级单例）========================*/
 
+struct ChannelFilters
+{
+    size_t active_count = 0;
+    float obj_thresh = 0.0f;
+    float nms_thresh = 1.0f;
+    std::set<int> classes;
+};
+
 struct InferenceRuntime
 {
     pthread_rwlock_t dispatch_mtx;
 
     std::vector<std::vector<std::shared_ptr<ModelGroup>>> model_groups_per_chn{MAX_CHANNEL_NUM};
 
-    std::atomic<float> obj_thresh[MAX_CHANNEL_NUM]{};
-    std::atomic<float> nms_thresh[MAX_CHANNEL_NUM]{};
-
-    std::shared_ptr<const std::set<int>> detect_classes[MAX_CHANNEL_NUM];
-    pthread_mutex_t detect_classes_mtx;
+    std::shared_ptr<const ChannelFilters> filters[MAX_CHANNEL_NUM];
 
     std::vector<std::unique_ptr<InferenceTaskQueue>> task_queues;
     std::atomic<bool> running{false};

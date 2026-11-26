@@ -44,7 +44,8 @@ def recovery_ui():
                    service=dict(installed=True, active=True, enabled=True, heartbeat_fresh=True, error=None),
                    interfaces=[dict(name='eth0', type='ethernet', state='connected')],
                    interface_error=None, policy_pending=False, runtime=None, events=[])
-    snapshots = {'/api/system/recovery': system, '/api/system/recovery/network': network,
+    snapshots = {'/api/auth/me': {'username': 'tester'},
+                 '/api/system/recovery': system, '/api/system/recovery/network': network,
                  '/api/system/device-info': device_overview(),
                  '/api/system/recovery/history': {'events': [], 'keep_per_category': 20, 'keep_operations': 20,
                                                   'error': None, 'observer': {'updated_at': time.time()}}}
@@ -303,7 +304,7 @@ def device_overview():
 def test_device_info_is_centralized_in_system_settings_and_read_only(recovery_ui):
     page, url, snapshots, writes = recovery_ui
     requests = []
-    page.on('request', lambda request: requests.append(request) if '/api/' in request.url else None)
+    page.on('request', lambda request: requests.append(request) if '/api/system/' in request.url else None)
     page.goto(url + '/system-settings?section=device')
     card = visible_card(page)
     playwright.expect(card.locator('h4')).to_have_text('设备基本信息')

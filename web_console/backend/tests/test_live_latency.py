@@ -42,6 +42,7 @@ for key in list(os.environ):
 
 root, dist, router_file, http_port, rtsp_port = sys.argv[1:]
 root, dist = pathlib.Path(root), pathlib.Path(dist)
+os.environ['APPS_ROOT'] = str(root)
 spec = importlib.util.spec_from_file_location('latency_stream', router_file)
 stream = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = stream
@@ -99,7 +100,7 @@ if engine_binary:
     with socket.socket() as port_probe:
         port_probe.bind(('127.0.0.1',0))
         output_port = port_probe.getsockname()[1]
-    config['global'].update(enable_display=bool(os.environ.get('RK3588_TEST_HDMI')),enable_rtsp=True,rtsp_codec='h264',rtsp_port=output_port,rtsp_path='/live')
+    config['global'].update(enable_display=bool(os.environ.get('RK3588_TEST_HDMI')),enable_rtsp=True,rtsp_port=output_port,rtsp_path='/live')
     crop_cols = config['global']['tile_cols']
     crop_rows = config['global']['tile_rows']
     for channel in config['channels']:

@@ -141,6 +141,8 @@ async def upload_app(file: UploadFile = File(...), name: str = Form("")):
     try:
         tmp = await run_in_threadpool(_save)
         info = await run_in_threadpool(_install_pkg, tmp, app_name)
+    except pm.CommandLineAppRunningError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as e:
@@ -163,7 +165,10 @@ async def delete_app(name: str, delete_data: bool = False):
                 raise HTTPException(status_code=400, detail="程序目录不能是符号链接")
             if not dest.is_dir():
                 raise HTTPException(status_code=404, detail=f"程序不存在: {app_name}")
-            pm.stop_app(app_name)
+            try:
+                pm.stop_app(app_name)
+            except pm.CommandLineAppRunningError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             shutil.rmtree(dest)
             data_deleted = False
             if delete_data:

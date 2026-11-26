@@ -33,10 +33,8 @@ void render_composite_image(ImageJob &job)
     if (job.panes.empty())
         return;
 
-    if (job.need_raw)
-        job.raw = cv::Mat::zeros(job.composite_height, job.composite_width, CV_8UC3);
-    if (job.need_annotated)
-        job.annotated = cv::Mat::zeros(job.composite_height, job.composite_width, CV_8UC3);
+    job.raw = cv::Mat::zeros(job.composite_height, job.composite_width, CV_8UC3);
+    job.annotated = cv::Mat::zeros(job.composite_height, job.composite_width, CV_8UC3);
 
     for (size_t index = 0; index < job.panes.size(); ++index)
     {
@@ -47,10 +45,7 @@ void render_composite_image(ImageJob &job)
 
         cv::Mat resized;
         cv::resize(pane.frame, resized, tile.size());
-        if (job.need_raw)
-            resized.copyTo(job.raw(tile));
-        if (!job.need_annotated)
-            continue;
+        resized.copyTo(job.raw(tile));
 
         cv::Mat annotated_tile = job.annotated(tile);
         resized.copyTo(annotated_tile);
@@ -92,7 +87,7 @@ void *image_worker(void *)
             {
                 render_composite_image(job);
             }
-            else if (job.need_annotated)
+            else
             {
                 /* report_event 只传递不可变 Mat 引用；深拷贝和叠加统一留在图片线程。 */
                 job.annotated = job.overlay_mode == "none" ? job.raw : job.raw.clone();
@@ -105,12 +100,10 @@ void *image_worker(void *)
                     render_runtime_overlays(job.annotated, job.render_params);
                 }
             }
-            snapshot_ok =
-                !job.need_annotated ||
-                (!job.annotated.empty() && cv::imwrite(job.event_dir + "/annotated.jpg", job.annotated, params) &&
-                 event_storage::sync_file(job.event_dir + "/annotated.jpg"));
-            raw_ok = !job.need_raw || (!job.raw.empty() && cv::imwrite(job.event_dir + "/raw.jpg", job.raw, params) &&
-                                       event_storage::sync_file(job.event_dir + "/raw.jpg"));
+            snapshot_ok = !job.annotated.empty() && cv::imwrite(job.event_dir + "/annotated.jpg", job.annotated, params) &&
+                          event_storage::sync_file(job.event_dir + "/annotated.jpg");
+            raw_ok = !job.raw.empty() && cv::imwrite(job.event_dir + "/raw.jpg", job.raw, params) &&
+                     event_storage::sync_file(job.event_dir + "/raw.jpg");
         }
         catch (const cv::Exception &exc)
         {
@@ -118,13 +111,8 @@ void *image_worker(void *)
         }
         if (snapshot_ok && raw_ok)
         {
-            if (job.need_annotated && job.need_raw)
-                update_media_state(job.event_dir, "image", "ready", "",
-                                   {{"annotated_image", "annotated.jpg"}, {"raw_image", "raw.jpg"}});
-            else if (job.need_annotated)
-                update_media_state(job.event_dir, "image", "ready", "", {{"annotated_image", "annotated.jpg"}});
-            else
-                update_media_state(job.event_dir, "image", "ready", "", {{"raw_image", "raw.jpg"}});
+            update_media_state(job.event_dir, "image", "ready", "",
+                               {{"annotated_image", "annotated.jpg"}, {"raw_image", "raw.jpg"}});
         }
         else
         {

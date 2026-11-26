@@ -77,11 +77,11 @@ class YoloV8Det : public ModelBase
     int post_process(rknn_output *outputs, LetterBoxInfo &lb, std::vector<AlgoResult> &results);
 
     int process_i8(int8_t *box_tensor, int32_t box_zp, float box_scale, int8_t *score_tensor, int32_t score_zp,
-                   float score_scale, int8_t *score_sum_tensor, int32_t score_sum_zp, float score_sum_scale, int grid_h,
+                   float score_scale, int grid_h,
                    int grid_w, int stride, int dfl_len, int class_num, std::vector<float> &boxes,
                    std::vector<float> &objProbs, std::vector<int> &classId, float threshold);
 
-    int process_fp32(float *box_tensor, float *score_tensor, float *score_sum_tensor, int grid_h, int grid_w,
+    int process_fp32(float *box_tensor, float *score_tensor, int grid_h, int grid_w,
                      int stride, int dfl_len, int class_num, std::vector<float> &boxes, std::vector<float> &objProbs,
                      std::vector<int> &classId, float threshold);
 
@@ -94,7 +94,6 @@ class YoloV8Det : public ModelBase
     int model_w_ = 640;
     int model_h_ = 640;
     int num_classes_ = 80;
-    int io_num_in_ = 0;
     int io_num_out_ = 0;
     std::vector<rknn_tensor_attr> out_attrs_;
     std::vector<std::string> labels_;

@@ -1,0 +1,154 @@
+{
+  "global": {
+    "enable_display": false,
+    "disp_width": 1280,
+    "disp_height": 720,
+    "tile_rows": 1,
+    "tile_cols": 1,
+    "max_fps": 25,
+    "queue_size": 1,
+    "channel_threads": 3,
+    "tracker_enable": 1,
+    "tracker_type": "bytetrack",
+    "tracker_iou_thresh": 0.3,
+    "tracker_max_miss": 30,
+    "tracker_min_hits": 3,
+    "bytetrack_low_thresh": 0.1,
+    "bytetrack_low_iou_thresh": 0.2,
+    "performance_display": false,
+    "enable_rtsp": true,
+    "rtsp_port": 8554,
+    "rtsp_path": "/live",
+    "rtsp_bitrate": 4096
+  },
+  "channels": [
+    {
+      "id": 0,
+      "stream": {
+        "src_type": "file",
+        "url": "assets/10_23.mp4",
+        "loop": false
+      },
+      "models": [
+        {
+          "id": "ppe_six",
+          "enable": true,
+          "model_type": "yolov5",
+          "model_path": "assets/best.rknn",
+          "label_path": "assets/labels.txt",
+          "version": "",
+          "obj_thresh": 0.3,
+          "nms_thresh": 0.45,
+          "detect_classes": [],
+          "npu_core": 0
+        }
+      ],
+      "logic": "logic_ppe_guard",
+      "report_policy": {
+        "enabled": true,
+        "deliveries": []
+      },
+      "logic_parameters": {
+        "person_labels": "person",
+        "person_min_score": 0.35,
+        "violation_min_score": 0.75,
+        "keypoint_min_score": 0.3,
+        "roi_name": "",
+        "check_helmet": true,
+        "no_helmet_labels": "head",
+        "check_workwear": true,
+        "no_workwear_labels": "",
+        "check_gloves": true,
+        "no_gloves_labels": "hand_bare",
+        "geometry_gate": true,
+        "helmet_top_ratio": 0.35,
+        "helmet_area_min_ratio": 0.01,
+        "helmet_area_max_ratio": 0.12,
+        "helmet_head_ratio": 0.35,
+        "workwear_top_ratio": 0.25,
+        "workwear_bottom_ratio": 0.75,
+        "glove_wrist_ratio": 0.2,
+        "evidence_window_sec": 4,
+        "evidence_gap_ms": 250,
+        "required_observations": 3,
+        "required_span_ms": 1000,
+        "reacquire_gap_ms": 3000,
+        "state_ttl_sec": 600,
+        "dedupe_iou": 0.6,
+        "require_pose_for_violation": false,
+        "positive_veto": true,
+        "helmet_positive_labels": "helmet",
+        "workwear_positive_labels": "workwear_on",
+        "glove_positive_labels": "hand_gloved",
+        "helmet_infer_by_absence": false,
+        "helmet_search_up_ratio": 0.6,
+        "helmet_search_side_ratio": 0.15,
+        "workwear_require_positive": true,
+        "workwear_min_person_height": 140,
+        "absence_min_person_score": 0.6,
+        "glove_require_pose": false,
+        "positive_min_score": 0.35,
+        "glove_min_score": 0.5,
+        "timeout_sec": 300,
+        "missing_ms": 800,
+        "machine_enabled": true,
+        "initialize_visible": true,
+        "gate_standing_height": 295,
+        "machine_standing_height": 350,
+        "min_platform_person_height": 95
+      },
+      "roi_zones": [
+        {
+          "name": "platform",
+          "polygon": [
+            [
+              0.125,
+              0.59348
+            ],
+            [
+              0.17157,
+              0.7
+            ],
+            [
+              0.33824,
+              0.76957
+            ],
+            [
+              0.505,
+              0.694
+            ],
+            [
+              0.495,
+              0.525
+            ],
+            [
+              0.3223,
+              0.48478
+            ]
+          ]
+        },
+        {
+          "name": "machine_door",
+          "polygon": [
+            [
+              0.33701,
+              0.55435
+            ],
+            [
+              0.43995,
+              0.53043
+            ],
+            [
+              0.45956,
+              0.66739
+            ],
+            [
+              0.38235,
+              0.70652
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

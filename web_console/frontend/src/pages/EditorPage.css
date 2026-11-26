@@ -229,7 +229,7 @@
 
 /* ── Bottom row: merged global settings + generated config preview ── */
 .editor-bottom {
-  min-height: 150px;
+  min-height: 34px;
   max-height: calc(100% - 220px);
   flex-shrink: 0;
   display: flex;
@@ -369,3 +369,41 @@
   transition: background 0.1s;
 }
 .import-new-btn:hover { background: var(--surface2); }
+
+.draft-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; padding: 0 16px 16px; }
+.editor-mobile-tabs, .mobile-inspector-close { display: none; }
+@media (max-width: 900px) {
+  .editor-toolbar {
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 6px; padding: 6px 8px;
+  }
+  .editor-toolbar > .save { grid-column: 3; grid-row: 1; }
+  .tb-title { min-width: 0; gap: 4px; }
+  .tb-app-name { display: none; }
+  .tb-file { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .tb-dirty { flex-shrink: 0; }
+  .tb-actions, .node-palette { flex-wrap: nowrap; overflow-x: auto; }
+  .tb-actions { grid-column: 1 / -1; grid-row: 2; }
+  .tb-actions > *, .node-palette > * { flex-shrink: 0; }
+  .editor-main { position: relative; }
+  .editor-sidebar { display: none; }
+  .editor-sidebar.has-selection {
+    display: flex; position: absolute; inset: auto 0 0; z-index: 6;
+    flex-direction: column; width: 100% !important; max-width: none; min-width: 0;
+    height: 68%; border-top: 1px solid var(--border); background: var(--surface);
+  }
+  .mobile-inspector-close { display: block; align-self: flex-end; margin: 3px 8px; }
+  .editor-sidebar > .ncp { min-height: 0; flex: 1; }
+  .editor-panel-resizer, .editor-main .react-flow__minimap { display: none; }
+  .editor-mobile-tabs { display: flex; gap: 8px; padding: 4px 8px; }
+  .editor-mobile-tabs button[aria-expanded=true] { color: var(--accent); border-color: currentColor; }
+  .editor-bottom { height: min(40vh, 320px) !important; }
+  .editor-bottom[data-mobile-panel=closed],
+  .editor-bottom[data-mobile-panel=global] .config-preview,
+  .editor-bottom[data-mobile-panel=json] .gs-panel { display: none; }
+  .editor-bottom[data-mobile-panel=json] .config-preview { display: flex; width: 100%; min-width: 0; }
+  .editor-page .import-dialog { max-width: calc(100% - 20px) !important; }
+}
+.draft-dialog { margin: auto; padding: 0; color: var(--text); max-width: min(440px, 96vw); min-width: min(360px, 94vw); }
+.draft-dialog::backdrop { background: rgba(0,0,0,.65); }
+.draft-error { padding: 0 16px; color: #fca5a5; }

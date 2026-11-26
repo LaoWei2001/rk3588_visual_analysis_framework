@@ -182,6 +182,27 @@ class RecordsSplitEventTest(unittest.TestCase):
                 asyncio.run(records.delete_all_records("ignored"))
                 self.assertEqual(asyncio.run(records.list_records("ignored"))["event_types"], [])
 
+    def test_bulk_scope_includes_matches_beyond_display_limit(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {"EVENT_STORE_DIR": temporary}):
+            ids = [f"alarm-{i}" for i in range(501)]
+            for i, event_id in enumerate(ids):
+                self._write_record(temporary, event_id, 1000 + i, "alarm")
+                folder = Path(temporary) / event_id
+                (folder / "raw.jpg").write_bytes(b"original")
+                (folder / "media_state.json").write_text(json.dumps({
+                    "media": {"image": {"files": {"raw_image": "raw.jpg"}}}
+                }))
+            self._write_record(temporary, "other", 5000, "alarm")
+            listing = asyncio.run(records.list_records("demo", event_type="alarm", media_type="image"))
+            self.assertEqual(len(listing["records"]), 500)
+            self.assertEqual(set(listing["matching_ids"]), set(ids))
+            selection = records.RecordSelection(ids=listing["matching_ids"])
+            result = asyncio.run(records.prepare_image_export("demo", selection))
+            self.assertEqual(result["image_count"], 501)
+            removed = asyncio.run(records.delete_selected_records("demo", selection))
+            self.assertEqual(set(removed["deleted_ids"]), set(ids))
+            self.assertTrue((Path(temporary) / "other" / "event.json").is_file())
+
     def test_missing_outbox_has_no_event_types(self):
         with tempfile.TemporaryDirectory() as temporary:
             with patch.dict(os.environ, {"EVENT_STORE_DIR": str(Path(temporary) / "missing")}):

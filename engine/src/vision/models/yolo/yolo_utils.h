@@ -20,10 +20,6 @@ inline float sigmoid(float x)
 {
     return 1.0f / (1.0f + expf(-x));
 }
-inline float unsigmoid(float y)
-{
-    return -1.0f * logf((1.0f / y) - 1.0f);
-}
 
 // 量化工具
 inline int32_t clip(float val, float min, float max)

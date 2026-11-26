@@ -301,6 +301,7 @@ if(BUILD_PERFORMANCE_TESTS)
 
     add_executable(display_metrics_tests
         tests/performance/test_display_metrics.cpp
+        src/application/config/config.cpp
         src/media/display/display_render.cpp
         src/media/display/display.cpp
         src/media/display/result_renderer.cpp
@@ -318,6 +319,7 @@ option(BUILD_PERFORMANCE_BENCHMARKS "Build RK3588 hardware display microbenchmar
 if(BUILD_PERFORMANCE_BENCHMARKS)
     add_executable(display_performance_benchmark
         tests/performance/benchmark_display.cpp
+        src/application/config/config.cpp
         src/media/display/display_render.cpp
         src/media/display/display.cpp
         src/media/display/result_renderer.cpp
@@ -520,6 +522,16 @@ if(BUILD_PPE_TESTS)
     target_compile_options(ppe_tests PRIVATE -UNDEBUG)
     target_link_libraries(ppe_tests PRIVATE ${OpenCV_LIBS})
     add_test(NAME ppe_regression COMMAND ppe_tests)
+
+    add_executable(ppe_display_tests
+        tests/ppe/test_ppe_display.cpp
+        ${VISION_PROJECTS_ROOT}/modules/logic_ppe_guard/logic.cpp
+        ${VISION_PROJECTS_ROOT}/modules/logic_ppe_guard/ppe_guard.cpp
+        "${logic_catalog_cpp}"
+    )
+    target_compile_options(ppe_display_tests PRIVATE -UNDEBUG)
+    target_link_libraries(ppe_display_tests PRIVATE Vision::Analysis)
+    add_test(NAME ppe_display_regression COMMAND ppe_display_tests)
 endif()
 
 # Shared image/video executor contract; no real RKNN model is required.

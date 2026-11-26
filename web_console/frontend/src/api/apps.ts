@@ -16,6 +16,7 @@ export interface AppInfo {
   desired_running: boolean      // 用户最后一次操作是否要求保持运行
   status: 'running' | 'stopped' | 'unknown'
   pid: number | null
+  launch_source?: 'command_line'
   uptime_seconds: number | null
   recovery_state?: 'running' | 'restarting' | 'stopping'
   shutdown_stage?: string

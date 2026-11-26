@@ -3,7 +3,6 @@
 #include "application/control/file_playback_control.h"
 #include "application/control/logic_control.h"
 #include "application/runtime/app_ctrl.h"
-#include "application/runtime/pause_ctrl.h"
 #include "application/runtime/runtime_status.h"
 #include "logic/global_logic.h"
 #include "media/capture/decode_channel.h"
@@ -15,7 +14,6 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
-#include <unistd.h>
 
 extern "C" void *config_monitor_thread_func(void *arg);
 
@@ -45,14 +43,6 @@ int VideoRuntime::Impl::start()
         fprintf(stderr, "[FATAL] no streams configured\n");
         return -1;
     }
-
-    if (g_pCtrl->config.enable_pause_key && g_pCtrl->config.enable_display)
-    {
-        pause_ctrl::init(true);
-        printf("[Main] Pause key enabled (SPACE / kill -USR1 %d)\n", getpid());
-    }
-    else
-        pause_ctrl::init(false);
 
     g_pCtrl->dispDesc = {"rtsp_yolo_grid", 0, 0, app_ctrl_get_disp_width(), app_ctrl_get_disp_height()};
     if (app_ctrl_get_enable_disp() || app_ctrl_get_enable_rtsp())

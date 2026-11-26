@@ -1,9 +1,8 @@
 import { Handle, Position, NodeProps } from '@xyflow/react'
 import { useEditorStore } from '../store/editorStore'
-import { getSrcType } from '../utils/streamSource'
+import { getSrcType, isFilePlaybackSource, networkVideoProtocol } from '../utils/streamSource'
 import './nodeStyles.css'
 
-const TYPE_LABELS: Record<string, string> = { rtsp: 'RTSP', usb: 'USB', file: 'FILE' }
 const TYPE_COLORS: Record<string, string> = { rtsp: '#3b82f6', usb: '#22c55e', file: '#f59e0b' }
 
 export default function StreamNode({ data, selected }: NodeProps) {
@@ -17,8 +16,10 @@ export default function StreamNode({ data, selected }: NodeProps) {
   const assetsReady = useEditorStore(s => s.assetsStatus === 'ready'
     && s.assetsForApp === s.appName)
   const videoMissing = assetsReady && srcType === 'file' && !!d.url
-    && !assets.videos.includes(String(d.url))
-  const color = srcType ? (TYPE_COLORS[srcType] ?? '#6b7280') : '#ef4444'
+    && !addr.startsWith('/') && !assets.videos.includes(addr)
+  const displayType = isFilePlaybackSource(d) ? 'file' : srcType
+  const protocol = displayType === 'rtsp' ? networkVideoProtocol(addr) : ''
+  const color = displayType ? (TYPE_COLORS[displayType] ?? '#6b7280') : '#ef4444'
   const inferenceRoi = d.inference_roi && typeof d.inference_roi === 'object'
     ? d.inference_roi as Record<string, unknown> : null
   const roiOnly = inferenceRoi?.mode === 'roi_only'
@@ -35,7 +36,7 @@ export default function StreamNode({ data, selected }: NodeProps) {
         {d.enable != null && !d.enable && <span className="node-type-badge" style={{ color: '#f87171' }}>通道已停用</span>}
         <span className="node-type-badge"
           style={{ background: `${color}22`, color, border: `1px solid ${color}55` }}>
-          {srcType ? (TYPE_LABELS[srcType] ?? srcType.toUpperCase()) : '未指定'}
+          {(protocol || displayType).toUpperCase() || '未指定'}
         </span>
         {roiOnly && <span className="node-type-badge" style={{
           marginLeft: 0,

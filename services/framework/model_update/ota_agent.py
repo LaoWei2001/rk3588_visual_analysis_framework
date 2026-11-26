@@ -1,5 +1,4 @@
 import asyncio
-import websockets
 import json
 import hashlib
 import shutil
@@ -7,6 +6,7 @@ import os
 import requests
 import threading
 import uuid
+from websockets.legacy.client import connect
 
 # ================= 配置区 =================
 # 资产目录: 优先用环境变量 ASSETS_DIR, 未设置时自动检测
@@ -244,7 +244,7 @@ async def ota_daemon():
     while True:
         try:
             print(f"[Sys] 尝试接入平台: {ws_url}")
-            async with websockets.connect(ws_url, ping_interval=30, ping_timeout=10) as websocket:
+            async with connect(ws_url, ping_interval=30, ping_timeout=10) as websocket:
                 print(f"[Sys] 成功连接。DeviceID: {device_id}")
                 
                 while True:

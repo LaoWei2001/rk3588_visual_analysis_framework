@@ -65,6 +65,11 @@ class AppAlreadyRunningError(RuntimeError):
         super().__init__(f"程序 {app_name}{pid_text} 正在运行，请先停止它再启动其他程序")
 
 
+class CommandLineAppRunningError(AppAlreadyRunningError):
+    def __str__(self) -> str:
+        return f"程序 {self.app_name}（PID {self.pid}）由命令行启动，请先在终端停止它"
+
+
 @contextmanager
 def _exclusive_start_lock() -> Iterator[None]:
     """跨线程、跨 worker 串行化整个运行组合的变更。"""
@@ -140,6 +145,21 @@ def _clear_stale_runtime_marker(app_name: str) -> None:
     (app_dir / "run.systemd_unit").unlink(missing_ok=True)
 
 
+def engine_path(app_dir: Path, binary_name: Optional[str] = None) -> Path:
+    name = binary_name or BINARY_NAME
+    engine = app_dir / (name + ".bin")
+    entry = app_dir / name
+    if engine.is_file():
+        # An operator can atomically upgrade an older package by replacing its public ELF.
+        # Prefer that explicit replacement until the launcher is installed again.
+        if entry.is_file():
+            with entry.open('rb') as source:
+                if source.read(4) == b'\x7fELF':
+                    return entry
+        return engine
+    return entry
+
+
 def _pid_belongs_to_app(app_name: str, pid: int) -> bool:
     """验证 PID 确实是该 App 的视觉进程，避免重启后 PID 被其他进程复用。"""
     app_dir = _app_path(app_name)
@@ -153,18 +173,19 @@ def _pid_belongs_to_app(app_name: str, pid: int) -> bool:
             return False
 
     try:
-        expected_exe = (app_dir / BINARY_NAME).resolve(strict=True)
         proc_exe = Path(f"/proc/{pid}/exe")
         actual_exe_link = os.readlink(proc_exe)
         actual_cwd = Path(f"/proc/{pid}/cwd").resolve(strict=True)
         expected_cwd = app_dir.resolve(strict=True)
+        expected_exes = {path.resolve() for path in (app_dir / BINARY_NAME, app_dir / (BINARY_NAME + ".bin"))
+                         if path.is_file() and not path.is_symlink()}
         if actual_exe_link.endswith(" (deleted)"):
             # Linux 会在运行中原子替换可执行文件后给旧 inode 加 deleted 后缀。
             # 路径、PID、boot-id 和 cwd 仍一致时，它仍是当前 App 的合法旧进程。
             old_exe_path = Path(actual_exe_link[:-10])
-            return old_exe_path == expected_exe and actual_cwd == expected_cwd
+            return old_exe_path in expected_exes and actual_cwd == expected_cwd
         actual_exe = proc_exe.resolve(strict=True)
-        return actual_exe == expected_exe and actual_cwd == expected_cwd
+        return actual_exe in expected_exes and actual_cwd == expected_cwd
     except OSError:
         return False
 
@@ -180,7 +201,7 @@ def _find_running_app(exclude: Optional[str] = None) -> Optional[ManagedProcess]
     for entry in sorted(entries, key=lambda item: item.name):
         if not entry.is_dir() or entry.name.startswith((".", "_")) or entry.name == exclude:
             continue
-        status = get_status(entry.name)
+        status = _managed_status(entry.name)
         if status.get("status") == "running":
             return _processes.get(entry.name) or ManagedProcess(
                 app_name=entry.name, pid=status.get("pid") or 0,
@@ -395,7 +416,7 @@ def _systemd_unit_status(unit_name: str) -> dict:
     try:
         result = subprocess.run(
             ["systemctl", "show", unit_name,
-             "--property=MainPID,ActiveState,SubState,NRestarts,ExecMainStartTimestampMonotonic,WatchdogUSec,Restart,TimeoutStopUSec,SendSIGKILL,LoadState,Result,ExecMainCode,ExecMainStatus"],
+             "--property=MainPID,ActiveState,SubState,NRestarts,ExecMainStartTimestampMonotonic,WatchdogUSec,Restart,TimeoutStopUSec,SendSIGKILL,LoadState,Result,ExecMainCode,ExecMainStatus,LogExtraFields"],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode == 0:
@@ -506,6 +527,54 @@ def _process_start_ticks(pid: int) -> Optional[str]:
         return None
 
 
+def installed_video_processes() -> dict[str, dict]:
+    """Snapshot unregistered video processes by their installed executable, across all packages."""
+    root = APPS_ROOT.resolve()
+    found = {}
+    for entry in os.listdir("/proc"):
+        if not entry.isdecimal():
+            continue
+        proc = Path("/proc") / entry
+        try:
+            executable = os.readlink(proc / "exe").removesuffix(" (deleted)")
+            if Path(executable).name not in (BINARY_NAME, BINARY_NAME + ".bin"):
+                continue
+            app = Path(executable).parent
+            if app.parent != root or app.name.startswith((".", "_")):
+                continue
+            argv = (proc / "cmdline").read_bytes().rstrip(b"\0").split(b"\0")
+            if not argv[0] or (len(argv) > 1 and argv[1].startswith(b"-")):
+                continue  # Inspection, validation and image jobs use the same executable.
+            unit = _app_unit_name(app.name)
+            if any(unit in line.split(":")[-1].split("/")
+                   for line in (proc / "cgroup").read_text().splitlines()):
+                continue
+            argument = os.fsdecode(argv[1]) if len(argv) > 1 else "assets/config.json"
+            config_path = (proc / "cwd" / argument).resolve()
+            pid = int(entry)
+            ticks = _process_start_ticks(pid)
+            if ticks is None:
+                continue
+            uptime = time.clock_gettime(time.CLOCK_BOOTTIME) - int(ticks) / os.sysconf("SC_CLK_TCK")
+        except (OSError, RuntimeError, ValueError):
+            continue  # Processes can exit during any procfs read.
+        listed_config = config_path.parent == app / "assets" and config_path.suffix == ".json"
+        found[app.name] = {
+            "status": "running", "launch_source": "command_line", "pid": pid,
+            "uptime_seconds": max(0, int(uptime)),
+            "config": config_path.name if listed_config else None,
+        }
+    return found
+
+
+def _check_command_line_apps(app_name: Optional[str] = None) -> None:
+    for name, external in installed_video_processes().items():
+        if app_name is not None and name != app_name:
+            continue
+        if _managed_status(name).get("pid") != external["pid"]:
+            raise CommandLineAppRunningError(name, external["pid"])
+
+
 def _terminate_pid(pid: int) -> None:
     identity = _process_start_ticks(pid)
     if identity is None:
@@ -571,7 +640,7 @@ def _clear_device_only_override(unit_name: str):
         raise
 
 
-def _start_systemd_app(binary: Path, config: Path, app_dir: Path, env: dict, unit_name: str) -> subprocess.Popen:
+def _start_systemd_app(binary: Path, config: Path, app_dir: Path, env: dict, unit_name: str, journal_tag: Optional[str] = None) -> subprocess.Popen:
     policy = recovery_policy.read()
     graceful_override = SYSTEMD_RUNTIME_UNIT_DIR / (unit_name + '.d') / GRACEFUL_STOP_DROPIN
     if graceful_override.exists():
@@ -603,6 +672,8 @@ def _start_systemd_app(binary: Path, config: Path, app_dir: Path, env: dict, uni
         "--property=SendSIGKILL=no",
         f"--working-directory={app_dir}",
     ]
+    if journal_tag:
+        command.append(f"--property=LogExtraFields=RK_APP_RUN_ID={journal_tag}")
     if policy['app_stall_enabled'] and _supports_service_watchdog(binary, app_dir, env):
         command.extend(["--property=WatchdogSec=30", "--property=WatchdogSignal=SIGKILL",
                         "--property=NotifyAccess=main"])
@@ -621,9 +692,9 @@ def _start_systemd_app(binary: Path, config: Path, app_dir: Path, env: dict, uni
     return _follow_journal(unit_name, since)
 
 
-def start_app(app_name: str, config_name: Optional[str] = None) -> int:
+def start_app(app_name: str, config_name: Optional[str] = None, *, journal_tag: Optional[str] = None) -> int:
     app_dir     = _app_path(app_name)
-    binary      = app_dir / BINARY_NAME
+    binary      = engine_path(app_dir)
     assets_dir  = app_dir / "assets"
     control_sock = app_dir / "run.control.sock"
     playback_sock = app_dir / "run.playback.sock"
@@ -642,6 +713,7 @@ def start_app(app_name: str, config_name: Optional[str] = None) -> int:
     # 检查其他 App、重启同名 App、拉起进程和写入 PID 必须处于同一把跨 worker 锁内。
     # 否则两个浏览器同时点击不同 App 时，都可能在对方写 PID 前通过检查。
     with _exclusive_start_lock():
+        _check_command_line_apps()
         running = _find_running_app(exclude=app_name)
         if running is not None:
             raise AppAlreadyRunningError(running.app_name, running.pid)
@@ -681,7 +753,7 @@ def start_app(app_name: str, config_name: Optional[str] = None) -> int:
                 raise RuntimeError(f"无法停止同名残留视觉进程服务: {unit_name}")
 
         try:
-            launcher = _start_systemd_app(binary, config, app_dir, env, unit_name)
+            launcher = _start_systemd_app(binary, config, app_dir, env, unit_name, journal_tag)
         except Exception:
             _stop_systemd_unit(unit_name)
             raise
@@ -844,6 +916,7 @@ def stop_all_apps_for_install_unlocked() -> list[str]:
     前缀的 transient unit，用于清理目录曾被覆盖后遗留的孤儿视觉进程。
     """
     stopped_labels: set[str] = set()
+    _check_command_line_apps()
     app_names: set[str] = set(_processes)
     unit_to_app: Dict[str, str] = {}
 
@@ -882,6 +955,7 @@ def stop_all_apps_for_install_unlocked() -> list[str]:
 def stop_app_detailed(app_name: str) -> dict:
     outcome = {'warnings': [], 'graceful': None, 'exit_code': None}
     with _exclusive_start_lock():
+        _check_command_line_apps(app_name)
         try:
             runtime_state.mark_vision_stopped(app_name)
         except Exception as exc:
@@ -978,7 +1052,16 @@ def _refresh_systemd_app(app_name: str, *, read_only: bool = False) -> Optional[
             "restart_enabled": restart_enabled}
 
 
-def get_status(app_name: str) -> dict:
+def get_status(app_name: str, observed: Optional[dict] = None) -> dict:
+    managed = _managed_status(app_name)
+    if managed["status"] == "running":
+        return managed
+    if observed is None:
+        observed = installed_video_processes()
+    return observed.get(app_name, managed)
+
+
+def _managed_status(app_name: str) -> dict:
     stopping = _stopping.get(app_name)
     if stopping is not None:
         record = _shutdown_record(app_name, stopping.get('pid'), stopping.get('_start_ticks'))

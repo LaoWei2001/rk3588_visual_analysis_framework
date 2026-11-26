@@ -5,22 +5,28 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_DIR="$SCRIPT_DIR"
 
+if [[ $# -eq 1 && ( $1 == --help || $1 == -h ) ]]; then
+    echo "用法：sudo ./install_offline.sh [--port 端口]"
+    echo "首次安装默认 8080，更新沿用已配置的端口。例如：sudo ./install_offline.sh --port 9090"
+    exit 0
+fi
+
+requested_port=""
+if [[ $# -gt 0 ]]; then
+    case "$1" in
+        --port)   if [[ $# -eq 2 ]]; then requested_port=$2; fi ;;
+        --port=*) if [[ $# -eq 1 ]]; then requested_port=${1#--port=}; fi ;;
+    esac
+    if [[ ! $requested_port =~ ^[0-9]{1,5}$ ]] || (( 10#$requested_port < 1 || 10#$requested_port > 65535 )); then
+        echo "[错误] 用法：sudo ./install_offline.sh [--port 端口]，端口范围 1 至 65535。" >&2
+        exit 2
+    fi
+fi
+
 if [ ! -f "$BUNDLE_DIR/BUNDLE_INFO" ] || [ ! -f "$BUNDLE_DIR/apt/Packages" ]; then
     echo "[错误] install_offline.sh 必须位于生成包根目录，并与 BUNDLE_INFO、apt/ 一起使用。" >&2
     exit 1
 fi
-
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        -h|--help)
-            echo "用法：sudo bash install_offline.sh"
-            echo "安装器会自动读取离线包类型，无需再次选择完整或精简模式。"
-            exit 0
-            ;;
-        *) echo "[错误] 未知参数: $1" >&2; exit 2 ;;
-    esac
-    shift
-done
 
 if [ "$(id -u)" -eq 0 ]; then
     ROOT=()
@@ -37,7 +43,7 @@ metadata_value() {
     sed -n "s/^${key}=//p" "$BUNDLE_DIR/BUNDLE_INFO" | head -n 1
 }
 
-EXPECTED_BUNDLE_FORMAT=11
+EXPECTED_BUNDLE_FORMAT=12
 ACTUAL_BUNDLE_FORMAT="$(metadata_value bundle_format)"
 if [ "$ACTUAL_BUNDLE_FORMAT" != "$EXPECTED_BUNDLE_FORMAT" ]; then
     echo "[错误] 离线包格式不匹配：安装器要求 $EXPECTED_BUNDLE_FORMAT，当前为 ${ACTUAL_BUNDLE_FORMAT:-未设置}。" >&2
@@ -166,7 +172,7 @@ echo ">>> [1/2] 读取本地 APT 仓库..."
 as_root apt-get "${APT_OPTIONS[@]}" update
 
 echo ">>> [2/2] 安装项目环境、Web 控制台及其全部依赖..."
-if ! as_root env DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTIONS[@]}" \
+if ! as_root env DEBIAN_FRONTEND=noninteractive RK_CONSOLE_INSTALL_PORT="$requested_port" apt-get "${APT_OPTIONS[@]}" \
     -o Dpkg::Options::=--force-confold \
     --no-install-recommends --reinstall -y install "${TARGET_PACKAGES[@]}"; then
     echo >&2
@@ -272,8 +278,9 @@ if [ "$WANT_BUILD" = true ]; then
 fi
 
 echo
+console_port="$(/usr/bin/python3 /opt/ai_apps/_console/scripts/console_port.py show)"
 echo "[OK] RK3588 视觉分析环境和 Web 控制台安装完成。"
-echo "     Web 控制台: http://设备IP:8080"
+echo "     Web 控制台: http://设备IP:$console_port"
 echo "     控制台服务: systemctl status rk3588-console"
 echo "     程序目录: /opt/ai_apps（默认不预装任何程序）"
 echo "     Python 环境: /usr/bin/python3（系统环境；已满足的包会跳过）"

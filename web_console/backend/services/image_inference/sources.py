@@ -1,5 +1,6 @@
 """Discover board images and snapshot them into an existing inference batch."""
 from dataclasses import dataclass
+import errno
 import os
 from pathlib import Path
 import stat
@@ -37,6 +38,23 @@ class DeviceSelection:
     def preview(self) -> dict:
         return dict(**self.source(), total=len(self.images), total_bytes=sum(image.size for image in self.images),
                     images=[dict(name=image.name, path=str(image.path), size=image.size) for image in self.images])
+
+
+def list_device_folders(value: str) -> dict:
+    if not Path(value).is_absolute() or '\0' in value:
+        raise JobError(422, '请输入板端绝对路径')
+    try:
+        folder = Path(value).resolve(strict=True)
+        # Reopening the picker for a single image starts in its containing folder.
+        if folder.is_file():
+            folder = folder.parent
+        with os.scandir(folder) as entries:
+            names = sorted((entry.name for entry in entries if entry.is_dir(follow_symlinks=False)),
+                           key=lambda name: (name.casefold(), name))
+        return {'path': str(folder), 'parent': str(folder.parent) if folder.parent != folder else None,
+                'folders': names}
+    except (OSError, RuntimeError) as exc:
+        raise JobError(422, f'无法浏览板端文件夹：{value}（{exc}）') from exc
 
 
 def scan_device_images(value: str, recursive: bool = False) -> DeviceSelection:
@@ -85,7 +103,8 @@ def scan_device_images(value: str, recursive: bool = False) -> DeviceSelection:
                             add(path, str(path.relative_to(root)))
             images.sort(key=lambda image: (image.name.casefold(), image.name))
             if not images:
-                raise JobError(422, '文件夹中没有支持的图片；如图片位于下级目录，请勾选「包括子文件夹」')
+                hint = '' if recursive else '；如图片位于下级目录，请勾选「包括子文件夹」'
+                raise JobError(422, f'文件夹中没有支持的图片{hint}')
         else:
             add(requested, requested.name)
         return DeviceSelection(requested, directory, recursive if directory else False, images)
@@ -122,4 +141,6 @@ def snapshot_device_image(image: DeviceImage, target: Path, checkpoint: Callable
             if copied != image.size or identity(os.fstat(source.fileno())) != image.version:
                 raise JobError(409, f'图片在读取时发生了变化，请重试：{image.path}')
     except OSError as exc:
+        if exc.errno in (errno.ENOSPC, errno.EDQUOT):
+            raise JobError(507, '存储空间不足，请清理空间后继续') from exc
         raise JobError(422, f'复制板端图片失败：{image.path}（{exc.strerror}）') from exc

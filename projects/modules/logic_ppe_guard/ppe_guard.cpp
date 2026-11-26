@@ -18,8 +18,11 @@ struct TrackedFramePerson
     std::array<bool, PART_COUNT> violation_seen = {{false, false, false, false}};
     bool hand_unsided_seen = false;
     std::array<bool, PART_COUNT> positive_seen = {{false, false, false, false}};
-    bool head_checkable = false;  /* 头部区域没被别人挡住，可用于“正类缺失”推断 */
-    bool torso_checkable = false; /* 躯干区域没被别人挡住，可用于“未穿工装”推断 */
+    std::vector<AlarmRegion> observations;
+    std::vector<cv::Rect> gloved_boxes;
+    std::vector<cv::Rect> possible_helmets;
+    cv::Rect checkable_head;
+    cv::Rect checkable_torso;
 };
 
 bool keypoint_visible(const AlgoResult &pose, int index, float min_score)
@@ -175,50 +178,23 @@ cv::Rect helmet_search_region(const cv::Rect &person_box, const Config &config)
     return cv::Rect(person_box.x - pad, person_box.y - lift, person_box.width + pad * 2, person_box.height + lift);
 }
 
-/* 安全帽只归给“搜索区包含其中心、且头部中心离它最近”的那个人；并列时算归属不明。 */
-int nearest_person_for_helmet(const cv::Rect &box, const std::vector<TrackedFramePerson> &people, const Config &config)
+/* Ambiguous helmets block absence inference for all possible owners. An explicit
+ * bare head is vetoed only by a helmet at the same location or with a unique owner. */
+void collect_helmet(const AlgoResult &result, std::vector<TrackedFramePerson> &people, const Config &config)
 {
-    const cv::Point center(box.x + box.width / 2, box.y + box.height / 2);
-    const float head_ratio = config.helmet_top_ratio > 0.0f ? config.helmet_top_ratio : 0.35f;
-    int match = -1;
-    double best = 0.0;
+    TrackedFramePerson *owner = nullptr;
     int matches = 0;
-    for (size_t index = 0; index < people.size(); ++index)
+    for (TrackedFramePerson &person : people)
     {
-        const cv::Rect &person_box = people[index].detection->box;
-        if (!helmet_search_region(person_box, config).contains(center))
+        if (person.detection->frame_id != result.frame_id ||
+            !helmet_search_region(person.detection->box, config).contains(result.box_center()))
             continue;
-        const cv::Point head_center(person_box.x + person_box.width / 2,
-                                    person_box.y + static_cast<int>(person_box.height * head_ratio) / 2);
-        const double dx = static_cast<double>(center.x - head_center.x);
-        const double dy = static_cast<double>(center.y - head_center.y);
-        const double dist = dx * dx + dy * dy;
-        if (match < 0 || dist < best)
-        {
-            best = dist;
-            match = static_cast<int>(index);
-            matches = 1;
-        }
-        else if (dist == best)
-        {
-            ++matches;
-        }
+        person.possible_helmets.push_back(result.box);
+        owner = &person;
+        ++matches;
     }
-    if (matches > 1)
-        return -1;
-    return match;
-}
-
-/* 多人挨着站时，安全帽框只归一个人的话，另一人会被判“没戴”。
- * 这里改成共享信用：搜索区内有安全帽框的人，全部记“戴了”。宁可漏报，不要误报。 */
-void credit_helmet_shared(const cv::Rect &box, std::vector<TrackedFramePerson> &people, const Config &config)
-{
-    const cv::Point center(box.x + box.width / 2, box.y + box.height / 2);
-    for (size_t index = 0; index < people.size(); ++index)
-    {
-        if (helmet_search_region(people[index].detection->box, config).contains(center))
-            people[index].positive_seen[PART_HELMET] = true;
-    }
+    if (matches == 1)
+        owner->positive_seen[PART_HELMET] = true;
 }
 
 int unique_person_for_box(const cv::Rect &box, const std::vector<TrackedFramePerson> &people, int part,
@@ -244,18 +220,22 @@ int unique_person_for_box(const cv::Rect &box, const std::vector<TrackedFramePer
     return match;
 }
 
-/* 手/手套框归属。现场手臂横伸出去时，手框中心经常落在人员框外面——人框往往只框到
- * 躯干，而手伸在画面另一侧。严格 containment 会把裸手证据整条丢掉，等于“检出裸手
- * 也不报警”。这里退一步：先按严格归属，失败则取“到人框矩形外沿最近、且距离不超过
- * hand_attach_ratio × 人框高”的人；多人符合时取中心最近者（手比帽子更能确定归属）。 */
-int nearest_person_for_hand(const cv::Rect &box, const std::vector<TrackedFramePerson> &people, const Config &config)
+/* 手在框外时允许伸手范围内唯一的人接收证据；多人重叠或均可够到时等待下一帧。 */
+int owner_for_hand(const cv::Rect &box, const std::vector<TrackedFramePerson> &people, const Config &config)
 {
-    const int strict = unique_person_for_box(box, people, PART_HAND_LEFT, config);
-    if (strict >= 0)
-        return strict;
     const cv::Point center(box.x + box.width / 2, box.y + box.height / 2);
+    int contained = -1;
+    for (size_t index = 0; index < people.size(); ++index)
+    {
+        if (!people[index].detection->box.contains(center))
+            continue;
+        if (contained >= 0)
+            return -1;
+        contained = static_cast<int>(index);
+    }
+    if (contained >= 0)
+        return contained;
     int best = -1;
-    float best_center_distance = 0.0f;
     for (size_t index = 0; index < people.size(); ++index)
     {
         const cv::Rect &target = people[index].detection->box;
@@ -268,14 +248,9 @@ int nearest_person_for_hand(const cv::Rect &box, const std::vector<TrackedFrameP
                                                      static_cast<float>(center.y - (target.y + target.height))));
         if (std::hypot(over_x, over_y) > limit)
             continue;
-        const float dx = static_cast<float>(center.x) - static_cast<float>(target.x + target.width / 2);
-        const float dy = static_cast<float>(center.y) - static_cast<float>(target.y + target.height / 2);
-        const float center_distance = std::hypot(dx, dy);
-        if (best < 0 || center_distance < best_center_distance)
-        {
-            best = static_cast<int>(index);
-            best_center_distance = center_distance;
-        }
+        if (best >= 0)
+            return -1; // Two people can reach this hand.
+        best = static_cast<int>(index);
     }
     return best;
 }
@@ -286,7 +261,7 @@ const AlgoResult *find_pose_for(const AlgoResult &person, const std::vector<Algo
     const AlgoResult *fallback = nullptr;
     for (const AlgoResult &result : results)
     {
-        if (!result.is_coco17_pose())
+        if (result.frame_id != person.frame_id || !result.is_coco17_pose())
             continue;
         if (person.track_id >= 0 && result.track_id == person.track_id)
             return &result;
@@ -330,7 +305,7 @@ void collect_positive_parts(const std::vector<AlgoResult> &results, std::vector<
         return;
     for (const AlgoResult &result : results)
     {
-        if (result.score < config.positive_min_score)
+        if (result.box.empty() || result.score < config.positive_min_score)
             continue; /* 正类用独立的低门槛：穿好/戴好的框分数普遍偏低 */
         for (int part = 0; part < PART_COUNT; ++part)
         {
@@ -347,17 +322,21 @@ void collect_positive_parts(const std::vector<AlgoResult> &results, std::vector<
                 continue;
             if (part == PART_HELMET)
             {
-                credit_helmet_shared(result.box, people, config);
+                collect_helmet(result, people, config);
                 continue;
             }
             const int person_index = (part == PART_HAND_LEFT || part == PART_HAND_RIGHT)
-                                         ? nearest_person_for_hand(result.box, people, config)
+                                         ? owner_for_hand(result.box, people, config)
                                          : unique_person_for_box(result.box, people, part, config);
             if (person_index < 0)
                 continue;
             TrackedFramePerson &person = people[static_cast<size_t>(person_index)];
+            if (person.detection->frame_id != result.frame_id)
+                continue;
             if (part == PART_HAND_LEFT || part == PART_HAND_RIGHT)
             {
+                if (part == PART_HAND_LEFT)
+                    person.gloved_boxes.push_back(result.box);
                 const int side = resolve_hand_side(person, result.box, config);
                 if (side < 0)
                     continue;
@@ -406,6 +385,8 @@ const char *part_full_name(int part)
 {
     switch (part)
     {
+    case HAND_UNSIDED:
+        return "未戴手套";
     case PART_HELMET:
         return "未戴安全帽";
     case PART_WORKWEAR:
@@ -449,7 +430,7 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
     people.reserve(people_.size());
     for (const AlgoResult &result : results)
     {
-        if (result.track_id < 0 || result.score < config.person_min_score)
+        if (result.box.empty() || result.track_id < 0 || result.score < config.person_min_score)
             continue;
         if (!matches_label(result.label, config.person_labels))
             continue;
@@ -485,6 +466,8 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
         for (size_t i = 0; i < people.size(); ++i)
         {
             const cv::Rect &box = people[i].detection->box;
+            if (!people[i].possible_helmets.empty())
+                continue;
             if (box.height < 60)
                 continue; /* 人太小，头部区域只有几个像素，推断不可靠 */
             if (box.y < 6)
@@ -505,7 +488,8 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
                 if (static_cast<float>(overlap_x * overlap_y) > 0.4f * static_cast<float>(head.area()))
                     covered = true;
             }
-            people[i].head_checkable = !covered;
+            if (!covered)
+                people[i].checkable_head = head;
         }
     }
 
@@ -539,7 +523,8 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
                 if (static_cast<float>(overlap_x * overlap_y) > 0.4f * static_cast<float>(torso.area()))
                     covered = true;
             }
-            people[i].torso_checkable = !covered;
+            if (!covered)
+                people[i].checkable_torso = torso;
         }
     }
 
@@ -566,7 +551,7 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
             continue;
         /* 手部用独立门槛：现场手框只有 0.59~0.72，卡 0.75 会让手套这项永远不报。 */
         const float min_score = (hand_wanted && !other_wanted) ? config.glove_min_score : config.violation_min_score;
-        if (result.score < min_score)
+        if (result.box.empty() || result.score < min_score)
             continue;
         violations.push_back(&result);
     }
@@ -613,7 +598,7 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
             continue;
 
         const int person_index = (matched_part == PART_HAND_LEFT || matched_part == PART_HAND_RIGHT)
-                                     ? nearest_person_for_hand(result.box, people, config)
+                                     ? owner_for_hand(result.box, people, config)
                                      : unique_person_for_box(result.box, people, matched_part, config);
         if (person_index < 0)
         {
@@ -643,15 +628,32 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
                     continue;
                 }
                 person.violation_seen[static_cast<size_t>(side)] = true;
+                person.observations.push_back({side, result.box, false});
             }
-            else if (side == HAND_UNRESOLVED)
-                person.hand_unsided_seen = true;
+            else if (side == HAND_UNRESOLVED && !config.require_pose_for_violation)
+            {
+                const bool gloved = config.positive_veto &&
+                    std::any_of(person.gloved_boxes.begin(), person.gloved_boxes.end(), [&](const cv::Rect &box) {
+                        return box_iou(result.box, box) >= 0.3f;
+                    });
+                if (gloved)
+                    ++outcome.vetoed_observations;
+                else
+                {
+                    person.hand_unsided_seen = true;
+                    person.observations.push_back({HAND_UNSIDED, result.box, false});
+                }
+            }
             else
                 ++outcome.rejected_observations; /* 离腕点太远或没有腕点：不是手 */
             continue;
         }
 
-        if (config.positive_veto && person.positive_seen[static_cast<size_t>(matched_part)])
+        const bool overlapping_helmet = matched_part == PART_HELMET &&
+            std::any_of(person.possible_helmets.begin(), person.possible_helmets.end(), [&](const cv::Rect &box) {
+                return box_iou(box, result.box) >= 0.3f;
+            });
+        if (config.positive_veto && (person.positive_seen[static_cast<size_t>(matched_part)] || overlapping_helmet))
         {
             ++outcome.vetoed_observations; /* 同一部位上已识别到正类装备 */
             continue;
@@ -667,17 +669,20 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
             continue;
         }
         person.violation_seen[static_cast<size_t>(matched_part)] = true;
+        person.observations.push_back({matched_part, result.box, false});
     }
 
     for (TrackedFramePerson &person : people)
     {
-        if (config.helmet_infer_by_absence && config.enabled[PART_HELMET] && person.head_checkable &&
-            !person.positive_seen[PART_HELMET])
-            person.violation_seen[PART_HELMET] = true; /* 头部可核验，但没有安全帽框 */
-
-        if (config.workwear_require_positive && config.enabled[PART_WORKWEAR] && person.torso_checkable &&
-            !person.positive_seen[PART_WORKWEAR])
-            person.violation_seen[PART_WORKWEAR] = true; /* 躯干可核验，但没有工装框 */
+        const auto add_absence = [&](int part, const cv::Rect &region) {
+            if (!region.empty() && !person.positive_seen[part] && !person.violation_seen[part])
+            {
+                person.violation_seen[part] = true;
+                person.observations.push_back({part, region, true});
+            }
+        };
+        add_absence(PART_HELMET, person.checkable_head);
+        add_absence(PART_WORKWEAR, person.checkable_torso);
 
         PersonState &person_state = *person.state;
         Evaluation evaluation;
@@ -689,14 +694,15 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
         {
             PartEvidence &evidence = person_state.parts[static_cast<size_t>(part)];
             /* 本帧看到了“穿好了/戴好了”的正类框，就撤销该部位已确认的违规：
-             * 检测器漏检一两帧就永久报警是不能接受的。撤销后允许重新上报。 */
+             * 检测器漏检一两帧就永久报警是不能接受的。会话通知标记独立保留。 */
             if (person.positive_seen[static_cast<size_t>(part)] && (evidence.confirmed || !evidence.violations.empty()))
             {
                 evidence.violations.clear();
                 evidence.confirmed = false;
-                person_state.reported = false;
             }
             prune_evidence(evidence.violations, now_ms, config.evidence_window_ms);
+            if (evidence.violations.empty())
+                evidence.confirmed = false;
             if (person.violation_seen[static_cast<size_t>(part)])
             {
                 ++outcome.candidate_observations;
@@ -722,6 +728,8 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
 
         /* 分不清左右手的裸手证据：只用于“手套”这一项，不分配给具体某只手。 */
         prune_evidence(person_state.hand_unsided.violations, now_ms, config.evidence_window_ms);
+        if (person_state.hand_unsided.violations.empty())
+            person_state.hand_unsided.confirmed = false;
         if (person.hand_unsided_seen)
         {
             ++outcome.candidate_observations;
@@ -732,20 +740,18 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
                                config.required_span_ms))
             person_state.hand_unsided.confirmed = true;
         evaluation.gloves_unsided = config.enabled[PART_HAND_LEFT] && person_state.hand_unsided.confirmed;
-        if (evaluation.gloves_unsided)
+        for (const AlarmRegion &region : person.observations)
         {
-            /* 分不清左右手的裸手证据确认后，两只手的徽标都点亮：
-             * 否则现场只看到顶部计数变红、手部还是 '-'，不知道是哪一项在报。 */
-            evaluation.status[PART_HAND_LEFT] = PART_VIOLATION;
-            evaluation.status[PART_HAND_RIGHT] = PART_VIOLATION;
+            const bool confirmed = region.part == HAND_UNSIDED ? evaluation.gloves_unsided
+                                                               : evaluation.status[region.part] == PART_VIOLATION;
+            if (confirmed)
+                evaluation.regions.push_back(region);
         }
 
         for (int part = 0; part < PART_COUNT; ++part)
         {
             if (evaluation.status[static_cast<size_t>(part)] != PART_VIOLATION)
                 continue;
-            if (evaluation.gloves_unsided && (part == PART_HAND_LEFT || part == PART_HAND_RIGHT))
-                continue; /* 下面统一记一条“未戴手套(未分左右手)”，不重复两次 */
             evaluation.violation = true;
             if (!evaluation.violation_types.empty())
                 evaluation.violation_types += ", ";
@@ -758,7 +764,18 @@ Outcome Guard::update(const std::vector<AlgoResult> &results, uint64_t now_ms, c
                 evaluation.violation_types += ", ";
             evaluation.violation_types += "未戴手套(未分左右手)";
         }
-        evaluation.report_due = evaluation.violation && !person_state.reported;
+        const bool pending_hand = config.enabled[PART_HAND_LEFT] && !person_state.hand_unsided.violations.empty();
+        if (!evaluation.violation && (pending_hand ||
+            std::find(evaluation.status.begin(), evaluation.status.end(), PART_CANDIDATE) != evaluation.status.end()))
+            ++outcome.candidate_people;
+        // Helmet, clothing and gloves are independent notifications within a tracked visit.
+        person_state.localized_categories = 0;
+        for (const auto &region : evaluation.regions)
+        {
+            const unsigned category = region.part == PART_HELMET ? 1u : region.part == PART_WORKWEAR ? 2u : 4u;
+            person_state.localized_categories |= category;
+        }
+        evaluation.report_due = (person_state.localized_categories & ~person_state.reported_categories) != 0;
 
         char part_states[64];
         std::snprintf(part_states, sizeof(part_states), "H=%c,T=%c,L=%c,R=%c",
@@ -784,7 +801,7 @@ void Guard::mark_reported(int track_id)
 {
     auto it = people_.find(track_id);
     if (it != people_.end())
-        it->second.reported = true;
+        it->second.reported_categories |= it->second.localized_categories;
 }
 
 } // namespace ppe_guard

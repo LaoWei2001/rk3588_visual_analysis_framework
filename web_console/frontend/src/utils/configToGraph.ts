@@ -79,7 +79,11 @@ export function configToGraph(
   }))
 
   const { global_logics: _gl, ...rawGD } = global
-  const globalSettings: GlobalSettingsData = { ...NATIVE_GLOBAL_DEFAULTS, ...rawGD }
+  const globalSettings: GlobalSettingsData = {
+    ...NATIVE_GLOBAL_DEFAULTS,
+    ...Object.fromEntries(Object.keys(NATIVE_GLOBAL_DEFAULTS)
+      .filter(key => rawGD[key] !== undefined).map(key => [key, rawGD[key]])),
+  }
 
   // Layout constants
   const STREAM_X  = 60

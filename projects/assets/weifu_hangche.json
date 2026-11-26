@@ -16,9 +16,7 @@
     "bytetrack_low_thresh": 0.1,
     "bytetrack_low_iou_thresh": 0.2,
     "performance_display": 1,
-    "enable_pause_key": 0,
     "enable_rtsp": 1,
-    "rtsp_codec": "h264",
     "global_logics": [
       {
         "instance_id": "global_globalLogic-3-1791537195825",

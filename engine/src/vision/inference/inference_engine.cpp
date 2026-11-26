@@ -76,6 +76,28 @@ std::vector<ModelBuildSpec> video_model_specs(const ChannelConfig &channel)
     return specs;
 }
 
+std::shared_ptr<const ChannelFilters> derive_channel_filters(const ChannelConfig &channel)
+{
+    auto filters = std::make_shared<ChannelFilters>();
+    const ChannelModelConfig *single = nullptr;
+    for (const auto &model : channel.models)
+    {
+        if (npu::active_core_model(model))
+        {
+            ++filters->active_count;
+            single = &model;
+        }
+    }
+    // 多模型各有自己的标签表和阈值，由 ModelGroup 逐个过滤。
+    if (filters->active_count == 1)
+    {
+        filters->obj_thresh = config_utils::effective_model_obj_thresh(channel, *single);
+        filters->nms_thresh = single->nms_thresh;
+        filters->classes = names_to_class_ids(single->detect_classes, single->label_path);
+    }
+    return filters;
+}
+
 InferenceRoiMode resolve_inference_source_roi(int channel_id, int source_width, int source_height, cv::Rect &out_roi,
                                               InferenceRoiConfig &out_config)
 {
@@ -155,7 +177,6 @@ int inference_init(const AppConfig &cfg)
 
     /* 初始化 pthread 同步原语 */
     pthread_rwlock_init(&g_inference.dispatch_mtx, nullptr);
-    pthread_mutex_init(&g_inference.detect_classes_mtx, nullptr);
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
     {
         pthread_mutex_init(&g_inference.channel_results[i].mtx, nullptr);
@@ -179,15 +200,12 @@ int inference_init(const AppConfig &cfg)
         }))
         acquire_inference_device();
 
+    const auto default_filters = std::make_shared<const ChannelFilters>();
     for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
     {
         g_inference.auto_core_plan[i].store(0);
-        g_inference.obj_thresh[i].store(0.0f, std::memory_order_relaxed);
-        g_inference.nms_thresh[i].store(1.0f, std::memory_order_relaxed);
+        g_inference.filters[i] = default_filters;
     }
-
-    for (int i = 0; i < MAX_CHANNEL_NUM; ++i)
-        g_inference.detect_classes[i] = std::make_shared<const std::set<int>>();
 
     for (size_t i = 0; i < cfg.channels.size() && i < MAX_CHANNEL_NUM; ++i)
     {
@@ -195,36 +213,7 @@ int inference_init(const AppConfig &cfg)
         const int channel_id = channel.id;
         if (channel_id < 0 || channel_id >= MAX_CHANNEL_NUM)
             continue;
-        const size_t active_models =
-            std::count_if(channel.models.begin(), channel.models.end(), [](const ChannelModelConfig &model) {
-                return model.enable && !model.model_path.empty() && !model.model_type.empty();
-            });
-        /* ModelGroup 已按每个子模型独立过滤，外层过滤必须关闭，避免不同标签表
-         * 的 class_id=0 被通道级过滤误删。 */
-        if (active_models > 1)
-        {
-            g_inference.obj_thresh[channel_id] = 0.0f;
-            g_inference.nms_thresh[channel_id] = 1.0f;
-            g_inference.detect_classes[channel_id] = std::make_shared<const std::set<int>>();
-        }
-        else
-        {
-            const ChannelModelConfig *single = nullptr;
-            for (const auto &model : channel.models)
-                if (model.enable && !model.model_path.empty() && !model.model_type.empty())
-                {
-                    single = &model;
-                    break;
-                }
-            if (!single)
-                continue;
-            g_inference.obj_thresh[channel_id] = config_utils::effective_model_obj_thresh(channel, *single);
-            g_inference.nms_thresh[channel_id] = single->nms_thresh;
-            const std::vector<std::string> &classes = single->detect_classes;
-            const std::string &labels = single->label_path;
-            g_inference.detect_classes[channel_id] =
-                std::make_shared<const std::set<int>>(names_to_class_ids(classes, labels));
-        }
+        inference_update_model_filters(channel);
     }
 
     int loaded_models_count = 0;
@@ -416,7 +405,6 @@ void inference_deinit()
         pthread_mutex_destroy(&g_inference.result_ready_mtx[i]);
         pthread_cond_destroy(&g_inference.result_ready_cv[i]);
     }
-    pthread_mutex_destroy(&g_inference.detect_classes_mtx);
 
     pthread_rwlock_unlock(&g_inference.dispatch_mtx);
     pthread_rwlock_destroy(&g_inference.dispatch_mtx);
@@ -576,69 +564,12 @@ void inference_update_queue_size(int queue_size)
     pthread_rwlock_unlock(&g_inference.dispatch_mtx);
 }
 
-void inference_update_thresh(int chnId, const ChannelConfig &config)
+void inference_update_model_filters(const ChannelConfig &channel)
 {
-    if (chnId < 0 || chnId >= MAX_CHANNEL_NUM)
+    if (channel.id < 0 || channel.id >= MAX_CHANNEL_NUM)
         return;
-    const auto &models = config.models;
-    const size_t active_count = std::count_if(models.begin(), models.end(), [](const ChannelModelConfig &model) {
-        return model.enable && !model.model_path.empty() && !model.model_type.empty();
-    });
-    if (active_count > 1)
-    {
-        g_inference.obj_thresh[chnId] = 0.0f;
-        g_inference.nms_thresh[chnId] = 1.0f;
-        return;
-    }
-    const ChannelModelConfig *single = nullptr;
-    for (const auto &model : models)
-        if (model.enable && !model.model_path.empty() && !model.model_type.empty())
-        {
-            single = &model;
-            break;
-        }
-    const float obj_thresh = single ? config_utils::effective_model_obj_thresh(config, *single) : 0.0f;
-    const float nms_thresh = single ? single->nms_thresh : 1.0f;
-    printf("[AlgoProcess] Updating thresh for channel %d: obj=%.2f, nms=%.2f\n", chnId, obj_thresh, nms_thresh);
-    g_inference.obj_thresh[chnId] = obj_thresh;
-    g_inference.nms_thresh[chnId] = nms_thresh;
-
-    for (auto &model : g_inference.model_groups_per_chn[chnId])
-    {
-        if (!model)
-            continue;
-        // 每通道/worker 都拥有独立实例；不再扫描旧的跨通道共享模型。
-        model->entries().front().model->set_thresh(obj_thresh, nms_thresh);
-    }
-}
-
-void inference_update_detect_classes(int chnId, const ChannelConfig &config)
-{
-    if (chnId < 0 || chnId >= MAX_CHANNEL_NUM)
-        return;
-    const auto &models = config.models;
-    const size_t active_count = std::count_if(models.begin(), models.end(), [](const ChannelModelConfig &model) {
-        return model.enable && !model.model_path.empty() && !model.model_type.empty();
-    });
-    if (active_count > 1)
-    {
-        pthread_mutex_lock(&g_inference.detect_classes_mtx);
-        g_inference.detect_classes[chnId] = std::make_shared<const std::set<int>>();
-        pthread_mutex_unlock(&g_inference.detect_classes_mtx);
-        return;
-    }
-    const ChannelModelConfig *single = nullptr;
-    for (const auto &model : models)
-        if (model.enable && !model.model_path.empty() && !model.model_type.empty())
-        {
-            single = &model;
-            break;
-        }
-    auto ids = std::make_shared<const std::set<int>>(
-        single ? names_to_class_ids(single->detect_classes, single->label_path) : std::set<int>());
-    pthread_mutex_lock(&g_inference.detect_classes_mtx);
-    g_inference.detect_classes[chnId] = std::move(ids);
-    pthread_mutex_unlock(&g_inference.detect_classes_mtx);
+    // 解码阈值由 model_runtime_changed 触发模型重建，在新 worker 启动前设置。
+    std::atomic_store(&g_inference.filters[channel.id], derive_channel_filters(channel));
 }
 
 int inference_get_auto_core_plan(int chnId)
@@ -713,7 +644,8 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
                               worker_count, requested_worker_count);
         return false;
     }
-    if (config_utils::is_channel_infer_enabled(new_cfg))
+    const auto next_filters = derive_channel_filters(new_cfg);
+    if (next_filters->active_count > 0)
     {
         try
         {
@@ -727,12 +659,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
         }
     }
     const std::vector<std::shared_ptr<ModelGroup>> old_models = g_inference.model_groups_per_chn[chnId];
-    const float old_obj_thresh = g_inference.obj_thresh[chnId].load(std::memory_order_relaxed);
-    const float old_nms_thresh = g_inference.nms_thresh[chnId].load(std::memory_order_relaxed);
-    std::shared_ptr<const std::set<int>> old_detect_classes;
-    pthread_mutex_lock(&g_inference.detect_classes_mtx);
-    old_detect_classes = g_inference.detect_classes[chnId];
-    pthread_mutex_unlock(&g_inference.detect_classes_mtx);
+    const auto old_filters = std::atomic_load(&g_inference.filters[chnId]);
 
     g_inference.chn_reload_stop[chnId] = 1;
     pthread_mutex_lock(&tq->mtx);
@@ -809,11 +736,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
     };
 
     auto restore_old_workers = [&]() {
-        g_inference.obj_thresh[chnId].store(old_obj_thresh, std::memory_order_relaxed);
-        g_inference.nms_thresh[chnId].store(old_nms_thresh, std::memory_order_relaxed);
-        pthread_mutex_lock(&g_inference.detect_classes_mtx);
-        g_inference.detect_classes[chnId] = old_detect_classes;
-        pthread_mutex_unlock(&g_inference.detect_classes_mtx);
+        std::atomic_store(&g_inference.filters[chnId], old_filters);
         if (!restart_workers(old_models))
         {
             status.clear_active = true;
@@ -822,8 +745,9 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
         }
     };
 
-    if (!config_utils::is_channel_infer_enabled(new_cfg))
+    if (next_filters->active_count == 0)
     {
+        std::atomic_store(&g_inference.filters[chnId], next_filters);
         if (!restart_workers(std::vector<std::shared_ptr<ModelGroup>>(worker_count)))
         {
             stop_reloaded_workers();
@@ -838,11 +762,6 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
     }
 
     std::vector<std::shared_ptr<ModelGroup>> new_models;
-    std::vector<ChannelModelConfig> active_models;
-    for (const auto &model : new_cfg.models)
-        if (model.enable && !model.model_path.empty() && !model.model_type.empty())
-            active_models.push_back(model);
-
     try
     {
         const auto specs = video_model_specs(new_cfg);
@@ -867,21 +786,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
     }
     else
     {
-        const bool multi = active_models.size() > 1;
-        g_inference.obj_thresh[chnId] =
-            multi ? 0.0f : config_utils::effective_model_obj_thresh(new_cfg, active_models[0]);
-        g_inference.nms_thresh[chnId] = multi ? 1.0f : active_models[0].nms_thresh;
-        pthread_mutex_lock(&g_inference.detect_classes_mtx);
-        if (multi)
-            g_inference.detect_classes[chnId] = std::make_shared<const std::set<int>>();
-        else
-        {
-            const std::vector<std::string> &classes = active_models[0].detect_classes;
-            const std::string &labels = active_models[0].label_path;
-            g_inference.detect_classes[chnId] =
-                std::make_shared<const std::set<int>>(names_to_class_ids(classes, labels));
-        }
-        pthread_mutex_unlock(&g_inference.detect_classes_mtx);
+        std::atomic_store(&g_inference.filters[chnId], next_filters);
         if (!restart_workers(new_models))
         {
             stop_reloaded_workers();
@@ -889,7 +794,7 @@ bool inference_reload_channel_model(int chnId, const ChannelConfig &new_cfg, con
             return false;
         }
         log_printf_threadsafe("[Inference] ch%d model reload complete (%zu configured models)\n", chnId,
-                              active_models.size());
+                              next_filters->active_count);
     }
     g_inference.auto_core_plan[chnId].store(placement.key());
     log_printf_threadsafe("[NPU] ch%d active automatic pool=0x%x\n", chnId, placement.pool);

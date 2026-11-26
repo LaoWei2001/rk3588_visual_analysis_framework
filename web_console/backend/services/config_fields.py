@@ -5,8 +5,8 @@ config_init.cpp (covered by the contract test). Module parameter values remain d
 """
 
 GLOBAL = set("""enable_display disp_width disp_height tile_cols tile_rows
-performance_display enable_pause_key enable_rtsp rtsp_port rtsp_path rtsp_bitrate
-rtsp_codec rtsp_encoder channel_threads max_fps queue_size tracker_enable
+performance_display enable_rtsp rtsp_port rtsp_path rtsp_bitrate
+channel_threads max_fps queue_size tracker_enable
 tracker_type tracker_iou_thresh tracker_max_miss tracker_min_hits
 bytetrack_low_thresh bytetrack_low_iou_thresh global_logics""".split())
 CHANNEL = set("""id enable logic logic_parameters threads max_fps

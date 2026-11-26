@@ -257,6 +257,7 @@ export default function LiveViewPage() {
   const runningApp = apps.find(app => app.status === 'running') ?? null
   const appName = runningApp?.name ?? ''
   const runningConfig = runningApp?.config ?? ''
+  const unavailableConfig = runningApp?.launch_source === 'command_line' && !runningConfig
   const rtspEnabled = rtspState === 'enabled'
   const fileTimelineEnabled = !!appName && rtspEnabled && !streamLoading && !streamErr
   const independentPreview = channelPreview && previewMode === 'independent'
@@ -708,6 +709,11 @@ export default function LiveViewPage() {
       setVideoLayout(null)
       return
     }
+    if (unavailableConfig) {
+      setRtspState('error')
+      setVideoLayout(null)
+      return
+    }
     let disposed = false
     setRtspState('checking')
     setVideoLayout(null)
@@ -729,7 +735,7 @@ export default function LiveViewPage() {
     }
     checkRtsp()
     return () => { disposed = true }
-  }, [appName, runningConfig, runningApp?.pid])
+  }, [appName, runningConfig, runningApp?.pid, unavailableConfig])
 
   // 通道/全局动作定义和控制 socket 状态会在程序刚启动后变化，因此持续刷新。
   useEffect(() => {
@@ -1090,7 +1096,7 @@ export default function LiveViewPage() {
     : rtspState === 'checking'
       ? '检测配置中'
       : rtspState === 'disabled'
-        ? 'RTSP 未开启'
+        ? '运行中，未启用实时预览'
         : rtspState === 'error'
           ? '配置读取失败'
           : streamErr
@@ -1222,12 +1228,12 @@ export default function LiveViewPage() {
                         ? '正在检查运行配置'
                         : rtspState === 'disabled'
                           ? '当前程序未开启 RTSP 推流'
-                          : '无法确认 RTSP 推流配置'}
+                          : unavailableConfig ? '命令行运行配置不在程序的 assets 配置列表中' : '无法确认 RTSP 推流配置'}
                     </strong>
                   </div>
                 )}
               </div>
-              {videoLayout && videoLayout.tiles.length > 1 && !!appName && rtspEnabled && (
+              {videoLayout && (videoLayout.rows > 1 || videoLayout.columns > 1) && !!appName && rtspEnabled && (
                 <div className="live-view-tile-targets" style={{ left: pictureBounds.left, top: pictureBounds.top,
                   width: pictureBounds.width, height: pictureBounds.height }}>
                   {viewTiles.map(tile => <button key={tile.channelId}

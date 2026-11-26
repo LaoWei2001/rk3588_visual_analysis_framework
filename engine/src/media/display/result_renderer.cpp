@@ -395,7 +395,7 @@ void vision::render_overlays(cv::Mat &screen_roi, const vision::OverlayOptions &
     {
         for (const auto &res : *p.results)
         {
-            if (res.is_depth())
+            if (res.is_depth() || !res.show_detection_box)
                 continue;
             cv::Rect box;
             box.x = static_cast<int>(res.box.x * scale_x);

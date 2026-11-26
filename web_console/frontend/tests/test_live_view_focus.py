@@ -237,3 +237,31 @@ def test_hidden_tiles_and_preview_preferences(playback):
     assert page.get_by_label('点击画面后的显示方式').input_value() == 'zoom'
     page.get_by_label('点击画面后的显示方式').select_option('independent')
     expect(page.get_by_label('独立预览分辨率')).to_have_count(0)
+
+
+@pytest.mark.parametrize('rows,columns', [(2, 2), (1, 2), (2, 1), (1, 1)])
+def test_single_stream_focus_depends_on_grid_size(playback, rows, columns):
+    page, _, state = playback
+    state['config'] = {'global': {'enable_rtsp': 1, 'disp_width': 320, 'disp_height': 180,
+        'tile_rows': rows, 'tile_cols': columns}, 'channels': [
+        {'id': 0, 'enable': False, 'stream': {'src_type': 'file', 'url': '/disabled.mp4'}},
+        {'id': 9, 'stream': {'src_type': 'rtsp', 'url': 'rtsp://test/source'}}]}
+    page.reload()
+    page.wait_for_function("document.querySelector('video')?.currentTime > 1")
+    page.get_by_label('点击画面后的显示方式').select_option('zoom')
+    target = page.get_by_role('button', name='单独查看通道 9', exact=True)
+    assert page.get_by_role('button', name='单独查看通道 0', exact=True).count() == 0
+    if rows == columns == 1:
+        assert target.count() == 0
+        return
+    target.wait_for()
+    before = state['requests']
+    page.evaluate('window.originalVideo = document.querySelector("video")')
+    target.click()
+    page.wait_for_function("document.querySelector('.live-view-video-crop').dataset.focusedChannel === '9'")
+    if rows == columns == 2:
+        assert_color(page, (255, 0, 0))
+    page.get_by_role('button', name='点击画面返回拼接', exact=True).click()
+    target.wait_for()
+    assert page.evaluate('document.querySelector("video") === originalVideo')
+    assert state['requests'] == before

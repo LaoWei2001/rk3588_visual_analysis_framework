@@ -98,7 +98,6 @@ void YOLO::query_model_info()
     model_io::validate_io(io_num);
     if (io_num.n_output != 3)
         throw std::runtime_error("Unsupported yolo output count");
-    io_num_in_ = io_num.n_input;
     io_num_out_ = io_num.n_output;
 
     memset(&in_attr_, 0, sizeof(in_attr_));
@@ -219,13 +218,6 @@ cv::Mat YOLO::preprocess(cv::Mat &img, LetterBoxInfo &lb)
 void YOLO::post_process(void *feat, int out_idx, int feat_h, int feat_w, LetterBoxInfo &lb,
                         std::vector<AlgoResult> &results)
 {
-    int output_start = 0;
-    if (io_num_out_ > 3)
-        output_start = io_num_out_ - 3;
-    if (out_idx < output_start)
-        return;
-    int a_idx = out_idx - output_start;
-
     int grid_h = feat_h;
     int grid_w = feat_w;
     int stride = model_h_ / grid_h;
@@ -362,8 +354,8 @@ void YOLO::post_process(void *feat, int out_idx, int feat_h, int feat_w, LetterB
 
                 float cx = (box_x + j) * (float)stride;
                 float cy = (box_y + i) * (float)stride;
-                float rw = box_w * box_w * ANCHORS[a_idx][a][0];
-                float rh = box_h * box_h * ANCHORS[a_idx][a][1];
+                float rw = box_w * box_w * ANCHORS[out_idx][a][0];
+                float rh = box_h * box_h * ANCHORS[out_idx][a][1];
 
                 AlgoResult res;
                 res.box.x = (int)((cx - rw / 2.0f - lb.dw) / lb.ratio);

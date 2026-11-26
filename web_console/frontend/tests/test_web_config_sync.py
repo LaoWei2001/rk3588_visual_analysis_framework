@@ -365,6 +365,34 @@ def test_application_and_service_autostart_follow_external_state(console, route,
     pw_api.expect(checkbox).to_be_checked(timeout=2500)
 
 
+def test_terminal_app_start_and_exit_follow_on_open_pages(console):
+    page, url, snapshots, _, requests = console
+    app = snapshots['/api/apps'][0]
+    app['config_files'].append('assets/demo.json')
+    page.goto(url)
+    badge = page.locator('.app-card .status-badge')
+    pw_api.expect(badge).to_have_text('已停止')
+    app.update(status='running', pid=123, launch_source='command_line', config='demo.json')
+    pw_api.expect(badge).to_have_text('运行中 · 命令行启动')
+    pw_api.expect(page.locator('.app-card select')).to_have_value('demo.json')
+    app.update(status='stopped', pid=None, launch_source=None, config=None)
+    pw_api.expect(badge).to_have_text('已停止')
+    assert ('GET', '/api/apps/demo/log') not in requests
+
+    snapshots['/api/apps/demo/logic-actions'] = dict(channels=[], globals=[], socket_ready=False)
+    snapshots['/api/apps/demo/stream/capabilities'] = dict(channel_preview=False)
+    snapshots['/api/apps/demo/config-file'] = {'global': {'enable_rtsp': False}, 'channels': []}
+    page.goto(url + '/live-view')
+    empty = page.get_by_text('当前没有正在运行的视觉程序')
+    pw_api.expect(empty).to_be_visible()
+    app.update(status='running', pid=124, launch_source='command_line', config='demo.json')
+    pw_api.expect(page.get_by_text('运行中，未启用实时预览')).to_be_visible()
+    assert ('GET', '/api/apps/demo/config-file') in requests
+    assert ('GET', '/api/apps/demo/stream') not in requests
+    app.update(status='stopped', pid=None, launch_source=None, config=None)
+    pw_api.expect(empty).to_be_visible()
+
+
 def test_canvas_model_panel_has_no_image_inference_entry(console):
     page, url, snapshots, _, requests = console
     snapshots['/api/apps/demo/config'] = {'global': {}, 'channels': [{
@@ -779,6 +807,50 @@ def test_business_roi_balances_images_and_removes_empty_space_without_resizing_d
     assert_roi_content_fits_without_scrolling(dialog)
 
 
+def test_file_stream_board_path_and_package_selection(console):
+    page, url, snapshots, _, _ = console
+    config_url = '/api/apps/demo/config'
+    package_video = 'assets/clip.mp4'
+    board_video = '/userdata/录像/吊装 测试.mp4'
+    snapshots[config_url] = {'global': {}, 'channels': [
+        dict(id=0, models=[], stream=dict(src_type='file', url=package_video, loop=True))]}
+    snapshots['/api/apps/demo/assets']['videos'] = [package_video]
+    saved = []
+
+    def config_request(route):
+        if route.request.method == 'POST':
+            snapshots[config_url] = route.request.post_data_json
+            saved.append(snapshots[config_url]['channels'][0]['stream'])
+        route.fulfill(json={'ok': True} if route.request.method == 'POST' else snapshots[config_url])
+
+    page.route('**' + config_url, config_request)
+    page.goto(url + '/editor/demo')
+    node = page.locator('.react-flow__node-stream')
+    node.click()
+    field = page.get_by_role('textbox', name='板端视频路径')
+    save = page.get_by_role('button', name='💾 保存', exact=True)
+    pw_api.expect(field).to_have_value(package_video)
+    field.fill('assets/missing.mp4')
+    save.click()
+    pw_api.expect(node).to_contain_text('视频文件不存在')
+    assert not saved
+    field.fill(board_video)
+    pw_api.expect(node).to_contain_text(board_video)
+    pw_api.expect(page.locator('.picker-missing')).to_have_count(0)
+    save.click()
+    pw_api.expect(page.get_by_text('保存成功 ✓（config.json）', exact=True)).to_be_visible()
+    assert saved == [dict(src_type='file', url=board_video, loop=True)]
+    page.reload()
+    node.click()
+    pw_api.expect(field).to_have_value(board_video)
+    page.locator('.asset-picker .picker-trigger').click()
+    page.get_by_title(package_video, exact=True).click()
+    pw_api.expect(field).to_have_value(package_video)
+    save.click()
+    pw_api.expect(page.get_by_text('保存成功 ✓（config.json）', exact=True)).to_be_visible()
+    assert saved[-1] == dict(src_type='file', url=package_video, loop=True)
+
+
 def test_channel_switches_are_visible_and_editable(console):
     page, url, snapshots, _, _ = console
     snapshots['/api/apps/demo/config']['channels'] = [dict(
@@ -867,31 +939,30 @@ def test_runtime_options_edit_save_and_reload(console):
 
     page.route('**' + path, write)
     page.goto(url + '/editor/demo')
-    pw_api.expect(page.get_by_label('RTSP 输出编码', exact=True)).to_have_value('h265')
+    pw_api.expect(page.get_by_label('RTSP 输出编码', exact=True)).to_have_count(0)
     pw_api.expect(page.get_by_label('RTSP 端口', exact=True)).to_have_value('9554')
     pw_api.expect(page.get_by_label('RTSP 路径', exact=True)).to_have_value('/camera')
-    pw_api.expect(page.get_by_label('RTSP 编码器', exact=True)).to_have_value('hw')
+    pw_api.expect(page.get_by_label('RTSP 编码器', exact=True)).to_have_count(0)
     page.get_by_label('RTSP 端口', exact=True).fill('8555')
     page.get_by_label('RTSP 路径', exact=True).fill('/review')
     page.get_by_label('RTSP 软件编码码率 (kbps)', exact=True).fill('3072')
-    page.get_by_label('RTSP 编码器', exact=True).select_option('auto')
-    page.get_by_role('checkbox', name='HDMI 空格键暂停', exact=True).check()
+    pw_api.expect(page.get_by_role('checkbox', name='HDMI 空格键暂停', exact=True)).to_have_count(0)
     page.locator('.react-flow__node-stream').click()
     pw_api.expect(page.get_by_text('当前生效：跟踪已关闭', exact=True)).to_be_visible()
     page.get_by_role('checkbox', name='启用通道', exact=True).check()
     page.get_by_role('button', name='💾 保存', exact=True).click()
     pw_api.expect(page.get_by_text('保存成功 ✓（config.json）', exact=True)).to_be_visible()
-    assert saved[-1]['global']['rtsp_codec'] == 'h265'
+    assert 'rtsp_codec' not in saved[-1]['global']
     assert saved[-1]['global']['rtsp_port'] == 8555
     assert saved[-1]['global']['rtsp_path'] == '/review'
     assert saved[-1]['global']['rtsp_bitrate'] == 3072
-    assert saved[-1]['global']['rtsp_encoder'] == 'auto'
-    assert saved[-1]['global']['enable_pause_key'] == 1
+    assert 'rtsp_encoder' not in saved[-1]['global']
+    assert 'enable_pause_key' not in saved[-1]['global']
     assert saved[-1]['channels'][0]['enable'] is True
     assert 'swap_rb' not in saved[-1]['channels'][0]
     page.reload()
-    pw_api.expect(page.get_by_label('RTSP 输出编码', exact=True)).to_have_value('h265')
-    pw_api.expect(page.get_by_role('checkbox', name='HDMI 空格键暂停', exact=True)).to_be_checked()
+    pw_api.expect(page.get_by_label('RTSP 输出编码', exact=True)).to_have_count(0)
+    pw_api.expect(page.get_by_role('checkbox', name='HDMI 空格键暂停', exact=True)).to_have_count(0)
     page.locator('.react-flow__node-stream').click()
     pw_api.expect(page.get_by_role('checkbox', name='启用通道', exact=True)).to_be_checked()
     pw_api.expect(page.get_by_role('checkbox', name='显示红蓝互换', exact=True)).to_have_count(0)
@@ -922,3 +993,160 @@ def test_shared_report_options_are_editable_from_each_delivery(console):
     pw_api.expect(page.get_by_role('checkbox', name='启用上报', exact=True)).to_be_checked()
     reports.nth(1).click()
     pw_api.expect(page.get_by_role('checkbox', name='启用上报', exact=True)).not_to_be_checked()
+
+
+def test_global_panel_fits_content_and_keeps_manual_resize(console):
+    page, url, snapshots, _, _ = console
+    snapshots['/api/apps/demo/config']['global']['tracker_type'] = 'bytetrack'
+    # Previous fixed-height preferences must not prevent the initial automatic layout.
+    page.add_init_script("if (!localStorage.getItem('rk3588.editor.bottomPanelHeight')) localStorage.setItem('rk3588.editor.bottomPanelHeight', '150')")
+    page.goto(url + '/editor/demo')
+    panel = page.locator('.editor-bottom')
+    pw_api.expect(panel).to_have_attribute('data-sizing', 'auto')
+
+    def fits():
+        page.wait_for_function('''() => {
+            const panel = document.querySelector('.editor-bottom');
+            const content = document.querySelector('.gs-content');
+            const scroll = document.querySelector('.gs-panel');
+            return panel && content && scroll && content.querySelectorAll('input').length > 0 &&
+              Math.abs(panel.getBoundingClientRect().height - content.getBoundingClientRect().height - 1) <= 2 &&
+              scroll.scrollHeight <= scroll.clientHeight + 1;
+        }''')
+
+    fits()
+    page.set_viewport_size({'width': 1100, 'height': 1100})
+    fits()
+    before = panel.bounding_box()['height']
+    page.locator('.gs-field').filter(has_text='跟踪算法').locator('select').select_option('sort')
+    fits()
+    assert panel.bounding_box()['height'] <= before
+    separator = page.get_by_role('separator', name='调整底部栏高度')
+    box = separator.bounding_box()
+    before = panel.bounding_box()['height']
+    page.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+    page.mouse.down()
+    page.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2 - 80, steps=8)
+    page.mouse.up()
+    pw_api.expect(panel).to_have_attribute('data-sizing', 'manual')
+    assert panel.bounding_box()['height'] >= before + 70
+    manual = panel.bounding_box()['height']
+    separator.focus()
+    page.keyboard.press('ArrowDown')
+    assert abs(panel.bounding_box()['height'] - (manual - 10)) <= 2
+    page.reload()
+    pw_api.expect(panel).to_have_attribute('data-sizing', 'manual')
+    assert abs(panel.bounding_box()['height'] - (manual - 10)) <= 2
+    separator.dblclick()
+    pw_api.expect(panel).to_have_attribute('data-sizing', 'auto')
+    fits()
+    page.locator('.gs-header').click()
+    page.wait_for_function("document.querySelector('.editor-bottom').getBoundingClientRect().height < 50")
+    page.locator('.gs-header').click()
+    fits()
+
+
+def test_canvas_file_switch_guards_draft_and_saves_original(console):
+    page, url, snapshots, _, _ = console
+    config = '/api/apps/demo/config'
+    snapshots[config]['channels'] = [{'id': 0, 'stream': {'src_type': 'usb', 'device': '/dev/video0'}}]
+    snapshots['/api/apps/demo/config-files'].append('assets/second.json')
+    snapshots['/api/apps/demo/config-file'] = {'global': {'max_fps': 12}, 'channels': []}
+    saved = []
+    def config_request(route):
+        if route.request.method == 'GET':
+            route.fulfill(json=snapshots[config])
+        else:
+            saved.append(route.request.post_data_json)
+            if len(saved) == 1:
+                route.fulfill(status=500, json={'detail': '临时写入失败'})
+            else:
+                snapshots[config] = saved[-1]
+                route.fulfill(json={'ok': True})
+    page.route('**' + config, config_request)
+    page.goto(url + '/editor/demo')
+    fps = page.locator('.gs-field').filter(has_text='全局处理 FPS').locator('input')
+    pw_api.expect(fps).to_have_value('25')
+    def switch():
+        page.get_by_role('button', name='📂 配置文件').click()
+        page.get_by_role('button', name='second.json', exact=True).click()
+    fps.fill('19')
+    switch()
+    dialog = page.get_by_role('dialog', name='有未保存的改动')
+    pw_api.expect(dialog).to_contain_text('config.json')
+    dialog.get_by_role('button', name='取消', exact=True).click()
+    pw_api.expect(fps).to_have_value('19')
+    switch()
+    dialog.get_by_role('button', name='保存并切换').click()
+    pw_api.expect(page.locator('.editor-toast')).to_contain_text('临时写入失败')
+    pw_api.expect(dialog).to_be_visible()
+    pw_api.expect(page.locator('.tb-file')).to_contain_text('config.json')
+    dialog.get_by_role('button', name='保存并切换').click()
+    pw_api.expect(page.locator('.tb-file')).to_contain_text('second.json')
+    pw_api.expect(fps).to_have_value('12')
+    assert len(saved) == 2 and saved[-1]['global']['max_fps'] == 19
+    fps.fill('14')
+    switch()
+    dialog.get_by_role('button', name='不保存切换').click()
+    pw_api.expect(fps).to_have_value('12')
+    assert len(saved) == 2
+
+
+def test_mobile_canvas_tools_and_inspector(console):
+    page, url, snapshots, _, _ = console
+    snapshots['/api/apps/demo/config']['channels'] = [{'id': 0, 'stream': {'src_type': 'usb', 'device': '/dev/video0'}}]
+    page.set_viewport_size({'width': 390, 'height': 844})
+    page.goto(url + '/editor/demo')
+    flow = page.locator('.flow-container')
+    node = page.locator('.react-flow__node-stream').first
+    pw_api.expect(node).to_be_visible()
+    size = flow.bounding_box()
+    assert size['width'] >= 360 and size['height'] >= 350, size
+    for btn in ['← 返回', '💾 保存']:
+        box = page.get_by_role('button', name=btn, exact=True).bounding_box()
+        assert 0 <= box['x'] <= 390 - box['width']
+    pw_api.expect(page.locator('.config-preview')).to_be_hidden()
+    page.get_by_role('button', name='配置 JSON').click()
+    pw_api.expect(page.locator('.config-preview')).to_be_visible()
+    page.get_by_role('button', name='全局设置', exact=True).click()
+    pw_api.expect(page.locator('.gs-panel')).to_be_visible()
+    page.get_by_role('button', name='全局设置', exact=True).click()
+    node.click()
+    pw_api.expect(page.locator('.ncp')).to_be_visible()
+    page.get_by_role('button', name='收起节点属性').click()
+    pw_api.expect(page.locator('.ncp')).to_be_hidden()
+    page.locator('.palette-chip.stream').click()
+    pw_api.expect(page.locator('.react-flow__node-stream')).to_have_count(2)
+
+
+def test_locally_imported_new_file_can_save_before_switch(console):
+    page, url, snapshots, _, _ = console
+    config = {'global': {'max_fps': 18}, 'channels': [{'id': 0, 'stream': {'src_type': 'usb', 'device': '/dev/video0'}}]}
+    saved = []
+    def board_file(route):
+        if 'draft.json' in route.request.url:
+            if route.request.method == 'POST':
+                saved.append(route.request.post_data_json)
+                route.fulfill(json={'path': 'assets/draft.json', 'ok': True})
+            elif saved:
+                route.fulfill(json=saved[-1])
+            else:
+                route.fulfill(status=404, json={'detail': 'File not found'})
+        else:
+            route.fulfill(json=snapshots['/api/apps/demo/config'])
+    page.route('**/api/apps/demo/config-file?*', board_file)
+    page.goto(url + '/editor/demo')
+    fps = page.locator('.gs-field').filter(has_text='全局处理 FPS').locator('input')
+    pw_api.expect(fps).to_have_value('25')
+    fps.fill('23')
+    page.locator('.editor-toolbar input[type=file]').set_input_files({
+        'name': 'draft.json', 'mimeType': 'application/json', 'buffer': json.dumps(config).encode()})
+    dialog = page.get_by_role('dialog', name='有未保存的改动')
+    dialog.get_by_role('button', name='不保存切换').click()
+    pw_api.expect(fps).to_have_value('18')
+    page.get_by_role('button', name='📂 配置文件').click()
+    page.get_by_role('button', name='config.json', exact=True).click()
+    pw_api.expect(dialog).to_contain_text('draft.json')
+    dialog.get_by_role('button', name='保存并切换').click()
+    pw_api.expect(fps).to_have_value('25')
+    assert len(saved) == 1 and saved[0]['global']['max_fps'] == 18

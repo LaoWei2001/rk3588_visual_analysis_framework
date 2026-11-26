@@ -9,7 +9,6 @@ void YoloV8Det::query_obb_info()
     model_io::validate_io(io);
     if (io.n_output != 4)
         throw std::runtime_error("OBB requires four outputs");
-    io_num_in_ = io.n_input;
     io_num_out_ = io.n_output;
     in_attr_ = {};
     in_attr_.index = 0;

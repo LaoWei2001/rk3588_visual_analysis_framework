@@ -33,6 +33,8 @@ export interface ImageItem {
   elapsed_ms?: number
   error?: string
   source_path?: string
+  size?: number
+  uploaded?: boolean
 }
 export interface ImageSource {
   kind: 'upload' | 'device'
@@ -59,6 +61,7 @@ export interface ImageJob {
   error: string
   total: number
   completed: number
+  resume_phase?: 'upload' | 'inference'
 }
 export interface ImageObject {
   model_id: string
@@ -94,6 +97,15 @@ export interface ImageResult {
 const base = '/image-inference'
 const task = (id: string) => `${base}/jobs/${encodeURIComponent(id)}`
 export const imageJobFinished = (status: string) => ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(status)
+export interface InferenceAssets { models: string[]; labels: string[] }
+export const fetchInferenceAssets = () => api.get<InferenceAssets>(`${base}/assets`).then(r => r.data)
+export const importInferenceAsset = (file: File, onProgress: (n: number) => void) => {
+  const data = new FormData()
+  data.append('file', file)
+  return api.post<{ path: string; renamed: boolean }>(`${base}/assets/upload`, data, {
+    onUploadProgress: event => { if (event.total) onProgress(Math.round(event.loaded / event.total * 100)) },
+  }).then(r => r.data)
+}
 export const fetchImageCapabilities = () => api.get<ImageCapabilities>(`${base}/capabilities`).then(r => r.data)
 export const inspectImageModel = (path: string, modelType: string, signal?: AbortSignal) =>
   api.get<ModelInfo>(`${base}/models/info`, { params: { path, model_type: modelType }, signal }).then(r => r.data)
@@ -103,30 +115,51 @@ export const clearCompletedImageJobs = () =>
 export const fetchImageResult = (id: string, index: number) =>
   api.get<ImageResult>(`${task(id)}/items/${index}`).then(r => r.data)
 export const cancelImageJob = (id: string) => api.post<ImageJob>(`${task(id)}/cancel`).then(r => r.data)
-export async function createImageJob(settings: ImageSettings, files: File[], onProgress: (n: number) => void) {
-  const { data: batch } = await api.post<{ id: string }>(`${base}/jobs`, {
-    settings, files: files.map(file => ({ name: file.name, size: file.size })),
-  })
+async function uploadImages(id: string, files: File[], onProgress: (n: number) => void, uploadedIndices: number[] = []) {
   let uploaded = 0
   const total = files.reduce((sum, file) => sum + file.size, 0)
   try {
     for (const [index, file] of files.entries()) {
-      await api.put(`${task(batch.id)}/inputs/${index}`, file, {
+      if (!uploadedIndices.includes(index)) await api.put(`${task(id)}/inputs/${index}`, file, {
         headers: { 'Content-Type': 'application/octet-stream' },
         onUploadProgress: event => onProgress(Math.min(100, Math.round((uploaded + event.loaded) / total * 100))),
       })
       uploaded += file.size
       onProgress(Math.round(uploaded / total * 100))
     }
-    return (await api.post<ImageJob>(`${task(batch.id)}/submit`)).data
+    return (await api.post<ImageJob>(`${task(id)}/submit`)).data
   } catch (error) {
-    // Includes files already uploaded if a later file runs out of disk space.
-    try { await api.delete(`${task(batch.id)}/upload`) } catch { /* Preserve the original error. */ }
+    if (isAxiosError(error) && error.response?.status === 507) {
+      const job = await fetchCurrentImageJob()
+      if (job?.id === id && job.status === 'paused_storage') return job
+    } else {
+      try { await api.delete(`${task(id)}/upload`) } catch { /* Preserve the original error. */ }
+    }
     throw error
   }
 }
-export const inspectDeviceImages = (path: string, recursive: boolean) =>
-  api.post<DeviceImages>(`${base}/device-images`, { path, recursive }).then(r => r.data)
+export async function createImageJob(settings: ImageSettings, files: File[], onProgress: (n: number) => void) {
+  const { data: batch } = await api.post<{ id: string }>(`${base}/jobs`, {
+    settings, files: files.map(file => ({ name: file.name, size: file.size })),
+  })
+  return uploadImages(batch.id, files, onProgress)
+}
+export async function resumeImageJob(job: ImageJob, files: File[], onProgress: (n: number) => void) {
+  const upload = job.resume_phase === 'upload' && job.source?.kind === 'upload'
+  const pendingUploads = upload && job.items.some(item => !item.uploaded)
+  if (pendingUploads && (files.length !== job.total || job.items.some((item, index) =>
+    files[index]?.name !== item.name || files[index]?.size !== item.size))) {
+    throw new Error('请重新选择原批次的图片（保持原顺序），再点击继续。已上传的图片会保留。')
+  }
+  const { data } = await api.post<ImageJob>(`${task(job.id)}/resume`)
+  return upload ? uploadImages(job.id, pendingUploads ? files : [], onProgress,
+    job.items.filter(i => i.uploaded).map(i => i.index)) : data
+}
+export interface DeviceFolders { path: string; parent: string | null; folders: string[] }
+export const fetchDeviceFolders = (path: string, signal: AbortSignal) =>
+  api.get<DeviceFolders>(`${base}/device-folders`, { params: { path }, signal }).then(r => r.data)
+export const inspectDeviceImages = (path: string, recursive: boolean, signal?: AbortSignal) =>
+  api.post<DeviceImages>(`${base}/device-images`, { path, recursive }, { signal }).then(r => r.data)
 export const createDeviceImageJob = (settings: ImageSettings, path: string, recursive: boolean) =>
   api.post<ImageJob>(`${base}/jobs/from-device`, { settings, path, recursive }).then(r => r.data)
 export function imageArtifactUrl(id: string, index: number, file: string): string {

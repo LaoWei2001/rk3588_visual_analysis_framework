@@ -1,10 +1,9 @@
 import os
-import shutil
-import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
+from services.asset_upload import save_asset
 from services import model_info
 from services.app_paths import application_directory
 
@@ -101,36 +100,8 @@ async def upload_asset(
     if assets_dir.resolve().parent != app_dir:
         raise HTTPException(400, "资源目录越界")
 
-    def _save():
-        # A private staging file plus atomic hard-link publication makes the
-        # no-overwrite contract safe across threads and worker processes.
-        tmp = None
-        target = assets_dir / fname
-        try:
-            with tempfile.NamedTemporaryFile(dir=assets_dir, prefix=".upload_", suffix=".tmp", delete=False) as out:
-                tmp = Path(out.name)
-                file.file.seek(0)
-                shutil.copyfileobj(file.file, out)
-            if do_overwrite:
-                os.replace(tmp, target)
-            else:
-                stem, ext = Path(fname).stem, Path(fname).suffix
-                index = 0
-                while True:
-                    try:
-                        os.link(tmp, target)
-                        break
-                    except FileExistsError:
-                        index += 1
-                        suffix = "_copy" if index == 1 else f"_copy_{index}"
-                        target = assets_dir / f"{stem}{suffix}{ext}"
-            return target
-        finally:
-            if tmp is not None:
-                tmp.unlink(missing_ok=True)
-
     try:
-        target = await run_in_threadpool(_save)
+        target = await run_in_threadpool(save_asset, assets_dir, fname, file.file, do_overwrite)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"保存失败: {exc}") from exc
     renamed = target.name != fname

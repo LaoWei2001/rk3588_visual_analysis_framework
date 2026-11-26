@@ -15,7 +15,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
 CAP_BYTES = int(os.environ.get("EVENT_STORE_MAX_BYTES", 1024 * 1024 * 1024))
@@ -30,7 +30,7 @@ _export_lock = threading.Lock()
 
 
 class RecordSelection(BaseModel):
-    ids: Optional[list[str]] = Field(default=None, max_length=5000)
+    ids: Optional[list[str]] = None
 
 
 def _selected_paths(name: str, ids: Optional[list[str]]) -> list[Path]:
@@ -213,7 +213,10 @@ async def list_records(
     start_unix_ms: Optional[int] = None,
     end_unix_ms: Optional[int] = None,
     event_type: Optional[str] = None,
+    media_type: Optional[str] = None,
 ):
+    if media_type not in (None, "all", "image", "video", "data"):
+        raise HTTPException(400, "媒体类型无效")
     if start_unix_ms is not None and start_unix_ms < 0:
         raise HTTPException(400, "开始时间无效")
     if end_unix_ms is not None and end_unix_ms < 0:
@@ -224,10 +227,11 @@ async def list_records(
     store = _store_dir(name)
     if not store.exists():
         return {
-            "records": [], "count": 0, "filtered_count": 0, "event_types": [],
+            "records": [], "matching_ids": [], "raw_available": {}, "count": 0, "filtered_count": 0, "event_types": [],
             "total_bytes": 0, "cap_bytes": CAP_BYTES,
         }
     records = []
+    raw_available = {}
     event_types = set()
     record_count = 0
     total = 0
@@ -243,6 +247,7 @@ async def list_records(
             size = sum(item.stat().st_size for item in path.iterdir() if item.is_file())
         except (OSError, ValueError, TypeError):
             continue
+        raw_available[path.name] = (path / "raw.jpg").is_file()
         record_count += 1
         total += size
         event, source, media = meta["event"], meta["source"], meta["media"]
@@ -264,8 +269,15 @@ async def list_records(
             for delivery in meta["deliveries"] if isinstance(delivery, dict)
             for kind in delivery.get("media", []) if isinstance(delivery.get("media", []), list)
         }
+        kinds = required_media | {kind for kind, file in media.items() if file}
+        if media_type == "image" and not kinds.intersection({"raw_image", "annotated_image"}):
+            continue
+        if media_type == "video" and "video" not in kinds:
+            continue
+        if media_type == "data" and kinds:
+            continue
         records.append({
-            "id": event.get("id", path.name),
+            "id": path.name,
             "channel_id": source.get("channel_id"),
             "event_type": event.get("type", ""),
             "message": event.get("message", ""),
@@ -284,6 +296,8 @@ async def list_records(
     records.sort(key=lambda item: item.get("created_unix_sec") or 0, reverse=True)
     return {
         "records": records[:max(0, limit)],
+        "matching_ids": [record["id"] for record in records],
+        "raw_available": raw_available,
         "count": record_count,
         "filtered_count": len(records),
         "event_types": sorted(event_types),

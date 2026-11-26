@@ -1,5 +1,6 @@
 #include "application/runtime/app_ctrl.h"
 #include "media/display/display_render.h"
+#include "vision/inference/npu_core_gate.h"
 
 #include <cassert>
 #include <iostream>
@@ -57,6 +58,57 @@ const std::vector<RoiZone> *app_ctrl_runtime_channel_rois(const std::shared_ptr<
 float inference_get_infer_fps(int)
 {
     return infer_rate.value();
+}
+
+static void test_failed_inference_preview(const cv::Mat &base, ChannelState &state)
+{
+    auto &channel = runtime->config.channels[0];
+    ChannelModelConfig model;
+    model.model_type = "yolov8_det";
+    model.model_path = "model.rknn";
+    channel.models = {model};
+    show_performance = 0;
+
+    AlgoResult box;
+    box.box = {160, 65, 55, 45};
+    state.last_results = {box};
+    DrawCommand command{};
+    command.type = DrawCommand::RECT;
+    command.rect = {300, 65, 45, 35};
+    state.draw_cmds = {command};
+    command.rect.x = 450;
+    state.global_draw_cmds_by_owner["test"] = {command};
+
+    auto render = [&] {
+        cv::Mat view = base.clone();
+        render_channel_view(view, 0, 10000);
+        return view;
+    };
+    const auto healthy = render();
+    for (int x : {160, 300, 450})
+        assert(healthy.at<cv::Vec3b>(65, x) != base.at<cv::Vec3b>(65, x));
+
+    state.logic_display_frame = cv::Mat(base.size(), base.type(), cv::Scalar(70, 80, 90));
+    state.logic_display_ts_ms = 1;
+    state.file_playback.paused = true;
+    const auto paused = render();
+    assert(paused.at<cv::Vec3b>(155, 630) == cv::Vec3b(70, 80, 90));
+
+    // Failure on any core invalidates results even for another channel or a paused frame.
+    npu::CoreLease(4).mark_failed();
+    const auto failed = render();
+    const cv::Rect warning(0, 0, base.cols, 35);
+    assert(cv::norm(failed(warning), base(warning), cv::NORM_INF) > 0);
+    assert(cv::norm(failed.rowRange(35, base.rows), base.rowRange(35, base.rows), cv::NORM_INF) == 0);
+    state.file_playback.paused = false;
+    assert(cv::norm(render(), failed, cv::NORM_INF) == 0);
+
+    // Channels doing only CPU logic and channels with inference switched off keep their own overlays.
+    channel.models[0].enable = false;
+    assert(cv::norm(render(), healthy, cv::NORM_INF) == 0);
+    channel.models[0].enable = true;
+    state.infer_runtime_enable = 0;
+    assert(cv::norm(render(), healthy, cv::NORM_INF) == 0);
 }
 
 int main()
@@ -216,6 +268,7 @@ int main()
         }
     }
 
+    test_failed_inference_preview(base, state);
     pthread_mutex_destroy(&g_pCtrl->chn_mtx[0]);
     delete g_pCtrl;
     g_pCtrl = nullptr;

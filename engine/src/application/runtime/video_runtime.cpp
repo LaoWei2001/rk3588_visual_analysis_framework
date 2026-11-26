@@ -2,7 +2,6 @@
 
 #include "application/control/file_playback_control.h"
 #include "application/runtime/app_ctrl.h"
-#include "application/runtime/pause_ctrl.h"
 #include "application/runtime/process_signals.h"
 #include "application/runtime/runtime_status.h"
 #include "application/runtime/service_watchdog.h"
@@ -129,7 +128,6 @@ int VideoRuntime::run()
         return -1;
     }
     g_shutdown_signal = 0;
-    g_pause_toggle_signal = 0;
     try
     {
         shutdown_status_begin();
@@ -180,11 +178,7 @@ void VideoRuntime::Impl::wait_for_stop()
         while (g_pCtrl->isRunning.load() && !stopping())
         {
             service_watchdog::main_heartbeat();
-            if (g_pause_toggle_signal)
-            {
-                g_pause_toggle_signal = 0;
-                pause_ctrl::toggle();
-            }
+
             usleep(100 * 1000);
         }
     }

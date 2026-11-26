@@ -4,7 +4,15 @@
     {
       "id": "logic_ppe_violation",
       "label": "人员安全穿戴违规",
-      "help": "按人员跟踪 ID 与部位累计多帧证据；同一跟踪会话只创建一次事件，部位状态区分可核验/候选/已确认。"
+      "help": "按人员与违规类别分别确认并上报；同一跟踪会话中同类去重。"
+    },
+    {
+      "id": "machine_entry_evidence",
+      "label": "进机边界抓拍"
+    },
+    {
+      "id": "machine_blind_timeout",
+      "label": "机内滞留超时"
     }
   ],
   "parameters": {
@@ -100,7 +108,7 @@
         "type": "string",
         "title": "未戴手套违规标签",
         "description": "填写模型明确输出的裸手/未戴手套类别；有姿态结果时按腕点位置分左右手，分不清则只计一次不分侧证据。",
-        "default": "bare_hand,no_glove",
+        "default": "hand_bare,bare_hand,no_glove",
         "x-hot-reload": "reset_state"
       },
       "geometry_gate": {
@@ -281,14 +289,14 @@
         "type": "string",
         "title": "工作服正类标签",
         "description": "模型表示「已穿工作服」的类别名，逗号分隔；留空则不做正类否决。",
-        "default": "",
+        "default": "workwear_on",
         "x-hot-reload": "reset_state"
       },
       "glove_positive_labels": {
         "type": "string",
         "title": "手套正类标签",
         "description": "模型表示「已戴手套」的类别名，逗号分隔；留空则不做正类否决。",
-        "default": "glove",
+        "default": "hand_gloved,glove",
         "x-hot-reload": "reset_state"
       },
       "helmet_infer_by_absence": {
@@ -361,6 +369,77 @@
         "description": "开启后没有姿态关键点时裸手框一律丢弃（更保守，但现场只挂检测模型时等于不判手套）。关闭时无姿态的裸手按“分不清左右”降级处理。",
         "default": false,
         "x-hot-reload": "preserve_state"
+      },
+      "machine_enabled": {
+        "type": "boolean",
+        "title": "启用平台人数与进机滞留监测",
+        "default": false,
+        "x-hot-reload": "reset_state"
+      },
+      "platform_roi": {
+        "type": "string",
+        "title": "平台区域名称",
+        "default": "platform",
+        "x-hot-reload": "reset_state"
+      },
+      "blind_roi": {
+        "type": "string",
+        "title": "机台入口带名称",
+        "default": "machine_door",
+        "x-hot-reload": "reset_state"
+      },
+      "missing_ms": {
+        "type": "integer",
+        "title": "进机消失确认（毫秒）",
+        "default": 800,
+        "x-hot-reload": "reset_state",
+        "minimum": 100,
+        "maximum": 10000
+      },
+      "timeout_sec": {
+        "type": "integer",
+        "title": "机内超时（秒）",
+        "default": 300,
+        "x-hot-reload": "reset_state",
+        "minimum": 1,
+        "maximum": 86400
+      },
+      "initialize_visible": {
+        "type": "boolean",
+        "title": "开场按持续可见人员建立在场基数",
+        "default": false,
+        "description": "前4秒内在平台持续可见满1秒的跟踪人员计入初始人数，适用于开始时已有人在岗的录像。",
+        "x-hot-reload": "reset_state"
+      },
+      "gate_standing_height": {
+        "type": "integer",
+        "title": "楼梯口标定站立高度",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 640,
+        "x-unit": "px",
+        "description": "按640×640业务画布校准。0 表示关闭此项，仅影响平台监测。",
+        "x-hot-reload": "reset_state"
+      },
+      "machine_standing_height": {
+        "type": "integer",
+        "title": "机台口标定站立高度",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 640,
+        "x-unit": "px",
+        "description": "按640×640业务画布校准。0 表示关闭此项，仅影响平台监测。",
+        "x-hot-reload": "reset_state"
+      },
+      "min_platform_person_height": {
+        "type": "integer",
+        "title": "平台人数所需最小人员框高度",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 640,
+        "x-unit": "px",
+        "description": "按640×640业务画布校准。0 表示关闭此项，仅影响平台监测。",
+        "x-hot-reload": "reset_state"
       }
     }
   },
@@ -399,6 +478,31 @@
       "key": "tracked_people",
       "type": "integer",
       "label": "本帧参与判定的人员数"
+    },
+    {
+      "key": "visible_count",
+      "type": "integer",
+      "label": "平台可见人数"
+    },
+    {
+      "key": "present_count",
+      "type": "integer",
+      "label": "区域在场人数"
+    },
+    {
+      "key": "hidden_count",
+      "type": "integer",
+      "label": "机内计时人数"
+    },
+    {
+      "key": "alarm_count",
+      "type": "integer",
+      "label": "超时人数"
+    },
+    {
+      "key": "observation_valid",
+      "type": "boolean",
+      "label": "本帧可观测"
     }
   ],
   "report_fields": [
@@ -421,6 +525,51 @@
       "key": "person_score",
       "type": "number",
       "label": "人员检测置信度"
+    },
+    {
+      "key": "regions",
+      "type": "json",
+      "label": "本帧确认的部位区域"
+    },
+    {
+      "key": "frame_id",
+      "type": "number",
+      "label": "检测帧号"
+    },
+    {
+      "key": "frame_width",
+      "type": "number",
+      "label": "部位坐标系宽度"
+    },
+    {
+      "key": "frame_height",
+      "type": "number",
+      "label": "部位坐标系高度"
+    },
+    {
+      "key": "visit_id",
+      "type": "number",
+      "label": "本轮访问编号"
+    },
+    {
+      "key": "dwell_ms",
+      "type": "number",
+      "label": "失去可见的时长（毫秒）"
+    },
+    {
+      "key": "entry_event_id",
+      "type": "string",
+      "label": "进机关键抓拍事件编号"
+    },
+    {
+      "key": "present_count",
+      "type": "number",
+      "label": "区域在场人数"
+    },
+    {
+      "key": "video_time_ms",
+      "type": "number",
+      "label": "触发时的视频位置（毫秒，实时源为 -1）"
     }
   ],
   "actions": [
@@ -446,7 +595,7 @@
       "id": "ppe_toggle_debug",
       "label": "调试信息开关",
       "style": "default",
-      "help": "隐藏/显示左上角候选、丢弃、灵敏度等调试文字；检测框与人号徽标保留。"
+      "help": "切换左上角统计与调试文字，部位报警框始终显示。"
     }
   ]
 }

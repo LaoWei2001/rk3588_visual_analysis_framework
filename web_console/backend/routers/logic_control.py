@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
-from services.app_paths import application_directory
+from services.app_paths import application_directory, read_runtime_config
 from services.logic_client import send_action
 from pydantic import BaseModel, Field
 
@@ -64,12 +64,7 @@ def _configured_channels(channels: Any) -> List[tuple[int, Dict[str, Any]]]:
 @router.get("/apps/{name}/logic-actions")
 async def get_logic_actions(name: str):
     app_dir = _app_dir(name)
-    config_name = "config.json"
-    run_config = app_dir / "run.config"
-    if run_config.exists():
-        config_name = run_config.read_text(encoding="utf-8").strip() or "config.json"
-
-    config = _load_json(app_dir / "assets" / config_name, {})
+    config = await run_in_threadpool(read_runtime_config, app_dir)
     channels = config.get("channels", []) if isinstance(config, dict) else []
     channel_logic_defs = _logic_defs(app_dir, "channel_logics")
     global_logic_defs = _logic_defs(app_dir, "global_logics")

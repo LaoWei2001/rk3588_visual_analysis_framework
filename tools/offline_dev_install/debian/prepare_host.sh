@@ -25,7 +25,7 @@ fi
 # 仓库可能携带旧系统上编译的调试二进制；它不代表当前 Debian 环境缺包。
 # 制包器下一步会在当前 Debian 上重新编译，并以新 ELF 识别真实依赖。
 # install_deps.sh 会安装运行、编译、制包、Python、Node.js 和前端依赖。
-bash "$PROJECT_ROOT/install_deps.sh" --skip-app-check
+bash "$PROJECT_ROOT/tools/setup/install_deps.sh" --skip-app-check
 
 # 两个制包工具已经列入 Debian APT_BUILD。这里只验收，不再无条件执行
 # apt-get install，防止 APT 根据陈旧索引升级本来已经可用的工具。

@@ -43,7 +43,7 @@ FINAL_BUNDLE_DIR=""
 REUSE_BUNDLE_DIR=""
 LEGACY_BUNDLE_DIR="$OUTPUT_DIR/bundle"
 BUNDLE_NAME="full-bundle"
-BUNDLE_FORMAT=11
+BUNDLE_FORMAT=12
 
 # 完整离线包必须携带的项目管理与 GPIO 子系统契约。这里在开始下载前检查，
 # 避免耗时制包结束后才发现源码不完整。
@@ -130,7 +130,11 @@ required_project_files=(
     "services/framework/system_watchdog/recovery_monitor.py"
     "tools/offline_dev_install/debian/create_source_update.sh"
     "tools/offline_dev_install/debian/templates/install_source_update.sh"
-    "web_console/deploy.sh"
+    "tools/setup/install_deps.sh"
+    "web_console/scripts/deploy.sh"
+    "web_console/scripts/build_image_runtime.sh"
+    "web_console/scripts/console_port.py"
+    "update_webconsole.sh"
     "web_console/backend/requirements.txt"
     "web_console/frontend/package-lock.json"
     "tools/device/gpio_test/CMakeLists.txt"
@@ -152,8 +156,8 @@ done
     || { echo "[错误] 统一安装入口没有执行权限: $PLATFORM_MANAGER_REL" >&2; exit 1; }
 [ -x "$PROJECT_ROOT/install_app.sh" ] \
     || { echo "[错误] App 安装入口没有执行权限: install_app.sh" >&2; exit 1; }
-[ -x "$PROJECT_ROOT/web_console/deploy.sh" ] \
-    || { echo "[错误] Web 控制台部署器没有执行权限: web_console/deploy.sh" >&2; exit 1; }
+[ -x "$PROJECT_ROOT/web_console/scripts/deploy.sh" ] \
+    || { echo "[错误] Web 控制台部署器没有执行权限: web_console/scripts/deploy.sh" >&2; exit 1; }
 [ -x "$PROJECT_ROOT/$GPIO_SERVICE_INSTALLER_REL" ] \
     || { echo "[错误] GPIO 服务安装器没有执行权限: $GPIO_SERVICE_INSTALLER_REL" >&2; exit 1; }
 
@@ -844,8 +848,9 @@ mkdir -p "$CONSOLE_ROOT/DEBIAN" \
 rsync -a --exclude='tests/' --exclude='.pytest_cache/' \
     --exclude='__pycache__/' --exclude='*.pyc' \
     "$PROJECT_ROOT/web_console/backend/" "$CONSOLE_DEST/backend/"
+install -Dm644 "$PROJECT_ROOT/web_console/scripts/console_port.py" "$CONSOLE_DEST/scripts/console_port.py"
 cp -a "$FRONTEND_WORK/dist" "$CONSOLE_DEST/frontend/"
-bash "$PROJECT_ROOT/web_console/build_image_runtime.sh" "$CONSOLE_DEST/inference_runtime"
+bash "$PROJECT_ROOT/web_console/scripts/build_image_runtime.sh" "$CONSOLE_DEST/inference_runtime"
 for frontend_asset in logo.png img.png; do
     [ ! -f "$FRONTEND_DIR/$frontend_asset" ] \
         || cp -a "$FRONTEND_DIR/$frontend_asset" "$CONSOLE_DEST/frontend/"
@@ -906,10 +911,12 @@ Type=simple
 User=root
 WorkingDirectory=/opt/ai_apps/_console/backend
 Environment="APPS_ROOT=/opt/ai_apps"
+Environment="RK_CONSOLE_START_SOCKET=/run/rk3588-console-start.sock"
+Environment=RK_CONSOLE_PORT=8080
 Environment="BINARY_NAME=vision_analysis"
 Environment="VISION_PYTHON=/usr/bin/python3"
 ExecStartPre=-/usr/bin/nm-online -q --timeout=30
-ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --log-level info
+ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port ${RK_CONSOLE_PORT} --workers 1 --log-level info
 Restart=always
 RestartSec=5
 WatchdogSec=60
@@ -952,6 +959,19 @@ cat > "$CONSOLE_ROOT/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e
 
+# 先记录原端口，再迁移 unit。离线包里的 Python 此时已经由 APT 安装。
+port_helper=/opt/ai_apps/_console/scripts/console_port.py
+console_port=""
+probe=select
+[ -d /run/systemd/system ] || probe=show
+if [ "${RK_CONSOLE_INSTALL_PORT+x}" = x ]; then
+    if [ -n "$RK_CONSOLE_INSTALL_PORT" ]; then
+        console_port="$(/usr/bin/python3 "$port_helper" "$probe" --port "$RK_CONSOLE_INSTALL_PORT")"
+    else
+        console_port="$(/usr/bin/python3 "$port_helper" "$probe")"
+    fi
+fi
+
 # 迁移旧版源码部署直接写入 /etc 的 unit；先留备份，再让
 # /lib/systemd/system 中由 deb 管理的 unit 生效。
 legacy_unit=/etc/systemd/system/rk3588-console.service
@@ -980,9 +1000,13 @@ if [ -d /run/systemd/system ]; then
     systemctl reenable rk3588-console.service >/dev/null 2>&1 \
         || systemctl enable rk3588-console.service >/dev/null 2>&1 \
         || true
-    if ! systemctl restart rk3588-console.service; then
+    if [ -n "${console_port:-}" ]; then
+        /usr/bin/python3 "$port_helper" install --port "$console_port"
+    elif ! systemctl restart rk3588-console.service; then
         echo "[警告] Web 控制台暂未启动；可运行 systemctl status rk3588-console 查看原因。" >&2
     fi
+elif [ -n "${console_port:-}" ]; then
+    /usr/bin/python3 "$port_helper" stage --port "$console_port"
 fi
 EOF
 cat > "$CONSOLE_ROOT/DEBIAN/prerm" <<'EOF'
@@ -995,6 +1019,11 @@ EOF
 cat > "$CONSOLE_ROOT/DEBIAN/postrm" <<'EOF'
 #!/bin/sh
 set -e
+if [ "${1:-}" = purge ]; then
+    port_dir=/etc/systemd/system/rk3588-console.service.d
+    rm -f "$port_dir/99-web-console-port.conf" "$port_dir/.port.lock"
+    rmdir "$port_dir" 2>/dev/null || true
+fi
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload
 fi

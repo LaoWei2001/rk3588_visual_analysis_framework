@@ -82,6 +82,7 @@ class Manager:
                     pm.recover_processes()
                     target = runtime_state.get_vision_boot_target()
                     current = pm.get_running_app_context()
+                    terminal_apps = pm.installed_video_processes() if current is None else {}
                     status['target'] = target
                     target_key = json.dumps(target, sort_keys=True) if target else None
                     change_key = (target_key, status['policy_revision'])
@@ -92,7 +93,11 @@ class Manager:
                         self.last_error = status['error'] = None
                     if current and target and current['app'] == target['app']:
                         self.started_targets.add(target_key)
-                    if current is None and target:
+                    if terminal_apps:
+                        name, instance = next(iter(terminal_apps.items()))
+                        status['current'] = {'app': name, **instance}
+                        self.last_error = status['error'] = None
+                    elif current is None and target:
                         allowed = policy['app_restart_enabled'] or target_key not in self.started_targets
                         if allowed and time.monotonic() >= self.next_attempt:
                             recovering = target_key in self.started_targets or self.failures > 0

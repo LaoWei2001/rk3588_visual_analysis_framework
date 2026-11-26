@@ -1,4 +1,5 @@
 #include "decode_channel.h"
+#include "application/config/config.h"
 #include "application/runtime/app_ctrl.h"
 #include "application/runtime/runtime_status.h"
 #include "application/runtime/service_watchdog.h"
@@ -109,8 +110,8 @@ static void rtsp_pad_added(GstElement *src, GstPad *new_pad, GstChannel_t *data)
     gst_caps_unref(caps);
 }
 
-/* 文件: decodebin pad-added 连接已解码的视频 pad 到 appsink */
-static void file_pad_added(GstElement *src, GstPad *new_pad, GstChannel_t *data)
+/* 只接收解码后的第一个视频轨。HTTP(S) 输入先转换为引擎支持的像素格式。 */
+static void decoded_video_pad_added(GstElement *src, GstPad *new_pad, GstChannel_t *data)
 {
     GstCaps *caps = gst_pad_get_current_caps(new_pad);
     if (!caps)
@@ -124,14 +125,14 @@ static void file_pad_added(GstElement *src, GstPad *new_pad, GstChannel_t *data)
     /* decodebin 的 src pad 在解码后是 video/x-raw */
     if (name && g_str_has_prefix(name, "video/x-raw"))
     {
-        GstPad *sink = gst_element_get_static_pad(data->vSink, "sink");
+        GstPad *sink = gst_element_get_static_pad(data->converter ? data->converter : data->vSink, "sink");
         if (sink)
         {
             if (!gst_pad_is_linked(sink))
             {
                 GstPadLinkReturn ret = gst_pad_link(new_pad, sink);
                 if (ret != GST_PAD_LINK_OK)
-                    g_printerr("[Ch%d] link decodebin -> appsink failed: %d\n",
+                    g_printerr("[Ch%d] link decoded video pad failed: %d\n",
                                data->chnIds.empty() ? -1 : data->chnIds[0], ret);
             }
             gst_object_unref(sink);
@@ -648,9 +649,9 @@ void DecChannel::stop()
 
 int DecChannel::init(bool start_thread)
 {
-    if (mIsFileSrc)
+    if (mIsFileSrc || (!mIsUsbSrc && config_utils::is_http_url(mCfg.location)))
     {
-        return createFileDecChannel(start_thread);
+        return createDecodedChannel(start_thread);
     }
     if (mIsUsbSrc)
     {
@@ -665,6 +666,7 @@ static inline void release_failed_pipeline(GstChannel_t &gst_chn)
 {
     if (gst_chn.pipeline)
     {
+        gst_element_set_state(gst_chn.pipeline, GST_STATE_NULL);
         gst_object_unref(gst_chn.pipeline);
         gst_chn.pipeline = NULL;
     }
@@ -787,23 +789,30 @@ int DecChannel::createVideoDecChannel(bool start_thread)
 
 /* ==================== 本地文件管道 ==================== */
 
-int DecChannel::createFileDecChannel(bool start_thread)
+int DecChannel::createDecodedChannel(bool start_thread)
 {
     std::lock_guard<std::mutex> pipeline_lock(mPipelineMutex);
     prefer_mpp_video_decoder();
-    mGstChn.pipeline = gst_pipeline_new("file-pipeline");
-    mGstChn.source = gst_element_factory_make("filesrc", "source");
+    mGstChn.pipeline = gst_pipeline_new(mIsFileSrc ? "file-pipeline" : "http-pipeline");
+    mGstChn.source = mIsFileSrc ? gst_element_factory_make("filesrc", "source")
+                                : gst_element_make_from_uri(GST_URI_SRC, mCfg.location.c_str(), "source", nullptr);
     mGstChn.decoder = gst_element_factory_make("decodebin", "decoder");
     mGstChn.vSink = gst_element_factory_make("appsink", "vSink");
 
-    if (!mGstChn.pipeline || !mGstChn.source || !mGstChn.decoder || !mGstChn.vSink)
+    mGstChn.converter = mIsFileSrc ? nullptr : gst_element_factory_make("videoconvert", "converter");
+    if (!mGstChn.pipeline || !mGstChn.source || !mGstChn.decoder || !mGstChn.vSink ||
+        (!mIsFileSrc && !mGstChn.converter))
     {
-        g_printerr("[DecChannel] Failed to create file pipeline elements\n");
+        g_printerr("[DecChannel] Missing file/HTTP source, decoder or sink element\n");
+        for (GstElement *element : {mGstChn.source, mGstChn.decoder, mGstChn.vSink, mGstChn.converter})
+            if (element)
+                gst_object_unref(element);
         release_failed_pipeline(mGstChn);
         return -1;
     }
 
-    g_object_set(mGstChn.source, "location", mCfg.location.c_str(), NULL);
+    if (mIsFileSrc)
+        g_object_set(mGstChn.source, "location", mCfg.location.c_str(), NULL);
 
     /* 本地文件按原始 PTS 实时播放。appsink 只保留两帧，防止下游短时繁忙时
      * 积累一段过期画面；推理/业务节拍统一由 pipeline_submit_frame 的 max_fps 控制。 */
@@ -818,15 +827,26 @@ int DecChannel::createFileDecChannel(bool start_thread)
      * decodebin 内部自动创建解码器链路（qtdemux -> h264parse -> mppvideodec）。
      * 其 src pad 解码后输出 video/x-raw (NV12)，通过 pad-added 回调连接到 appsink。
      */
-    g_signal_connect(mGstChn.decoder, "pad-added", G_CALLBACK(file_pad_added), &mGstChn);
+    g_signal_connect(mGstChn.decoder, "pad-added", G_CALLBACK(decoded_video_pad_added), &mGstChn);
     g_signal_connect(mGstChn.decoder, "element-added", G_CALLBACK(file_decodebin_element_added), &mGstChn);
 
     gst_bin_add_many(GST_BIN(mGstChn.pipeline), mGstChn.source, mGstChn.decoder, mGstChn.vSink, NULL);
 
-    /* 静态连接: filesrc -> decodebin */
+    if (mGstChn.converter)
+    {
+        gst_bin_add(GST_BIN(mGstChn.pipeline), mGstChn.converter);
+        GstCaps *caps = gst_caps_from_string("video/x-raw,format=NV12");
+        const bool linked = gst_element_link_filtered(mGstChn.converter, mGstChn.vSink, caps);
+        gst_caps_unref(caps);
+        if (!linked)
+        {
+            release_failed_pipeline(mGstChn);
+            return -1;
+        }
+    }
     if (!gst_element_link(mGstChn.source, mGstChn.decoder))
     {
-        g_printerr("[DecChannel] Failed to link filesrc -> decodebin\n");
+        g_printerr("[DecChannel] Failed to link source -> decodebin\n");
         release_failed_pipeline(mGstChn);
         return -1;
     }
@@ -837,35 +857,28 @@ int DecChannel::createFileDecChannel(bool start_thread)
                                                                 .count()),
                                       std::memory_order_relaxed);
 
-    /* decodebin 需要先 PAUSED 完成 typefinding，再切 PLAYING */
-    GstStateChangeReturn ret = gst_element_set_state(mGstChn.pipeline, GST_STATE_PAUSED);
-    if (ret == GST_STATE_CHANGE_FAILURE)
+    if (mIsFileSrc)
     {
-        g_printerr("[DecChannel] Failed to set file pipeline to PAUSED\n");
-        release_failed_pipeline(mGstChn);
-        return -1;
-    }
-
-    /* 等待 pipeline 达到 PAUSED 状态（decodebin 完成 typefinding） */
-    ret = gst_element_get_state(mGstChn.pipeline, NULL, NULL, 5 * GST_SECOND);
-    if (ret == GST_STATE_CHANGE_FAILURE)
-    {
-        g_printerr("[DecChannel] Failed to reach PAUSED state\n");
-        release_failed_pipeline(mGstChn);
-        return -1;
+        if (gst_element_set_state(mGstChn.pipeline, GST_STATE_PAUSED) == GST_STATE_CHANGE_FAILURE ||
+            gst_element_get_state(mGstChn.pipeline, nullptr, nullptr, 5 * GST_SECOND) == GST_STATE_CHANGE_FAILURE)
+        {
+            g_printerr("[DecChannel] Failed to preroll file pipeline\n");
+            release_failed_pipeline(mGstChn);
+            return -1;
+        }
     }
 
     /* 切换到 PLAYING */
-    ret = gst_element_set_state(mGstChn.pipeline, GST_STATE_PLAYING);
+    GstStateChangeReturn ret = gst_element_set_state(mGstChn.pipeline, GST_STATE_PLAYING);
     if (ret == GST_STATE_CHANGE_FAILURE)
     {
-        g_printerr("[DecChannel] Failed to set file pipeline to PLAYING\n");
+        g_printerr("[DecChannel] Failed to start decoded video pipeline\n");
         release_failed_pipeline(mGstChn);
         return -1;
     }
 
     /* 等待PLAYING状态,避免某些视频卡在状态切换 */
-    if (ret == GST_STATE_CHANGE_ASYNC)
+    if (mIsFileSrc && ret == GST_STATE_CHANGE_ASYNC)
     {
         ret = gst_element_get_state(mGstChn.pipeline, NULL, NULL, 3 * GST_SECOND);
         if (ret == GST_STATE_CHANGE_FAILURE || ret == GST_STATE_CHANGE_ASYNC)
@@ -876,22 +889,16 @@ int DecChannel::createFileDecChannel(bool start_thread)
         }
     }
 
+    if (start_thread && pthread_create(&mTid, nullptr, busListen, mGstChn.pipeline) != 0)
+    {
+        release_failed_pipeline(mGstChn);
+        return -1;
+    }
     if (start_thread)
-    {
-        if (0 == pthread_create(&mTid, nullptr, busListen, mGstChn.pipeline))
-        {
-            bObjIsInited = true;
-            mThreadStarted = true;
-        }
-    }
-    else
-    {
-        bObjIsInited = true;
-    }
-
-    g_print("[DecChannel ch%d] File pipeline started: %s (loop=%s)\n", channelId(), mCfg.location.c_str(),
-            mLoop ? "yes" : "no");
-    return bObjIsInited ? 0 : -1;
+        mThreadStarted = true;
+    bObjIsInited = true;
+    g_print("[DecChannel ch%d] %s pipeline started\n", channelId(), mIsFileSrc ? "File" : "HTTP(S)");
+    return 0;
 }
 
 /* ==================== USB 摄像头管道 ==================== */
@@ -1297,7 +1304,7 @@ void DecChannel::reconnect()
             bObjIsInited = false;
             mGstChn.pipeline = NULL;
             /* 复用当前 bus 线程，避免重复创建监听线程导致竞态和卡死 */
-            if (createFileDecChannel(false) == 0)
+            if (createDecodedChannel(false) == 0)
             {
                 ok = true;
                 break;
@@ -1354,7 +1361,7 @@ void DecChannel::reconnect()
     else
         delay_sec = 30;
 
-    const char *live_src_name = mIsUsbSrc ? "USB" : "RTSP";
+    const char *live_src_name = mIsUsbSrc ? "USB" : (config_utils::is_http_url(mCfg.location) ? "HTTP(S)" : "RTSP");
     g_print("[Ch%d] %s reconnecting in %d seconds (attempt #%d, backoff)...\n", channelId(), live_src_name, delay_sec,
             reconnect_count + 1);
 

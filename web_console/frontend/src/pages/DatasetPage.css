@@ -104,14 +104,6 @@
   .dataset-editor-saving { border-left:0; padding-left:0; border-top:1px solid #334258; padding-top:20px }
 }
 @media(max-width:600px) {
-  /* Keep the capture workspace usable on phones without changing other pages. */
-  .app-shell.dataset-workspace { flex-direction:column }
-  .app-shell.dataset-workspace>.sidebar { width:100%; box-sizing:border-box; flex-direction:row; align-items:center; overflow-x:auto; padding:8px; border-right:0; border-bottom:1px solid #37445a }
-  .app-shell.dataset-workspace>.sidebar>.logo { display:none }
-  .app-shell.dataset-workspace>.sidebar>.nav-item { flex-shrink:0; white-space:nowrap }
-  .app-shell.dataset-workspace>.sidebar>.sidebar-footer { flex-shrink:0; flex-direction:row; align-items:center; margin:0; padding:0 8px; border:0 }
-  .app-shell.dataset-workspace>.main-content { min-height:0 }
-
   .dataset-page { padding:16px }
   .dataset-page-heading { align-items:stretch; flex-direction:column; gap:14px }
   .dataset-source-panel,.dataset-receiver-panel,.dataset-config-panel,.dataset-tasks-panel { padding:16px }

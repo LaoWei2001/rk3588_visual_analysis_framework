@@ -1,33 +1,35 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { isAxiosError } from 'axios'
 import { fetchApps, uploadAsset, type AppInfo } from '../../api/apps'
 import { apiErrorMessage } from '../../api/http'
 import {
   cancelImageJob, clearCompletedImageJobs, createImageJob, createDeviceImageJob, fetchImageCapabilities, fetchCurrentImageJob,
-  canExportImageLabels, downloadImageLabels, imageJobFinished, type ImageCapabilities, type ImageJob, type ImageSettings,
+  fetchInferenceAssets, importInferenceAsset, type InferenceAssets,
+  canExportImageLabels, downloadImageLabels, imageJobFinished, resumeImageJob, type ImageCapabilities, type ImageJob,
 } from '../../api/imageInference'
 import ModelEditor from './ModelEditor'
 import ResultView, { statusText } from './ResultView'
-import SourcePicker, { type SourceChoice } from './SourcePicker'
+import SourcePicker from './SourcePicker'
+import useInferenceDraft from './useInferenceDraft'
 import useConfigSidebar from './useConfigSidebar'
 import useModelChecks from './useModelChecks'
 import './imageInference.css'
 
 export default function ImageInferencePage() {
   const [apps, setApps] = useState<AppInfo[]>([])
+  const [library, setLibrary] = useState<InferenceAssets>({ models: [], labels: [] })
+  const [resourceErrors, setResourceErrors] = useState<string[]>([])
   const [capabilities, setCapabilities] = useState<ImageCapabilities | null>(null)
-  const [settings, setSettings] = useState<ImageSettings>({ models: [{
-    id: 'model_1', model_type: 'yolov8_det', model_path: '', label_path: '',
-    obj_thresh: .3, nms_thresh: .45, npu_core: -1, detect_classes: [],
-  }] })
+  const { settings, setSettings, source, setSource, files, setFiles, selectedApps, setSelectedApps } = useInferenceDraft()
   const modelChecks = useModelChecks(settings.models)
-  const [files, setFiles] = useState<File[]>([])
-  const [source, setSource] = useState<SourceChoice>({ kind: 'upload', path: '', recursive: false })
   const [job, setJob] = useState<ImageJob | null>(null)
   const [index, setIndex] = useState(0)
   const [error, setError] = useState('')
+  const [retryStart, setRetryStart] = useState(false)
   const [catalogError, setCatalogError] = useState('')
   const [pollError, setPollError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [resuming, setResuming] = useState(false)
   const [importing, setImporting] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -39,6 +41,7 @@ export default function ImageInferencePage() {
   const resultsRef = useRef<HTMLDivElement>(null)
   const jobMutation = useRef(0)
   const active = job !== null && !imageJobFinished(job.status)
+  const paused = job?.status === 'paused_storage'
   const hasInput = source.kind === 'upload' ? files.length > 0 : source.path.trim().length > 0
   const labelsAvailable = job !== null && imageJobFinished(job.status) && canExportImageLabels(job)
   const selectable = labelsAvailable ? job.items.filter(item => item.status === 'success' && item.result).map(item => item.index) : []
@@ -52,10 +55,16 @@ export default function ImageInferencePage() {
 
   useEffect(() => {
     let stale = false
-    setCapabilities(null); setApps([]); setCatalogError('')
-    void Promise.all([fetchImageCapabilities(), fetchApps()]).then(([catalog, resources]) => {
-      if (!stale) { setCapabilities(catalog); setApps(resources) }
-    }).catch(error => { if (!stale) setCatalogError(apiErrorMessage(error)) })
+    setCatalogError(''); setResourceErrors([])
+    const resourceError = (source: string, error: unknown) => {
+      if (!stale) setResourceErrors(current => [...current, `${source}：${apiErrorMessage(error)}`])
+    }
+    void fetchImageCapabilities().then(value => { if (!stale) setCapabilities(value) })
+      .catch(error => { if (!stale) setCatalogError(apiErrorMessage(error)) })
+    void fetchInferenceAssets().then(value => { if (!stale) setLibrary(value) })
+      .catch(error => resourceError('独立模型库', error))
+    void fetchApps().then(value => { if (!stale) setApps(value) })
+      .catch(error => resourceError('程序包列表', error))
     return () => { stale = true }
   }, [revision])
   useEffect(() => {
@@ -98,7 +107,7 @@ export default function ImageInferencePage() {
   const start = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!capabilities || !hasInput || submitting || clearing || importing || !modelChecks.ready) return
-    setError('')
+    setError(''); setRetryStart(false)
     if (new Set(settings.models.map(m => m.id)).size !== settings.models.length) { setError('各模型 ID 必须唯一。'); return }
     if (settings.models.some(m => !Number.isFinite(m.obj_thresh) || !Number.isFinite(m.nms_thresh))) {
       setError('请填写有效的置信度和 NMS 阈值。'); return
@@ -113,7 +122,10 @@ export default function ImageInferencePage() {
       jobMutation.current += 1
       setJob(value); setIndex(0)
       requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
-    } catch (error) { setError(apiErrorMessage(error)) }
+    } catch (error) {
+      setError(apiErrorMessage(error))
+      setRetryStart(isAxiosError(error) && error.response?.status === 507)
+    }
     finally { setSubmitting(false) }
   }
   const cancel = async () => {
@@ -124,6 +136,16 @@ export default function ImageInferencePage() {
       setJob(current => current?.id === value.id ? value : current)
     }
     catch (error) { setError(apiErrorMessage(error)) }
+  }
+  const resume = async () => {
+    if (!job || resuming) return
+    setResuming(true); setError(''); jobMutation.current += 1
+    try {
+      const value = await resumeImageJob(job, files, setUploadProgress)
+      jobMutation.current += 1
+      setJob(value)
+    } catch (error) { setError(apiErrorMessage(error)) }
+    finally { setResuming(false); setRevision(r => r + 1) }
   }
   const clearRecords = async () => {
     if (clearing || submitting || exporting) return
@@ -150,9 +172,15 @@ export default function ImageInferencePage() {
     } catch (error) { setError(apiErrorMessage(error)) }
     finally { setExporting(false) }
   }
-  const importModel = async (app: AppInfo, file: File, onProgress: (value: number) => void) => {
+  const importAsset = async (app: AppInfo | undefined, file: File, onProgress: (value: number) => void) => {
     setImporting(true)
     try {
+      if (!app) {
+        const result = await importInferenceAsset(file, onProgress)
+        const group = file.name.toLowerCase().endsWith('.txt') ? 'labels' : 'models'
+        setLibrary(current => ({ ...current, [group]: [...new Set([...current[group], result.path])].sort() }))
+        return result
+      }
       const result = await uploadAsset(app.name, file, false, onProgress)
       // A successful upload must not depend on a second catalog request.
       setApps(current => current.map(item => item.name === app.name
@@ -160,12 +188,12 @@ export default function ImageInferencePage() {
       return { path: `${app.path}/${result.path}`, renamed: result.renamed }
     } finally { setImporting(false) }
   }
-  const editingDisabled = submitting || clearing || importing
+  const editingDisabled = submitting || clearing || importing || resuming
   return <div className="image-inference-page" role="region" aria-label="图片推理工作区" tabIndex={0}>
     <div className="image-page-content">
       <header className="image-page-header"><h1>图片推理</h1></header>
-      {(error || catalogError) && <div className="image-error" role="alert">{error || catalogError}
-        {catalogError && <button type="button" disabled={editingDisabled} onClick={() => setRevision(r => r + 1)}>重试</button>}
+      {(error || catalogError || resourceErrors.length > 0) && <div className="image-error" role="alert">{[error, catalogError, ...resourceErrors].filter(Boolean).join('；')}
+        {(catalogError || resourceErrors.length > 0) && <button type="button" disabled={editingDisabled} onClick={() => setRevision(r => r + 1)}>重试</button>}
       </div>}
       {pollError && <div className="image-warning" role="status">状态更新失败，正在重试：{pollError}</div>}
       {capabilities?.busy && !active && <div className="image-warning">NPU 占用中，请先停止视频程序。</div>}
@@ -189,26 +217,27 @@ export default function ImageInferencePage() {
             parent = parent.parentElement
           }
         }}>
-          {capabilities ? <ModelEditor models={settings.models} capabilities={capabilities} apps={apps}
+          {capabilities ? <ModelEditor models={settings.models} capabilities={capabilities} apps={apps} library={library}
+            selectedApps={selectedApps} setSelectedApps={setSelectedApps}
             checks={modelChecks.checks} onRetryCheck={modelChecks.retry}
-            disabled={editingDisabled} onImport={importModel}
+            disabled={editingDisabled} onImport={importAsset}
             onChange={models => setSettings(current => ({ ...current, models }))} /> : <p className="image-note">{catalogError ? '模型暂不可用' : '加载模型…'}</p>}
           <SourcePicker source={source} files={files} availableBytes={capabilities?.upload_available_bytes} disabled={editingDisabled} onChange={setSource}
             onFiles={chooseFiles} onClear={() => setFiles([])} />
           <button className="image-primary" type="submit" aria-label={`开始推理 · ${settings.models.length} 个模型`}
             disabled={!capabilities || !hasInput || active || capabilities.busy || editingDisabled || !modelChecks.ready}>
-            {submitting ? source.kind === 'device' ? '读取图片…' : `上传中 ${uploadProgress}%` : active ? '推理中…' : '开始推理'}
+            {submitting ? source.kind === 'device' ? '读取图片…' : `上传中 ${uploadProgress}%` : paused ? '任务已暂停' : active ? '推理中…' : retryStart ? '继续' : '开始推理'}
           </button>
         </form>
         <div className="image-config-resizer" {...separatorProps} />
         <div className="image-results-area" ref={resultsRef}>
           <div className="image-results-heading"><h2>结果</h2>
-            {job && imageJobFinished(job.status) && <div className="image-result-actions">
+            {job && (imageJobFinished(job.status) || paused) && <div className="image-result-actions">
               {labelsAvailable && <button type="button" disabled={!chosen.length || exporting || clearing}
                 onClick={() => void exportLabels()}>{exporting ? '正在导出…' : `下载标签 TXT${chosen.length ? ` (${chosen.length})` : ''}`}</button>}
               <button type="button" className="image-clear-results" aria-label="清除记录" aria-busy={clearing}
                 title={clearing ? '正在清除记录…' : '清除全部已结束的记录及结果缓存'}
-                disabled={clearing || submitting || exporting} onClick={() => void clearRecords()}>
+                disabled={clearing || submitting || exporting || resuming} onClick={() => void clearRecords()}>
                 <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4"
                   strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M3 5h14M7 5V3h6v2M5 5l1 12h8l1-12M8 8v6M12 8v6" />
@@ -221,8 +250,11 @@ export default function ImageInferencePage() {
             {!imageJobFinished(job.status) && <div className="image-progress" role="status">
               <span>{statusText[job.status] ?? job.status} · {job.completed}/{job.total}</span>
               <progress aria-label="推理进度" value={job.completed} max={job.total} />
-              <button type="button" disabled={job.status === 'cancelling'} onClick={() => void cancel()}>取消</button>
+              {paused && <button type="button" disabled={resuming || clearing || submitting}
+                onClick={() => void resume()}>{resuming ? '正在继续…' : '继续'}</button>}
+              <button type="button" disabled={job.status === 'cancelling' || resuming} onClick={() => void cancel()}>取消</button>
             </div>}
+            {paused && <p className="image-note">清理存储空间后点击“继续”，已完成的图片会保留。继续任务使用提交时的模型设置。</p>}
             {job.error && <div className="image-error" role="alert">{job.error}</div>}
             <div className={`image-results-workspace${showImageList ? ' has-image-list' : ''}`}>
               <div className="image-result-preview">

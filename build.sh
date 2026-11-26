@@ -411,31 +411,9 @@ echo "  聚合: Logic 上报模板  ->  report_templates/"
 echo ""
 echo ">>> [3/4] 生成本地运行与环境初始化脚本..."
 
-# ---------- run.sh (前台运行模式) ----------
-cat > "$DIST_DIR/run.sh" << 'RUN_EOF'
-#!/bin/bash
-if [ -z "$1" ]; then
-    echo "用法: bash run.sh <配置文件路径>"
-    echo "示例: bash run.sh ./assets/config_global.json"
-    exit 1
-fi
-CONFIG_PATH="$1"
-
-if [ ! -f "$CONFIG_PATH" ]; then
-    echo "[ERROR] 配置文件不存在: $CONFIG_PATH"
-    exit 1
-fi
-
-# 前台调试模式，开启显示
-echo ">>> 修改配置: enable_display = 1 (开启前台显示输出)..."
-sed -i 's/"enable_display"[ \t]*:[ \t]*[a-zA-Z0-9_"]*/"enable_display": 1/' "$CONFIG_PATH"
-
-ABS_PATH=$(cd "$(dirname "$0")"; pwd)
-export LD_LIBRARY_PATH="$ABS_PATH/libs:$LD_LIBRARY_PATH"
-export ASSETS_DIR="$ABS_PATH/assets"
-exec "$ABS_PATH/vision_analysis" "$CONFIG_PATH"
-RUN_EOF
-chmod +x "$DIST_DIR/run.sh"
+# 同一启动入口供开发包前台调试和已安装程序托管运行使用。
+mv "$DIST_DIR/$TARGET" "$DIST_DIR/$TARGET.bin"
+install -m755 "$REPO_ROOT/services/framework/runtime_manager/python/rk3588_runtime/app_entry.py" "$DIST_DIR/$TARGET"
 
 # ---------- setup_python.sh ----------
 cat > "$DIST_DIR/setup_python.sh" << 'SETUP_EOF'

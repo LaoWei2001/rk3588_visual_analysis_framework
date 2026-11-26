@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <stdexcept>
@@ -66,6 +67,10 @@ class CoreLease
         s.failed = true;
         wake(s);
     }
+    static bool failed()
+    {
+        return state().failed.load(std::memory_order_relaxed);
+    }
     static void stop()
     {
         auto &s = state();
@@ -104,7 +109,8 @@ class CoreLease
     {
         std::mutex mutex;
         int active = 0;
-        bool failed = false, stopping = false;
+        std::atomic<bool> failed{false};
+        bool stopping = false;
         Waiter *head = nullptr, *tail = nullptr;
     };
     static State &state()

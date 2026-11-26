@@ -37,7 +37,7 @@ flowchart TB
         Package[dist/&lt;app&gt;<br/>可部署应用包]
         WebSource[web_console<br/>React + FastAPI]
         GpioSource[services/framework/gpio_state]
-        PlatformInstall[install.sh<br/>web_console/deploy.sh]
+        PlatformInstall[install.sh<br/>web_console/scripts/deploy.sh]
         EngineSrc --> Builder
         ProjectSrc --> Builder
         AppServices --> Builder
@@ -195,7 +195,7 @@ GStreamer appsink
 ├── web_console/
 │   ├── frontend/                # React、TypeScript、XYFlow、Zustand
 │   ├── backend/                 # FastAPI 管理 API 与 WebSocket
-│   └── deploy.sh                # 根安装器调用的 Web 控制台部署器
+│   └── scripts/                 # 控制台部署、图片推理引擎构建与停服
 ├── services/framework/
 │   ├── upload/                  # 框架可靠事件上传服务
 │   ├── model_update/            # 框架模型 OTA 服务
@@ -204,6 +204,7 @@ GStreamer appsink
 │   └── gpio_state/              # 框架 GPIO 开机恢复服务
 ├── tools/
 │   ├── build/                   # Logic 清单和上报模板生成器
+│   ├── setup/install_deps.sh    # 平台依赖准备与环境检查
 │   ├── device/                  # 独立板端诊断与配置工具
 │   │   ├── first_net_config/    # 首次网络配置终端工具
 │   │   └── gpio_test/           # GPIO 独立测试工具
@@ -218,7 +219,6 @@ GStreamer appsink
 ├── build.sh                     # 仓库唯一的应用构建入口
 ├── install_app.sh               # 将 dist/<app>/ 安装到 Web 应用目录
 ├── install.sh                   # 平台统一安装、升级、状态与卸载入口
-├── install_deps.sh              # 内部依赖准备或只读环境检查脚本
 └── LICENSE                      # GPL-3.0
 ```
 
@@ -264,8 +264,8 @@ sudo ./install.sh offline  # 依赖齐全且前端已经构建
 ./install.sh status
 ```
 
-根目录 `install.sh` 是面向使用者的唯一源码安装入口；`install_deps.sh`、
-`web_console/deploy.sh` 和 `services/framework/gpio_state/install.sh` 是内部组件脚本。
+根目录 `install.sh` 是面向使用者的唯一源码安装入口；`tools/setup/install_deps.sh`、
+`web_console/scripts/deploy.sh` 和 `services/framework/gpio_state/install.sh` 是内部组件脚本。
 
 联网安装需要在盒子仍能访问 APT、PyPI/npm 镜像时执行，会安装完整第三方运行依赖、
 锁定安装前端依赖并预生成 `web_console/frontend/dist`。RKNPU 内核驱动、RGA、MPP 等
@@ -278,7 +278,7 @@ Python requirements 直接安装到系统 `/usr/bin/python3`，不会创建项�
 如果目标设备明确只运行预编译应用，可以选择精简环境：
 
 ```bash
-bash install_deps.sh --runtime-only
+bash tools/setup/install_deps.sh --runtime-only
 ```
 
 这属于高级依赖准备方式，不会完成 Web 控制台和 GPIO 服务部署。
@@ -293,9 +293,8 @@ bash tools/offline_dev_install/debian/create_bundle.sh
 # 已装过完整包且只修改源码时，生成快速源码更新包（不编译、不联网）
 bash tools/offline_dev_install/debian/create_bundle.sh --source-only
 
-# Ubuntu ARM64 使用对应入口（首次先运行 prepare_host.sh）
-bash tools/offline_dev_install/ubuntu/prepare_host.sh
-bash tools/offline_dev_install/ubuntu/create_bundle.sh --refresh-debs
+# Ubuntu ARM64 使用对应入口，脚本会自动准备制作机环境
+bash tools/offline_dev_install/ubuntu/create_bundle.sh
 
 # 把 output/full-bundle 复制到断网 RK3588，然后在包目录内一键安装
 cd /userdata/full-bundle
@@ -317,7 +316,7 @@ ARM64 Node.js/npm 和前端 `node_modules`，源码入口为
 并运行 `sudo bash install_source_update.sh`。依赖清单、前端锁文件或固定 RKNN 文件变化时，
 快速模式会拒绝制包并提示重新生成 `full-bundle`；全新设备也始终使用完整包。
 
-联网 `install_deps.sh` 和离线安装现在使用同一套系统 `/usr/bin/python3`；pip 对已经满足
+联网 `tools/setup/install_deps.sh` 和离线安装现在使用同一套系统 `/usr/bin/python3`；pip 对已经满足
 requirements 约束的包会跳过，只补装缺失项或调整不兼容版本。两条路径都会核验模块导入和
 依赖关系。仓库不会绑定项目源码哈希；发行版
 软件包按制作机对应的软件源解析，开发机上由 dpkg 管理、但软件源没有的厂家用户态包才会重新
@@ -332,8 +331,8 @@ requirements 约束的包会跳过，只补装缺失项或调整不兼容版本�
 诊断失败也不代表 deb 安装失败）：
 
 ```bash
-bash install_deps.sh --check
-# 只验收运行环境时：bash install_deps.sh --check --runtime-only
+bash tools/setup/install_deps.sh --check
+# 只验收运行环境时：bash tools/setup/install_deps.sh --check --runtime-only
 ```
 
 `--check` 会进行五层只读检测：系统/架构与已验证基线、RKNPU/RGA/MPP/DMA 设备、
@@ -350,7 +349,7 @@ Python/通用动态库、Rockchip GStreamer 硬件插件，以及项目和 `/opt
 `engine/vendor/rockchip/PLATFORM_COMPATIBILITY.env`；只有完成硬件冒烟测试后
 才应更新该基线。
 
-已经用 `install_deps.sh` 或完整离线包准备好依赖时，可以使用离线模式完成统一安装。
+已经用 `tools/setup/install_deps.sh` 或完整离线包准备好依赖时，可以使用离线模式完成统一安装。
 源码更新后的目录如果没有前端产物，安装器会使用已有 `node_modules` 自动离线构建前端：
 
 ```bash
@@ -368,7 +367,7 @@ sudo ./install.sh uninstall
 首次统一安装默认开启电平保持并将继电器 `GPIO6_A2` 置为低电平，后续升级会保留 Web 页面中
 的开关状态和已经保存的 GPIO 电平。
 
-`install_deps.sh` 是“联网预配置 + 断网验收”脚本，不包含 deb/wheel/npm 离线安装包；
+`tools/setup/install_deps.sh` 是“联网预配置 + 断网验收”脚本，不包含 deb/wheel/npm 离线安装包；
 因此不能把一台从未准备过的裸机带到无公网现场后再首次执行普通安装模式。
 
 目标机仍需使用能正确启动 RK3588 的厂家内核、设备树和固件。离线仓库负责 RGA/MPP、
@@ -416,23 +415,23 @@ export LD_LIBRARY_PATH="$PWD/../engine/vendor/rknn/2.4.2a2/lib/aarch64:$LD_LIBRA
 
 发布目录 `dist/my_app/` 包含：
 
-- `vision_analysis` 可执行程序；
+- `vision_analysis` 启动入口和 `vision_analysis.bin` 原生引擎；
 - `libs/` 动态库，其中 `librknnrt.so` 来自项目锁定版本并带版本清单；
 - `assets/` 模型、标签和配置；
 - `logics.json` Web 能力清单；
 - `services/upload` 和 `services/model_update`；
-- `report_templates/`、`run.sh` 和 `setup_python.sh`。
+- `report_templates/` 和 `setup_python.sh`。
 
 前台运行发布包：
 
 ```bash
 cp docs/examples/quickstart.json dist/my_app/assets/quickstart.json
 cd dist/my_app
-OFFLINE=1 bash setup_python.sh  # 已执行根目录 install_deps.sh 的现场盒子
-bash run.sh ./assets/quickstart.json
+OFFLINE=1 bash setup_python.sh  # 已执行 tools/setup/install_deps.sh 的现场盒子
+./vision_analysis ./assets/quickstart.json
 ```
 
-`run.sh` 会把所选配置的 `global.enable_display` 改为 1，适用于具备显示环境的前台调试。无界面运行请用首页的直接启动命令。生产托管请把完整包安装到 Web 控制台；
+已安装目录内执行该命令会创建与 Web 按钮相同的 systemd 服务，终端持续显示程序输出。按 Ctrl+C 或在 Web 点击“停止”，程序退出后终端返回提示符。解压到安装目录以外的开发包在前台运行。配置中的 `global.enable_display` 控制 HDMI，`global.enable_rtsp` 控制预览。生产托管请把完整包安装到 Web 控制台；
 当前 `build.sh` 不生成历史文档中的 `deploy.sh`/`stop.sh`。
 
 ### 5. 安装 Web 管理平台
@@ -803,10 +802,10 @@ PYTHONPATH=. python3 -m pytest -q tests
 修改安装脚本后检查 Shell 语法：
 
 ```bash
-bash -n install_deps.sh \
-  tools/offline_dev_install/debian/create_bundle.sh \
-  tools/offline_dev_install/debian/templates/install_offline.sh \
-  build.sh
+for script in install*.sh build.sh tools/setup/*.sh web_console/scripts/*.sh \
+  tools/offline_dev_install/{debian,ubuntu}/{*.sh,templates/*.sh}; do
+  bash -n "$script" || exit 1
+done
 ```
 
 测试通过只说明软件层面的静态行为符合预期。涉及摄像头、NPU、RGA/MPP、GPIO、显示、RTSP 或

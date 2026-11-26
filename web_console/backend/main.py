@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from routers import (apps, assets, auth, camera_settings, logic_control, file_playback, config_io, logs, network_settings,
                      ota_config, process, records, services, snapshot, storage_settings, stream,
                      system_settings, terminal, delivery_config, video_capture, dataset, recovery, image_inference)
+from services import local_start
 from services.auth_service import get_session
 from services import process_manager as process_manager
 from services import service_watchdog
@@ -65,12 +66,18 @@ async def lifespan(app: FastAPI):
         print(f"[CameraNetwork] 持久化配置恢复失败：{exc}")
     # Only reattach log followers. Boot restoration belongs to the system runtime manager.
     await asyncio.to_thread(process_manager.recover_processes)
+    socket_path = os.environ.get("RK_CONSOLE_START_SOCKET")
+    local_server = await local_start.listen(Path(socket_path), process.manual_start) if socket_path else None
     ready.set()
     storage_task = asyncio.create_task(storage_maintenance_loop())
     dataset_task = asyncio.create_task(dataset_manager.maintenance())
     try:
         yield
     finally:
+        if local_server is not None:
+            local_server.close()
+            await local_server.wait_closed()
+            Path(socket_path).unlink(missing_ok=True)
         await asyncio.to_thread(image_inference.image_jobs.shutdown)
         await terminal.terminal_sessions.shutdown()
         await stream._stream_pool.shutdown()

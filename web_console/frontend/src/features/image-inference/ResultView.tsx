@@ -2,8 +2,11 @@ import { useEffect, useState } from 'react'
 import { apiErrorMessage } from '../../api/http'
 import { fetchImageResult, imageArtifactUrl, type ImageItem, type ImageJob, type ImageResult } from '../../api/imageInference'
 
+import ImageComparison from './ImageComparison'
+
 export const statusText: Record<string, string> = {
   uploading: '准备图片', loading: '加载模型', running: '推理中', cancelling: '正在取消',
+  paused_storage: '已暂停，等待继续',
   completed: '已完成', completed_with_errors: '完成，部分失败', failed: '失败', cancelled: '已取消',
   pending: '等待', success: '成功', partial: '部分模型失败',
 }
@@ -39,14 +42,8 @@ export default function ResultView({ job, item }: { job: ImageJob; item: ImageIt
       {result.models.some(m => !m.succeeded) && <div className="image-warning" role="alert">
         {result.models.filter(m => !m.succeeded).map(m => <p key={m.id}>{m.id}：{m.error || '推理失败'}</p>)}
       </div>}
-      <div className="image-compare" aria-label="原图与推理图对照">
-        <figure><figcaption>原图</figcaption><div className="image-stage" data-view="original">
-          <img src={artifact(result.original)} alt={`${item.name} · 原图`} />
-        </div></figure>
-        <figure><figcaption title={model?.id}>{model ? `推理图 · ${model.id}` : '推理图'}</figcaption><div className="image-stage" data-view="inference">
-          {file && <img src={artifact(file)} alt={`${item.name} · ${model?.id ?? '所有模型推理结果'}`} />}
-        </div></figure>
-      </div>
+      <ImageComparison key={`${job.id}/${item.index}`} name={item.name} original={artifact(result.original)}
+        inference={file ? artifact(file) : undefined} inferenceLabel={model ? `推理图 · ${model.id}` : '推理图'} />
       <p className="image-result-meta">{result.source_width} × {result.source_height} · {result.elapsed_ms.toFixed(1)} ms</p>
       <div className="image-result-details" role="region" aria-label="详细结果">
       {item.source_path && <p className="image-note image-source-origin">{item.source_path}</p>}

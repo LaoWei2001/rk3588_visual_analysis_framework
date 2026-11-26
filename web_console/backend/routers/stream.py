@@ -8,12 +8,11 @@ GET /api/apps/{name}/stream — 将 App 的 H264 RTSP 拼接画面零转码封�
 Extensions 直接把 fMP4 交给系统 H264 解码器，CPU、内存带宽和网络带宽都只承担
 必要的封装与传输开销。
 
-Web 零转码播放明确要求 global.rtsp_codec=h264。H265 不再走隐藏的软件转码回退，
+引擎输出固定为 H264，Web 通过零转码封装播放，
 避免一份配置在不同浏览器上产生不可预测的性能和兼容性。
 """
 
 import asyncio
-import json
 import logging
 import os
 import re
@@ -29,7 +28,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from services.live_stream import SharedSource, StreamPool, Viewer
-from services.app_paths import application_directory
+from services.app_paths import application_directory, read_runtime_config
 from services.logic_client import send_action
 
 APPS_ROOT = Path(os.environ.get("APPS_ROOT", "/opt/ai_apps"))
@@ -61,26 +60,21 @@ class _ReplaceLock:
 _replace_locks: dict[tuple[str, str], _ReplaceLock] = {}
 
 
-def _rtsp_info(name: str) -> tuple[str, str]:
-    """读取运行配置中的板内 RTSP 地址和编码格式。"""
-    port, path, codec = 8554, "/live", "h264"
+def _rtsp_url(name: str) -> str:
+    """读取运行配置中的板内 RTSP 地址。"""
     app_dir = application_directory(APPS_ROOT, name)
-    config_name = "config.json"
     try:
-        run_config = app_dir / "run.config"
-        if run_config.exists():
-            config_name = run_config.read_text(encoding="utf-8").strip() or config_name
-        cfg_path = app_dir / "assets" / Path(config_name).name
-        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-        global_config = cfg.get("global", cfg) if isinstance(cfg, dict) else {}
+        cfg = read_runtime_config(app_dir)
+        global_config = cfg.get("global", cfg)
+        if global_config.get("enable_rtsp") in (False, 0, "0"):
+            raise HTTPException(409, "运行中，未启用实时预览")
         port = int(global_config.get("rtsp_port", 8554) or 8554)
         path = str(global_config.get("rtsp_path", "/live") or "/live")
-        codec = str(global_config.get("rtsp_codec", "h264") or "h264").lower()
-    except Exception:
-        pass
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(409, "无法读取预览配置") from exc
     if not path.startswith("/"):
         path = "/" + path
-    return f"rtsp://127.0.0.1:{port}{path}", codec
+    return f"rtsp://127.0.0.1:{port}{path}"
 
 
 def _build_ffmpeg_args(rtsp_url: str) -> list[str]:
@@ -256,13 +250,6 @@ async def stream_app(name: str, request: Request, channel_id: Annotated[Optional
     if shutil.which("ffmpeg") is None:
         raise HTTPException(500, "未找到 ffmpeg，无法将 RTSP 安全封装为网页实时流")
 
-    rtsp_url, codec = _rtsp_info(name)
-    if codec not in ("h264", "avc"):
-        raise HTTPException(
-            409,
-            "Web 零转码实时预览要求 global.rtsp_codec=h264，请修改全局 RTSP 编码格式后重启程序",
-        )
-
     cause = request.query_params.get("retry_cause", "")
     if cause in {"transport-error", "read-timeout", "decoder-error", "startup-timeout", "playback-stall",
                  "buffer-timeout", "initialization-timeout"}:
@@ -280,6 +267,8 @@ async def stream_app(name: str, request: Request, channel_id: Annotated[Optional
             raise HTTPException(409, "当前程序尚未提供独立高清预览")
         # Use only the local engine's validated route; never accept a client URL.
         rtsp_url = f"rtsp://127.0.0.1:{int(response['port'])}{response['path']}"
+    else:
+        rtsp_url = await asyncio.to_thread(_rtsp_url, name)
 
     return StreamingResponse(
         _fmp4_stream(request, name, rtsp_url, channel_id, lease),

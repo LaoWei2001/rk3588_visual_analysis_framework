@@ -2,10 +2,12 @@
 
 import json
 import os
+import re
 from pathlib import Path
 import socket
 import threading
 import time
+import zipfile
 
 import pytest
 import uvicorn
@@ -117,13 +119,13 @@ def test_event_type_time_and_media_filters_and_live_type_options(console):
             size = page.locator('.records-toolbar').evaluate('(e) => [e.clientWidth, e.scrollWidth]')
             assert size[1] <= size[0] + 1, (width, size)
 
-        # Removing the last records of the selected type refreshes the catalog
-        # and returns to all types; newly arriving custom types are selectable.
+        # An empty filter stays active until the user changes it.
         assert page.request.delete(url + '/api/apps/demo/records/hook-old').status == 200
         assert page.request.delete(url + '/api/apps/demo/records/hook-new').status == 200
         page.get_by_role('button', name='↻ 刷新', exact=True).click()
-        expect(types).to_have_value('')
-        expect(types.locator('option')).to_have_text(['全部类型', 'crane_still_no_helmet'])
+        expect(cards).to_have_count(0)
+        expect(types).to_have_value('crane_hook_outside')
+        types.select_option('')
         expect(cards).to_have_count(1)
         write_record(store, 'custom-new', '自定义/事件 & A', 1790917300)
         page.get_by_role('button', name='↻ 刷新', exact=True).click()
@@ -132,4 +134,71 @@ def test_event_type_time_and_media_filters_and_live_type_options(console):
         expect(cards).to_have_count(1)
         expect(cards).to_contain_text('自定义/事件 & A')
         assert not errors, errors
+        browser.close()
+
+
+def test_preview_mixed_media_and_bulk_scope(console):
+    url, store = console
+    for i, (name, event_type) in enumerate([('outside', 'A'), ('mixed', 'B'), ('photo', 'B')]):
+        media = {'raw_image': 'raw.jpg', 'annotated_image': 'annotated.jpg'}
+        if name == 'mixed':
+            media['video'] = 'clip.mp4'
+        write_record(store, name, event_type, 1790917300 + i, tuple(media))
+        path = store / name
+        for file in media.values():
+            (path / file).write_bytes(f'{name}/{file}'.encode())
+        (path / 'media_state.json').write_text(json.dumps({'media': {'ready': {'files': media}}}))
+    with playwright.sync_playwright() as pw:
+        browser = pw.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'),
+                                     args=['--no-sandbox', '--disable-dev-shm-usage'])
+        page = browser.new_page()
+        page.add_init_script("localStorage.setItem('rk3588-auth', JSON.stringify({state:{token:'test',username:'tester'},version:0}))")
+        page.goto(url + '/records/demo')
+        types = page.get_by_label('事件类型', exact=True)
+        types.select_option('B')
+        expect = playwright.expect
+
+        def exported(name):
+            with page.expect_download() as download:
+                page.get_by_role('button', name=name, exact=True).click()
+            with zipfile.ZipFile(download.value.path()) as archive:
+                return {archive.read(file).decode() for file in archive.namelist() if file.endswith('.jpg')}
+
+        assert exported('导出筛选结果原图（2 张）') == {'mixed/raw.jpg', 'photo/raw.jpg'}
+        page.locator('.rec-card').filter(has_text='图片 · 视频').click()
+        dialog = page.get_by_role('dialog')
+        dialog.get_by_role('button', name='视频', exact=True).click()
+        expect(dialog.locator('video')).to_be_visible()
+        dialog.get_by_role('button', name='原始图片').click()
+        expect(dialog.locator('img')).to_have_attribute('src', re.compile(r'mixed/image\?raw=1'))
+        dialog.get_by_label('选择此图').check()
+        page.keyboard.press('ArrowUp')
+        expect(dialog.get_by_label('选择此图')).not_to_be_checked()
+        dialog.get_by_role('button', name='↓ 下一张').click()
+        expect(dialog.get_by_label('选择此图')).to_be_checked()
+        page.keyboard.press('Escape')
+        types.select_option('A')
+        expect(page.get_by_text('已选择 1 条（其中 1 条在当前筛选外）')).to_be_visible()
+        assert exported('导出所选原图（1 张）') == {'mixed/raw.jpg'}
+        page.get_by_role('button', name='取消选择').click()
+        messages = []
+        def confirm(dialog):
+            messages.append(dialog.message)
+            dialog.accept()
+        page.once('dialog', confirm)
+        page.get_by_role('button', name='删除筛选结果（1 条）').click()
+        expect(page.locator('.rec-card')).to_have_count(0)
+        assert len(messages) == 1 and '筛选结果的 1 条' in messages[0]
+        assert {p.name for p in store.iterdir()} == {'mixed', 'photo'}
+        page.set_viewport_size({'width': 390, 'height': 844})
+        clear_all = page.locator('.records-header-actions').get_by_role('button', name='清空整个事件箱（2 条）')
+        expect(clear_all).to_be_visible()
+        page.once('dialog', lambda dialog: dialog.dismiss())
+        clear_all.click()
+        assert {p.name for p in store.iterdir()} == {'mixed', 'photo'}
+        page.once('dialog', confirm)
+        clear_all.click()
+        expect(page.get_by_role('button', name='清空整个事件箱（0 条）')).to_be_disabled()
+        assert '整个事件箱的 2 条' in messages[-1]
+        assert not list(store.iterdir())
         browser.close()

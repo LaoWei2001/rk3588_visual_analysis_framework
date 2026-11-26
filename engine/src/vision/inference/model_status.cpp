@@ -1,3 +1,4 @@
+#include "vision/inference/npu_core_assignment.h"
 #include "model_status.h"
 
 #include "vision/models/model_group.h"
@@ -58,7 +59,7 @@ void model_status_applied(int channel, const ChannelConfig &config,
         size_t index = 0;
         for (const auto &spec : config.models)
         {
-            if (!spec.enable || spec.model_path.empty() || spec.model_type.empty())
+            if (!npu::active_core_model(spec))
                 continue;
             const auto child = models[0]->entries().at(index).model;
             active.push_back({spec.id.empty() ? "model_" + std::to_string(index) : spec.id, spec.model_type,

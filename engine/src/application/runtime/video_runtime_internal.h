@@ -23,7 +23,7 @@ class SignalScope
     SignalScope &operator=(const SignalScope &) = delete;
 
   private:
-    struct sigaction previous_[4]{};
+    struct sigaction previous_[3]{};
     unsigned installed_ = 0;
 };
 void raise_fd_limit_or_warn();

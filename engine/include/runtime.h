@@ -33,7 +33,7 @@ struct VideoChannelStatus
 struct VideoRuntimeOptions
 {
     std::string config_path;
-    /** 接管 SIGINT/SIGTERM 停止、SIGUSR1 切换文件暂停、SIGPIPE 忽略；run() 结束后恢复。
+    /** 接管 SIGINT/SIGTERM 停止、SIGPIPE 忽略；run() 结束后恢复。
      * 嵌入已有宿主时默认关闭；独立命令行程序可开启并用 Ctrl+C 退出。 */
     bool install_signal_handlers = false;
 };

@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import List, Dict, Any
 
-from services.process_manager import get_status
+from services.process_manager import get_status, installed_video_processes
 from services.runtime_state import get_vision_settings
 from services.data_dir import data_dir
 
@@ -16,6 +16,7 @@ def scan_apps() -> List[Dict[str, Any]]:
     if not APPS_ROOT.exists():
         return apps
 
+    observed = installed_video_processes()
     for entry in sorted(APPS_ROOT.iterdir()):
         if not entry.is_dir():
             continue
@@ -53,7 +54,7 @@ def scan_apps() -> List[Dict[str, Any]]:
             except OSError:
                 pass
 
-        status_info = get_status(entry.name)
+        status_info = get_status(entry.name, observed)
         runtime_settings = get_vision_settings(entry.name)
 
         # 待上报记录数 = 统一事件目录数，以 event.json 为完成标记。

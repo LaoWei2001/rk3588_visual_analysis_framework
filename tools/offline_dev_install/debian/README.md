@@ -22,7 +22,9 @@ cd /userdata/full-bundle
 sudo bash install_offline.sh
 ```
 
-安装完成后直接访问：
+Web 端口由目标板在安装时选择。首次安装可省略，默认 8080；更新时省略会沿用原端口。要使用 9090，在包目录运行 `sudo bash install_offline.sh --port 9090`，完成后访问 `http://设备IP:9090`。
+
+使用默认端口时，安装完成后访问：
 
 ```text
 http://<RK3588-IP>:8080
@@ -227,5 +229,5 @@ GStreamer 厂商包和项目固定的 RKNN Runtime。
 另一台机器安全迁移，仍需来自适配板卡的 BSP/系统镜像。未由 dpkg 管理的固定 `.so` 如需
 携带，应明确加入 `dependency_manifest.sh` 的 `BUNDLED_RUNTIME_FILES`。
 
-安装完成后可按需执行 `bash install_deps.sh --check` 诊断硬件、驱动和动态库。它是排障工具，
+安装完成后可按需执行 `bash tools/setup/install_deps.sh --check` 诊断硬件、驱动和动态库。它是排障工具，
 不是一键安装流程的一部分，也不会替代真实摄像头和 NPU 推理测试。

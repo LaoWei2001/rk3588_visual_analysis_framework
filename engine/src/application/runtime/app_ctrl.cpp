@@ -245,9 +245,8 @@ extern "C" void *config_monitor_thread_func(void *arg)
             new_cfg.enable_display != old_cfg.enable_display || new_cfg.enable_rtsp != old_cfg.enable_rtsp ||
             new_cfg.disp_width != old_cfg.disp_width || new_cfg.disp_height != old_cfg.disp_height ||
             new_cfg.tile_cols != old_cfg.tile_cols || new_cfg.tile_rows != old_cfg.tile_rows ||
-            new_cfg.enable_pause_key != old_cfg.enable_pause_key || new_cfg.rtsp_port != old_cfg.rtsp_port ||
-            new_cfg.rtsp_path != old_cfg.rtsp_path || new_cfg.rtsp_bitrate != old_cfg.rtsp_bitrate ||
-            new_cfg.rtsp_codec != old_cfg.rtsp_codec || new_cfg.rtsp_encoder != old_cfg.rtsp_encoder;
+            new_cfg.rtsp_port != old_cfg.rtsp_port ||
+            new_cfg.rtsp_path != old_cfg.rtsp_path || new_cfg.rtsp_bitrate != old_cfg.rtsp_bitrate;
         if (channel_topology_changed || output_topology_changed)
         {
             fprintf(stderr, "[ConfigMonitor] Hot reload rejected: channel topology or display/RTSP layout/settings "
@@ -475,8 +474,7 @@ extern "C" void *config_monitor_thread_func(void *arg)
         {
             printf("[ConfigMonitor] Updating channel %d model filters (%zu configured)\n", channel.id,
                    channel.models.size());
-            inference_update_thresh(channel.id, channel);
-            inference_update_detect_classes(channel.id, channel);
+            inference_update_model_filters(channel);
         }
         inference_update_queue_size(base_applied_cfg.queue_size);
 

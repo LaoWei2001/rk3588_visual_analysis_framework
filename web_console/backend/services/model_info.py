@@ -69,7 +69,7 @@ def _probe(app: Path, binary: Path, model: Path) -> dict:
     lines = [line[len("MODEL_INFO_JSON="):] for line in result.stdout.splitlines()
              if line.startswith("MODEL_INFO_JSON=")]
     if not lines:
-        return {"ok": False, "error": "引擎未返回模型信息，请更新支持 --inspect-model 的程序包，或检查引擎运行库"}
+        return {"ok": False, "error": "独立引擎未返回模型信息，请更新 Web 控制台或检查推理引擎运行库"}
     try:
         info = json.loads(lines[-1])
         if not isinstance(info, dict) or not isinstance(info.get("ok"), bool):

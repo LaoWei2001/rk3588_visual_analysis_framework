@@ -126,8 +126,8 @@ APP_BUILD_NAME=".offline-ubuntu-app-$STAMP"
 APP_BUILD_DIR="$PROJECT_ROOT/dist/$APP_BUILD_NAME"
 [ -x "$PROJECT_ROOT/install_app.sh" ] \
     || { echo "[错误] 项目缺少可执行的 App 安装入口 install_app.sh。" >&2; exit 1; }
-[ -x "$PROJECT_ROOT/web_console/deploy.sh" ] \
-    || { echo "[错误] 项目缺少可执行的 Web 控制台部署器 web_console/deploy.sh。" >&2; exit 1; }
+[ -x "$PROJECT_ROOT/web_console/scripts/deploy.sh" ] \
+    || { echo "[错误] 项目缺少可执行的 Web 控制台部署器 web_console/scripts/deploy.sh。" >&2; exit 1; }
 # 项目可能从另一发行版复制而来，不能复用其中的 CMakeCache 和旧目标文件。
 bash "$PROJECT_ROOT/build.sh" "$APP_BUILD_NAME" \
     --clean --no-bundle-libs
@@ -720,6 +720,7 @@ mkdir -p "$CONSOLE_ROOT/DEBIAN" \
 rsync -a --exclude='tests/' --exclude='.pytest_cache/' \
     --exclude='__pycache__/' --exclude='*.pyc' \
     "$PROJECT_ROOT/web_console/backend/" "$CONSOLE_DEST/backend/"
+install -Dm644 "$PROJECT_ROOT/web_console/scripts/console_port.py" "$CONSOLE_DEST/scripts/console_port.py"
 cp -a "$FRONTEND_WORK/dist" "$CONSOLE_DEST/frontend/"
 for frontend_asset in logo.png img.png; do
     [ ! -f "$FRONTEND_DIR/$frontend_asset" ] \
@@ -781,10 +782,12 @@ Type=simple
 User=root
 WorkingDirectory=/opt/ai_apps/_console/backend
 Environment="APPS_ROOT=/opt/ai_apps"
+Environment="RK_CONSOLE_START_SOCKET=/run/rk3588-console-start.sock"
+Environment=RK_CONSOLE_PORT=8080
 Environment="BINARY_NAME=vision_analysis"
 Environment="VISION_PYTHON=/usr/bin/python3"
 ExecStartPre=-/usr/bin/nm-online -q --timeout=30
-ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --log-level info
+ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port ${RK_CONSOLE_PORT} --workers 1 --log-level info
 Restart=always
 RestartSec=5
 WatchdogSec=60
@@ -827,6 +830,19 @@ cat > "$CONSOLE_ROOT/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e
 
+# 先记录原端口，再迁移 unit。离线包里的 Python 此时已经由 APT 安装。
+port_helper=/opt/ai_apps/_console/scripts/console_port.py
+console_port=""
+probe=select
+[ -d /run/systemd/system ] || probe=show
+if [ "${RK_CONSOLE_INSTALL_PORT+x}" = x ]; then
+    if [ -n "$RK_CONSOLE_INSTALL_PORT" ]; then
+        console_port="$(/usr/bin/python3 "$port_helper" "$probe" --port "$RK_CONSOLE_INSTALL_PORT")"
+    else
+        console_port="$(/usr/bin/python3 "$port_helper" "$probe")"
+    fi
+fi
+
 # 迁移旧版源码部署直接写入 /etc 的 unit；先留备份，再让
 # /lib/systemd/system 中由 deb 管理的 unit 生效。
 legacy_unit=/etc/systemd/system/rk3588-console.service
@@ -855,9 +871,13 @@ if [ -d /run/systemd/system ]; then
     systemctl reenable rk3588-console.service >/dev/null 2>&1 \
         || systemctl enable rk3588-console.service >/dev/null 2>&1 \
         || true
-    if ! systemctl restart rk3588-console.service; then
+    if [ -n "${console_port:-}" ]; then
+        /usr/bin/python3 "$port_helper" install --port "$console_port"
+    elif ! systemctl restart rk3588-console.service; then
         echo "[警告] Web 控制台暂未启动；可运行 systemctl status rk3588-console 查看原因。" >&2
     fi
+elif [ -n "${console_port:-}" ]; then
+    /usr/bin/python3 "$port_helper" stage --port "$console_port"
 fi
 EOF
 cat > "$CONSOLE_ROOT/DEBIAN/prerm" <<'EOF'
@@ -870,6 +890,11 @@ EOF
 cat > "$CONSOLE_ROOT/DEBIAN/postrm" <<'EOF'
 #!/bin/sh
 set -e
+if [ "${1:-}" = purge ]; then
+    port_dir=/etc/systemd/system/rk3588-console.service.d
+    rm -f "$port_dir/99-web-console-port.conf" "$port_dir/.port.lock"
+    rmdir "$port_dir" 2>/dev/null || true
+fi
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload
 fi
@@ -914,8 +939,8 @@ if [ "$WANT_BUILD" = true ]; then
         || { echo "[错误] 源码包缺少根构建入口 build.sh。" >&2; exit 1; }
     [ -x "$SOURCE_TREE/install_app.sh" ] \
         || { echo "[错误] 源码包缺少可执行的 App 安装入口 install_app.sh。" >&2; exit 1; }
-    [ -x "$SOURCE_TREE/web_console/deploy.sh" ] \
-        || { echo "[错误] 源码包缺少可执行的 Web 控制台部署器 web_console/deploy.sh。" >&2; exit 1; }
+    [ -x "$SOURCE_TREE/web_console/scripts/deploy.sh" ] \
+        || { echo "[错误] 源码包缺少可执行的 Web 控制台部署器 web_console/scripts/deploy.sh。" >&2; exit 1; }
     [ -d "$FRONTEND_WORK/node_modules" ] \
         || { echo "[错误] 前端依赖目录 node_modules 不存在。" >&2; exit 1; }
     tar -C "$SOURCE_TREE" -czf "$SOURCE_SHARE/source.tar.gz" .

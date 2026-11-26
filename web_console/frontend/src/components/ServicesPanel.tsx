@@ -38,13 +38,9 @@ function statusBadge(s: ServiceInfo): { text: string; color: string } {
   }
 }
 
-const panel: React.CSSProperties = {
-  background: '#1a1d29', border: '1px solid #2e3352', borderRadius: 10,
-  padding: '12px 16px', marginBottom: 18,
-}
 const row: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0',
-  borderTop: '1px solid #23263a', flexWrap: 'wrap',
+  borderTop: '1px solid var(--border)', flexWrap: 'wrap',
 }
 const btn = (bg: string): React.CSSProperties => ({
   background: bg, color: '#fff', border: 'none', borderRadius: 6,
@@ -146,7 +142,7 @@ export default function ServicesPanel({ apps, onToast }: Props) {
   if (!loaded && !syncError) return null
 
   return (
-    <div style={panel}>
+    <div className="services-panel">
       <ConfigSyncNotice error={syncError} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{ fontWeight: 600, fontSize: 15 }}>⚙ 后台服务</span>
@@ -246,7 +242,7 @@ export default function ServicesPanel({ apps, onToast }: Props) {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000,
                       display: 'flex', alignItems: 'center', justifyContent: 'center' }}
              onClick={() => setLogKey(null)}>
-          <div style={{ background: '#0f1117', border: '1px solid #2e3352', borderRadius: 10,
+          <div className="service-log-dialog" style={{
                         width: 820, maxWidth: '94vw', height: '74vh', display: 'flex', flexDirection: 'column' }}
                onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',

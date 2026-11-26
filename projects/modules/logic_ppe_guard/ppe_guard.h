@@ -102,7 +102,17 @@ struct PersonState
     std::array<PartEvidence, PART_COUNT> parts;
     PartEvidence hand_unsided; /* 违规框分不清左右手时的兜底证据 */
     uint64_t last_seen_ms = 0;
-    bool reported = false;
+    unsigned reported_categories = 0;
+    unsigned localized_categories = 0;
+};
+
+// A negative part denotes a real hand detection with unknown side.
+constexpr int HAND_UNSIDED = -1;
+struct AlarmRegion
+{
+    int part;
+    cv::Rect box;
+    bool inferred;
 };
 
 struct Evaluation
@@ -114,6 +124,7 @@ struct Evaluation
     bool gloves_unsided = false; /* 已确认的手套违规，但分不清左右手 */
     bool violation = false;
     bool report_due = false; /* 已确认且本会话尚未上报 */
+    std::vector<AlarmRegion> regions; // Confirmed, localized on this frame only.
     std::string violation_types;
     std::string part_states;
 };
@@ -121,6 +132,7 @@ struct Evaluation
 struct Outcome
 {
     std::vector<Evaluation> people;
+    int candidate_people = 0; // Present tracks with pending evidence and no confirmed violation.
     int candidate_observations = 0;
     int rejected_observations = 0;  /* 类别匹配但被归属/几何门控丢弃的违规框数 */
     int duplicate_observations = 0; /* 同类重叠框被去重丢弃的数量 */

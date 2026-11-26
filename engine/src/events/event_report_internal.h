@@ -13,13 +13,6 @@
 
 namespace event_report_detail
 {
-enum EventMedia : uint32_t
-{
-    EVENT_MEDIA_NONE = 0,
-    EVENT_MEDIA_IMAGE = 1u << 0,
-    EVENT_MEDIA_VIDEO = 1u << 1
-};
-
 struct ImageJob
 {
     struct Pane
@@ -39,8 +32,6 @@ struct ImageJob
     std::string event_dir;
     cv::Mat annotated;
     cv::Mat raw;
-    bool need_annotated = false;
-    bool need_raw = false;
     std::string overlay_mode;
     vision::OverlayOptions render_params;
     InferenceRoiConfig inference_roi;
@@ -97,14 +88,6 @@ struct PersistenceJob
     bool extend_video = false;
 };
 
-struct DeliveryRequirements
-{
-    int count = 0;
-    uint32_t media_flags = EVENT_MEDIA_NONE;
-    bool annotated_image = false;
-    bool raw_image = false;
-};
-
 struct ImageSelectionPolicy
 {
     std::string mode = "connected";
@@ -130,7 +113,7 @@ void enforce_outbox_cap();
 std::string make_event_id(const std::string &scope);
 cJSON *fields_to_json(const EventFields &fields);
 cJSON *parse_object_or_empty(const std::string &text);
-DeliveryRequirements delivery_requirements(cJSON *policy, const std::string &event_type);
+bool delivery_needs_video(cJSON *policy, const std::string &event_type);
 void add_delivery_statuses(cJSON *policy, const std::string &event_type, cJSON *root);
 bool json_to_text(cJSON *root, std::string &out);
 bool atomic_write_text(const std::string &path, const std::string &text);
@@ -142,7 +125,7 @@ void refresh_media_status(cJSON *root);
 bool update_media_state(const std::string &event_dir, const char *kind, const char *status, const char *error,
                         std::initializer_list<std::pair<const char *, const char *>> files = {});
 void *image_worker(void *);
-bool ensure_workers_locked(bool need_image_worker);
+bool ensure_workers_locked();
 double policy_number(cJSON *policy, const char *key, double fallback);
 std::string policy_string(cJSON *policy, const char *key, const char *fallback);
 void append_unique_channel(std::vector<int> &channels, int channel_id);

@@ -51,7 +51,7 @@ sudo ./install.sh online
 
 默认安装到 `/opt/ai_apps/_console`，生成并启用 `rk3588-console.service`，端口 8080。可在命令前
 设置 `APPS_ROOT`/`INSTALL_DIR` 更改位置。`online` 由根安装器统一准备 Python/npm 依赖并构建前端；
-`offline` 只使用完整离线包已经安装的依赖和预构建前端。`web_console/deploy.sh` 是不接受参数、
+`offline` 只使用完整离线包已经安装的依赖和预构建前端。`web_console/scripts/deploy.sh` 是不接受参数、
 不访问网络的内部部署器，不作为用户安装入口。
 
 Web“上传程序”接受归档并先校验解包路径，之后委托同一安装事务。两个入口都会在校验和准备

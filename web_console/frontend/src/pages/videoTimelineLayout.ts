@@ -31,6 +31,7 @@ export function videoTimelineLayout(config: Record<string, unknown>): VideoLayou
   const channelIds = channels.flatMap((value, index) => {
     if (!value || typeof value !== 'object') return []
     const channel = value as Record<string, unknown>
+    if (channel.enable === false || channel.enable === 0) return []
     const stream = (channel.stream ?? {}) as Record<string, unknown>
     const location = stream.src_type === 'usb' ? stream.device : stream.url
     const id = channel.id === undefined ? index : Number(channel.id)

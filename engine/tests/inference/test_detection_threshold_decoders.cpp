@@ -97,7 +97,7 @@ struct DetectionThresholdTestAccess
                 model.set_thresh(threshold, .45f);
                 std::vector<float> boxes, scores;
                 std::vector<int> classes;
-                const int count = model.process_fp32(input.data(), 1, 1, 8, boxes, scores, classes, 0, 1.f, 0);
+                const int count = model.process_fp32(input.data(), 1, 1, 8, boxes, scores, classes, 0);
                 check(count == (std::isfinite(score) && score >= threshold ? 1 : 0), "Pose float boundary", threshold);
             }
         }

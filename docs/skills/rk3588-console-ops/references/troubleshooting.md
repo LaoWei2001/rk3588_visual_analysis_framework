@@ -70,7 +70,7 @@ reject 时应重启 App，而不是反复保存。
 ## 实时画面黑屏/报错
 
 1. 确认唯一运行 App 和 `run.config`。
-2. 确认配置 `global.enable_rtsp != 0`、`global.rtsp_codec` 为 `h264`/`avc`。
+2. 确认配置 `global.enable_rtsp != 0`。引擎的 RTSP 输出固定为 H.264。
 3. 确认 `rtsp_port/rtsp_path` 与进程日志一致。
 4. 确认 `ffmpeg` 存在并支持 RTSP/fMP4。
 5. 在板端直接验证 RTSP 地址，再检查浏览器 MSE/H264 支持。

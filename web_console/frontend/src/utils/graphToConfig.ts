@@ -1,5 +1,5 @@
 import { Node, Edge } from '@xyflow/react'
-import { getSrcType } from './streamSource'
+import { getSrcType, isFilePlaybackSource } from './streamSource'
 import type { GlobalLogicEntry } from './globalLogic'
 import { NATIVE_GLOBAL_DEFAULTS, type GlobalSettingsData } from '../components/GlobalSettingsPanel'
 import type { Zone } from '../store/roiStore'
@@ -41,7 +41,11 @@ function buildStream(d: Record<string, unknown>): Record<string, unknown> {
     return s
   }
   if (t === 'file') return { src_type: 'file', url: d.url ?? '', loop: d.loop ?? false }
-  if (t === 'rtsp') return { src_type: 'rtsp', url: d.url ?? '', video_enc: d.video_enc ?? 'h264' }
+  if (t === 'rtsp') {
+    const stream: Record<string, unknown> = { src_type: t, url: d.url ?? '', video_enc: d.video_enc ?? 'h264' }
+    if (isFilePlaybackSource(d)) stream.loop = d.loop ?? false
+    return stream
+  }
   // 未指定 src_type：原样写出 url，但保留空 src_type → 后端配置校验会拒绝，提示用户补全
   return { src_type: '', url: d.url ?? '' }
 }

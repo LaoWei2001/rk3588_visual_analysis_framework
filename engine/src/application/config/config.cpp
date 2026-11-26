@@ -6,11 +6,13 @@
 #include "config_registry.h"
 #include "config_validator.h"
 #include "logic/logic_registry.h"
+#include "vision/inference/npu_core_assignment.h"
 #include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <initializer_list>
 #include <json.h>
+#include <memory>
 #include <parameters.h>
 #include <set>
 #include <sstream>
@@ -35,14 +37,25 @@ std::string to_lower_copy(const std::string &value)
 
 std::string normalize_src_type(const StreamConfig &stream)
 {
-    /* src_type 现为必填字段：仅做大小写归一，不再根据 url/device 自动推断。
+    /* src_type 现为必填字段：保留显式 rtsp 的本地绝对路径兼容写法。
      * 返回空字符串表示用户未指定 → 由 load_config 视为配置错误并拒绝。 */
-    return to_lower_copy(stream.src_type);
+    const std::string type = to_lower_copy(stream.src_type);
+    return type == "rtsp" && starts_with(stream.url, "/") ? "file" : type;
 }
 
 std::string resolve_stream_location(const StreamConfig &stream, const std::string &src_type)
 {
     return src_type == "usb" ? stream.device : stream.url;
+}
+
+bool is_rtsp_url(const std::string &url)
+{
+    return starts_with(url, "rtsp://") || starts_with(url, "rtsps://");
+}
+
+bool is_http_url(const std::string &url)
+{
+    return starts_with(url, "http://") || starts_with(url, "https://");
 }
 
 bool is_supported_src_type(const std::string &src_type)
@@ -54,9 +67,7 @@ bool is_channel_infer_enabled(const ChannelConfig &ch_cfg)
 {
     /* 模型节点开关是唯一推理配置开关。无启用且完整的模型时仍解码/显示，
      * 已配置的后处理在业务帧以空结果运行。 */
-    return std::any_of(ch_cfg.models.begin(), ch_cfg.models.end(), [](const ChannelModelConfig &model) {
-        return model.enable && !model.model_path.empty() && !model.model_type.empty();
-    });
+    return std::any_of(ch_cfg.models.begin(), ch_cfg.models.end(), npu::active_core_model<ChannelModelConfig>);
 }
 
 bool is_bytetrack_enabled(const ChannelConfig &ch_cfg)
@@ -232,17 +243,15 @@ bool load_config(const std::string &path, AppConfig &cfg)
     buffer << ifs.rdbuf();
     std::string json_text = buffer.str();
 
-    cJSON *root = cJSON_Parse(json_text.c_str());
-    if (!cJSON_IsObject(root))
+    std::unique_ptr<cJSON, decltype(&cJSON_Delete)> root(cJSON_Parse(json_text.c_str()), cJSON_Delete);
+    if (!cJSON_IsObject(root.get()))
     {
         fprintf(stderr, "[Config] JSON parse failed: %s\n", path.c_str());
-        cJSON_Delete(root);
         return false;
     }
 
-    if (!validate_object_keys(root, {"global", "channels", "_editor_layout"}, "root"))
+    if (!validate_object_keys(root.get(), {"global", "channels", "_editor_layout"}, "root"))
     {
-        cJSON_Delete(root);
         return false;
     }
 
@@ -250,24 +259,21 @@ bool load_config(const std::string &path, AppConfig &cfg)
     cfg = AppConfig{};
     cfg.config_path = path;
 
-    cJSON *global = cJSON_GetObjectItemCaseSensitive(root, "global");
+    cJSON *global = cJSON_GetObjectItemCaseSensitive(root.get(), "global");
     if (!cJSON_IsObject(global))
     {
         fprintf(stderr, "[Config] missing global\n");
-        cJSON_Delete(root);
         return false;
     }
 
     if (!validate_global_keys(global))
     {
-        cJSON_Delete(root);
         return false;
     }
 
     if (!g_cfg_reg.parse_global(global, &cfg))
     {
         fprintf(stderr, "[Config] parse global failed\n");
-        cJSON_Delete(root);
         return false;
     }
     cfg.tracker_type = config_utils::to_lower_copy(cfg.tracker_type);
@@ -275,7 +281,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
     {
         fprintf(stderr, "[Config] unsupported global tracker_type '%s' (expected sort/bytetrack)\n",
                 cfg.tracker_type.c_str());
-        cJSON_Delete(root);
         return false;
     }
     cfg.bytetrack_low_thresh = std::max(0.0f, std::min(cfg.bytetrack_low_thresh, 1.0f));
@@ -298,7 +303,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                                        "media_source_channel_id"},
                                       "global.global_logics[" + std::to_string(global_index) + "]"))
             {
-                cJSON_Delete(root);
                 return false;
             }
 
@@ -312,7 +316,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
             {
                 fprintf(stderr, "[Config] global_logic[%zu].instance_id must be a non-empty string\n",
                         cfg.global_logics.size());
-                cJSON_Delete(root);
                 return false;
             }
             gl_cfg.instance_id = gl_instance_id->valuestring;
@@ -320,7 +323,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 global_instance_ids.end())
             {
                 fprintf(stderr, "[Config] duplicate global logic instance_id: %s\n", gl_cfg.instance_id.c_str());
-                cJSON_Delete(root);
                 return false;
             }
             global_instance_ids.push_back(gl_cfg.instance_id);
@@ -357,7 +359,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 {
                     fprintf(stderr, "[Config] global_logic[%zu].logic_parameters must be an object\n",
                             cfg.global_logics.size());
-                    cJSON_Delete(root);
                     return false;
                 }
                 char *parameters_text = cJSON_PrintUnformatted(gl_parameters);
@@ -365,7 +366,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 {
                     fprintf(stderr, "[Config] cannot serialize global_logic[%zu].logic_parameters\n",
                             cfg.global_logics.size());
-                    cJSON_Delete(root);
                     return false;
                 }
                 gl_cfg.logic_parameters_json = parameters_text;
@@ -376,7 +376,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
             if (!validate_report_policy(gl_report_policy,
                                         "global.global_logics[" + std::to_string(global_index) + "].report_policy"))
             {
-                cJSON_Delete(root);
                 return false;
             }
             if (gl_report_policy)
@@ -385,13 +384,11 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 {
                     fprintf(stderr, "[Config] global_logic[%zu].report_policy must be an object\n",
                             cfg.global_logics.size());
-                    cJSON_Delete(root);
                     return false;
                 }
                 char *policy_text = cJSON_PrintUnformatted(gl_report_policy);
                 if (!policy_text)
                 {
-                    cJSON_Delete(root);
                     return false;
                 }
                 gl_cfg.report_policy_json = policy_text;
@@ -407,7 +404,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
             {
                 fprintf(stderr, "[Config] global instance '%s': global logic '%s' is not registered\n",
                         gl_cfg.instance_id.c_str(), gl_cfg.logic.c_str());
-                cJSON_Delete(root);
                 return false;
             }
             {
@@ -420,7 +416,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                             cfg.global_logics.size());
                     for (const auto &error : parameter_errors)
                         fprintf(stderr, "  - %s: %s\n", error.field.c_str(), error.message.c_str());
-                    cJSON_Delete(root);
                     return false;
                 }
                 gl_cfg.logic_parameters_json = std::move(normalized_parameters);
@@ -442,11 +437,10 @@ bool load_config(const std::string &path, AppConfig &cfg)
         printf("[Config] Hotreload mode: loading with relaxed model defaults\n");
     }
 
-    cJSON *channels = cJSON_GetObjectItemCaseSensitive(root, "channels");
+    cJSON *channels = cJSON_GetObjectItemCaseSensitive(root.get(), "channels");
     if (!cJSON_IsArray(channels))
     {
         fprintf(stderr, "[Config] missing channels\n");
-        cJSON_Delete(root);
         return false;
     }
 
@@ -457,7 +451,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
     {
         if (!validate_channel_keys(item, static_cast<size_t>(seq_idx)))
         {
-            cJSON_Delete(root);
             return false;
         }
         ChannelConfig ch;
@@ -475,7 +468,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                               stream_obj, {"src_type", "url", "device", "video_enc", "loop", "usb_width", "usb_height"},
                               "channels[" + std::to_string(seq_idx) + "].stream"))
         {
-            cJSON_Delete(root);
             return false;
         }
         if (stream_obj && cJSON_IsObject(stream_obj))
@@ -512,7 +504,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
             if (rz && !cJSON_IsArray(rz))
             {
                 fprintf(stderr, "[Config] channel %d roi_zones must be an array\n", ch.id);
-                cJSON_Delete(root);
                 return false;
             }
             if (cJSON_IsArray(rz))
@@ -523,7 +514,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                     if (!validate_object_keys(zone, {"name", "polygon"},
                                               "channels[" + std::to_string(seq_idx) + "].roi_zones"))
                     {
-                        cJSON_Delete(root);
                         return false;
                     }
                     RoiZoneConfig zc;
@@ -560,7 +550,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
             if (inference_roi && !cJSON_IsObject(inference_roi))
             {
                 fprintf(stderr, "[Config] channel %d inference_roi must be an object\n", ch.id);
-                cJSON_Delete(root);
                 return false;
             }
             if (cJSON_IsObject(inference_roi))
@@ -568,7 +557,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 if (!validate_object_keys(inference_roi, {"mode", "resize_mode", "polygon"},
                                           "channels[" + std::to_string(seq_idx) + "].inference_roi"))
                 {
-                    cJSON_Delete(root);
                     return false;
                 }
                 cJSON *mode = cJSON_GetObjectItemCaseSensitive(inference_roi, "mode");
@@ -577,7 +565,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 if (!cJSON_IsString(mode) || !mode->valuestring || !cJSON_IsArray(polygon))
                 {
                     fprintf(stderr, "[Config] channel %d inference_roi requires mode and polygon[]\n", ch.id);
-                    cJSON_Delete(root);
                     return false;
                 }
                 ch.inference_roi.mode = mode->valuestring;
@@ -590,7 +577,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                         !cJSON_IsNumber(cJSON_GetArrayItem(point, 0)) || !cJSON_IsNumber(cJSON_GetArrayItem(point, 1)))
                     {
                         fprintf(stderr, "[Config] channel %d inference_roi polygon contains invalid point\n", ch.id);
-                        cJSON_Delete(root);
                         return false;
                     }
                     ch.inference_roi.polygon.emplace_back(cJSON_GetArrayItem(point, 0)->valuedouble,
@@ -626,20 +612,17 @@ bool load_config(const std::string &path, AppConfig &cfg)
         if (logic_parameters_item && !cJSON_IsObject(logic_parameters_item))
         {
             fprintf(stderr, "[Config] channel %d logic_parameters must be a JSON object\n", ch.id);
-            cJSON_Delete(root);
             return false;
         }
 
         cJSON *report_policy_item = cJSON_GetObjectItemCaseSensitive(item, "report_policy");
         if (!validate_report_policy(report_policy_item, "channels[" + std::to_string(seq_idx) + "].report_policy"))
         {
-            cJSON_Delete(root);
             return false;
         }
         if (report_policy_item && !cJSON_IsObject(report_policy_item))
         {
             fprintf(stderr, "[Config] channel %d report_policy must be a JSON object\n", ch.id);
-            cJSON_Delete(root);
             return false;
         }
         ch.event_video = event_video_from_report_policy(report_policy_item);
@@ -650,7 +633,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
         if (models && !cJSON_IsArray(models))
         {
             fprintf(stderr, "[Config] channel %d models must be an array\n", ch.id);
-            cJSON_Delete(root);
             return false;
         }
         if (cJSON_IsArray(models))
@@ -663,7 +645,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                                            "obj_thresh", "nms_thresh", "detect_classes", "npu_core"},
                                           "channels[" + std::to_string(seq_idx) + "].models"))
                 {
-                    cJSON_Delete(root);
                     return false;
                 }
                 ChannelModelConfig model;
@@ -703,14 +684,12 @@ bool load_config(const std::string &path, AppConfig &cfg)
                     else
                     {
                         fprintf(stderr, "[Config] channel %d model npu_core must be auto, -1, 0, 1 or 2\n", ch.id);
-                        cJSON_Delete(root);
                         return false;
                     }
                 }
                 else if (v)
                 {
                     fprintf(stderr, "[Config] channel %d model npu_core must be a number or 'auto'\n", ch.id);
-                    cJSON_Delete(root);
                     return false;
                 }
                 v = cJSON_GetObjectItemCaseSensitive(model_item, "detect_classes");
@@ -730,7 +709,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
         if (!ch.logic.empty() && !channel_logic_get(ch.logic.c_str()))
         {
             fprintf(stderr, "[Config] channel %d: channel logic '%s' is not registered\n", ch.id, ch.logic.c_str());
-            cJSON_Delete(root);
             return false;
         }
         {
@@ -742,7 +720,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
                 fprintf(stderr, "[Config] channel %d logic_parameters validation failed:\n", ch.id);
                 for (const auto &error : parameter_errors)
                     fprintf(stderr, "  - %s: %s\n", error.field.c_str(), error.message.c_str());
-                cJSON_Delete(root);
                 return false;
             }
             ch.logic_parameters_json = std::move(normalized_parameters);
@@ -779,7 +756,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
         {
             fprintf(stderr, "[Config] channel %d unsupported tracker_type '%s' (expected sort/bytetrack)\n", ch.id,
                     ch.tracker_type.c_str());
-            cJSON_Delete(root);
             return false;
         }
         if (ch.tracker_iou_thresh < 0.01f)
@@ -817,13 +793,11 @@ bool load_config(const std::string &path, AppConfig &cfg)
         if (ch.stream.src_type.empty())
         {
             fprintf(stderr, "[Config] channel %d 缺少 stream.src_type（必填: rtsp/file/usb，已取消自动推断）\n", ch.id);
-            cJSON_Delete(root);
             return false;
         }
         if (!config_utils::is_supported_src_type(ch.stream.src_type))
         {
             fprintf(stderr, "[Config] channel %d invalid src_type: %s\n", ch.id, ch.stream.src_type.c_str());
-            cJSON_Delete(root);
             return false;
         }
 
@@ -831,7 +805,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
         if (ch.enable && stream_location.empty())
         {
             fprintf(stderr, "[Config] channel %d missing stream location (url/device)\n", ch.id);
-            cJSON_Delete(root);
             return false;
         }
 
@@ -839,15 +812,14 @@ bool load_config(const std::string &path, AppConfig &cfg)
             !config_utils::starts_with(stream_location, "/dev/video"))
         {
             fprintf(stderr, "[Config] channel %d invalid usb device: %s\n", ch.id, stream_location.c_str());
-            cJSON_Delete(root);
             return false;
         }
 
-        if (ch.stream.src_type == "rtsp" && !ch.stream.video_enc.empty() && ch.stream.video_enc != "h264" &&
+        if (ch.stream.src_type == "rtsp" && config_utils::is_rtsp_url(stream_location) &&
+            !ch.stream.video_enc.empty() && ch.stream.video_enc != "h264" &&
             ch.stream.video_enc != "h265")
         {
             fprintf(stderr, "[Config] channel %d invalid video_enc\n", ch.id);
-            cJSON_Delete(root);
             return false;
         }
 
@@ -874,14 +846,12 @@ bool load_config(const std::string &path, AppConfig &cfg)
             {
                 fprintf(stderr, "[Config] global instance %s references unknown connected channel %d\n",
                         global_logic.instance_id.c_str(), channel_id);
-                cJSON_Delete(root);
                 return false;
             }
             if (!connected_ids.insert(channel_id).second)
             {
                 fprintf(stderr, "[Config] global instance %s has duplicate connected channel %d\n",
                         global_logic.instance_id.c_str(), channel_id);
-                cJSON_Delete(root);
                 return false;
             }
         }
@@ -895,7 +865,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
             {
                 fprintf(stderr, "[Config] global instance %s references unknown media source channel %d\n",
                         global_logic.instance_id.c_str(), global_logic.media_source_channel_id);
-                cJSON_Delete(root);
                 return false;
             }
         }
@@ -903,7 +872,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
         {
             fprintf(stderr, "[Config] global instance %s enables event video but has no media source channel\n",
                     global_logic.instance_id.c_str());
-            cJSON_Delete(root);
             return false;
         }
     }
@@ -937,7 +905,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
     if (cfg.channels.empty())
     {
         fprintf(stderr, "[Config] no enabled channels\n");
-        cJSON_Delete(root);
         return false;
     }
 
@@ -947,7 +914,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
         cfg.tile_rows = 2;
     if (cfg.queue_size <= 0)
         cfg.queue_size = 1;
-    cJSON_Delete(root);
 
     // 【修改点】：分级验证 — 首次加载做完整验证，热重载只做关键字段验证
     if (!is_hotreload)
@@ -978,7 +944,6 @@ bool load_config(const std::string &path, AppConfig &cfg)
         printf("[Config] Hotreload critical validation passed (%zu channels)\n", cfg.channels.size());
     }
 
-    g_cfg_reg.trigger_reload();
     return true;
 }
 

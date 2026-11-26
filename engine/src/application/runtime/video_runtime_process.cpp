@@ -13,7 +13,6 @@
 #include <sys/resource.h>
 
 volatile sig_atomic_t g_shutdown_signal = 0;
-volatile sig_atomic_t g_pause_toggle_signal = 0;
 
 namespace vision
 {
@@ -21,15 +20,11 @@ namespace runtime_detail
 {
 namespace
 {
-const int signals[] = {SIGINT, SIGTERM, SIGUSR1, SIGPIPE};
+const int signals[] = {SIGINT, SIGTERM, SIGPIPE};
 void stop_signal(int)
 {
     g_shutdown_signal = 1;
     service_watchdog::request_shutdown();
-}
-void pause_signal(int)
-{
-    g_pause_toggle_signal = 1;
 }
 } // namespace
 
@@ -37,13 +32,13 @@ SignalScope::SignalScope(bool enabled)
 {
     if (!enabled)
         return;
-    for (unsigned i = 0; i < 4; ++i)
+    for (unsigned i = 0; i < sizeof(signals) / sizeof(signals[0]); ++i)
     {
         struct sigaction action
         {
         };
         sigemptyset(&action.sa_mask);
-        action.sa_handler = i < 2 ? stop_signal : (i == 2 ? pause_signal : SIG_IGN);
+        action.sa_handler = i < 2 ? stop_signal : SIG_IGN;
         if (sigaction(signals[i], &action, &previous_[i]) != 0)
         {
             const int error = errno;

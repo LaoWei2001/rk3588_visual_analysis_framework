@@ -57,9 +57,8 @@ bool delivery_matches_event(const cJSON *delivery, const std::string &event_type
     return false;
 }
 
-DeliveryRequirements delivery_requirements(cJSON *policy, const std::string &event_type)
+bool delivery_needs_video(cJSON *policy, const std::string &event_type)
 {
-    DeliveryRequirements requirements;
     cJSON *deliveries = cJSON_GetObjectItemCaseSensitive(policy, "deliveries");
     cJSON *delivery = nullptr;
     cJSON_ArrayForEach(delivery, deliveries)
@@ -75,27 +74,14 @@ DeliveryRequirements delivery_requirements(cJSON *policy, const std::string &eve
             !delivery_matches_event(delivery, event_type))
             continue;
 
-        ++requirements.count;
         const cJSON *kind = nullptr;
         cJSON_ArrayForEach(kind, media)
         {
-            if (!cJSON_IsString(kind) || !kind->valuestring)
-                continue;
-            if (strcmp(kind->valuestring, "annotated_image") == 0)
-            {
-                requirements.annotated_image = true;
-                requirements.media_flags |= EVENT_MEDIA_IMAGE;
-            }
-            else if (strcmp(kind->valuestring, "raw_image") == 0)
-            {
-                requirements.raw_image = true;
-                requirements.media_flags |= EVENT_MEDIA_IMAGE;
-            }
-            else if (strcmp(kind->valuestring, "video") == 0)
-                requirements.media_flags |= EVENT_MEDIA_VIDEO;
+            if (cJSON_IsString(kind) && kind->valuestring && strcmp(kind->valuestring, "video") == 0)
+                return true;
         }
     }
-    return requirements;
+    return false;
 }
 
 void add_delivery_statuses(cJSON *policy, const std::string &event_type, cJSON *root)

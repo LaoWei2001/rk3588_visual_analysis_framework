@@ -38,6 +38,10 @@ function toLocalDateTime(value: Date): string {
 
 export default function RecordsPage() {
   const { appName } = useParams()
+  return appName ? <Inbox key={appName} appName={appName} /> : null
+}
+
+function Inbox({ appName }: { appName: string }) {
   const navigate = useNavigate()
   const [records, setRecords] = useState<EventRecord[]>([])
   const [stats, setStats] = useState({ count: 0, total: 0, cap: 0 })
@@ -47,7 +51,10 @@ export default function RecordsPage() {
   const [timePreset, setTimePreset] = useState<TimePreset>('all')
   const [startTime, setStartTime] = useState('')
   const [endTime, setEndTime] = useState('')
-  const [filteredCount, setFilteredCount] = useState(0)
+  const [matchingIds, setMatchingIds] = useState<string[]>([])
+  const [rawAvailable, setRawAvailable] = useState<Record<string, boolean>>({})
+  const [loadedScope, setLoadedScope] = useState('')
+  const [revision, setRevision] = useState(0)
   const [loading, setLoading] = useState(true)
   const [clearing, setClearing] = useState(false)
   const [error, setError] = useState('')
@@ -55,8 +62,8 @@ export default function RecordsPage() {
   const [detail, setDetail] = useState<RecordJsonResponse | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState('')
-  const [mediaRecord, setMediaRecord] = useState<EventRecord | null>(null)
-  const [showRawImage, setShowRawImage] = useState(false)
+  const [mediaRecordId, setMediaRecordId] = useState<string | null>(null)
+  const [medium, setMedium] = useState<'raw' | 'annotated' | 'video'>('annotated')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [exporting, setExporting] = useState(false)
   const [notice, setNotice] = useState('')
@@ -66,18 +73,21 @@ export default function RecordsPage() {
   const endUnixMs = endTime ? new Date(endTime).getTime() : undefined
   const timeRangeInvalid = startUnixMs !== undefined && endUnixMs !== undefined && startUnixMs > endUnixMs
 
+  const scope = JSON.stringify([filter, eventType, startTime, endTime])
   const load = useCallback(async () => {
     if (!appName || timeRangeInvalid) return
     const sequence = ++loadSequence.current
     try {
-      const result = await fetchRecords(appName, 500, { startUnixMs, endUnixMs, eventType })
+      const result = await fetchRecords(appName, 500, { startUnixMs, endUnixMs, eventType, mediaType: filter })
       if (sequence !== loadSequence.current) return
+      setMatchingIds(result.matching_ids)
+      setRawAvailable(result.raw_available)
+      setLoadedScope(scope)
       setRecords(result.records)
-      setEventTypes(result.event_types)
-      if (eventType && !result.event_types.includes(eventType)) setEventType('')
-      setSelectedIds(previous => new Set([...previous].filter(id => result.records.some(record => record.id === id))))
+      setMediaRecordId(id => id && result.records.some(record => record.id === id) ? id : null)
+      setEventTypes(eventType && !result.event_types.includes(eventType) ? [...result.event_types, eventType] : result.event_types)
+      setSelectedIds(previous => new Set([...previous].filter(id => Object.prototype.hasOwnProperty.call(result.raw_available, id))))
       setStats({ count: result.count, total: result.total_bytes, cap: result.cap_bytes })
-      setFilteredCount(result.filtered_count ?? result.count)
       setError('')
     } catch {
       if (sequence !== loadSequence.current) return
@@ -85,33 +95,53 @@ export default function RecordsPage() {
     } finally {
       if (sequence === loadSequence.current) setLoading(false)
     }
-  }, [appName, endUnixMs, eventType, startUnixMs, timeRangeInvalid])
-
-  useEffect(() => { setEventType(''); setEventTypes([]) }, [appName])
+  }, [appName, endUnixMs, eventType, startUnixMs, timeRangeInvalid, filter, scope])
 
   useEffect(() => {
     setLoading(true)
     load()
     const timer = setInterval(load, 4000)
     return () => { clearInterval(timer); ++loadSequence.current }
-  }, [load])
+  }, [load, revision])
 
-  useEffect(() => { setSelectedIds(new Set()); setNotice('') }, [appName, eventType, filter, startTime, endTime])
+  useEffect(() => { setNotice('') }, [scope])
 
-  useEffect(() => {
-    const closeModal = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      setMediaRecord(null)
-      setDetailRecord(null)
-    }
-    window.addEventListener('keydown', closeModal)
-    return () => window.removeEventListener('keydown', closeModal)
+  const shown = records
+  const scopeReady = !loading && !error && !timeRangeInvalid && loadedScope === scope
+  const actionIds = selectedIds.size ? [...selectedIds] : matchingIds
+  const scopeLabel = selectedIds.size ? '所选' : '筛选结果'
+  const imageCount = actionIds.filter(id => rawAvailable[id]).length
+  const selectedMatching = matchingIds.filter(id => selectedIds.has(id)).length
+  const busy = clearing || exporting
+  const mediaRecord = shown.find(record => record.id === mediaRecordId)
+  const images = shown.filter(record => record.has_annotated_image || record.has_raw_image)
+  const imageIndex = images.findIndex(record => record.id === mediaRecordId)
+  const previousImageId = imageIndex > 0 ? images[imageIndex - 1].id : undefined
+  const nextImageId = imageIndex >= 0 ? images[imageIndex + 1]?.id : undefined
+  const viewingVideo = mediaRecord?.has_video && (medium === 'video' || imageIndex < 0)
+  const viewingRaw = mediaRecord?.has_raw_image && (medium === 'raw' || !mediaRecord.has_annotated_image)
+
+  const navigateImage = useCallback((id?: string) => {
+    if (!id) return
+    setMedium(current => current === 'video' ? 'annotated' : current)
+    setMediaRecordId(id)
   }, [])
 
-  const shown = records.filter(record => filter === 'all'
-    || (filter === 'data' && record.required_media.length === 0)
-    || (filter === 'image' && record.required_media.some(item => item.endsWith('_image')))
-    || (filter === 'video' && record.required_media.includes('video')))
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setMediaRecordId(null)
+        setDetailRecord(null)
+      } else if (imageIndex >= 0 && !event.altKey && !event.ctrlKey && !event.metaKey
+        && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        event.preventDefault()
+        const id = event.key === 'ArrowUp' ? previousImageId : nextImageId
+        navigateImage(id)
+      }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [imageIndex, previousImageId, nextImageId, navigateImage])
 
   const toggleSelection = (id: string) => setSelectedIds(previous => {
     const next = new Set(previous)
@@ -120,35 +150,33 @@ export default function RecordsPage() {
     return next
   })
 
-  const clearRecords = async () => {
-    const ids = [...selectedIds]
-    if (!appName || !confirm(ids.length
-      ? `确定清空所选 ${ids.length} 条告警记录及其图片、视频？此操作不可撤销。`
-      : `确定清空全部 ${stats.count} 条告警记录及其图片、视频？此操作不可撤销。`)) return
+  const clearRecords = async (wholeInbox = false) => {
+    const count = wholeInbox ? stats.count : actionIds.length
+    const target = wholeInbox ? '整个事件箱' : scopeLabel
+    if (!scopeReady || busy || !count || !confirm(`确定删除${target}的 ${count} 条告警记录及其图片、视频？此操作不可撤销。`)) return
     setClearing(true)
     setNotice('')
     try {
-      if (ids.length) {
-        const result = await deleteSelectedRecords(appName, ids)
-        setSelectedIds(new Set(result.failed_ids))
-        setNotice(result.failed_ids.length ? `已清空 ${result.deleted_ids.length} 条，${result.failed_ids.length} 条清空失败，可重试。` : `已清空 ${result.deleted_ids.length} 条所选记录。`)
-      } else {
+      if (wholeInbox) {
         await deleteAllRecords(appName)
         setSelectedIds(new Set())
-        setNotice('已清空全部记录。')
+        setNotice('已清空整个事件箱。')
+      } else {
+        const result = await deleteSelectedRecords(appName, actionIds)
+        setSelectedIds(new Set(result.failed_ids))
+        setNotice(`已删除 ${result.deleted_ids.length} 条记录。${result.failed_ids.length ? `另有 ${result.failed_ids.length} 条失败，已保留勾选，可重试。` : ''}`)
       }
-      await load()
-    } catch { setNotice('清空失败，请重试。') }
+      setRevision(value => value + 1)
+    } catch (error) { setNotice(apiErrorMessage(error)) }
     finally { setClearing(false) }
   }
 
   const exportImages = async () => {
-    if (!appName) return
-    const ids = selectedIds.size ? [...selectedIds] : undefined
+    if (!scopeReady || busy || !imageCount) return
     setExporting(true)
     setNotice('')
     try {
-      const result = await prepareRawImageExport(appName, ids)
+      const result = await prepareRawImageExport(appName, actionIds)
       const skipped = result.skipped_count ? `，跳过 ${result.skipped_count} 条没有原图的记录` : ''
       downloadToComputer(rawImageExportUrl(appName, result.download_id), result.filename)
       setNotice(`已开始下载 ${result.image_count} 张原图（ZIP 内按文件夹归档）${skipped}。${localDownloadHint}`)
@@ -184,8 +212,8 @@ export default function RecordsPage() {
 
   const openRecord = (record: EventRecord) => {
     if (record.has_video || record.has_annotated_image || record.has_raw_image) {
-      setShowRawImage(!record.has_annotated_image && record.has_raw_image)
-      setMediaRecord(record)
+      setMedium(filter === 'video' ? 'video' : 'annotated')
+      setMediaRecordId(record.id)
       return
     }
     openDetail(record)
@@ -200,23 +228,31 @@ export default function RecordsPage() {
       </span>
       <div className="records-header-actions">
         <button className="rec-btn" onClick={load}>↻ 刷新</button>
-        <button className="rec-btn" disabled={exporting || clearing || stats.count === 0}
-          onClick={exportImages}>{exporting ? '导出中…' : selectedIds.size ? '导出所选原始图片' : '导出全部原始图片'}</button>
-        <button className="rec-btn rec-btn-danger" disabled={clearing || exporting || stats.count === 0}
-          onClick={clearRecords}>{clearing ? '清空中…' : selectedIds.size ? '清空所选记录' : '清空全部'}
-        </button>
+        <button className="rec-btn" disabled={!scopeReady || busy || !imageCount}
+          onClick={exportImages}>{exporting ? '导出中…' : `导出${scopeLabel}原图（${scopeReady ? imageCount : '…'} 张）`}</button>
+        <button className="rec-btn rec-btn-danger" disabled={!scopeReady || busy || !actionIds.length}
+          onClick={() => clearRecords()}>{clearing ? '删除中…' : `删除${scopeLabel}（${scopeReady ? actionIds.length : '…'} 条）`}</button>
+        <button className="rec-btn rec-btn-danger" disabled={!scopeReady || busy || !stats.count}
+          onClick={() => clearRecords(true)}>清空整个事件箱（{stats.count} 条）</button>
       </div>
     </div>
     <div className="records-selection-bar">
-      <label><input type="checkbox" disabled={!shown.length || clearing || exporting}
-        checked={shown.length > 0 && shown.every(record => selectedIds.has(record.id))}
-        ref={element => { if (element) element.indeterminate = shown.some(record => selectedIds.has(record.id)) && !shown.every(record => selectedIds.has(record.id)) }}
-        onChange={event => setSelectedIds(event.target.checked ? new Set(shown.map(record => record.id)) : new Set())} />
-        全选</label>
-      {selectedIds.size > 0 && <span>已选择 {selectedIds.size} 条</span>}
+      <label><input type="checkbox" disabled={!scopeReady || !matchingIds.length || busy}
+        checked={scopeReady && !!matchingIds.length && selectedMatching === matchingIds.length}
+        ref={element => { if (element) element.indeterminate = scopeReady && selectedMatching > 0 && selectedMatching < matchingIds.length }}
+        onChange={event => {
+          const checked = event.target.checked
+          setSelectedIds(previous => {
+            const next = new Set(previous)
+            matchingIds.forEach(id => checked ? next.add(id) : next.delete(id))
+            return next
+          })
+        }} />
+        全选筛选结果</label>
+      {selectedIds.size > 0 && <span>已选择 {selectedIds.size} 条{scopeReady && selectedIds.size > selectedMatching && `（其中 ${selectedIds.size - selectedMatching} 条在当前筛选外）`}</span>}
       {selectedIds.size > 0 && <button className="rec-btn rec-btn-secondary" disabled={clearing || exporting}
         onClick={() => setSelectedIds(new Set())}>取消选择</button>}
-      <span className="records-save-hint">原图保存到电脑；不支持目录选择时下载 ZIP</span>
+      <span className="records-save-hint">原图以 ZIP 下载到电脑</span>
     </div>
     {notice && <div className="records-notice" role="status">{notice}</div>}
     <div className="records-toolbar">
@@ -258,7 +294,7 @@ export default function RecordsPage() {
           onClick={() => chooseTimePreset('all')}>清除时间</button>}
         <span className={`records-filter-summary ${timeRangeInvalid ? 'err' : ''}`}>
           {timeRangeInvalid ? '开始时间不能晚于结束时间'
-            : `显示 ${shown.length} / ${filteredCount} 条`}
+            : `显示 ${shown.length} / ${matchingIds.length} 条`}
         </span>
       </div>
     </div>
@@ -271,7 +307,7 @@ export default function RecordsPage() {
             const failed = Object.entries(record.media_statuses ?? {})
               .filter(([, state]) => state.status === 'failed')
             const visibleDeliveries = record.deliveries.slice(0, 1)
-            const mediaLabel = record.has_video ? '视频'
+            const mediaLabel = record.has_video ? (record.has_annotated_image || record.has_raw_image ? '图片 · 视频' : '视频')
               : record.has_annotated_image || record.has_raw_image ? '图片' : '仅数据'
             return <article key={record.id} className={`rec-card rec-card-clickable${selectedIds.has(record.id) ? ' selected' : ''}`}
               role="button" tabIndex={0} onClick={() => openRecord(record)}
@@ -342,44 +378,60 @@ export default function RecordsPage() {
                   <button className="rec-btn rec-btn-secondary"
                     onClick={() => openDetail(record)}>查看详情</button>{' '}
                   <button className="rec-btn" onClick={async () => {
-                    await retryRecord(appName!, record.id); load()
+                    await retryRecord(appName, record.id); setRevision(value => value + 1)
                   }}>重试发送</button>{' '}
                   <button className="rec-btn rec-btn-danger" onClick={async () => {
                     if (confirm('确定删除这条告警记录？')) {
-                      await deleteRecord(appName!, record.id); load()
+                      await deleteRecord(appName, record.id); setRevision(value => value + 1)
                     }
                   }}>删除</button>
                 </div>
             </article>
           })}</div>}
 
-    {mediaRecord && <div className="record-modal-backdrop" onClick={() => setMediaRecord(null)}>
-      <div className="record-media-dialog" role="dialog" aria-modal="true"
+    {mediaRecord && <div className="record-modal-backdrop" onClick={() => setMediaRecordId(null)}>
+      <div className="record-media-dialog" role="dialog" aria-modal="true" aria-labelledby="record-media-title"
         onClick={event => event.stopPropagation()}>
         <div className="record-modal-header">
           <div className="record-modal-heading">
-            <div className="record-modal-title">
-              {mediaRecord.has_video ? '告警视频' : '告警图片'}
+            <div className="record-modal-title" id="record-media-title">
+              {viewingVideo ? '告警视频' : '告警图片'}
             </div>
             <div className="record-modal-subtitle">
               {mediaRecord.channel_id == null ? '全局逻辑' : `通道 ${mediaRecord.channel_id}`} · {fmtTime(mediaRecord.snap_time)} · {mediaRecord.message || mediaRecord.event_type}
             </div>
           </div>
-          <button className="rec-btn rec-btn-secondary" onClick={() => setMediaRecord(null)}>关闭</button>
+          <button className="rec-btn rec-btn-secondary" onClick={() => setMediaRecordId(null)}>关闭</button>
         </div>
-        {!mediaRecord.has_video && mediaRecord.has_annotated_image && mediaRecord.has_raw_image &&
+        {imageIndex >= 0 &&
           <div className="record-media-toolbar">
-            <button className={`rec-btn ${showRawImage ? '' : 'active'}`}
-              onClick={() => setShowRawImage(false)}>标注图片</button>
-            <button className={`rec-btn ${showRawImage ? 'active' : ''}`}
-              onClick={() => setShowRawImage(true)}>原始图片</button>
+            <label className="record-image-select">
+              <input type="checkbox" autoFocus checked={selectedIds.has(mediaRecord.id)}
+                disabled={clearing || exporting} onChange={() => toggleSelection(mediaRecord.id)} />
+              选择此图
+            </label>
+            <div className="record-image-navigation">
+              <button className="rec-btn rec-btn-secondary" disabled={!previousImageId}
+                onClick={() => navigateImage(previousImageId)}>↑ 上一张</button>
+              <span>{imageIndex + 1} / {images.length}</span>
+              <button className="rec-btn rec-btn-secondary" disabled={!nextImageId}
+                onClick={() => navigateImage(nextImageId)}>↓ 下一张</button>
+            </div>
+            {mediaRecord.has_annotated_image &&
+              <button className={`rec-btn ${!viewingVideo && !viewingRaw ? 'active' : ''}`}
+                onClick={() => setMedium('annotated')}>标注图片</button>}
+            {mediaRecord.has_raw_image &&
+              <button className={`rec-btn ${!viewingVideo && viewingRaw ? 'active' : ''}`}
+                onClick={() => setMedium('raw')}>原始图片</button>}
+            {mediaRecord.has_video && <button className={`rec-btn ${viewingVideo ? 'active' : ''}`}
+              onClick={() => setMedium('video')}>视频</button>}
           </div>}
         <div className="record-media-stage">
-          {mediaRecord.has_video
+          {viewingVideo
             ? <video key={mediaRecord.id} className="record-media-content"
               src={recordVideoUrl(appName!, mediaRecord.id)} controls autoPlay playsInline />
-            : <img className="record-media-content"
-              src={recordImageUrl(appName!, mediaRecord.id, showRawImage)}
+            : <img key={mediaRecord.id} className="record-media-content"
+              src={recordImageUrl(appName!, mediaRecord.id, viewingRaw)}
               alt={mediaRecord.message || '告警图片'} />}
         </div>
       </div>

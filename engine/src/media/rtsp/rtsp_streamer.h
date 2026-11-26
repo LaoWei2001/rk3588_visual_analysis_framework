@@ -12,8 +12,7 @@
  *     在板上起 rtsp://<板IP>:<port><path>，无需引入新依赖。
  *   - 服务跑在【独立 GMainContext + 独立线程】，与 GTK 显示(若开启)互不干扰；
  *     无显示器(enable_display=false)时只要 enable_rtsp=true 也能对外推流。
- *   - 编码优先硬件 mpph264enc/mpph265enc，缺失时自动回退软件 x264enc/x265enc。
- *   - 可通过 rtsp_encoder="hw" 强制硬编；不支持强制软编。
+ *   - 输出固定为 H.264，自动优先硬件编码；拼接流在硬件不可用时回退软件编码。
  *   - 推帧用 g_signal_emit_by_name(appsrc,"push-buffer",...)，与采集端 pull-sample 风格一致，
  *     不需要链接 gstreamer-app。
  *

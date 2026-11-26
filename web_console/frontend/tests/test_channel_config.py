@@ -101,6 +101,13 @@ assert.equal(sparse.global.global_logics[0].enable,false);
 assert.equal(sparse.global.global_logics[0].poll_interval_ms,100);
 assert.deepEqual(sparse.global.global_logics[0].channels,[4]); // Direct stream -> global logic survives.
 assert.equal(sparse.channels[0].stream.loop,false);
+for (const url of ['rtsp://cam/live','rtsps://cam/live','http://cam/video','https://cam/video','/data/clip.mp4']) {
+  const source = {src_type:'rtsp', url, loop:true};
+  const saved = save(configToGraph({channels:[{id:0,stream:source,models:[]}]})).channels[0].stream;
+  assert.equal(saved.url, url);
+  assert.equal(saved.src_type, 'rtsp');
+  assert.equal(saved.loop, url.startsWith('/') ? true : undefined);
+}
 const {NATIVE_GLOBAL_DEFAULTS} = require('./src/components/GlobalSettingsPanel.tsx');
 const native = fs.readFileSync('../../engine/src/application/config/config.h','utf8');
 const defaults = {};
@@ -111,9 +118,11 @@ for (const [,type,key,raw] of native.matchAll(/(bool|int|float|std::string) (\w+
 assert.deepEqual(NATIVE_GLOBAL_DEFAULTS,defaults);
 for (const [key,value] of Object.entries(defaults)) assert.deepEqual(sparse.global[key],value,key);
 const rtsp = configToGraph({global:{rtsp_codec:'h265',rtsp_encoder:'hw',rtsp_path:'/custom',rtsp_port:9554,rtsp_bitrate:2048,enable_pause_key:1},channels:original.channels});
-assert.equal(save(rtsp).global.rtsp_codec,'h265');
+for (const key of ['rtsp_codec','rtsp_encoder','enable_pause_key']) {
+ assert.ok(!(key in save(rtsp).global));
+ assert.ok(!(key in rtsp.globalSettings));
+}
 assert.equal(save(rtsp).global.rtsp_path,'/custom');
-assert.equal(save(rtsp).global.enable_pause_key,1);
 const {updateNodeConfiguration} = require('./src/utils/reportSettings.ts');
 const reports = configToGraph({global:{},channels:[{...original.channels[1],logic:'logic_default',
  report_policy:{enabled:true,video_pre_sec:3,deliveries:[

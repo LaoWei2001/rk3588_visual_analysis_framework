@@ -6,20 +6,19 @@
 
 ## 在 Web 控制台使用
 
-1. 打开侧边栏的「图片推理」。模型来自已安装的程序包，无需启动对应的视频程序。
-2. 添加一个或多个模型，先选择「程序包」，再选择该程序包 `assets/` 中的 `.rknn` 模型和 `.txt` 标签。
-   每个模型可使用不同程序包；切换程序包会清空之前选择的模型文件和标签。
-   选择类型、模型文件后自动检查，显示输入尺寸与布局；检查中或不匹配时不能开始推理。
-   模型文件下拉菜单末尾的「导入模型…」可上传电脑上的 RKNN 到当前程序包 `assets/`，完成后自动选中并检查。
-   同名文件自动另存，保留原文件；标签通过程序包的资源管理维护。
-3. 选择图片来源：「电脑上传」支持单张或批量上传；「板端文件」支持输入板端图片
-   或文件夹的绝对路径，如 `/userdata/test.jpg`、`/userdata/pictures`。文件夹可勾选
-   「包括子文件夹」，点击「读取图片清单」预览后再「开始推理」，也可以直接开始。
+1. 打开侧边栏的「图片推理」，模型来源默认是「独立模型库」。只安装控制台即可使用。
+2. 选择模型类型，在「模型文件」中点「导入模型…」上传电脑上的 `.rknn`，需要标签的模型还可在「标签」中点「导入标签…」上传 `.txt`。
+   导入的文件可在以后的任务中直接选择。同名文件自动另存，模型检查通过后会显示输入尺寸和布局。
+   也可以把来源切换为已安装的程序包，直接使用其 `assets/` 下的模型和标签。每个模型可单独选来源，切换来源后重新选择文件。
+3. 在「待推理图片」中，点「选择图片」可从电脑上传一张或多张图片。点「选择板端文件夹」可浏览板端目录，
+   进入目标目录后点「使用此文件夹」，页面会显示找到的图片数量，展开可查看文件名。
+   默认只处理当前目录，勾选「包括子文件夹」会重新统计。确认范围后点「开始推理」即可逐张处理。
+   也可以切换到「板端文件」，手动输入单张图片或文件夹的绝对路径，然后点「预览图片」查看清单。
 4. 右侧紧凑的竖向图片列表支持独立滚动，点击后在左侧预览原图和推理图。
    配置栏支持拖动右侧边缘调整宽度，向左拖窄可收起，收起后可从边缘向右拖开；
    图标按钮也可收起、展开，已选图片和参数会保留。窄屏下预览自动上下排列。
    多模型任务可切换合并结果或单个模型。
-   原图和推理图保持比例铺满窗口，超出窗口的边缘会裁切。
+   原图和推理图均按原比例完整显示。点击任一张图进入大图对照，放大后拖动任一侧，两张图会同步移动。
 5. 单个 YOLO 目标检测模型（`yolov5`、`yolov8_det`）的成功结果可勾选或全选，点击「下载标签 TXT」。
    ZIP 中每张图片对应一个同名 TXT，每行是 `class_id x_center y_center width height`，坐标归一化到 0～1，
    不附带置信度。未检测到目标时生成空 TXT；重名图片按列表序号分目录保存。
@@ -31,7 +30,7 @@
 开始时将板端图片复制到任务私有目录；原始图片不会被修改，缓存清理也不会删除原文件。
 页面只显示当前批次；刷新后恢复当前批次状态和结果。
 
-从侧栏「图片推理」进入独立工作区，在页面内选择程序包及模型文件。图片任务参数不写回程序启动配置。
+从侧栏「图片推理」进入独立工作区，在页面内选择模型来源及文件。图片任务参数不写回程序启动配置。
 
 任务开始后会保存一份参数快照。结果表格显示这份实际参数，随后修改左侧表单不会改变旧任务。
 图片在批次内顺序处理，各模型沿用视频的并行执行和 NPU 调度；模型只加载一次。
@@ -54,7 +53,7 @@
 控制台引擎未安装或版本不兼容时会明确报错，不会回退调用业务程序。
 
 任务默认保存在 `/opt/ai_apps/_console/image_inference`，可用 `IMAGE_INFERENCE_ROOT` 修改。
-模型和标签来自 `/opt/ai_apps/<程序包>/assets/`。
+独立模型和标签默认保存在 `/opt/ai_apps/_console/model_assets/`，程序包资源仍保存在对应程序包的 `assets/`。
 独立引擎在 `/opt/ai_apps/_console/inference_runtime`（`IMAGE_INFERENCE_RUNTIME`）。
 结果缓存独立于视频程序。后台最多保留最近 5 个已结束批次的缓存，超出的缓存自动清理，
 避免结果持续占用磁盘；页面不提供历史列表或复用旧任务参数的功能。
@@ -64,7 +63,7 @@
 
 所有任务 API 均位于 `/api/image-inference`，不带程序名称。模型参数中的文件路径为板端绝对路径。
 `GET /api/apps` 提供程序包及其模型、标签清单；前端用程序包目录与资源相对路径组成绝对路径。
-图片推理原有的公共模型库查询、上传接口已移除。
+`GET /assets` 列出独立模型库的模型和标签绝对路径，`POST /assets/upload` 接收 multipart 文件字段 `file` 并返回落盘路径 `path` 和同名另存标记 `renamed`。
 `GET /models/info?path=...&model_type=...` 检查所选模型，返回与画布相同的兼容性结果和输入尺寸。
 电脑上传接口依次调用：
 
@@ -90,8 +89,9 @@ Python 的 [model_info.py](../../web_console/backend/services/model_info.py) 只
 不再依赖画布所属程序的 `vision_analysis` 文件来执行检查。C++ 调用示例、职责边界、缓存和画布流程见
 [模型检查 SDK](model-inspection.md)。
 
-板端路径 API（JSON 请求体）：
+板端路径 API
 
+- `GET /api/image-inference/device-folders?path=/userdata` 返回当前目录、上一级路径和可浏览的子文件夹名称。省略参数时从根目录开始。
 - `POST /api/image-inference/device-images`：`{"path":"/userdata/pictures","recursive":false}`，返回图片清单和大小。
 - `POST /api/image-inference/jobs/from-device`：同上并添加 `settings`，其格式与上传任务一致。
   提交时重新扫描并生成输入快照；后续任务状态、取消、结果和下载接口与电脑上传共用。
@@ -174,12 +174,12 @@ build/engine/image_inference_example yolov8_det /absolute/model.rknn /absolute/l
 ```sh
 cmake -S engine -B build/image-inference -DVISION_INFERENCE_ONLY=ON
 cmake --build build/image-inference --target image_inference_runner -j4
-bash web_console/build_image_runtime.sh /absolute/runtime-directory
+bash web_console/scripts/build_image_runtime.sh /absolute/runtime-directory
 ```
 
 独立构建不读取 `projects/`，不链接视频业务模块。`image_inference_runner` 和视频程序
 链接同一个 `Vision::Inference`，共享模型注册、预处理、后处理、阈值筛选与绘图。
-`web_console/build_image_runtime.sh` 一并部署锁定版本的 RKNN Runtime；
+`web_console/scripts/build_image_runtime.sh` 一并部署锁定版本的 RKNN Runtime；
 `install.sh online/offline` 和完整离线包构建均调用此步骤，新增模型后更新控制台即可使用。
 
 ## 命令行批量接口

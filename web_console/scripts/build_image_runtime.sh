@@ -5,7 +5,7 @@ if [ "$#" -ne 1 ]; then
     echo "Usage: $0 <runtime destination>" >&2
     exit 2
 fi
-image_project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+image_project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 image_build_dir="${IMAGE_INFERENCE_BUILD_DIR:-$image_project_root/build/image-inference}"
 image_destination="$1"
 cmake -S "$image_project_root/engine" -B "$image_build_dir" -DVISION_INFERENCE_ONLY=ON

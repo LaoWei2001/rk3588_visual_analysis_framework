@@ -127,7 +127,7 @@ class DecChannel
 
   protected:
     int createVideoDecChannel(bool start_thread = true); // RTSP 管道
-    int createFileDecChannel(bool start_thread = true);  // 本地文件管道
+    int createDecodedChannel(bool start_thread = true);  // 本地文件与 HTTP(S) 管道
     int createUsbDecChannel(bool start_thread = true);   // USB 摄像头管道
 
   private:

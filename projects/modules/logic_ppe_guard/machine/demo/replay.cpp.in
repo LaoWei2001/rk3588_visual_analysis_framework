@@ -1,0 +1,295 @@
+// Test driver only; .in keeps this main out of the firmware's recursive source glob.
+#include <cassert>
+#include <drawing.h>
+#include <iostream>
+#include <logic_session.h>
+#include <opencv2/opencv.hpp>
+#include <rendering.h>
+#include <string>
+
+extern const char *logic_embedded_catalog_json();
+namespace
+{
+const cv::Size size(960, 540);
+const std::vector<RoiZone> zones = {{"platform", {{180, 400}, {180, 275}, {540, 275}, {540, 400}}},
+                                    {"machine_door", {{435, 275}, {540, 275}, {540, 400}, {435, 400}}}};
+cv::Point screen(cv::Point p)
+{
+    return {p.x * size.width / 640, p.y * size.height / 640};
+}
+AlgoResult person(int track, int x, int y)
+{
+    AlgoResult result;
+    result.track_id = track;
+    result.score = 0.96f;
+    result.label = "person";
+    result.box = {x - 12, y - 57, 24, 58};
+    return result;
+}
+cv::Mat scene(const std::vector<AlgoResult> &people, double time)
+{
+    cv::Mat img(size, CV_8UC3, cv::Scalar(38, 33, 29));
+    cv::rectangle(img, screen({180, 275}), screen({540, 400}), {65, 76, 64}, -1);
+    cv::rectangle(img, screen({435, 275}), screen({540, 400}), {49, 75, 96}, -1);
+    for (int x = 105; x < 180; x += 10)
+        cv::line(img, screen({x, 278}), screen({x, 399}), {90, 90, 90}, 2);
+    auto text = [&](const std::string &s, cv::Point pt, int pixels) {
+        assert(draw_text_unicode(img, s, screen(pt), pixels, {210, 214, 215}, -1));
+    };
+    text("850T   /   轨迹模拟", {443, 42}, 23);
+    text("楼梯", {106, 435}, 17);
+    text("护栏平台", {264, 435}, 17);
+    text("机台入口带", {438, 435}, 17);
+    text("护栏外地面行人", {32, 575}, 18);
+    const char *stage = time < 1.8    ? "人员走向楼梯"
+                        : time < 6.2  ? "经楼梯入场，在场加一"
+                        : time < 7    ? "走入机台入口带，保存关键抓拍"
+                        : time < 10.9 ? "人员消失，在场保持"
+                        : time < 14   ? "滞留超时，关联进机抓拍"
+                        : time < 17.7 ? "人员换号返回，计时解除"
+                                      : "经楼梯离开，在场减一";
+    text(stage, {32, 622}, 22);
+    for (const auto &r : people)
+    {
+        cv::Point foot(r.box.x + 12, r.box.y + 57);
+        auto col = foot.y > 450 ? cv::Scalar(166, 155, 145) : cv::Scalar(217, 213, 105);
+        auto at = [&](int x, int y) { return screen(foot + cv::Point(x, y)); };
+        cv::circle(img, at(0, -55), 7, col, -1, cv::LINE_AA);
+        cv::line(img, at(0, -44), at(0, -22), col, 5);
+        cv::line(img, at(-9, -29), at(0, -40), col, 3);
+        cv::line(img, at(0, -40), at(9, -28), col, 3);
+        cv::line(img, at(0, -22), at(-6, 0), col, 3);
+        cv::line(img, at(0, -22), at(6, 0), col, 3);
+        cv::circle(img, at(0, 0), 3, col, -1);
+    }
+    return img;
+}
+int read(const vision::LogicSession &session, const char *key)
+{
+    int64_t value = 0;
+    assert(session.outputs().try_get_int(key, &value));
+    return int(value);
+}
+void render(cv::Mat &img, const std::vector<DrawCommand> &drawing)
+{
+    vision::OverlayOptions opts;
+    opts.show_fps = 0;
+    opts.inputW = opts.inputH = 640;
+    opts.draw_cmds = &drawing;
+    vision::render_overlays(img, opts);
+}
+
+void verify_doorway_id_change(int timeout_sec, int replacement_track)
+{
+    vision::LogicSessionOptions options;
+    options.channel.logic = "logic_ppe_guard";
+    options.channel.logic_parameters_json =
+        "{\"machine_enabled\":true,\"timeout_sec\":" + std::to_string(timeout_sec) + "}";
+    vision::LogicSession session(options);
+    auto tick = [&](int ms, std::vector<AlgoResult> people) {
+        vision::LogicFrame frame;
+        frame.results = &people;
+        frame.rois = &zones;
+        frame.frame_id = ms;
+        frame.video_time_ms = ms;
+        session.run(frame);
+    };
+    tick(0, {person(3, 150, 350)});
+    tick(100, {person(3, 205, 350)});
+    tick(200, {person(3, 295, 350)});
+    tick(300, {person(3, 370, 350)});
+    tick(400, {person(3, 425, 350)});
+    tick(500, {person(replacement_track, 450, 350)});
+    assert(read(session, "present_count") == 1 && session.events().size() == 1);
+    assert(session.events()[0].request.event_type == "machine_entry_evidence");
+    tick(1299, {});
+    assert(read(session, "hidden_count") == 0);
+    tick(1300, {});
+    assert(read(session, "hidden_count") == 1);
+    const int due = 500 + timeout_sec * 1000;
+    for (int ms = 2000; ms < due; ms += 1000)
+    {
+        tick(ms, {});
+        assert(read(session, "present_count") == 1 && session.events().empty());
+    }
+    tick(due - 1, {});
+    assert(read(session, "alarm_count") == 0 && session.events().empty());
+    tick(due, {});
+    assert(read(session, "alarm_count") == 1 && session.events().size() == 1);
+    const auto &alarm = session.events()[0].request;
+    assert(alarm.event_type == "machine_blind_timeout");
+    assert(alarm.fields.values().at("entry_event_id").text() == "replay-500-1");
+    tick(due + 1000, {});
+    assert(session.events().empty());
+    tick(due + 1100, {person(12, 443, 350)});
+    assert(read(session, "visible_count") == 1 && read(session, "hidden_count") == 0 && read(session, "alarm_count") == 0);
+    for (int i = 1; i <= 6; ++i)
+        tick(due + 1100 + i * 100, {person(12, 443 - i * 45, 350)});
+    assert(read(session, "present_count") == 0);
+}
+} // namespace
+
+int main(int argc, char **argv)
+{
+    if (argc != 2)
+        return 2;
+    const std::string out = argv[1];
+    vision::set_logic_catalog(logic_embedded_catalog_json());
+    verify_doorway_id_change(300, 7);
+    verify_doorway_id_change(600, -1);
+    vision::LogicSessionOptions opts;
+    opts.channel.logic = "logic_ppe_guard";
+    opts.channel.logic_parameters_json = R"({"machine_enabled":true,"missing_ms":500,"timeout_sec":4})";
+    vision::LogicSession session(opts);
+    cv::VideoWriter video(out + "/replay.avi", cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 10, size);
+    if (!video.isOpened())
+        return 3;
+    int entries = 0, alarms = 0;
+    std::string evidence;
+    for (int i = 0; i < 202; ++i)
+    {
+        const double t = i / 10.0;
+        std::vector<AlgoResult> people{person(77, 120 + i, 510)}; // Ground pedestrian, throughout the sequence.
+        if (i < 70 || i >= 140)
+        {
+            int x = i < 50    ? 90 + 5 * i
+                    : i < 67  ? 340 + (i - 50) * 8
+                    : i < 70  ? 476
+                    : i < 150 ? 470 - (i - 140) * 5
+                              : std::max(95, 420 - (i - 150) * 9);
+            people.push_back(person(i < 70 ? 4 : 19, x, 340));
+        }
+        cv::Mat raw = scene(people, t);
+        vision::LogicFrame frame;
+        frame.results = &people;
+        frame.rois = &zones;
+        frame.source = &raw;
+        frame.frame_id = i;
+        frame.video_time_ms = i * 100;
+        session.run(frame);
+        const int n = read(session, "present_count"), vis = read(session, "visible_count");
+        const int hidden = read(session, "hidden_count"), alarm = read(session, "alarm_count");
+        if (i == 10 || i == 193)
+            assert(n == 0 && vis == 0 && hidden == 0 && alarm == 0);
+        if (i == 45)
+            assert(n == 1 && vis == 1 && hidden == 0);
+        if (i == 85)
+            assert(n == 1 && vis == 0 && hidden == 1 && alarm == 0);
+        if (i == 115)
+            assert(n == 1 && vis == 0 && hidden == 1 && alarm == 1);
+        if (i == 145)
+            assert(n == 1 && vis == 1 && hidden == 0 && alarm == 0);
+        for (const auto &e : session.events())
+        {
+            if (e.request.event_type == "machine_entry_evidence")
+            {
+                ++entries;
+                evidence = "replay-" + std::to_string(i) + "-1";
+                cv::Mat entry = raw.clone();
+                render(entry, e.drawing);
+                assert(cv::imwrite(out + "/entry.jpg", entry));
+            }
+            if (e.request.event_type == "machine_blind_timeout")
+            {
+                ++alarms;
+                assert(!evidence.empty() && e.request.fields.values().at("entry_event_id").text() == evidence);
+                cv::Mat alarm_frame = raw.clone();
+                render(alarm_frame, e.drawing);
+                assert(cv::imwrite(out + "/timeout.jpg", alarm_frame));
+            }
+        }
+        render(raw, session.drawing());
+        video.write(raw);
+    }
+    assert(entries == 1 && alarms == 1);
+    // Two missing workers with active timers. Each local return can clear just one timer.
+    vision::LogicSession pair(opts);
+    int total_alerts = 0;
+    auto tick = [&](int ms, std::vector<AlgoResult> people, bool valid = true) {
+        vision::LogicFrame f;
+        f.results = &people;
+        f.rois = &zones;
+        f.video_time_ms = ms;
+        f.inference_valid = valid;
+        pair.run(f);
+        for (const auto &e : pair.events())
+            if (e.request.event_type == "machine_blind_timeout")
+                ++total_alerts;
+    };
+    int ms = 0;
+    for (int x = 145; x <= 475; x += 15)
+    {
+        tick(ms, {person(1, x, 325), person(2, x, 358)});
+        ms += 100;
+    }
+    assert(read(pair, "present_count") == 2);
+    for (int j = 0; j < 45; ++j)
+    {
+        tick(ms, {});
+        ms += 100;
+    }
+    assert(total_alerts == 2 && read(pair, "alarm_count") == 2);
+    tick(ms, {person(9, 475, 342)});
+    assert(read(pair, "visible_count") == 1 && read(pair, "hidden_count") == 1 && read(pair, "alarm_count") == 1);
+    tick(ms + 100, {person(9, 475, 342), person(10, 480, 352)});
+    assert(read(pair, "present_count") == 2 && read(pair, "hidden_count") == 0 && read(pair, "alarm_count") == 0);
+    // Lose both again. An actual stair entrant must add a third visit while both timers continue.
+    tick(ms + 200, {person(9, 415, 325), person(10, 415, 358)});
+    tick(ms + 1400, {person(9, 415, 325), person(10, 415, 358)});
+    tick(ms + 1500, {person(9, 450, 325), person(10, 450, 358)});
+    tick(ms + 2200, {person(20, 150, 330)});
+    tick(ms + 2300, {person(20, 200, 330)});
+    assert(read(pair, "present_count") == 3 && read(pair, "visible_count") == 1 && read(pair, "hidden_count") == 2);
+    // Simultaneous new IDs just outside the door rectangle (x < 435), both spatially compatible
+    // with both old visits. Ground passers-by and the stair entrant do not clear a hidden worker.
+    tick(ms + 2400, {person(20, 210, 330), person(88, 450, 510)});
+    assert(read(pair, "hidden_count") == 2);
+    tick(ms + 2500, {person(20, 210, 330), person(31, 430, 330), person(32, 429, 351)});
+    assert(read(pair, "visible_count") == 3 && read(pair, "present_count") == 3 && read(pair, "hidden_count") == 0);
+    // One anonymous observation at the door can keep only one visit visible.
+    tick(ms + 2600, {person(31, 450, 330), person(32, 450, 351)});
+    for (int dt = 2700; dt <= 6800; dt += 100)
+        tick(ms + dt, {person(-1, 450, 332), person(20, 210, 330)});
+    assert(read(pair, "visible_count") == 2 && read(pair, "hidden_count") == 1 && read(pair, "alarm_count") == 1);
+    // Start a fresh empty-platform session, lose a person away from the doorway, and drop inference.
+    pair.reset_state();
+    tick(0, {person(3, 150, 350)});
+    tick(100, {person(3, 210, 350)});
+    tick(200, {person(3, 270, 350)});
+    for (int j = 0; j < 55; ++j)
+        tick(300 + j * 100, {});
+    assert(read(pair, "present_count") == 1 && read(pair, "hidden_count") == 0 && read(pair, "alarm_count") == 0);
+    tick(5900, {}, false);
+    assert(read(pair, "visible_count") == -1 && read(pair, "present_count") == 1);
+    // One person outside the platform can trigger successive head and hand events.
+    opts.channel.logic_parameters_json =
+        R"({"machine_enabled":true,"check_workwear":false,"no_helmet_labels":"head","no_gloves_labels":"hand_bare"})";
+    vision::LogicSession ppe(opts);
+    AlgoResult worker = person(8, 0, 0);
+    worker.box = {100, 100, 100, 200};
+    AlgoResult part;
+    part.score = 0.94f;
+    int ppe_events = 0;
+    for (int t = 0; t <= 3500; t += 500)
+    {
+        part.label = t < 1500 ? "head" : "hand_bare";
+        part.box = t < 1500 ? cv::Rect(130, 100, 30, 30) : cv::Rect(100, 190, 20, 20);
+        std::vector<AlgoResult> results{worker, part};
+        vision::LogicFrame f;
+        f.video_time_ms = t;
+        f.results = &results;
+        ppe.run(f);
+        for (const auto &e : ppe.events())
+        {
+            assert(e.request.event_type == "logic_ppe_violation");
+            const auto &regions = e.request.fields.values().at("regions").text();
+            assert(regions.find(t < 1500 ? "未戴安全帽" : "未戴手套") != std::string::npos);
+            ++ppe_events;
+        }
+        if (t == 1000)
+            assert(ppe_events == 1);
+    }
+    assert(ppe_events == 2);
+    std::cout << "Verified entrance, ground rejection, blind hold, correlated evidence, single timeout, new ID return "
+                 "and exit.\n";
+}

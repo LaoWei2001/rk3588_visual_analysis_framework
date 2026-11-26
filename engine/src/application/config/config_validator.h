@@ -24,5 +24,4 @@ class ConfigValidator
     static bool validate_channels(const AppConfig &cfg, std::vector<ValidationError> &errors);
     static bool validate_channels_critical(const AppConfig &cfg, std::vector<ValidationError> &errors);
     static bool file_exists(const std::string &path);
-    static bool is_valid_url(const std::string &url);
 };

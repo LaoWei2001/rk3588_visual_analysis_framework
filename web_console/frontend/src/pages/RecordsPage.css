@@ -477,11 +477,26 @@ video.rec-thumb:fullscreen {
 
 .record-media-toolbar {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 9px 14px;
   background: #171d29;
   border-bottom: 1px solid #30384c;
 }
+
+.record-image-select,
+.record-image-navigation {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #e2e8f0;
+  font-size: 13px;
+}
+
+.record-image-select { cursor: pointer; }
+.record-image-navigation { margin-right: auto; }
+.record-image-navigation span { font-variant-numeric: tabular-nums; }
 
 .record-media-stage {
   flex: 1;
@@ -526,7 +541,7 @@ video.rec-thumb:fullscreen {
 
 .rec-card.selected { border-color: #60a5fa; box-shadow: inset 3px 0 #3b82f6; }
 .rec-select { flex: 0 0 44px; display: grid; place-items: center; cursor: pointer; }
-.rec-select input, .records-selection-bar input { width: 17px; height: 17px; accent-color: #3b82f6; cursor: pointer; }
+.rec-select input, .records-selection-bar input, .record-image-select input { width: 17px; height: 17px; accent-color: #3b82f6; cursor: pointer; }
 .records-selection-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 10px 18px; border-bottom: 1px solid #30384c; color: #94a3b8; font-size: 12px; }
 .records-selection-bar label { display: flex; align-items: center; gap: 8px; color: #e2e8f0; cursor: pointer; }
 .records-save-hint { margin-left: auto; }

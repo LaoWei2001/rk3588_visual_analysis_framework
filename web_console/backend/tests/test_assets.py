@@ -49,7 +49,7 @@ def test_app_scanner_counts_only_real_asset_files(tmp_path, monkeypatch):
     (assets_dir / "config.JSON").write_text("{}", encoding="utf-8")
 
     monkeypatch.setattr(app_scanner, "APPS_ROOT", tmp_path)
-    monkeypatch.setattr(app_scanner, "get_status", lambda _name: {
+    monkeypatch.setattr(app_scanner, "get_status", lambda _name, observed: {
         "status": "stopped", "pid": None, "uptime_seconds": None,
     })
     monkeypatch.setattr(app_scanner, "get_vision_settings", lambda _name: {

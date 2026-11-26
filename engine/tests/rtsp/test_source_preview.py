@@ -50,10 +50,11 @@ def main(binary):
             channels.append(dict(id=index, enable=True, models=[], max_fps=10,
                                  stream=dict(src_type='file', url=str(video), loop=True), logic='',
                                  report_policy=dict(enabled=False, deliveries=[])))
+        # Each grid tile stays within RGA scaling limits even for the 4K source.
         config = root / 'config.json'
         config.write_text(json.dumps({'global': dict(enable_display=False, enable_rtsp=True,
-            rtsp_port=port, rtsp_path='/preview', rtsp_codec='h264', rtsp_encoder='hw',
-            disp_width=320, disp_height=180, tile_rows=2, tile_cols=2, tracker_enable=0,
+            rtsp_port=port, rtsp_path='/preview',
+            disp_width=1280, disp_height=720, tile_rows=2, tile_cols=2, tracker_enable=0,
             performance_display=False, global_logics=[]), 'channels': channels}))
         control = root / 'control.sock'
         with (root / 'engine.log').open('w+') as log:
@@ -72,6 +73,15 @@ def main(binary):
                             pass
                         assert time.monotonic() < deadline, 'preview never became available'
                         time.sleep(.1)
+                    if index == 0:
+                        probe = subprocess.run(['ffprobe', '-v', 'error', '-rtsp_transport', 'tcp',
+                            '-select_streams', 'v:0', '-show_entries', 'stream=codec_name,width,height',
+                            '-of', 'json', f'rtsp://127.0.0.1:{port}/preview'],
+                            capture_output=True, check=True, timeout=20)
+                        stream = json.loads(probe.stdout)['streams'][0]
+                        assert stream['codec_name'] == 'h264', stream
+                        assert (stream['width'], stream['height']) == (1280, 720), stream
+                        print('PASS: grid output is H.264 without encoder/codec configuration', flush=True)
                     assert (response['width'], response['height']) == expected_size, response
                     assert 'preview_resolutions' not in response
                     second = command(control, 'acquire', index, 'second-viewer')

@@ -61,6 +61,20 @@ def test_autostart_and_running_intent_both_required(isolated):
     assert not calls
 
 
+def test_terminal_instance_defers_recovery_until_it_exits(isolated, monkeypatch):
+    calls, _ = isolated
+    runtime_state.set_vision_autostart('demo', True)
+    runtime_state.mark_vision_started('demo', 'production.json')
+    terminal = {'other': {'status': 'running', 'pid': 42, 'launch_source': 'command_line'}}
+    monkeypatch.setattr(pm, 'installed_video_processes', lambda: terminal)
+    agent = manager.Manager()
+    assert agent.tick()['current'] == {'app': 'other', **terminal['other']}
+    assert not calls
+    terminal.clear()
+    assert agent.tick()['current']['app'] == 'demo'
+    assert calls == [('demo', 'production.json')]
+
+
 def test_disabled_policy_is_loaded_by_running_agent(isolated):
     calls, _ = isolated
     runtime_state.set_vision_autostart('demo', True)
@@ -316,5 +330,7 @@ def test_package_install_stops_under_runtime_lock_and_preserves_external_data(is
     monkeypatch.setattr(pm, 'stop_all_apps_for_install_unlocked', stop)
     result = package_install.install(source, 'demo')
     assert result['stopped_apps'] == ['demo']
-    assert (destination / pm.BINARY_NAME).read_bytes() == (source / pm.BINARY_NAME).read_bytes()
+    assert (destination / (pm.BINARY_NAME + '.bin')).read_bytes() == (source / pm.BINARY_NAME).read_bytes()
+    assert (destination / pm.BINARY_NAME).read_text().startswith('#!/usr/bin/python3 -I')
+    assert not (destination / 'run.sh').exists()
     assert (external / 'keep').read_bytes() == b'event'

@@ -43,10 +43,10 @@ struct ConfigFixture
         rmdir(directory.c_str());
     }
     bool accepts(const char *channel_logic, const char *global_logic = nullptr,
-                 const char *policy = R"({"enabled":false,"deliveries":[]})", const char *channel_extra = "")
+                 const char *policy = R"({"enabled":false,"deliveries":[]})", const char *channel_extra = "", const char *global_extra = "")
     {
         std::ofstream file(path);
-        file << R"({"global":{"enable_display":false,"enable_rtsp":false,"tracker_enable":0)";
+        file << R"({"global":{"enable_display":false,"enable_rtsp":false,"tracker_enable":0)" << global_extra;
         if (global_logic)
             file << R"(,"global_logics":[{"instance_id":"test","enable":true,"logic":")" << global_logic
                  << R"(","channels":[0],"logic_parameters":{},"report_policy":)" << policy << "}]";
@@ -79,6 +79,34 @@ int main(int argc, char **)
         })");
 
     ConfigFixture fixture;
+    const std::string source_prefix = R"({"global":{},"channels":[{"id":0,"stream":{"src_type":"rtsp","url":")";
+    for (const bool reload : {false, true})
+    {
+        for (const std::string &address : std::vector<std::string>{
+                 "rtsp://camera/live", "rtsps://camera/live", "http://camera/video", "https://camera/video",
+                 fixture.source, "ftp://camera/video", "relative.mp4"})
+        {
+            std::ofstream(fixture.path) << source_prefix << address << R"("}}]})";
+            AppConfig config;
+            if (reload)
+                config.config_path = "HOTRELOAD";
+            const bool valid = address != "ftp://camera/video" && address != "relative.mp4";
+            assert(load_config(fixture.path, config) == valid);
+            if (valid)
+                assert(config.channels.at(0).stream.src_type == (address == fixture.source ? "file" : "rtsp"));
+        }
+        for (int invalid_id : {0, -1, 9999})
+        {
+            std::ofstream(fixture.path) << source_prefix << fixture.source << R"("}},{"id":)" << invalid_id
+                                        << R"(,"stream":{"src_type":"file","url":")" << fixture.source << R"("}}]})";
+            AppConfig config;
+            if (reload)
+                config.config_path = "HOTRELOAD";
+            assert(!load_config(fixture.path, config));
+        }
+    }
+    for (const char *removed : {R"(,"rtsp_codec":"h265")", R"(,"rtsp_encoder":"hw")", R"(,"enable_pause_key":true)"})
+        assert(!fixture.accepts("channel_only", nullptr, "{}", "", removed));
     // There is no hidden per-channel override: each model node controls itself.
     ChannelConfig channel;
     assert(!config_utils::is_channel_infer_enabled(channel));
@@ -123,22 +151,16 @@ int main(int argc, char **)
     // Reloading a smaller file must reset every omitted global setting.
     assert(fixture.accepts("channel_only", nullptr, "{}", R"(,"tracker_enable":-1)"));
     AppConfig reused;
-    reused.enable_pause_key = true;
     reused.performance_display = false;
     reused.rtsp_port = 9554;
     reused.rtsp_path = "/old";
     reused.rtsp_bitrate = 1234;
-    reused.rtsp_codec = "h265";
-    reused.rtsp_encoder = "hw";
     assert(load_config(fixture.path, reused));
     const AppConfig defaults;
-    assert(reused.enable_pause_key == defaults.enable_pause_key);
     assert(reused.performance_display == defaults.performance_display);
     assert(reused.rtsp_port == defaults.rtsp_port);
     assert(reused.rtsp_path == defaults.rtsp_path);
     assert(reused.rtsp_bitrate == defaults.rtsp_bitrate);
-    assert(reused.rtsp_codec == defaults.rtsp_codec);
-    assert(reused.rtsp_encoder == defaults.rtsp_encoder);
     assert(reused.channels.size() == 1 && reused.channels[0].tracker_enable == 0);
     assert(!reused.channels[0].stream.loop);
     // Numeric and boolean switch encodings agree with the canvas.

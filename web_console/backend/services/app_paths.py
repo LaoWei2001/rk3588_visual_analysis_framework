@@ -1,4 +1,5 @@
 """Shared application and configuration path boundaries for HTTP routes."""
+import json
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -37,3 +38,27 @@ def config_target(app: Path, path: str) -> Path:
     if target.suffix != ".json":
         raise HTTPException(400, "只允许访问 .json 配置文件")
     return target
+
+
+def read_runtime_config(app: Path) -> dict:
+    """Select the current instance's configuration, or the last selection while stopped."""
+    from services.process_manager import get_status
+    status = get_status(app.name)
+    config_name = status.get("config")
+    if not config_name:
+        if status.get("launch_source") == "command_line":
+            raise HTTPException(409, "命令行运行配置不在程序的 assets 配置列表中")
+        try:
+            config_name = (app / "run.config").read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            pass
+    target = config_target(app, config_name or "config.json")
+    try:
+        config = json.loads(target.read_text(encoding="utf-8"))
+        if not isinstance(config, dict):
+            raise ValueError("配置必须是 JSON 对象")
+        return config
+    except (ValueError, OSError) as exc:
+        if status.get("launch_source") == "command_line":
+            raise HTTPException(409, "无法读取命令行实例的运行配置") from exc
+        return {}

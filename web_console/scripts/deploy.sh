@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 
 if [ "$#" -ne 0 ]; then
-    echo "[错误] web_console/deploy.sh 是内部部署器，不接受参数。" >&2
+    echo "[错误] web_console/scripts/deploy.sh 是内部部署器，不接受参数。" >&2
     echo "       请在项目根目录执行 sudo ./install.sh <online|offline>。" >&2
     exit 2
 fi
@@ -14,7 +14,8 @@ fi
 APPS_ROOT="${APPS_ROOT:-/opt/ai_apps}"
 INSTALL_DIR="${INSTALL_DIR:-$APPS_ROOT/_console}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CONSOLE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$CONSOLE_DIR/.." && pwd)"
 PYTHON_BIN="/usr/bin/python3"
 DIST_STAGE=""
 
@@ -39,7 +40,7 @@ echo "=== RK3588 Web Console 部署 ==="
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
     echo "[错误] 未找到 ffmpeg，网页实时画面无法进行 RTSP 零转码封装。" >&2
-    echo "       请先在项目根目录运行 install_deps.sh。" >&2
+    echo "       请先在项目根目录运行 tools/setup/install_deps.sh。" >&2
     exit 1
 fi
 
@@ -82,7 +83,7 @@ bash "$SCRIPT_DIR/build_image_runtime.sh" "$INSTALL_DIR/inference_runtime"
 
 rm -rf -- "$INSTALL_DIR/backend"
 mkdir -p "$INSTALL_DIR/backend"
-cp -a "$SCRIPT_DIR/backend/." "$INSTALL_DIR/backend/"
+cp -a "$CONSOLE_DIR/backend/." "$INSTALL_DIR/backend/"
 
 # 2. 部署根安装器或离线包已经准备好的前端。
 echo "[2/4] 部署预构建前端..."
@@ -98,7 +99,7 @@ deploy_frontend_dist() {
     DIST_STAGE=""
 }
 
-FRONTEND_DIST="$SCRIPT_DIR/frontend/dist"
+FRONTEND_DIST="$CONSOLE_DIR/frontend/dist"
 if [ ! -f "$FRONTEND_DIST/index.html" ]; then
     FRONTEND_DIST="/usr/share/vision-analysis/frontend/dist"
 fi
@@ -112,7 +113,7 @@ echo "    已部署：$FRONTEND_DIST"
 
 # 可替换的图片文件（不存在也没关系）
 for imgfile in logo.png img.png; do
-    src="$SCRIPT_DIR/frontend/$imgfile"
+    src="$CONSOLE_DIR/frontend/$imgfile"
     if [ -f "$src" ]; then
         cp "$src" "$INSTALL_DIR/frontend/$imgfile"
         echo "    已复制 $imgfile"
@@ -122,8 +123,8 @@ done
 # 随机 logo 目录：用户把图片/GIF 放进 frontend/logos/，每次打开网页随机取一张。
 # 用 -n（no-clobber）合并：重装时【保留】板子上已放的图片，只补缺失的文件
 # （首装时播种 logo.png + README；之后你在板子上加的图不会被覆盖）。
-if [ -d "$SCRIPT_DIR/frontend/logos" ]; then
-    cp -rn "$SCRIPT_DIR/frontend/logos" "$INSTALL_DIR/frontend/"
+if [ -d "$CONSOLE_DIR/frontend/logos" ]; then
+    cp -rn "$CONSOLE_DIR/frontend/logos" "$INSTALL_DIR/frontend/"
     echo "    已准备随机 logo 目录: $INSTALL_DIR/frontend/logos/  (把图片/GIF 放这里)"
 fi
 
@@ -143,10 +144,12 @@ echo "[3/4] 安装 Web systemd 服务..."
     printf 'Environment="APPS_ROOT=%s"\n' "$APPS_ROOT"
     printf 'Environment="IMAGE_INFERENCE_RUNTIME=%s/inference_runtime"\n' "$INSTALL_DIR"
     printf 'Environment="IMAGE_INFERENCE_ROOT=%s/image_inference"\n' "$INSTALL_DIR"
+    echo 'Environment="RK_CONSOLE_START_SOCKET=/run/rk3588-console-start.sock"'
+    echo 'Environment=RK_CONSOLE_PORT=8080'
     echo 'Environment="BINARY_NAME=vision_analysis"'
     printf 'Environment="VISION_PYTHON=%s"\n' "$PYTHON_BIN"
     echo "ExecStartPre=-/usr/bin/nm-online -q --timeout=30"
-    printf 'ExecStart="%s" -m uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --log-level info\n' "$PYTHON_BIN"
+    printf 'ExecStart="%s" -m uvicorn main:app --host 0.0.0.0 --port ${RK_CONSOLE_PORT} --workers 1 --log-level info\n' "$PYTHON_BIN"
     echo "Restart=always"
     echo "RestartSec=5"
     echo "WatchdogSec=60"
@@ -170,8 +173,9 @@ systemctl enable rk3588-console
 
 # 4. 启动
 echo "[4/4] 启动 Web 服务..."
-systemctl restart rk3588-console
-sleep 2
+port_args=()
+if [[ -n ${RK_CONSOLE_INSTALL_PORT:-} ]]; then port_args=(--port "$RK_CONSOLE_INSTALL_PORT"); fi
+console_port="$("$PYTHON_BIN" "$SCRIPT_DIR/console_port.py" install "${port_args[@]}")"
 systemctl status rk3588-console --no-pager
 
 LAN_IP=$(ip route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++){if($i=="src"){print $(i+1);exit}}}')
@@ -179,7 +183,7 @@ if [ -z "$LAN_IP" ]; then
     LAN_IP=$(hostname -I | awk '{print $NF}')
 fi
 echo ""
-echo "✓ 安装完成！访问地址: http://${LAN_IP}:8080"
+echo "✓ 安装完成！访问地址: http://${LAN_IP}:$console_port"
 echo "  程序根目录: $APPS_ROOT"
 echo "  控制台目录: $INSTALL_DIR"
 echo "  Python: $PYTHON_BIN（系统环境）"

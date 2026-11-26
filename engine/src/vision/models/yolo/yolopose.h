@@ -81,7 +81,7 @@ class YoloPose : public ModelBase
     int process_quantized(const T *input, int grid_h, int grid_w, int stride, std::vector<float> &boxes,
                           std::vector<float> &boxScores, std::vector<int> &classId, int32_t zp, float scale, int index);
     int process_fp32(float *input, int grid_h, int grid_w, int stride, std::vector<float> &boxes,
-                     std::vector<float> &boxScores, std::vector<int> &classId, int32_t zp, float scale, int index);
+                     std::vector<float> &boxScores, std::vector<int> &classId, int index);
 
     int post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std::vector<AlgoResult> &results);
     void softmax(float *input, int size);
@@ -98,7 +98,7 @@ class YoloPose : public ModelBase
 
     int model_w_ = 640;
     int model_h_ = 640;
-    int model_c_ = 3;
+
     bool is_quant_ = false;
 
     /* 当前已跑通的 RKNN Pose 布局为 3 个 DFL 检测头 + 1 个关键点输出。

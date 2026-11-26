@@ -1,12 +1,13 @@
 #include "display.h"
 
 #include "application/runtime/app_ctrl.h"
-#include "application/runtime/pause_ctrl.h"
 #include "application/runtime/process_signals.h"
 #include "application/runtime/service_watchdog.h"
 #include "common/logging.h"
 #include "logic/context_access.h"
+#include "text_overlay.h"
 #include "vision/inference/inference_engine.h"
+#include "vision/inference/npu_core_gate.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -36,10 +37,9 @@ bool channel_uses_depth_background(const ChannelConfig *channel)
 vision::OverlayOptions channel_render_params(const ChannelContext &ctx)
 {
     vision::OverlayOptions p;
-    const cv::Mat *frame = ctx.business_frame();
     p.chnId = ctx.chnId;
-    p.inputW = frame ? frame->cols : 0;
-    p.inputH = frame ? frame->rows : 0;
+    p.inputW = ctx.business_width();
+    p.inputH = ctx.business_height();
     p.disp_fps = ctx.disp_fps;
     p.infer_fps = ctx.infer_fps;
     p.result_frame_id = ctx.frame_id;
@@ -75,6 +75,24 @@ void render_runtime_performance_overlay(cv::Mat &bgr, const vision::OverlayOptio
     vision::render_performance_overlay(bgr, effective, cache);
 }
 
+static void draw_inference_failure(cv::Mat &view)
+{
+    const int height = std::max(12, std::min(view.rows / 18, view.cols / 12));
+    const int margin = std::max(2, height / 3);
+    const cv::Point origin(margin, height + margin);
+    const cv::Scalar white(255, 255, 255), outline(0, 0, 100);
+    const std::string label = "NPU 推理已停止";
+    if (draw_text_unicode_cached(view, label, origin, height, white, 1, true, outline, 2))
+        return;
+    // Some bundled FreeType builds only accept a three-channel destination, including for glyph masks.
+    draw_text_unicode(view, label, origin, height, outline, 3);
+    if (draw_text_unicode(view, label, origin, height, white, -1))
+        return;
+    const double scale = height / 30.0;
+    cv::putText(view, "NPU inference stopped", origin, cv::FONT_HERSHEY_SIMPLEX, scale, outline, 3, cv::LINE_AA);
+    cv::putText(view, "NPU inference stopped", origin, cv::FONT_HERSHEY_SIMPLEX, scale, white, 1, cv::LINE_AA);
+}
+
 void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms, vision::OverlayCache *performance_cache)
 {
     if (bgr.empty() || !app_ctrl_has_channel(chn_id))
@@ -96,10 +114,15 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms, 
 
     pthread_mutex_lock(&g_pCtrl->chn_mtx[chn_id]);
     const ChannelState &state = g_pCtrl->channels_state[chn_id];
-    results = state.last_results;
-    commands = state.draw_cmds;
-    state.append_global_draw_commands(&commands);
-    logic_frame = state.logic_display_frame;
+    const bool failed = npu::CoreLease::failed() && state.infer_runtime_enable && channel->enable &&
+                        config_utils::is_channel_infer_enabled(*channel);
+    if (!failed)
+    {
+        results = state.last_results;
+        commands = state.draw_cmds;
+        state.append_global_draw_commands(&commands);
+        logic_frame = state.logic_display_frame;
+    }
     disp_fps = state.preview_rate.value();
     network_rtt_ms = state.network_rtt_ms;
     result_frame_id = state.published_frame_seq;
@@ -123,7 +146,7 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms, 
     if (params.inputW <= 0 || params.inputH <= 0)
         return;
     params.disp_fps = file_paused ? 0.0f : disp_fps;
-    params.infer_fps = file_paused ? 0.0f : inference_get_infer_fps(chn_id);
+    params.infer_fps = file_paused || failed ? 0.0f : inference_get_infer_fps(chn_id);
     params.show_network_rtt = channel->stream.src_type == "rtsp";
     params.network_rtt_ms = network_rtt_ms;
     params.result_frame_id = result_frame_id;
@@ -136,6 +159,8 @@ void render_channel_view(cv::Mat &bgr, int chn_id, uint64_t frame_timestamp_ms, 
     params.results = &results;
     params.draw_cmds = &commands;
     render_runtime_overlays(bgr, params, performance_cache);
+    if (failed)
+        draw_inference_failure(bgr);
 }
 
 char **dispBufferMap(Display_t *dispDesc)
@@ -185,11 +210,6 @@ bool display_try_lock()
 static gboolean showWidget(GtkWidget *pImage)
 {
     service_watchdog::main_heartbeat();
-    if (g_pause_toggle_signal)
-    {
-        g_pause_toggle_signal = 0;
-        pause_ctrl::toggle();
-    }
     if (g_shutdown_signal)
         app_ctrl_request_stop();
 
@@ -216,40 +236,7 @@ static gboolean showWidget(GtkWidget *pImage)
 
     return G_SOURCE_CONTINUE;
 }
-/*======================== 暂停键: GTK 键盘事件处理 ========================*/
-/* 保存窗口指针和原始标题，用于在暂停/恢复时更新标题栏 */
-static GtkWidget *g_main_window = nullptr;
-static std::string g_win_title;
 
-/**
- * GTK key-press-event 回调.
- * 仅在 暂停键配置开启 时生效 (由 toggle() 内部判断).
- * 按下空格键切换暂停/运行状态，并同步更新窗口标题以提示用户。
- */
-static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer user_data)
-{
-    (void)widget;
-    (void)user_data;
-    if (event->keyval == GDK_KEY_space)
-    {
-        pause_ctrl::toggle();
-        /* 更新窗口标题: 暂停时加 [PAUSED] 提示，恢复后还原 */
-        if (g_main_window)
-        {
-            if (pause_ctrl::is_paused())
-            {
-                std::string t = g_win_title + " [FILES PAUSED - SPACE to resume]";
-                gtk_window_set_title(GTK_WINDOW(g_main_window), t.c_str());
-            }
-            else
-            {
-                gtk_window_set_title(GTK_WINDOW(g_main_window), g_win_title.c_str());
-            }
-        }
-        return TRUE; /* 事件已处理，不再向下传递 */
-    }
-    return FALSE;
-}
 
 /* —— 无图形会话(SSH / VS Code Remote / systemd 服务)拉起时，也能连上板端 HDMI 的 X(:0) ——
  * 现象：这些场景下 shell 没有指向本地 :0 的 DISPLAY、也没有 XAUTHORITY cookie，gtk_init 连不上 X，
@@ -351,15 +338,6 @@ static GtkWidget *disp_init(const char *strWinTitle, int32_t width, int32_t heig
         gtk_window_set_title(GTK_WINDOW(pWindow), strWinTitle);
         gtk_window_set_default_size(GTK_WINDOW(pWindow), width, height);
 
-        /* 挂接键盘事件 — 仅在 pause_ctrl 已启用时有实际意义;
-         * 即使功能关闭，连接信号也无害：toggle() 内部会直接返回。
-         * gtk_widget_add_events 确保窗口接收键盘事件。 */
-        gtk_widget_add_events(pWindow, GDK_KEY_PRESS_MASK);
-        g_signal_connect(pWindow, "key-press-event", G_CALLBACK(on_key_press), NULL);
-
-        /* 保存窗口指针和标题，供 on_key_press 更新标题栏 */
-        g_main_window = pWindow;
-        g_win_title = strWinTitle ? strWinTitle : "";
     }
     else
     {

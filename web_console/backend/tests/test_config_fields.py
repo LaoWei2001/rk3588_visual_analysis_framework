@@ -39,6 +39,7 @@ def config():
 
 
 @pytest.mark.parametrize('path,key', [
+    (('global',), 'rtsp_codec'), (('global',), 'rtsp_encoder'), (('global',), 'enable_pause_key'),
     ((), 'model_path'), (('global',), 'obj_thresh'), (('channels', 0), 'model_path'),
     (('channels', 0), 'swap_rb'), (('channels', 0), 'report_parameters'),
     (('global', 'global_logics', 0), 'report_parameters'),

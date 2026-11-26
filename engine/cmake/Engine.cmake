@@ -14,7 +14,6 @@ set(runtime_srcs
     src/application/runtime/runtime_status.cpp
     src/application/runtime/app_ctrl.cpp
     src/application/runtime/channel_snapshot.cpp
-    src/application/runtime/pause_ctrl.cpp
     src/application/runtime/publication_signal.cpp
     src/application/runtime/service_watchdog.cpp
     src/application/runtime/shutdown_status.cpp

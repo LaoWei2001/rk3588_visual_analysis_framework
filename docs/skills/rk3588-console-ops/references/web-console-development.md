@@ -19,7 +19,7 @@ Axios、XYFlow 和 xterm。目录职责以当前源码为准：
 | `web_console/frontend/src/components/` | 编辑器、服务、契约等组件 |
 | `web_console/frontend/src/features/terminal/` | 终端页面、会话、输入和显示效果 |
 | `web_console/frontend/src/nodes/`、`store/`、`utils/` | 画布节点、状态与配置转换 |
-| `web_console/deploy.sh` | 控制台部署实现，由根目录 `install.sh` 调用 |
+| `web_console/scripts/deploy.sh` | 控制台部署实现，由根目录 `install.sh` 调用 |
 
 数据集功能的具体分层与协议见[数据集架构](../../../architecture/dataset-collection.md)。
 新增进程管理规则应放共享运行库，避免 Web 和设备守护进程各自实现一份。

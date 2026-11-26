@@ -89,7 +89,6 @@ void YoloPose::query_model_info()
 
     if (in_attr_.fmt == RKNN_TENSOR_NCHW)
     {
-        model_c_ = in_attr_.dims[1];
         model_h_ = in_attr_.dims[2];
         model_w_ = in_attr_.dims[3];
     }
@@ -97,7 +96,6 @@ void YoloPose::query_model_info()
     {
         model_h_ = in_attr_.dims[1];
         model_w_ = in_attr_.dims[2];
-        model_c_ = in_attr_.dims[3];
     }
 
     out_attrs_.clear();
@@ -393,7 +391,7 @@ float YoloPose::box_iou(float xmin0, float ymin0, float xmax0, float ymax0, floa
 }
 
 int YoloPose::process_fp32(float *input, int grid_h, int grid_w, int stride, std::vector<float> &boxes,
-                           std::vector<float> &boxScores, std::vector<int> &classId, int32_t zp, float scale, int index)
+                           std::vector<float> &boxScores, std::vector<int> &classId, int index)
 {
     int input_loc_len = 64;
     int obj_class_num = 1;
@@ -530,7 +528,7 @@ int YoloPose::post_process(rknn_output *outputs, YoloPoseLetterBoxInfo &lb, std:
                                   objProbs, classId, out_attrs_[i].zp, out_attrs_[i].scale, index);
         else
             validCount += process_fp32(static_cast<float *>(outputs[i].buf), grid_h, grid_w, stride, filterBoxes,
-                                       objProbs, classId, out_attrs_[i].zp, out_attrs_[i].scale, index);
+                                       objProbs, classId, index);
         index += grid_h * grid_w;
     }
 

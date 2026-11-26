@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # RK3588 视觉分析框架统一管理入口。
-# 用户只需要从项目根目录调用本脚本；各组件目录中的安装器是内部实现与故障修复入口。
+# 只更新 Web 控制台前端时，使用根目录下的 update_webconsole.sh。
 set -Eeuo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,23 +8,27 @@ CONSOLE_UNIT="rk3588-console.service"
 GPIO_CONTROL_UNIT="rk3588-gpio-control.service"
 GPIO_RESTORE_UNIT="rk3588-gpio-restore.service"
 GPIO_SERVICE_INSTALLER="$PROJECT_ROOT/services/framework/gpio_state/install.sh"
-WEB_CONSOLE_DEPLOYER="$PROJECT_ROOT/web_console/deploy.sh"
+WEB_CONSOLE_DEPLOYER="$PROJECT_ROOT/web_console/scripts/deploy.sh"
 WATCHDOG_INSTALLER="$PROJECT_ROOT/services/framework/system_watchdog/install_watchdog.py"
 RUNTIME_INSTALLER="$PROJECT_ROOT/services/framework/runtime_manager/install_runtime.py"
 
 usage() {
     cat <<'EOF'
+本脚本用于安装或升级整个 RK3588 平台。若只更新网页，请运行 ./update_webconsole.sh
+
 用法：
-  sudo ./install.sh online              联网准备全部依赖并部署平台
-  sudo ./install.sh offline             使用已有依赖构建前端并离线部署平台
+  sudo ./install.sh online [--port 端口]   联网准备全部依赖并部署平台
+  sudo ./install.sh offline [--port 端口]  使用已有依赖构建前端并离线部署平台
   ./install.sh status                   查看平台、GPIO和Web服务状态
   sudo ./install.sh uninstall [--yes]   卸载平台服务，保留应用和GPIO持久状态
 
 说明：
-  online 适合仍可访问 APT、PyPI 和 npm 镜像的新设备。
-  offline 适合已经准备好依赖的设备；缺少前端产物时使用本地依赖构建。
+  端口可选，首次安装默认 8080，更新时沿用已配置的端口。例如：sudo ./install.sh offline --port 9090
+  online 适合可通过网络访问 APT、PyPI 和 npm 镜像的新设备。
+  offline 适合无法访问网络但已经准备好依赖的设备；缺少前端产物时使用本地依赖构建。
   完整离线 bundle 首次部署仍直接运行 bundle 根目录的 install_offline.sh。
   安装同时接入硬件看门狗和独立故障恢复监测；未识别硬件时会明确报告。
+  硬件看门狗的相关内容对不同开发板的适配工作量较高，所以本项目未适配其他的开发板。
 EOF
 }
 
@@ -169,7 +173,7 @@ install_platform() {
 
     if [ "$mode" = online ]; then
         echo ">>> [1/3] 准备项目全部依赖和预构建前端..."
-        bash "$PROJECT_ROOT/install_deps.sh"
+        bash "$PROJECT_ROOT/tools/setup/install_deps.sh"
     else
         echo ">>> [1/3] 检查已经准备好的离线环境..."
         check_offline_source_environment
@@ -182,7 +186,7 @@ install_platform() {
     python3 "$RUNTIME_INSTALLER"
 
     echo ">>> [3/3] 部署 Web 控制台..."
-    bash "$WEB_CONSOLE_DEPLOYER"
+    RK_CONSOLE_INSTALL_PORT="$console_port" bash "$WEB_CONSOLE_DEPLOYER"
 
     echo
     echo "[完成] 平台安装成功。以后统一使用："
@@ -221,6 +225,8 @@ uninstall_platform() {
         /etc/systemd/system/rk3588-recovery.timer \
         /etc/systemd/system/rk3588-recovery.service \
         "/etc/systemd/system/$CONSOLE_UNIT" \
+        "/etc/systemd/system/$CONSOLE_UNIT.d/99-web-console-port.conf" \
+        "/etc/systemd/system/$CONSOLE_UNIT.d/.port.lock" \
         "/etc/systemd/system/$GPIO_CONTROL_UNIT" \
         "/etc/systemd/system/$GPIO_RESTORE_UNIT" \
         /usr/local/bin/rk3588-gpioctl \
@@ -242,7 +248,8 @@ command_name="${1:-}"
 [ "$#" -eq 0 ] || shift
 case "$command_name" in
     online|offline)
-        [ "$#" -eq 0 ] || { echo "[错误] $command_name 不接受额外参数。" >&2; exit 2; }
+        if [[ $# -eq 1 && ( $1 == --help || $1 == -h ) ]]; then usage; exit 0; fi
+        console_port="$(python3 "$PROJECT_ROOT/web_console/scripts/console_port.py" select "$@")"
         install_platform "$command_name"
         ;;
     status)

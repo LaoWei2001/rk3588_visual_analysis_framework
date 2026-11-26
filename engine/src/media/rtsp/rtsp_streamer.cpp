@@ -75,8 +75,6 @@ int rtsp_streamer_init(void)
         g_st.path = g_pCtrl->config.rtsp_path.empty() ? "/live" : g_pCtrl->config.rtsp_path;
         g_st.fps = constants::PREVIEW_MAX_FPS;
         g_st.bitrate = g_pCtrl->config.rtsp_bitrate > 0 ? g_pCtrl->config.rtsp_bitrate : 4096;
-        g_st.codec = g_pCtrl->config.rtsp_codec.empty() ? "h264" : g_pCtrl->config.rtsp_codec;
-        g_st.encoder = g_pCtrl->config.rtsp_encoder.empty() ? "auto" : g_pCtrl->config.rtsp_encoder;
         pthread_rwlock_unlock(&g_pCtrl->mtx);
     }
     if (!enabled)
@@ -179,8 +177,8 @@ int rtsp_streamer_init(void)
         g_preview_ready.store(true);
     }
     printf("[RTSP] streaming composited view at rtsp://<board-ip>:%d%s "
-           "(codec=%s, %dfps, %dx%d)\n",
-           g_st.port, g_st.path.c_str(), g_st.codec.c_str(), g_st.fps, g_st.width, g_st.height);
+           "(H.264, %dfps, %dx%d)\n",
+           g_st.port, g_st.path.c_str(), g_st.fps, g_st.width, g_st.height);
     return 0;
 }
 

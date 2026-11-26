@@ -202,8 +202,8 @@ copy_project_source "$CURRENT_SOURCE"
     || { echo "[错误] 当前源码缺少根构建入口 build.sh。" >&2; exit 1; }
 [ -x "$CURRENT_SOURCE/install_app.sh" ] \
     || { echo "[错误] 当前源码缺少可执行的 App 安装入口 install_app.sh。" >&2; exit 1; }
-[ -x "$CURRENT_SOURCE/web_console/deploy.sh" ] \
-    || { echo "[错误] 当前源码缺少可执行的 Web 控制台部署器 web_console/deploy.sh。" >&2; exit 1; }
+[ -x "$CURRENT_SOURCE/web_console/scripts/deploy.sh" ] \
+    || { echo "[错误] 当前源码缺少可执行的 Web 控制台部署器 web_console/scripts/deploy.sh。" >&2; exit 1; }
 [ -f "$CURRENT_SOURCE/install.sh" ] \
     || { echo "[错误] 当前源码缺少统一管理入口 install.sh。" >&2; exit 1; }
 

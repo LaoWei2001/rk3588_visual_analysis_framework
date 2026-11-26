@@ -34,6 +34,7 @@ def console(tmp_path, monkeypatch):
         pytest.skip('Build frontend first')
     app, state = FastAPI(), {}
     # Any endpoint not simulated below must stay isolated from board records.
+    monkeypatch.setattr(routes, 'console_root', tmp_path / '_console')
     monkeypatch.setattr(routes, 'image_jobs', ImageJobs(tmp_path / 'jobs', routes.catalog))
 
     packages = [
@@ -57,7 +58,8 @@ def console(tmp_path, monkeypatch):
         for package in packages:
             uploaded = [f'assets/{path.name}' for path in sorted((state['package_root'] / package['name'] / 'assets').glob('*.rknn'))
                         if f'assets/{path.name}' not in package['models']]
-            result.append(dict(package, models=package['models'] + uploaded))
+            result.append(dict(package, models=package['models'] + uploaded, config_files=[],
+                               status='stopped', active_config='', videos=[], unreported=0))
         return state.get('packages', result)
 
     @app.get(BASE + '/capabilities')
@@ -125,8 +127,33 @@ def console(tmp_path, monkeypatch):
         assert job_id == state['upload_id']
         data = await request.body()
         assert len(data) == state['upload']['files'][index]['size']
+        if state.get('fail_upload_index') == index:
+            state.pop('fail_upload_index')
+            upload = state['upload']
+            state['job'] = dict(id=job_id, status='paused_storage', resume_phase='upload',
+                created_at=time.time(), settings=upload['settings'], source=dict(kind='upload'),
+                total=len(upload['files']), completed=0, error='存储空间不足：需保留超过 100 MB',
+                items=[dict(index=i, **file, status='pending', uploaded=i in state['uploaded'])
+                       for i, file in enumerate(upload['files'])])
+            return Response(json.dumps({'detail': state['job']['error']}), status_code=507, media_type='application/json')
+        state.setdefault('upload_calls', []).append(index)
         state['uploaded'][index] = len(data)
         return {'received': len(data)}
+
+    @app.post(BASE + '/jobs/{job_id}/resume', status_code=202)
+    def resume_job(job_id: str):
+        state['resume_calls'] = state.get('resume_calls', 0) + 1
+        job = state['job']
+        assert job['id'] == job_id and job['status'] == 'paused_storage'
+        if state.get('disk_full'):
+            return Response(json.dumps({'detail': '存储空间不足，请清理后继续'}), status_code=507, media_type='application/json')
+        job['error'] = ''
+        job['status'] = 'uploading' if job.get('resume_phase') == 'upload' else 'completed'
+        if job['status'] == 'completed':
+            for item in job['items']:
+                item.update(status='success', result=f"{item['index']:06d}/result.json")
+            job['completed'] = job['total']
+        return job
 
     @app.post(BASE + '/jobs/{job_id}/submit', status_code=202)
     def submit(job_id: str):
@@ -139,14 +166,6 @@ def console(tmp_path, monkeypatch):
         state['discarded_upload'] = job_id
         state['uploaded'] = {}
         return {'ok': True}
-
-    @app.post(BASE + '/device-images')
-    async def inspect(request: Request):
-        data = await request.json()
-        state['preview'] = data
-        names = ['first.png', 'nested/second.png'] if data['recursive'] else ['first.png']
-        return dict(**data, is_directory=True, total=len(names), total_bytes=100 * len(names),
-                    images=[dict(name=name, path=data['path'] + '/' + name, size=100) for name in names])
 
     @app.post(BASE + '/jobs/from-device', status_code=202)
     async def create_device(request: Request):
@@ -209,14 +228,14 @@ def test_multi_model_upload_views_and_reload(console):
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto(url + '/image-inference')
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         page.get_by_label('模型 1 文件', exact=True).select_option('/packages/demo/assets/first.rknn')
         page.get_by_label('模型 1 标签文件', exact=True).select_option('/packages/demo/assets/labels.txt')
         expect(page.get_by_label('模型 1 置信度阈值', exact=True)).not_to_be_visible()
         page.get_by_label('模型 1 参数', exact=True).click()
         page.get_by_label('模型 1 置信度阈值', exact=True).fill('0.2')
         page.get_by_role('button', name='＋ 添加模型', exact=False).click()
-        page.get_by_label('模型 2 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 2 来源', exact=True).select_option('demo')
         page.get_by_label('模型 2 文件', exact=True).select_option('/packages/demo/assets/second.rknn')
         page.get_by_label('模型 2 标签文件', exact=True).select_option('/packages/demo/assets/labels.txt')
         page.get_by_label('模型 2 参数', exact=True).click()
@@ -263,7 +282,7 @@ def test_multi_model_upload_views_and_reload(console):
         page.get_by_label('结果视图', exact=True).select_option('all')
         expect(page.locator('[data-view="inference"] img')).to_have_attribute('src', re.compile(r'annotated\.jpg'))
         page.reload()
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         expect(page.locator('.image-result-title')).to_contain_text('first.png')
         expect(page.get_by_label('任务记录', exact=True)).to_have_count(0)
         expect(page.get_by_role('button', name='使用此任务参数', exact=True)).to_have_count(0)
@@ -303,7 +322,7 @@ def test_current_batch_cancel_reload_and_new_submission(console):
         page.on('request', lambda request: requests.append((request.method, request.url.split('?')[0])))
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto(url + '/image-inference')
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         expect(page.get_by_text('选择图片，开始推理', exact=True)).to_be_visible()
         page.get_by_label('模型 1 文件', exact=True).select_option('/packages/demo/assets/first.rknn')
         page.get_by_label('模型 1 标签文件', exact=True).select_option('/packages/demo/assets/labels.txt')
@@ -320,7 +339,7 @@ def test_current_batch_cancel_reload_and_new_submission(console):
         expect(page.get_by_role('link', name='下载整批结果', exact=True)).to_have_count(0)
         expect(page.get_by_role('button', name='下载标签 TXT', exact=False)).to_be_disabled()
         page.reload()
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         expect(page.locator('.image-result-title')).to_contain_text('first.png')
         page.get_by_role('button', name='2. second.png', exact=False).click()
         expect(page.locator('.image-result-title')).to_contain_text('second.png')
@@ -333,7 +352,7 @@ def test_current_batch_cancel_reload_and_new_submission(console):
         expect(page.get_by_label('选择标签 1. next.png', exact=True)).not_to_be_checked()
         assert state['job']['id'] != first_id
         page.reload()
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         expect(page.locator('.image-result-title')).to_contain_text('next.png')
         assert state['current_requests'] >= 3
         assert ('GET', url + BASE + '/jobs') not in requests
@@ -353,7 +372,7 @@ def test_clear_records_retry_stale_poll_reload_and_new_submission(console):
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.on('request', lambda request: delete_requests.append(request.url) if request.method == 'DELETE' else None)
         page.goto(url + '/image-inference')
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         clear = page.get_by_role('button', name='清除记录', exact=True)
         expect(clear).to_have_count(0)
         page.get_by_label('模型 1 文件', exact=True).select_option('/packages/demo/assets/first.rknn')
@@ -413,7 +432,7 @@ def test_clear_records_retry_stale_poll_reload_and_new_submission(console):
         expect(page.get_by_label('模型 1 置信度阈值', exact=True)).to_have_value('0.2')
         assert page.get_by_label('选择图片', exact=True).evaluate('el => el.files.length') == 2
         page.reload()
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         expect(page.get_by_label('模型 1 文件', exact=True)).to_be_visible()
         expect(page.get_by_text('选择图片，开始推理', exact=True)).to_be_visible()
         expect(page.locator('.image-result-title')).to_have_count(0)
@@ -427,8 +446,13 @@ def test_clear_records_retry_stale_poll_reload_and_new_submission(console):
         browser.close()
 
 
-def test_device_folder_preview_submission_and_reload(console):
+def test_device_folder_preview_submission_and_reload(console, tmp_path):
     url, state = console
+    folder = tmp_path / '测试图片'
+    (folder / 'nested').mkdir(parents=True)
+    (folder / 'first.png').write_bytes(PNG)
+    (folder / 'nested' / 'second.png').write_bytes(PNG)
+    (folder / 'notes.txt').write_text('ignore')
     expect = playwright.expect
     with playwright.sync_playwright() as pw:
         browser = pw.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'),
@@ -439,30 +463,41 @@ def test_device_folder_preview_submission_and_reload(console):
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto(url + '/image-inference')
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         page.get_by_label('模型 1 文件', exact=True).select_option('/packages/demo/assets/first.rknn')
         page.get_by_label('模型 1 标签文件', exact=True).select_option('/packages/demo/assets/labels.txt')
         page.get_by_label('模型 1 参数', exact=True).click()
         page.get_by_label('模型 1 置信度阈值', exact=True).fill('0.2')
-        page.get_by_label('选择图片来源', exact=True).select_option(label='板端文件')
-        page.get_by_label('板端图片或文件夹路径', exact=True).fill('/userdata/测试图片')
-        page.get_by_role('button', name='读取图片清单', exact=True).click()
+        browse = page.get_by_role('button', name='选择板端文件夹', exact=True)
+        browse.click()
+        dialog = page.get_by_role('dialog', name='选择板端文件夹')
+        dialog.get_by_role('button', name='取消').click()
+        expect(page.get_by_label('选择图片来源', exact=True)).to_have_value('upload')
+        browse.click()
+        for name in folder.parts[1:]:
+            dialog.get_by_role('button', name=name, exact=True).click()
+        dialog.get_by_role('button', name='nested', exact=True).click()
+        expect(dialog.get_by_text('没有下一级文件夹', exact=False)).to_be_visible()
+        dialog.get_by_role('button', name='上一级').click()
+        expect(dialog.get_by_role('button', name='nested', exact=True)).to_be_visible()
+        dialog.get_by_role('button', name='使用此文件夹').click()
+        expect(page.get_by_label('板端图片或文件夹路径', exact=True)).to_have_value(str(folder))
         expect(page.locator('.image-device-preview')).to_contain_text('找到 1 张图片')
         page.get_by_label('包括子文件夹', exact=True).check()
-        expect(page.locator('.image-device-preview')).to_have_count(0)
-        page.get_by_role('button', name='读取图片清单', exact=True).click()
         expect(page.locator('.image-device-preview')).to_contain_text('找到 2 张图片')
-        assert state['preview'] == dict(path='/userdata/测试图片', recursive=True)
+        page.get_by_text('找到 2 张图片', exact=True).click()
+        expect(page.locator('.image-device-preview li')).to_have_text(['first.png', 'nested/second.png'])
+        assert 'device_request' not in state
         page.get_by_role('button', name='开始推理 · 1 个模型', exact=True).click()
         expect(page.locator('.image-result-title')).to_contain_text('first.png')
         expect(page.locator('.image-result .image-source-origin')).to_be_visible()
-        expect(page.locator('.image-result .image-source-origin')).to_contain_text('/userdata/测试图片/first.png')
-        assert state['device_request']['path'] == '/userdata/测试图片'
+        expect(page.locator('.image-result .image-source-origin')).to_contain_text(str(folder / 'first.png'))
+        assert state['device_request']['path'] == str(folder)
         assert state['device_request']['recursive'] is True
         assert state['settings']['models'][0]['obj_thresh'] == .2
         assert_comparison(page, models=1)
         page.reload()
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         expect(page.locator('.image-result-title')).to_contain_text('first.png')
         page.get_by_role('button', name='2. nested/second.png', exact=False).click()
         expect(page.locator('.image-result-title')).to_contain_text('nested/second.png')
@@ -487,7 +522,7 @@ def test_model_selection_validation_retry_and_late_response(console):
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto(url + '/image-inference')
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         model = page.get_by_label('模型 1 文件', exact=True)
         kind = page.get_by_label('模型 1 类型', exact=True)
         check = page.get_by_role('status', name='模型 1 检查', exact=True)
@@ -537,7 +572,7 @@ def test_model_selection_validation_retry_and_late_response(console):
         expect(check).to_contain_text('640 × 640')
         expect(start).to_be_enabled()
         page.get_by_role('button', name='添加模型', exact=False).click()
-        page.get_by_label('模型 2 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 2 来源', exact=True).select_option('demo')
         page.get_by_label('模型 2 文件', exact=True).select_option('/packages/demo/assets/first.rknn')
         page.get_by_label('模型 2 类型', exact=True).select_option('yolov5')
         expect(page.get_by_role('status', name='模型 2 检查', exact=True)).to_contain_text('3 个输出张量')
@@ -561,7 +596,7 @@ def test_package_selection(console):
         page = context.new_page(); errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto(url + '/image-inference')
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         page.get_by_label('模型 1 文件', exact=True).select_option('/packages/demo/assets/first.rknn')
         page.get_by_label('模型 1 标签文件', exact=True).select_option('/packages/demo/assets/labels.txt')
         page.get_by_label('选择图片', exact=True).set_input_files(dict(name='image.png', mimeType='image/png', buffer=PNG))
@@ -584,7 +619,7 @@ def test_page_scroll_reaches_model_controls_and_results(console, viewport):
         page = browser.new_page(viewport=viewport)
         page.add_init_script("localStorage.setItem('rk3588-auth', JSON.stringify({state:{token:'test',username:'tester'},version:0}))")
         page.goto(url + '/image-inference')
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         expect(page.get_by_label('模型 1 文件', exact=True)).to_be_visible()
         page.get_by_label('模型 1 设置', exact=True).click()
         expect(page.get_by_label('模型 1 文件', exact=True)).not_to_be_visible()
@@ -599,8 +634,13 @@ def test_page_scroll_reaches_model_controls_and_results(console, viewport):
             expect(page.get_by_role('button', name='开始推理 · 1 个模型', exact=True)).to_be_in_viewport()
         add = page.get_by_role('button', name='＋ 添加模型', exact=False)
         add.click()
-        expect(page.get_by_label('模型 2 文件', exact=True)).to_have_count(0)
-        page.get_by_label('模型 2 程序包', exact=True).select_option('demo')
+        expect(page.get_by_label('模型 2 文件', exact=True)).to_be_visible()
+        for number in (1, 2):
+            heading = page.get_by_label(f'模型 {number} 设置', exact=True).locator('span').bounding_box()
+            remove = page.get_by_role('button', name=f'移除模型 {number}', exact=True).bounding_box()
+            assert 0 <= remove['x'] - heading['x'] - heading['width'] <= 12
+            assert abs(remove['y'] + remove['height'] / 2 - heading['y'] - heading['height'] / 2) < 4
+        page.get_by_label('模型 2 来源', exact=True).select_option('demo')
         expect(page.get_by_label('模型 2 文件', exact=True)).to_be_visible()
         # Longer multi-model content still scrolls after compacting the default view.
         metrics = panel.evaluate('el => ({overflow:getComputedStyle(el).overflowY, height:el.clientHeight, total:el.scrollHeight})')
@@ -634,7 +674,7 @@ def test_collapsible_config_and_vertical_result_list(console, viewport):
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto(url + '/image-inference')
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         model = page.get_by_label('模型 1 文件', exact=True)
         model.select_option('/packages/demo/assets/first.rknn')
         page.get_by_label('模型 1 标签文件', exact=True).select_option('/packages/demo/assets/labels.txt')
@@ -704,7 +744,7 @@ def test_config_edge_drag_resize_collapse_and_restore(console, width):
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto(url + '/image-inference')
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         model = page.get_by_label('模型 1 文件', exact=True)
         model.select_option('/packages/demo/assets/first.rknn')
         page.get_by_label('模型 1 标签文件', exact=True).select_option('/packages/demo/assets/labels.txt')
@@ -790,7 +830,7 @@ def test_select_and_download_yolo_labels_through_real_backend(console):
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto(url + '/image-inference')
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         page.get_by_label('模型 1 文件', exact=True).select_option('/packages/demo/assets/first.rknn')
         page.get_by_label('模型 1 标签文件', exact=True).select_option('/packages/demo/assets/labels.txt')
         page.get_by_label('选择图片', exact=True).set_input_files([
@@ -831,7 +871,7 @@ def test_select_and_download_yolo_labels_through_real_backend(console):
         export.click()
         expect(page.get_by_role('alert')).to_contain_text('结果数据不完整')
         expect(export).to_be_enabled()
-        # Both previews fill their stages, including after resizing the window.
+        # Both previews start uncropped at either width.
         for width in (1500, 768):
             page.set_viewport_size({'width': width, 'height': 1000})
             for stage in page.locator('.image-stage').all():
@@ -840,13 +880,33 @@ def test_select_and_download_yolo_labels_through_real_backend(console):
                     return {fit:getComputedStyle(image).objectFit, width:image.clientWidth,
                             height:image.clientHeight, stageWidth:el.clientWidth, stageHeight:el.clientHeight};
                 }''')
-                assert geometry['fit'] == 'cover'
+                assert geometry['fit'] == 'contain'
                 assert geometry['width'] == geometry['stageWidth'] and geometry['height'] == geometry['stageHeight']
+        expect(page.get_by_role('button', name=re.compile(r'^(铺满|完整显示)$'))).to_have_count(0)
+        page.set_viewport_size({'width': 390, 'height': 844})
+        page.get_by_role('button', name='放大查看原图', exact=True).click()
+        viewer = page.get_by_role('dialog', name='原图与推理图联动对照')
+        viewer.get_by_role('button', name='放大', exact=True).click()
+        panes = viewer.locator('.comparison-pan')
+        box = panes.first.bounding_box()
+        x, y = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
+        page.mouse.move(x, y)
+        page.mouse.down()
+        page.mouse.move(x + 30, y + 20)
+        page.mouse.up()
+        transforms = panes.locator('img').evaluate_all('(els) => els.map(el => getComputedStyle(el).transform)')
+        assert transforms[0] == transforms[1]
+        matrix = [float(v) for v in transforms[0][7:-1].split(',')]
+        assert matrix[0] == matrix[3] == 2 and matrix[4] > 0 and matrix[5] > 0
+        viewer.get_by_role('button', name='复位', exact=True).click()
+        expect(viewer.locator('output')).to_have_text('100%')
+        page.keyboard.press('Escape')
+        expect(viewer).to_have_count(0)
         expect(page.get_by_role('link', name='下载原图')).to_have_count(0)
         expect(page.get_by_role('link', name='下载推理图')).to_have_count(0)
         expect(page.get_by_role('button', name='清除记录', exact=True)).to_have_text('清除记录')
         page.reload()
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         expect(page.get_by_label('选择标签 1. first.png', exact=True)).not_to_be_checked()
         expect(export).to_be_disabled()
         assert not errors
@@ -864,11 +924,11 @@ def test_package_cascade_keeps_models_and_labels_together(console):
         requests = []
         page.on('request', lambda request: requests.append(request.url))
         page.goto(url + '/image-inference')
-        package = page.get_by_label('模型 1 程序包', exact=True)
+        package = page.get_by_label('模型 1 来源', exact=True)
         model = page.get_by_label('模型 1 文件', exact=True)
         label = page.get_by_label('模型 1 标签文件', exact=True)
         expect(package).to_be_visible()
-        expect(model).to_have_count(0)
+        expect(model).to_be_visible()
         expect(page.get_by_label('上传模型 1 文件', exact=True)).to_have_count(0)
         package.select_option('demo')
         expect(model.locator('option')).to_have_text(['选择模型', 'first.rknn', 'second.rknn', 'broken.rknn', 'valid.rknn', '导入模型…'])
@@ -885,7 +945,7 @@ def test_package_cascade_keeps_models_and_labels_together(console):
         model.select_option('/packages/other/assets/first.rknn')
         label.select_option('/packages/other/assets/other.txt')
         page.get_by_role('button', name='添加模型', exact=False).click()
-        page.get_by_label('模型 2 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 2 来源', exact=True).select_option('demo')
         page.get_by_label('模型 2 文件', exact=True).select_option('/packages/demo/assets/second.rknn')
         page.get_by_label('模型 2 标签文件', exact=True).select_option('/packages/demo/assets/labels.txt')
         expect(package).to_have_value('other')
@@ -894,13 +954,13 @@ def test_package_cascade_keeps_models_and_labels_together(console):
         assert [m['model_path'] for m in state['settings']['models']] == [
             '/packages/other/assets/first.rknn', '/packages/demo/assets/second.rknn']
         package.select_option('empty')
-        expect(model.locator('option')).to_have_text(['该程序包暂无 .rknn 文件', '导入模型…'])
+        expect(model.locator('option')).to_have_text(['暂无 .rknn 文件', '导入模型…'])
         expect(page.get_by_role('button', name='开始推理 · 2 个模型', exact=True)).to_be_disabled()
         state['packages'] = []
         page.reload()
-        expect(package.locator('option')).to_have_text(['暂无程序包，请先安装'])
-        expect(model).to_have_count(0)
-        assert not any('/image-inference/assets' in url for url in requests)
+        expect(package.locator('option')).to_have_text(['独立模型库'])
+        expect(model).to_be_visible()
+        assert any('/image-inference/assets' in url for url in requests)
         # Recover from a package-list failure without silently reusing stale choices.
         page.route('**/api/apps?*', lambda route: route.fulfill(status=503, json={'detail': '程序包列表读取失败'}), times=1)
         page.reload()
@@ -908,6 +968,34 @@ def test_package_cascade_keeps_models_and_labels_together(console):
         state.pop('packages')
         page.get_by_role('button', name='重试', exact=True).click()
         expect(package.locator('option')).to_have_count(5)
+        browser.close()
+
+
+def test_standalone_model_and_label_import_without_packages(console):
+    url, state = console
+    state['packages'] = []
+    expect = playwright.expect
+    with playwright.sync_playwright() as pw:
+        browser = pw.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'),
+                                    headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
+        page = browser.new_page()
+        page.add_init_script("localStorage.setItem('rk3588-auth', JSON.stringify({state:{token:'test',username:'tester'},version:0}))")
+        page.goto(url + '/image-inference')
+        source = page.get_by_label('模型 1 来源', exact=True)
+        expect(source.locator('option')).to_have_text(['独立模型库'])
+        for title, filename in [('模型 1 文件', 'det.rknn'), ('模型 1 标签文件', 'person.txt')]:
+            field = page.get_by_label(title, exact=True)
+            with page.expect_file_chooser() as chooser:
+                field.select_option('__import__')
+            chooser.value.set_files(dict(name=filename, mimeType='application/octet-stream', buffer=b'fixture'))
+            expect(field).to_have_value(re.compile('/model_assets/' + re.escape(filename) + '$'))
+        page.route('**/api/apps?*', lambda route: route.fulfill(status=503, json={'detail': '读取失败'}))
+        page.reload()
+        expect(page.get_by_role('alert')).to_contain_text('程序包列表')
+        page.get_by_label('选择图片', exact=True).set_input_files(dict(name='photo.png', mimeType='image/png', buffer=PNG))
+        page.get_by_role('button', name='开始推理 · 1 个模型', exact=True).click()
+        expect(page.locator('.image-result-title')).to_contain_text('photo.png')
+        assert Path(state['settings']['models'][0]['model_path']).name == 'det.rknn'
         browser.close()
 
 
@@ -922,7 +1010,7 @@ def test_import_model_from_dropdown_into_selected_package(console):
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto(url + '/image-inference')
-        package = page.get_by_label('模型 1 程序包', exact=True)
+        package = page.get_by_label('模型 1 来源', exact=True)
         package.select_option('demo')
         model = page.get_by_label('模型 1 文件', exact=True)
         model.select_option('/packages/demo/assets/first.rknn')
@@ -988,7 +1076,7 @@ def test_import_model_from_dropdown_into_selected_package(console):
         browser.close()
 
 
-def test_large_batch_upload_and_space_failure_cleanup(console):
+def test_large_batch_upload_and_space_failure_resume(console):
     url, state = console
     expect = playwright.expect
     with playwright.sync_playwright() as pw:
@@ -997,7 +1085,7 @@ def test_large_batch_upload_and_space_failure_cleanup(console):
         page = browser.new_page(viewport={'width': 1366, 'height': 900})
         page.add_init_script("localStorage.setItem('rk3588-auth', JSON.stringify({state:{token:'test',username:'tester'},version:0}))")
         page.goto(url + '/image-inference')
-        page.get_by_label('模型 1 程序包', exact=True).select_option('demo')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
         page.get_by_label('模型 1 文件', exact=True).select_option('/packages/demo/assets/first.rknn')
         page.get_by_label('模型 1 标签文件', exact=True).select_option('/packages/demo/assets/labels.txt')
         page.get_by_label('选择图片', exact=True).set_input_files([
@@ -1011,11 +1099,101 @@ def test_large_batch_upload_and_space_failure_cleanup(console):
         assert len(state['uploaded']) == state['job']['total'] == 101
         page.get_by_label('全选检测结果', exact=True).check()
         expect(page.get_by_role('button', name='下载标签 TXT', exact=False)).to_have_text('下载标签 TXT (101)')
-        page.route('**/jobs/*/inputs/1', lambda route: route.fulfill(status=507,
-                   json={'detail': '存储空间不足：需保留超过 100 MB'}), times=1)
+        state['fail_upload_index'] = 1
+        state['upload_calls'] = []
         start.click()
         expect(page.get_by_role('alert')).to_contain_text('100 MB')
-        assert state['discarded_upload'] == state['upload_id'] and state['uploaded'] == {}
-        expect(start).to_be_enabled()
+        resume = page.get_by_role('button', name='继续', exact=True)
+        expect(resume).to_be_enabled()
+        assert 'discarded_upload' not in state and state['uploaded'] == {0: len(PNG)}
+        expect(start).to_be_disabled()
+        # Navigation retains File handles; the first upload is not sent twice.
+        page.get_by_role('link', name='程序管理', exact=False).click()
+        page.get_by_role('link', name='图片推理', exact=False).click()
+        expect(page.get_by_text('已选 101 张 · 重新选择', exact=True)).to_be_visible()
+        resume.click()
+        expect(page.get_by_label('全选检测结果', exact=True)).to_be_visible(timeout=15000)
+        assert state['upload_calls'] == list(range(101))
         assert state['job']['total'] == 101
+        # A reload cannot restore local File handles; request re-selection before
+        # changing the paused server state, then retain the already uploaded input.
+        files = [dict(name=f'{i}.png', mimeType='image/png', buffer=PNG) for i in range(3)]
+        page.get_by_label('选择图片', exact=True).set_input_files(files)
+        state['fail_upload_index'] = 1
+        state['upload_calls'] = []
+        start.click()
+        expect(resume).to_be_enabled()
+        page.reload()
+        expect(resume).to_be_enabled()
+        resume.click()
+        expect(page.get_by_text('请重新选择原批次的图片（保持原顺序），再点击继续。已上传的图片会保留。', exact=True)).to_be_visible()
+        assert state['resume_calls'] == 1 and state['job']['status'] == 'paused_storage'
+        page.get_by_label('选择图片', exact=True).set_input_files(files)
+        resume.click()
+        expect(page.get_by_label('全选检测结果', exact=True)).to_be_visible()
+        assert state['upload_calls'] == [0, 1, 2]
+        browser.close()
+
+
+def test_draft_models_source_navigation_reload_and_resume(console):
+    url, state = console
+    expect = playwright.expect
+    with playwright.sync_playwright() as pw:
+        browser = pw.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'),
+                                    headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
+        page = browser.new_page(viewport={'width': 1500, 'height': 1000})
+        page.add_init_script("localStorage.setItem('rk3588-auth', JSON.stringify({state:{token:'test',username:'tester'},version:0}))")
+        page.goto(url + '/image-inference')
+        page.get_by_label('模型 1 来源', exact=True).select_option('demo')
+        page.get_by_label('模型 1 文件', exact=True).select_option('/packages/demo/assets/first.rknn')
+        page.get_by_label('模型 1 标签文件', exact=True).select_option('/packages/demo/assets/labels.txt')
+        page.get_by_label('模型 1 参数', exact=True).click()
+        page.get_by_label('模型 1 ID', exact=True).fill('saved_model')
+        page.get_by_label('模型 1 置信度阈值', exact=True).fill('0.24')
+        page.get_by_label('模型 1 NMS 阈值', exact=True).fill('0.51')
+        page.get_by_label('模型 1 NPU 核心', exact=True).select_option('2')
+        page.get_by_label('模型 1 检测类别', exact=True).fill('person,car')
+        page.get_by_label('选择图片来源', exact=True).select_option('device')
+        page.get_by_label('板端图片或文件夹路径', exact=True).fill('/userdata/photos')
+        page.get_by_label('包括子文件夹', exact=True).check()
+        page.get_by_role('button', name='开始推理 · 1 个模型', exact=True).click()
+        expect(page.get_by_label('全选检测结果', exact=True)).to_be_visible()
+        submitted_settings = json.loads(json.dumps(state['job']['settings']))
+        job_id = state['job']['id']
+        state['job'].update(status='paused_storage', completed=1, resume_phase='inference', error='存储空间不足，请清理后继续')
+        state['job']['items'][1].update(status='pending')
+        state['job']['items'][1].pop('result')
+        state['disk_full'] = True
+        # An unsent draft must persist without being replaced by the old job settings.
+        page.get_by_label('模型 1 置信度阈值', exact=True).fill('0.81')
+        page.get_by_role('button', name='＋ 添加模型', exact=False).click()
+        page.get_by_label('模型 2 来源', exact=True).select_option('empty')
+        page.get_by_role('link', name='程序管理', exact=False).click()
+        page.get_by_role('link', name='图片推理', exact=False).click()
+        for reload in (False, True):
+            if reload: page.reload()
+            expect(page.get_by_label('模型 1 来源', exact=True)).to_have_value('demo')
+            expect(page.get_by_label('模型 1 类型', exact=True)).to_have_value('yolov8_det')
+            expect(page.get_by_label('模型 1 文件', exact=True)).to_have_value('/packages/demo/assets/first.rknn')
+            expect(page.get_by_label('模型 1 标签文件', exact=True)).to_have_value('/packages/demo/assets/labels.txt')
+            expect(page.get_by_label('模型 2 来源', exact=True)).to_have_value('empty')
+            expect(page.get_by_label('板端图片或文件夹路径', exact=True)).to_have_value('/userdata/photos')
+            expect(page.get_by_label('包括子文件夹', exact=True)).to_be_checked()
+            page.get_by_label('模型 1 参数', exact=True).click()
+            expect(page.get_by_label('模型 1 ID', exact=True)).to_have_value('saved_model')
+            expect(page.get_by_label('模型 1 置信度阈值', exact=True)).to_have_value('0.81')
+            expect(page.get_by_label('模型 1 NMS 阈值', exact=True)).to_have_value('0.51')
+            expect(page.get_by_label('模型 1 NPU 核心', exact=True)).to_have_value('2')
+            expect(page.get_by_label('模型 1 检测类别', exact=True)).to_have_value('person,car')
+            expect(page.get_by_role('button', name='继续', exact=True)).to_be_enabled()
+        page.get_by_role('button', name='继续', exact=True).click()
+        expect(page.get_by_role('button', name='继续', exact=True)).to_be_enabled()
+        expect(page.locator('.image-progress')).to_contain_text('1/2')
+        assert state['resume_calls'] == 1
+        state['disk_full'] = False
+        page.get_by_role('button', name='继续', exact=True).click()
+        expect(page.get_by_label('全选检测结果', exact=True)).to_be_visible()
+        assert state['resume_calls'] == 2 and state['job']['id'] == job_id
+        assert state['job']['settings'] == submitted_settings
+        expect(page.get_by_label('模型 1 置信度阈值', exact=True)).to_have_value('0.81')
         browser.close()

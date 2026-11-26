@@ -19,12 +19,13 @@ export default function ModelAssetInput({ title, value, options, extension, requ
   }, [])
   // Keep a canvas-provided path visible even if its package was removed meanwhile.
   const paths = [...new Set([...options, ...(value ? [value] : [])])]
-  const importModel = async (file: File) => {
+  const kind = extension === '.rknn' ? '模型' : '标签'
+  const importAsset = async (file: File) => {
     if (!onImport || progress !== null) return
     setError(''); setMessage('')
-    if (!file.name.toLowerCase().endsWith('.rknn')) { setError('请选择 .rknn 模型文件'); return }
-    if (!file.size) { setError('模型文件为空，请重新选择'); return }
-    if (file.size > 1024 ** 3) { setError('单个模型不能超过 1 GiB'); return }
+    if (!file.name.toLowerCase().endsWith(extension)) { setError(`请选择 ${extension} ${kind}文件`); return }
+    if (!file.size) { setError(`${kind}文件为空，请重新选择`); return }
+    if (file.size > 1024 ** 3) { setError(`单个${kind}文件不能超过 1 GiB`); return }
     setProgress(0)
     try {
       const result = await onImport(file, value => { if (mounted.current) setProgress(value) })
@@ -51,17 +52,16 @@ export default function ModelAssetInput({ title, value, options, extension, requ
             onChange(event.target.value)
           }
         }}>
-        <option value="">{options.length ? `选择${extension === '.rknn' ? '模型' : '标签'}`
-          : `该程序包暂无 ${extension} 文件`}</option>
+        <option value="">{options.length ? `选择${kind}` : `暂无 ${extension} 文件`}</option>
         {paths.map(path => <option key={path} value={path}>{path.split('/').pop()}</option>)}
-        {onImport && <option value="__import__">导入模型…</option>}
+        {onImport && <option value="__import__">导入{kind}…</option>}
       </select>
     </label>
-    {onImport && <input ref={inputRef} type="file" accept=".rknn" hidden aria-label={`导入${title}`}
+    {onImport && <input ref={inputRef} type="file" accept={extension} hidden aria-label={`导入${title}`}
       onChange={event => {
         const file = event.target.files?.[0]
         event.target.value = ''
-        if (file) void importModel(file)
+        if (file) void importAsset(file)
       }} />}
     {progress !== null && <div className="image-import-feedback" role="status">
       {progress >= 100 ? '正在保存…' : `正在上传 ${progress}%`}

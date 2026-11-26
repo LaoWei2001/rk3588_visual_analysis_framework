@@ -6,8 +6,8 @@
 #   - 后台微服务（ota_agent / unified_upload）
 # 是各自独立的 systemd 单元 / 进程，默认不受影响。若要一并停，见末尾提示。
 #
-# 用法：  bash stop.sh            # 停止控制台（保留开机自启）
-#         bash stop.sh --disable  # 停止并禁用开机自启
+# 用法：  bash web_console/scripts/stop.sh            # 停止控制台（保留开机自启）
+#         bash web_console/scripts/stop.sh --disable  # 停止并禁用开机自启
 
 SERVICE=rk3588-console
 

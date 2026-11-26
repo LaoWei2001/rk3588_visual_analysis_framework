@@ -12,7 +12,7 @@ import {
   fetchAppLogics, uploadAsset, deleteAsset,
   type LogicDef, type LogicParam,
 } from '../api/client'
-import { getSrcType, SRC_TYPES } from '../utils/streamSource'
+import { getSrcType, isFilePlaybackSource, networkVideoProtocol, SRC_TYPES } from '../utils/streamSource'
 import { MODEL_ID_MAX_LENGTH, validateModelId } from '../utils/modelId'
 import { FALLBACK_MODEL_TYPES, isDepthModel, modelCapabilities } from '../models/capabilities'
 import AssetPicker         from './AssetPicker'
@@ -296,21 +296,21 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
   const effectiveTrackerEnabled = d.tracker_enable == null || Number(d.tracker_enable) < 0
     ? !!globalTrackerEnable : Number(d.tracker_enable) !== 0
 
-  const deleteAsset_ = useAssetDelete(String(d.url ?? ''), v => set('url', v))
+  const videoPath = String(d.url ?? '')
+  const deleteAsset_ = useAssetDelete(videoPath, v => set('url', v))
   const srcType = getSrcType(d)
 
   const setSrcType = (type: string) => {
     const patch: Record<string, unknown> = { src_type: type }
     const cur = String(d.url ?? '')
+    const networkUrl = networkVideoProtocol(cur)
     if (type === 'rtsp') {
-      // 从非 RTSP(如本地文件)切过来时 URL 还停留在旧地址 → 用默认 RTSP 地址
-      patch.url = cur.startsWith('rtsp://') ? cur : DEFAULT_RTSP_URL
+      patch.url = networkUrl || cur.startsWith('/') ? cur : DEFAULT_RTSP_URL
       patch.video_enc = d.video_enc ?? 'h264'
     }
     if (type === 'usb')  { patch.device = d.device ?? DEFAULT_USB_DEVICE }
     if (type === 'file') {
-      // 从 RTSP 切到文件时清掉 rtsp 地址，避免文件选择器里残留 rtsp://
-      patch.url = cur.startsWith('rtsp://') ? '' : cur
+      patch.url = networkUrl ? '' : cur
       patch.loop = d.loop ?? true
     }
     onUpdate(node.id, patch)
@@ -358,19 +358,19 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
       )}
 
       {srcType === 'rtsp' && <>
-        <F label="RTSP 地址">
+        <F label="视频地址（RTSP、RTSPS、HTTP、HTTPS 或本地绝对路径）">
           <input
             value={String(d.url ?? '')}
             onChange={e => set('url', e.target.value)}
             placeholder="rtsp://user:pass@192.168.1.x/stream"
           />
         </F>
-        <F label="编码格式">
+        {!/^(?:https?:\/\/|\/)/.test(String(d.url ?? '')) && <F label="RTSP 编码格式">
           <select value={String(d.video_enc ?? 'h264')} onChange={e => set('video_enc', e.target.value)}>
             <option value="h264">H.264</option>
             <option value="h265">H.265</option>
           </select>
-        </F>
+        </F>}
       </>}
 
       {srcType === 'usb' && <>
@@ -404,14 +404,19 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
       </>}
 
       {srcType === 'file' && <>
-        <F label="视频文件">
+        <F label="板端视频路径">
+          <input aria-label="板端视频路径" value={videoPath} spellCheck={false}
+            placeholder="/userdata/videos/现场录像.mp4"
+            onChange={e => set('url', e.target.value)} />
+        </F>
+        <F label="或选择程序内的视频">
           <AssetPicker
-            value={String(d.url ?? '')}
+            value={videoPath.startsWith('/') ? '' : videoPath}
             onChange={v => set('url', v)}
             options={assets.videos}
             verified={assetsReady}
             resourceLabel="视频文件"
-            emptyHint="该程序 assets/ 下暂无视频文件，请点「导入」上传"
+            emptyHint="程序内暂无视频，可导入文件或填写上方路径"
             accept=".mp4,.avi,.mkv"
             uploading={busy === 'url'}
             progress={busy === 'url' ? progress : 0}
@@ -419,11 +424,14 @@ function StreamForm({ node, onUpdate, globalTrackerType, globalTrackerEnable }: 
             onDelete={deleteAsset_}
           />
         </F>
+      </>}
+
+      {isFilePlaybackSource(d) && (
         <label className="node-toggle">
           <input type="checkbox" checked={!!d.loop} onChange={e => set('loop', e.target.checked)} />
           循环播放
         </label>
-      </>}
+      )}
 
       <InferenceROIEditor streamData={d} onChange={value => set('inference_roi', value)} />
 

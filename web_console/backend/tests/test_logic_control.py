@@ -41,6 +41,7 @@ def _write_demo_app(root):
 def test_lists_channel_and_global_actions(tmp_path, monkeypatch):
     _write_demo_app(tmp_path)
     monkeypatch.setattr(logic_control, "APPS_ROOT", tmp_path)
+    monkeypatch.setattr(logic_control.pm, "APPS_ROOT", tmp_path)
 
     result = asyncio.run(logic_control.get_logic_actions("demo"))
 

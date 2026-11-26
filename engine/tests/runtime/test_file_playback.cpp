@@ -94,7 +94,7 @@ int main(int argc, char **argv)
             if (argc == 4 && id == 0)
                 out << R"({"id":"detector","enable":true,"model_type":"yolov8_det","model_path":")" << argv[2]
                     << R"(","label_path":")" << argv[3] << R"("})";
-            out << R"(],"stream":{"src_type":"file","url":")" << argv[1]
+            out << R"(],"stream":{"src_type":")" << (id == 0 ? "rtsp" : "file") << R"(","url":")" << argv[1]
                 << R"("},"logic":"observe","logic_parameters":{},"report_policy":{"enabled":false,"deliveries":[]}})";
         }
         out << "]}";

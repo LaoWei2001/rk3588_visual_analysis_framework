@@ -69,11 +69,11 @@ class YoloSeg : public ModelBase
     int post_process(rknn_output *outputs, LetterBoxInfo &lb, int ori_in_width, int ori_in_height,
                      std::vector<AlgoResult> &results);
 
-    int process_i8(rknn_output *all_input, int input_id, const int *anchor, int grid_h, int grid_w, int height,
-                   int width, int stride, int class_num, std::vector<float> &boxes, std::vector<float> &segments,
+    int process_i8(rknn_output *all_input, int input_id, const int *anchor, int grid_h, int grid_w,
+                   int stride, int class_num, std::vector<float> &boxes, std::vector<float> &segments,
                    float *proto, std::vector<float> &objProbs, std::vector<int> &classId, float threshold);
-    int process_fp32(rknn_output *all_input, int input_id, const int *anchor, int grid_h, int grid_w, int height,
-                     int width, int stride, int class_num, std::vector<float> &boxes, std::vector<float> &segments,
+    int process_fp32(rknn_output *all_input, int input_id, const int *anchor, int grid_h, int grid_w,
+                     int stride, int class_num, std::vector<float> &boxes, std::vector<float> &segments,
                      float *proto, std::vector<float> &objProbs, std::vector<int> &classId, float threshold);
 
   private:
@@ -87,7 +87,6 @@ class YoloSeg : public ModelBase
     int model_w_ = 640;
     int model_h_ = 640;
     int num_classes_ = 80;
-    int io_num_in_ = 0;
     int io_num_out_ = 0;
     std::vector<rknn_tensor_attr> out_attrs_;
     model_io::OutputBuffers outputs_;

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState, useRef } from 'react'
-import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom'
 import AppsPage    from './pages/AppsPage'
 import LoginPage   from './pages/LoginPage'
 import { destroyAllTerminals } from './features/terminal/sessionLifecycle'
@@ -71,9 +71,21 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+const navigation = [
+  { to: '/', label: '程序管理', icon: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z' },
+  { to: '/live-view', label: '实时画面', icon: 'M3 4h18v13H3z M8 21h8 M12 17v4 M9.5 8l5 2.5-5 2.5z' },
+  { to: '/image-inference', label: '图片推理', icon: 'M3 3h18v18H3z M4 17l5-5 4 4 3-3 5 5 M16 8h.01' },
+  { to: '/video-capture', label: '视频采集', icon: 'M3 6h12v12H3z M15 10l6-4v12l-6-4z' },
+  { to: '/dataset', label: '数据集采集', icon: 'M2 7l10-5 10 5-10 5z M2 12l10 5 10-5 M2 17l10 5 10-5' },
+  { to: '/services', label: '系统服务', icon: 'M3 3h18v7H3z M3 14h18v7H3z M6 6.5h2 M6 17.5h2' },
+  { to: '/system-settings', label: '系统设置', icon: 'M4 6h6m4 0h6 M4 12h10m4 0h2 M4 18h2m4 0h10 M10 4v4 M15 10v4 M7 16v4' },
+  { to: '/recovery', label: '故障恢复', icon: 'M3 5v6h6 M3 11a9 9 0 1 1 2.5 8 M12 7v5l3 2' },
+  { to: '/camera-settings', label: '摄像头配置', icon: 'M3 7h4l2-3h6l2 3h4v13H3z M16 13a4 4 0 1 1-8 0 4 4 0 1 1 8 0z' },
+  { to: '/terminal', label: '终端命令行', icon: 'M3 4h18v16H3z M6 8l4 4-4 4 M13 16h4' },
+]
+
 // ── Main shell (sidebar + content) ────────────────────────────────────────
 function AppShell() {
-  const {pathname} = useLocation()
   const navigate  = useNavigate()
   const username  = useAuthStore(s => s.username)
   const clearAuth = useAuthStore(s => s.clearAuth)
@@ -90,49 +102,18 @@ function AppShell() {
   const guardNav = (e: React.MouseEvent) => { if (!confirmLeaveIfDirty()) e.preventDefault() }
 
   return (
-    <div className={`app-shell${pathname === '/dataset' ? ' dataset-workspace' : ''}`}>
+    <div className="app-shell">
       <nav className="sidebar">
         <SidebarLogo />
 
-        <NavLink to="/" end onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
-          <span className="nav-icon">▣</span> 程序管理
-        </NavLink>
-
-        <NavLink to="/live-view" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
-          <span className="nav-icon">▰</span> 实时画面
-        </NavLink>
-
-        <NavLink to="/image-inference" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
-          <span className="nav-icon">▧</span> 图片推理
-        </NavLink>
-
-        <NavLink to="/video-capture" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
-          <span className="nav-icon">●</span> 视频采集
-        </NavLink>
-
-        <NavLink to="/dataset" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
-          <span className="nav-icon">▧</span> 数据集采集
-        </NavLink>
-
-        <NavLink to="/services" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
-          <span className="nav-icon">⚙</span> 系统服务
-        </NavLink>
-
-        <NavLink to="/system-settings" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
-          <span className="nav-icon">◉</span> 系统设置
-        </NavLink>
-
-        <NavLink to="/recovery" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
-          <span className="nav-icon">↻</span> 故障恢复
-        </NavLink>
-
-        <NavLink to="/camera-settings" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
-          <span className="nav-icon">◈</span> 摄像头配置
-        </NavLink>
-
-        <NavLink to="/terminal" onClick={guardNav} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
-          <span className="nav-icon">▤</span> 终端命令行
-        </NavLink>
+        {navigation.map(({ to, label, icon }) =>
+          <NavLink key={to} to={to} end={to === '/'} onClick={guardNav}
+            className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
+            <svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d={icon} />
+            </svg>
+            {label}
+          </NavLink>)}
 
         {/* Bottom: user info + logout */}
         <div className="sidebar-footer">

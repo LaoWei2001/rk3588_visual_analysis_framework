@@ -234,8 +234,6 @@ std::string rtsp_streamer_preview_control(const char *action, int channel_id, co
             state->path = g_st.path + "/channel/" + std::to_string(channel_id);
             state->fps = constants::PREVIEW_MAX_FPS;
             state->bitrate = 6000;
-            state->encoder = "hw";
-            state->codec = "h264";
             state->width = state->enc_w = width;
             state->height = state->enc_h = height;
             const auto launch = build_launch_string(*state);

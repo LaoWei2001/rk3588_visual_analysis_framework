@@ -2,7 +2,6 @@
   "global": {
     "enable_display": false,
     "enable_rtsp": true,
-    "rtsp_codec": "h264",
     "rtsp_port": 8554,
     "rtsp_path": "/live",
     "disp_width": 1280,
@@ -13,8 +12,7 @@
     "queue_size": 1,
     "channel_threads": 1,
     "tracker_enable": 0,
-    "performance_display": true,
-    "enable_pause_key": 0
+    "performance_display": true
   },
   "channels": [
     {

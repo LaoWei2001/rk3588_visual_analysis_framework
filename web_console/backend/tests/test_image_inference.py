@@ -29,21 +29,26 @@ if sys.argv[1] == '--inspect-model':
  print('MODEL_INFO_JSON=' + json.dumps(dict(ok=True,inspection_version=1,width=640,height=640,format='NHWC',outputs=outputs,compatibility=dict(yolov8_det=dict(ok=True,error=''),yolov5=dict(ok=False,error='yolov5 当前要求 3 个输出张量')))))
  sys.exit(0)
 job = json.loads(pathlib.Path(sys.argv[2]).read_text())
-out = pathlib.Path(job['output_dir']); out.mkdir()
+out = pathlib.Path(job['output_dir']); out.mkdir(exist_ok=True)
 items = [dict(index=i,name=x['name'],status='pending') for i,x in enumerate(job['images'])]
+if job.get('resume'): items=json.loads((out/'progress.json').read_text())['items']
 def progress(status):
  p=out/'progress.json.tmp';p.write_text(json.dumps(dict(status=status,items=items)));p.replace(out/'progress.json')
 def cancel(*args):
  progress('cancelled');sys.exit(130)
 signal.signal(signal.SIGINT, cancel)
 progress('running')
-if any(x['name'].startswith('slow') for x in job['images']): time.sleep(30)
+if not job.get('resume') and any(x['name'].startswith('slow') for x in job['images']): time.sleep(30)
 failures=0
 for i, image in enumerate(job['images']):
+ if items[i]['status'] in ('success', 'partial', 'failed'):
+  failures+=items[i]['status']!='success';continue
+ if image['name'].startswith('wait') and not job.get('resume'): time.sleep(30)
+ with (out/'executed.log').open('a') as log: print(i, file=log)
  if pathlib.Path(image['path']).read_bytes()==b'bad':
   items[i].update(status='failed',error='Cannot decode image');failures+=1
  else:
-  directory=out/f'{i:06d}';directory.mkdir()
+  directory=out/f'{i:06d}';directory.mkdir(exist_ok=True)
   (directory/'result.json').write_text(json.dumps(dict(coordinate_width=640,coordinate_height=640,source_width=1280,source_height=720,models=[dict(m,type=m['model_type'],succeeded=True) for m in job['models']],results=[])))
   (directory/'original.jpg').write_bytes(b'original')
   (directory/'annotated.jpg').write_bytes(b'jpeg')
@@ -108,7 +113,7 @@ def wait(manager, job_id):
     while time.monotonic() < deadline:
         result = manager.current()
         assert result is not None and result['id'] == job_id
-        if result['status'] in jobs.TERMINAL:
+        if result['status'] in jobs.TERMINAL or result['status'] == 'paused_storage':
             return result
         time.sleep(.03)
     raise AssertionError(manager.current())
@@ -352,7 +357,7 @@ def test_upload_failure_releases_slot_and_restart_interrupts_upload(console):
     assert manager.current() is None
     job_id = manager.reserve(settings(manager.catalog), ['x.jpg'])
     restarted = jobs.ImageJobs(manager.root, catalog)
-    assert restarted.current()['status'] == 'failed'
+    assert restarted.current()['status'] == 'paused_storage'
     assert '重启' in restarted.current()['error']
 
 
@@ -393,6 +398,24 @@ def test_relative_storage_root_works_in_native_job_working_directory(console, tm
         assert manager.result(job_id, 0)['results'] == []
     finally:
         manager.shutdown()
+
+
+def test_browse_device_folders(console, tmp_path):
+    client, _, _ = console
+    folder = tmp_path / '测试图片'
+    for name in ('第 1 组', 'B', 'a'):
+        (folder / name).mkdir(parents=True)
+    image = folder / 'photo.png'
+    image.touch()
+    (folder / 'loop').symlink_to(folder, target_is_directory=True)
+    url = BASE + '/device-folders'
+    listing = dict(path=str(folder), parent=str(tmp_path), folders=['a', 'B', '第 1 组'])
+    for path in (folder, image):
+        assert client.get(url, params={'path': str(path)}).json() == listing
+    assert client.get(url, params={'path': str(folder / 'a')}).json()['folders'] == []
+    assert client.get(url).json()['parent'] is None
+    for path in ('relative', str(folder / 'missing')):
+        assert client.get(url, params={'path': path}).status_code == 422
 
 
 def test_device_directory_uses_same_batch_and_preserves_source(console, tmp_path):
@@ -503,15 +526,27 @@ def test_changed_device_file_rejected_and_slot_released(console, tmp_path, monke
     assert wait(manager, response.json()['id'])['status'] == 'completed'
 
 
-def test_shared_model_library_routes_removed(console, tmp_path):
-    client, _, _ = console
-    legacy = tmp_path / 'apps/_console/model_assets'
-    legacy.mkdir(parents=True)
-    model = legacy / 'saved.rknn'
-    model.write_bytes(b'user model')
-    assert client.get(BASE + '/assets').status_code == 404
-    assert client.post(BASE + '/assets/upload', files={'file': ('test.rknn', b'model')}).status_code == 404
-    assert model.read_bytes() == b'user model'
+def test_standalone_assets_survive_job_cleanup_and_duplicate_import(console, tmp_path):
+    client, manager, _ = console
+    folder = tmp_path / 'apps/_console/model_assets'
+    folder.mkdir(parents=True)
+    original = folder / 'saved.rknn'
+    original.write_bytes(b'user model')
+    upload = BASE + '/assets/upload'
+    assert client.post(upload, files={'file': ('empty.rknn', b'')}).status_code == 422
+    assert client.post(upload, files={'file': ('script.py', b'x')}).status_code == 422
+    result = client.post(upload, files={'file': ('saved.rknn', b'new model')}).json()
+    assert result == {'path': str(folder / 'saved_copy.rknn'), 'renamed': True}
+    label = client.post(upload, files={'file': ('person.txt', b'person')}).json()['path']
+    params = settings(manager.catalog)
+    for model in params['models']:
+        model.update(model_path=result['path'], label_path=label)
+    response = upload_batch(client, data={'settings': json.dumps(params)}, files={'files': ('x.jpg', b'ok')})
+    assert response.status_code == 202, response.text
+    assert wait(manager, response.json()['id'])['status'] == 'completed'
+    assert client.delete(BASE + '/jobs/completed').json()['cleared'] == 1
+    assert client.get(BASE + '/assets').json() == {'models': [str(original), result['path']], 'labels': [label]}
+    assert original.read_bytes() == b'user model'
 
 
 def test_package_models_infer_without_copying_to_shared_library(console, tmp_path):
@@ -706,17 +741,27 @@ def test_upload_reserves_strictly_more_than_100mb(console, monkeypatch, remainin
         assert manager.current() is None
 
 
-def test_storage_drop_during_upload_removes_entire_unsubmitted_batch(console, monkeypatch):
+def test_storage_drop_during_upload_preserves_inputs_and_resumes(console, monkeypatch):
     from collections import namedtuple
     client, manager, catalog = console
     job_id = reserve_upload(client, catalog, [dict(name='first.jpg', size=2), dict(name='second.jpg', size=2)]).json()['id']
     assert client.put(f'{BASE}/jobs/{job_id}/inputs/0', content=b'ok').status_code == 200
     Usage = namedtuple('Usage', 'total used free')
-    monkeypatch.setattr(storage.shutil, 'disk_usage', lambda _: Usage(0, 0, storage.MIN_FREE_BYTES + 2))
-    response = client.put(f'{BASE}/jobs/{job_id}/inputs/1', content=b'ok')
-    assert response.status_code == 507 and '100 MB' in response.text
-    assert manager.current() is None
-    assert not (manager.root / job_id).exists()
+    with monkeypatch.context() as patch:
+        patch.setattr(storage.shutil, 'disk_usage', lambda _: Usage(0, 0, storage.MIN_FREE_BYTES + 2))
+        response = client.put(f'{BASE}/jobs/{job_id}/inputs/1', content=b'ok')
+        assert client.post(f'{BASE}/jobs/{job_id}/resume').status_code == 507
+    assert response.status_code == 507 and '存储空间不足' in response.text
+    paused = manager.current()
+    assert paused['status'] == 'paused_storage' and paused['resume_phase'] == 'upload'
+    assert paused['items'][0]['uploaded'] and not paused['items'][1].get('uploaded')
+    assert (manager.root / job_id / 'input/000000.jpg').read_bytes() == b'ok'
+    assert not (manager.root / job_id / 'input/000001.jpg').exists()
+    assert client.delete(BASE + '/jobs/completed').json()['cleared'] == 0
+    assert client.post(f'{BASE}/jobs/{job_id}/resume').json()['status'] == 'uploading'
+    assert client.put(f'{BASE}/jobs/{job_id}/inputs/1', content=b'ok').status_code == 200
+    assert client.post(f'{BASE}/jobs/{job_id}/submit').status_code == 202
+    assert wait(manager, job_id)['status'] == 'completed'
 
 
 @pytest.mark.parametrize('content', [b'', b'o', b'too long'])
@@ -760,4 +805,120 @@ def test_storage_drop_stops_inference(console, monkeypatch):
     Usage = namedtuple('Usage', 'total used free')
     monkeypatch.setattr(storage.shutil, 'disk_usage', lambda _: Usage(0, 0, storage.MIN_FREE_BYTES))
     result = wait(manager, response.json()['id'])
-    assert result['status'] == 'failed' and '100 MB' in result['error']
+    assert result['status'] == 'paused_storage' and '100 MB' in result['error']
+
+
+def test_resume_checkpoint_preserves_finished_results_and_settings(console, monkeypatch):
+    client, manager, catalog = console
+    response = upload_batch(client, data={'settings': json.dumps(settings(catalog))}, files=[
+        ('files', ('first.jpg', b'ok')), ('files', ('bad.jpg', b'bad')), ('files', ('wait.jpg', b'ok'))])
+    job_id = response.json()['id']
+    deadline = time.monotonic() + 5
+    while manager.current()['completed'] < 2 and time.monotonic() < deadline:
+        time.sleep(.03)
+    assert manager.current()['completed'] == 2
+    result = manager.root / job_id / 'output/000000/result.json'
+    original = (result.read_bytes(), result.stat().st_mtime_ns)
+    with monkeypatch.context() as patch:
+        def full(*args):
+            raise engine.JobError(507, '存储空间不足：需保留超过 100 MB')
+        patch.setattr(jobs, 'require_space', full)
+        paused = wait(manager, job_id)
+        assert paused['status'] == 'paused_storage' and paused['completed'] == 2
+        manager._jobs[job_id].thread.join(2)
+        assert [i['status'] for i in paused['items']] == ['success', 'failed', 'pending']
+        assert client.post(f'{BASE}/jobs/{job_id}/resume').status_code == 507
+    # A process restart and clearing finished records both preserve this batch.
+    restored = jobs.ImageJobs(manager.root, catalog)
+    assert restored.current() == paused
+    monkeypatch.setattr(routes, 'image_jobs', restored)
+    try:
+        assert client.delete(BASE + '/jobs/completed').json()['cleared'] == 0
+        with monkeypatch.context() as patch:
+            patch.setattr(jobs, 'npu_busy', lambda: True)
+            assert client.post(f'{BASE}/jobs/{job_id}/resume').status_code == 409
+        assert client.post(f'{BASE}/jobs/{job_id}/resume').status_code == 202
+        completed = wait(restored, job_id)
+        assert completed['status'] == 'completed_with_errors'
+        assert completed['settings'] == paused['settings']
+        assert completed['completed'] == 3 and not completed['error']
+        assert (result.read_bytes(), result.stat().st_mtime_ns) == original
+        assert (result.parent.parent / 'executed.log').read_text().splitlines() == ['0', '1', '2']
+        assert client.post(f'{BASE}/jobs/{job_id}/resume').status_code == 409
+    finally:
+        restored.shutdown()
+
+
+def test_device_copy_resumes_after_space_failure(console, tmp_path, monkeypatch):
+    client, manager, catalog = console
+    folder = tmp_path / 'pictures'; folder.mkdir()
+    for name in ('first.jpg', 'second.jpg'):
+        (folder / name).write_bytes(b'ok')
+    copy_image = jobs.snapshot_device_image
+    def full_on_second(image, target, checkpoint):
+        if image.name == 'second.jpg':
+            target.write_bytes(b'o')
+            raise engine.JobError(507, '存储空间不足')
+        copy_image(image, target, checkpoint)
+    with monkeypatch.context() as patch:
+        patch.setattr(jobs, 'snapshot_device_image', full_on_second)
+        response = client.post(BASE + '/jobs/from-device', json=dict(path=str(folder), settings=settings(catalog)))
+    assert response.status_code == 507
+    job = manager.current()
+    assert job['status'] == 'paused_storage' and job['resume_phase'] == 'upload'
+    original = manager.root / job['id'] / 'input/000000.jpg'
+    timestamp = original.stat().st_mtime_ns
+    (folder / 'first.jpg').unlink()  # Already copied inputs no longer depend on originals.
+    assert client.post(f"{BASE}/jobs/{job['id']}/resume").status_code == 202
+    assert wait(manager, job['id'])['status'] == 'completed'
+    assert original.stat().st_mtime_ns == timestamp
+
+
+def test_cancel_paused_job_releases_slot(console):
+    client, manager, catalog = console
+    job_id = manager.reserve(settings(catalog), ['x.jpg'], sizes=[2])
+    manager.pause_upload(job_id, 0, '存储空间不足')
+    assert client.post(f'{BASE}/jobs/{job_id}/cancel').json()['status'] == 'cancelled'
+    assert client.post(f'{BASE}/jobs/{job_id}/resume').status_code == 409
+    assert manager.reserve(settings(catalog), ['next.jpg'], sizes=[2])
+
+
+def test_full_disk_checkpoint_releases_reserve(console, monkeypatch):
+    _, manager, catalog = console
+    job_id = manager.reserve(settings(catalog), ['x.jpg'], sizes=[2])
+    job = manager._jobs[job_id]
+    write = jobs.write_json
+    def full(path, value):
+        if (job.directory / 'checkpoint.reserve').exists():
+            raise OSError(errno.ENOSPC, 'No space left on device')
+        write(path, value)
+    monkeypatch.setattr(jobs, 'write_json', full)
+    manager.pause_upload(job_id, 0, '存储空间不足')
+    assert jobs.read_json(job.directory / 'status.json')['status'] == 'paused_storage'
+    assert not (job.directory / 'checkpoint.reserve').exists()
+    monkeypatch.setattr(jobs, 'write_json', write)
+    assert manager.resume(job_id)['status'] == 'uploading'
+    assert (job.directory / 'checkpoint.reserve').is_file()
+    monkeypatch.setattr(jobs, 'write_json', full)
+    manager.pause_upload(job_id, 0, '再次空间不足')
+    assert jobs.read_json(job.directory / 'status.json')['status'] == 'paused_storage'
+
+
+def test_restart_discards_only_incomplete_upload_and_can_continue(console, monkeypatch):
+    client, manager, catalog = console
+    job_id = reserve_upload(client, catalog, [dict(name='first.jpg', size=2), dict(name='second.jpg', size=2)]).json()['id']
+    assert client.put(f'{BASE}/jobs/{job_id}/inputs/0', content=b'ok').status_code == 200
+    partial = manager.input_path(job_id, 1)
+    partial.write_bytes(b'o')
+    restored = jobs.ImageJobs(manager.root, catalog)
+    monkeypatch.setattr(routes, 'image_jobs', restored)
+    try:
+        assert restored.current()['status'] == 'paused_storage'
+        assert restored.current()['items'][0]['uploaded']
+        assert not partial.exists()
+        assert client.post(f'{BASE}/jobs/{job_id}/resume').json()['status'] == 'uploading'
+        assert client.put(f'{BASE}/jobs/{job_id}/inputs/1', content=b'ok').status_code == 200
+        assert client.post(f'{BASE}/jobs/{job_id}/submit').status_code == 202
+        assert wait(restored, job_id)['status'] == 'completed'
+    finally:
+        restored.shutdown()

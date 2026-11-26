@@ -10,6 +10,7 @@ from services.runtime_loader import load_runtime
 
 recovery_history = load_runtime('recovery_history')
 background_services = load_runtime('background_services')
+manual_start = load_runtime('manual_start').start
 
 router = APIRouter()
 
@@ -31,30 +32,20 @@ async def app_status(name: str, response: Response):
 
 @router.post("/apps/{name}/start")
 async def start_app(name: str, req: StartRequest):
-    event_id = None
+    return await _start_request(name, req)
+
+
+async def _start_request(name: str, req: StartRequest, restart: bool = False):
     try:
-        event_id = recovery_history.record('application', 'manual_start',
-            '用户在程序管理页面主动启动程序', f'启动程序 {name}', source='Web 程序管理')
-        pid = await run_in_threadpool(pm.start_app, name, req.config)
-        recovery_history.update(event_id, 'performed', f'程序进程已启动，PID {pid}；业务状态需另行检查。')
-        service_sync = await run_in_threadpool(background_services.sync_services_for_running_app)
-        return {"ok": True, "pid": pid, "service_sync": service_sync}
-    except pm.AppAlreadyRunningError as e:
-        if event_id:
-            recovery_history.update(event_id, 'failed', str(e))
-        raise HTTPException(status_code=409, detail=str(e))
-    except ValueError as e:
-        if event_id:
-            recovery_history.update(event_id, 'failed', str(e))
-        raise HTTPException(status_code=400, detail=str(e))
-    except FileNotFoundError as e:
-        if event_id:
-            recovery_history.update(event_id, 'failed', str(e))
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        if event_id:
-            recovery_history.update(event_id, 'failed', str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        return await run_in_threadpool(manual_start, name, req.config, 'Web 程序管理', restart)
+    except pm.AppAlreadyRunningError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/apps/{name}/stop")
@@ -67,6 +58,10 @@ def _stop_app(name: str):
                                             f'停止程序 {name}', source='Web 程序管理', fault_recovery=False)
     try:
         result = pm.stop_app_detailed(name)
+    except pm.CommandLineAppRunningError as exc:
+        if event_id:
+            recovery_history.safe_update(event_id, 'failed', str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         if event_id:
             recovery_history.safe_update(event_id, 'failed', str(exc))
@@ -97,29 +92,4 @@ def _set_app_autostart(name: str, req: AutostartRequest):
 
 @router.post("/apps/{name}/restart")
 async def restart_app(name: str, req: StartRequest):
-    event_id = None
-    try:
-        event_id = recovery_history.record('application', 'manual_restart',
-            '用户在程序管理页面主动请求重启', f'停止并重新启动程序 {name}', source='Web 程序管理')
-        # start_app 会在同一把全局锁内完成同名停止和重新启动，避免重启间隙被另一 App 抢占。
-        pid = await run_in_threadpool(pm.start_app, name, req.config)
-        if event_id:
-            recovery_history.update(event_id, 'performed', f'程序进程已启动，PID {pid}；业务状态需另行检查。')
-        service_sync = await run_in_threadpool(background_services.sync_services_for_running_app)
-        return {"ok": True, "pid": pid, "service_sync": service_sync}
-    except pm.AppAlreadyRunningError as e:
-        if event_id:
-            recovery_history.update(event_id, 'failed', str(e))
-        raise HTTPException(status_code=409, detail=str(e))
-    except ValueError as e:
-        if event_id:
-            recovery_history.update(event_id, 'failed', str(e))
-        raise HTTPException(status_code=400, detail=str(e))
-    except FileNotFoundError as e:
-        if event_id:
-            recovery_history.update(event_id, 'failed', str(e))
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        if event_id:
-            recovery_history.update(event_id, 'failed', str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+    return await _start_request(name, req, restart=True)

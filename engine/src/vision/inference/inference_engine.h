@@ -28,8 +28,7 @@ bool inference_take_results(int chnId, std::vector<AlgoResult> &out, std::shared
                             int64_t &out_frame_id, uint64_t &out_frame_steady_ms, uint64_t &out_frame_unix_ms,
                             int64_t &out_video_time_ms, std::shared_ptr<FrameActivity> &out_activity);
 float inference_get_infer_fps(int chnId);
-void inference_update_thresh(int chnId, const ChannelConfig &config);
-void inference_update_detect_classes(int chnId, const ChannelConfig &config);
+void inference_update_model_filters(const ChannelConfig &channel);
 void inference_update_queue_size(int queue_size);
 /**
  * @return true 仅当新模型已经完整启用；false 表示旧模型仍保持运行，调用方不得

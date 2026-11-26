@@ -296,10 +296,11 @@ void test_ambiguous_hand_side()
     CHECK(only_person(outcome).gloves_unsided);
     CHECK(only_person(outcome).violation);
     CHECK(only_person(outcome).violation_types == "未戴手套(未分左右手)");
-    /* 证据不归属具体某只手（只记一条“不分侧”），但两只手的徽标都点亮，
-     * 否则现场只看到顶部变红、手部还是 '-'，不知道是哪一项在报。 */
-    CHECK(status_of(only_person(outcome), ppe_guard::PART_HAND_LEFT) == ppe_guard::PART_VIOLATION);
-    CHECK(status_of(only_person(outcome), ppe_guard::PART_HAND_RIGHT) == ppe_guard::PART_VIOLATION);
+    CHECK(status_of(only_person(outcome), ppe_guard::PART_HAND_LEFT) != ppe_guard::PART_VIOLATION);
+    CHECK(status_of(only_person(outcome), ppe_guard::PART_HAND_RIGHT) != ppe_guard::PART_VIOLATION);
+    CHECK(only_person(outcome).regions.size() == 1);
+    CHECK(only_person(outcome).regions.at(0).part == ppe_guard::HAND_UNSIDED);
+    CHECK(only_person(outcome).regions.at(0).box == frame.back().box);
 }
 
 /* 目标：同一 track 断开超过 reacquire_gap 视为新会话，可以再次报警。 */
@@ -1028,7 +1029,7 @@ void test_helmet_absence_skips_small_person()
 }
 
 /* 目标：两人挨着站、只有一个安全帽框能覆盖两人搜索区时，两人都不推断缺帽。 */
-void test_helmet_shared_credit_between_neighbours()
+void test_ambiguous_helmet_prevents_absence_inference()
 {
     Guard guard;
     Config config = base_config();
@@ -1047,7 +1048,7 @@ void test_helmet_shared_credit_between_neighbours()
     CHECK(outcome.candidate_observations == 0);
     CHECK(outcome.people.size() == 2);
     for (size_t i = 0; i < outcome.people.size(); ++i)
-        CHECK(status_of(outcome.people[i], ppe_guard::PART_HELMET) == ppe_guard::PART_CLEAR);
+        CHECK(status_of(outcome.people[i], ppe_guard::PART_HELMET) == ppe_guard::PART_UNKNOWN);
 }
 
 /* 目标：手臂横伸到人框外面（人框只框到躯干）时，裸手证据仍要归到这个人。
@@ -1101,10 +1102,55 @@ void test_hand_attaches_to_center_nearest_person()
     CHECK(outcome.rejected_observations == 0);
 }
 
+void test_local_regions_and_session_notification()
+{
+    Guard guard;
+    Config config = base_config();
+    config.workwear_require_positive = true;
+    config.positive_labels[ppe_guard::PART_WORKWEAR] = {"workwear_on"};
+    config.positive_labels[ppe_guard::PART_HAND_LEFT] = {"hand_gloved"};
+    const auto person = person_box(13, {100, 100, 100, 200});
+    const auto head = violation_box("bare_head", {130, 100, 30, 30});
+    const auto hand = violation_box("bare_hand", {100, 190, 20, 20});
+    std::vector<AlgoResult> objects = {person, head, hand};
+    const Outcome pending = guard.update(objects, 0, config);
+    CHECK(pending.candidate_people == 1 && pending.candidate_observations == 3);
+    guard.update(objects, 500, config);
+    Outcome outcome = guard.update(objects, 1100, config);
+    CHECK(outcome.candidate_people == 0);
+    const auto &regions = only_person(outcome).regions;
+    CHECK(regions.size() == 3);
+    CHECK(regions.at(0).box == head.box && !regions.at(0).inferred);
+    CHECK(regions.at(1).box == hand.box && !regions.at(1).inferred);
+    CHECK(regions.at(2).box == cv::Rect(100, 150, 100, 100) && regions.at(2).inferred);
+    guard.mark_reported(13);
+    objects = {person, violation_box("workwear_on", {100, 150, 100, 100})};
+    outcome = guard.update(objects, 1500, config);
+    CHECK(only_person(outcome).regions.empty());
+    CHECK(!only_person(outcome).report_due);
+    objects.push_back(hand);
+    objects.push_back(violation_box("hand_gloved", hand.box));
+    outcome = guard.update(objects, 2000, config);
+    CHECK(outcome.vetoed_observations == 1 && only_person(outcome).regions.empty());
+    objects.back().box.x += 60;
+    outcome = guard.update(objects, 2300, config);
+    CHECK(only_person(outcome).regions.size() == 1);
+    CHECK(!only_person(outcome).report_due);
+    objects.push_back(person_box(14, person.box));
+    outcome = guard.update(objects, 2500, config);
+    CHECK(outcome.rejected_observations == 1);
+    CHECK(only_person(outcome).regions.empty());
+    objects = {person, violation_box("workwear_on", {100, 150, 100, 100})};
+    guard.update(objects, 4500, config);
+    outcome = guard.update(objects, 6500, config);
+    CHECK(!only_person(outcome).violation);
+}
+
 } // namespace
 
 int main()
 {
+    test_local_regions_and_session_notification();
     test_confirmation_needs_count_and_span();
     test_gap_dedupes_adjacent_frames();
     test_window_expiry();
@@ -1153,7 +1199,7 @@ int main()
     test_helmet_above_person_still_counts();
     test_helmet_absence_skips_edge_person();
     test_helmet_absence_skips_small_person();
-    test_helmet_shared_credit_between_neighbours();
+    test_ambiguous_helmet_prevents_absence_inference();
     test_hand_outside_person_box_still_attaches();
     test_hand_far_away_is_rejected();
     test_hand_attaches_to_center_nearest_person();

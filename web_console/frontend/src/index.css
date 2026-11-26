@@ -1,37 +1,43 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg: #0f1117;
-  --bg2: #171c2b;          /* 背景渐变的较亮一端，给暗色界面一点纵深 */
-  --surface: #1a1d27;
-  --surface2: #22263a;
-  --border: #2e3352;
+  color-scheme: dark;
+  --bg: #0b1528;
+  --bg2: #182440;
+  --surface: #1a2a42;
+  --surface2: #253851;
+  --border: rgba(181, 210, 245, .22);
   --accent: #4f8ef7;
-  --accent2: #7c3aed;
-  --green: #22c55e;
-  --red: #ef4444;
-  --yellow: #f59e0b;
-  --text: #e2e8f0;
-  --text2: #94a3b8;
-  --radius: 8px;
-  /* 亚克力(毛玻璃)材质 —— 选择性用于侧边栏/卡片/弹窗；不支持 backdrop-filter 时回退实底。
-     比 --surface 更亮更透，让背后的彩色光晕能"磨砂"透出来，玻璃感才明显。 */
-  --glass-bg: rgba(34, 40, 60, 0.50);
-  --glass-blur: blur(22px) saturate(180%);
-  --glass-border: rgba(255, 255, 255, 0.14);
-  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.10);  /* 顶部高光，仿苹果材质 */
+  --accent2: #a492ff;
+  --green: #77e5b5;
+  --red: #ff929b;
+  --yellow: #ffca76;
+  --text: #f2f7ff;
+  --text2: #b9c8dc;
+  --radius: 12px;
+  --glass-bg: #1c2c44;
+  --glass-dialog: #192940;
+  --glass-blur: none;
+  --glass-border: rgba(206, 229, 255, .25);
+  --glass-sheen:
+    radial-gradient(ellipse 76% 145% at 0% -50%, rgba(205, 245, 255, .15), transparent 74%),
+    linear-gradient(130deg, rgba(235, 249, 255, .10), rgba(211, 234, 255, .018) 46%, rgba(166, 182, 255, .085));
+  --glass-highlight: inset 0 1px 0 rgba(250, 254, 255, .36), inset 1px 0 0 rgba(223, 250, 255, .07), inset 0 -1px 0 rgba(188, 213, 255, .07);
+  --glass-shadow: var(--glass-highlight), 0 8px 24px -12px rgba(2, 9, 26, .65);
+  --glass-wallpaper: linear-gradient(145deg, #192b40, #101b2e);
+}
+
+@supports ((-webkit-backdrop-filter: blur(2px)) or (backdrop-filter: blur(2px))) {
+  :root {
+    --glass-bg: rgba(22, 40, 63, .65);
+    --glass-dialog: rgba(19, 34, 55, .89);
+    --glass-blur: saturate(145%) blur(18px);
+  }
 }
 
 body {
-  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
-  /* 对角渐变打底 + 几团柔和的蓝/紫/青光晕：给毛玻璃面"磨砂"出彩色的料 */
-  background-color: var(--bg);
-  background-image:
-    radial-gradient(circle at 12% 16%, rgba(79, 142, 247, 0.16) 0%, transparent 38%),
-    radial-gradient(circle at 90% 8%,  rgba(124, 58, 237, 0.14) 0%, transparent 36%),
-    radial-gradient(circle at 80% 95%, rgba(56, 189, 248, 0.08) 0%, transparent 42%),
-    linear-gradient(135deg, var(--bg) 0%, var(--bg2) 100%);
-  background-attachment: fixed;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  background: var(--glass-wallpaper) var(--bg) fixed;
   color: var(--text);
   font-size: 14px;
   line-height: 1.5;

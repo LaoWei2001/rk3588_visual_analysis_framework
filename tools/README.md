@@ -22,6 +22,7 @@
 tools/
 ├── check.py                   # 审核整改的代表性回归入口（不安装、不部署）
 ├── build/                     # Logic 清单与上报模板生成器
+├── setup/                     # 平台依赖准备与板端环境检查
 ├── device/                    # 在设备上独立运行的配置与诊断工具
 │   ├── first_net_config/      # 首次网络配置终端工具
 │   ├── gpio_test/             # GPIO 控制与测试工具

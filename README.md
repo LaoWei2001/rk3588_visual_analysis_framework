@@ -76,7 +76,9 @@ sudo ./install.sh online
 ./install.sh status
 ```
 
-安装器准备构建依赖并部署 Web、运行管理及 GPIO 等服务。已有环境可先用 `bash install_deps.sh --check` 检查依赖。**首次安装默认将继电器 `GPIO6_A2` 置低并保存状态，执行前请核对接线。**
+安装器准备构建依赖并部署 Web、运行管理及 GPIO 等服务。已有环境可先用 `bash tools/setup/install_deps.sh --check` 检查依赖。**首次安装默认将继电器 `GPIO6_A2` 置低并保存状态，执行前请核对接线。**
+
+Web 端口可省略，首次安装默认使用 8080，之后更新沿用已配置的端口。自定义示例：`sudo ./install.sh online --port 9090`。在新版离线包目录中使用 `sudo ./install_offline.sh --port 9090`。
 
 断网新设备使用完整离线 bundle；`install.sh offline` 适用于依赖已准备好的设备。详见[离线交付](docs/guides/project-guide.md#部署与离线交付)。
 
@@ -95,7 +97,7 @@ sudo ./install_app.sh readme_demo
 
 ### 3. 在 Web 中启动
 
-打开 **`http://<设备IP>:8080`**，使用板端 Linux 系统账号登录：
+使用默认端口时，打开 **`http://<设备IP>:8080`**，使用板端 Linux 系统账号登录：
 
 1. 在程序管理中选择 `readme_demo` 和 `quickstart.json`，点击“启动”。
 2. 打开“实时画面”，查看循环播放的视频；也可用 VLC 打开 `rtsp://<设备IP>:8554/live`。
@@ -108,17 +110,16 @@ Web 停止流程会等待引擎完成清理，核对退出记录并展示对应�
 <details>
 <summary><strong>命令行运行与配置检查</strong></summary>
 
-先停止其他视觉实例，在仓库根目录执行：
+进入已安装程序的目录执行：
 
 ```bash
-cd dist/readme_demo
-export ASSETS_DIR="$PWD/assets"
-export LD_LIBRARY_PATH="$PWD/libs:$LD_LIBRARY_PATH"
+cd /opt/ai_apps/readme_demo
+./vision_analysis --help
 ./vision_analysis --validate-config ./assets/quickstart.json
 ./vision_analysis ./assets/quickstart.json
 ```
 
-日志输出到当前终端，按 `Ctrl+C` 停止。`--validate-config` 在启动前完成配置结构与资源路径检查。无界面运行使用上述直接启动方式；HDMI 运行可使用包内 `run.sh`，该脚本会把所选配置的 `enable_display` 改为 `1`。
+视频启动命令和 Web 的“启动”使用同一套托管流程。命令在前台持续显示程序输出。按 Ctrl+C 可正常停止本次运行，也可以在 Web 中查看实时画面、日志或点击“停止”。程序退出后终端返回提示符。HDMI 和实时预览分别由配置中的 `enable_display` 和 `enable_rtsp` 控制。省略参数时使用上次有效的配置，其次为 `config.json` 或按文件名排序的首个配置。Web 中手动选择的配置可通过命令参数指定。
 
 平台以一个视觉应用统一托管多路视频，各通道在同一应用内独立配置模型与业务。
 
@@ -194,7 +195,25 @@ SDK 提供随应用编译的源码接口；更新业务模块后重新构建即�
 └── docs/                使用指南、接口、运维与性能记录
 ```
 
-三个根目录脚本分别负责：`build.sh` 构建应用包，`install.sh` 安装平台，`install_app.sh` 安装应用。代码职责与依赖边界见[整体架构](docs/architecture/overview.md)，C++ 内部目录见[引擎源码导航](engine/README.md)。
+### 常用脚本速查
+
+以下命令均从项目根目录执行。
+
+| 要做的事 | 命令 |
+| --- | --- |
+| 联网安装或更新平台 | `sudo ./install.sh online` |
+| 在依赖已就绪的设备上离线部署 | `sudo ./install.sh offline` |
+| 发布前端页面，可同时更改监听端口 | `./update_webconsole.sh` 或 `sudo ./update_webconsole.sh --port 9090` |
+| 查看平台服务状态 | `./install.sh status` |
+| 构建应用包 | `./build.sh <应用名>` |
+| 安装已构建的应用包 | `sudo ./install_app.sh <应用名>` |
+| 检查板端依赖 | `bash tools/setup/install_deps.sh --check` |
+| 停止 Web 控制台 | `bash web_console/scripts/stop.sh` |
+| 制作完整离线包 | Debian 用 `bash tools/offline_dev_install/debian/create_bundle.sh --full`，Ubuntu 用 `bash tools/offline_dev_install/ubuntu/create_bundle.sh` |
+
+控制台部署和图片引擎构建脚本集中在 `web_console/scripts/`，平台安装时会自动调用。
+
+代码职责与依赖边界见[整体架构](docs/architecture/overview.md)，C++ 内部目录见[引擎源码导航](engine/README.md)。
 
 ## 性能与验证
 

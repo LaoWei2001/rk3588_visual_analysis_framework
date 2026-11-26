@@ -103,7 +103,6 @@ void YoloV8Det::query_model_info()
     model_io::validate_io(io_num);
     if (io_num.n_output != 9)
         throw std::runtime_error("Unsupported yolov8det output count");
-    io_num_in_ = io_num.n_input;
     io_num_out_ = io_num.n_output;
 
     memset(&in_attr_, 0, sizeof(in_attr_));
@@ -266,8 +265,7 @@ void YoloV8Det::compute_dfl(float *tensor, int dfl_len, float *box)
 }
 
 int YoloV8Det::process_i8(int8_t *box_tensor, int32_t box_zp, float box_scale, int8_t *score_tensor, int32_t score_zp,
-                          float score_scale, int8_t *score_sum_tensor, int32_t score_sum_zp, float score_sum_scale,
-                          int grid_h, int grid_w, int stride, int dfl_len, int class_num, std::vector<float> &boxes,
+                          float score_scale, int grid_h, int grid_w, int stride, int dfl_len, int class_num, std::vector<float> &boxes,
                           std::vector<float> &objProbs, std::vector<int> &classId, float threshold)
 {
     int validCount = 0;
@@ -332,7 +330,7 @@ int YoloV8Det::process_i8(int8_t *box_tensor, int32_t box_zp, float box_scale, i
     return validCount;
 }
 
-int YoloV8Det::process_fp32(float *box_tensor, float *score_tensor, float *score_sum_tensor, int grid_h, int grid_w,
+int YoloV8Det::process_fp32(float *box_tensor, float *score_tensor, int grid_h, int grid_w,
                             int stride, int dfl_len, int class_num, std::vector<float> &boxes,
                             std::vector<float> &objProbs, std::vector<int> &classId, float threshold)
 {
@@ -460,7 +458,6 @@ int YoloV8Det::post_process(rknn_output *outputs, LetterBoxInfo &lb, std::vector
         {
             int8_t *box_tensor = (int8_t *)outputs[i * 3].buf;
             int8_t *score_tensor = (int8_t *)outputs[i * 3 + 1].buf;
-            int8_t *score_sum_tensor = nullptr;
 
             int32_t box_zp = out_attrs_[i * 3].zp;
             int32_t score_zp = out_attrs_[i * 3 + 1].zp;
@@ -468,16 +465,15 @@ int YoloV8Det::post_process(rknn_output *outputs, LetterBoxInfo &lb, std::vector
             float score_scale = out_attrs_[i * 3 + 1].scale;
 
             validCount += process_i8(box_tensor, box_zp, box_scale, score_tensor, score_zp, score_scale,
-                                     score_sum_tensor, 0, 1.0f, grid_h, grid_w, stride_arr[i], dfl_len, num_classes_,
+                                     grid_h, grid_w, stride_arr[i], dfl_len, num_classes_,
                                      filterBoxes, objProbs, classId, obj_thresh_);
         }
         else
         {
             float *box_tensor = (float *)outputs[i * 3].buf;
             float *score_tensor = (float *)outputs[i * 3 + 1].buf;
-            float *score_sum_tensor = nullptr;
 
-            validCount += process_fp32(box_tensor, score_tensor, score_sum_tensor, grid_h, grid_w, stride_arr[i],
+            validCount += process_fp32(box_tensor, score_tensor, grid_h, grid_w, stride_arr[i],
                                        dfl_len, num_classes_, filterBoxes, objProbs, classId, obj_thresh_);
         }
     }

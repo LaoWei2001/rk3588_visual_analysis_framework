@@ -16,19 +16,18 @@
     "bytetrack_low_thresh": 0.1,
     "bytetrack_low_iou_thresh": 0.2,
     "performance_display": true,
-    "enable_pause_key": 0,
     "enable_rtsp": true,
-    "rtsp_codec": "h264",
     "rtsp_port": 8554,
-    "rtsp_path": "/live"
+    "rtsp_path": "/live",
+    "rtsp_bitrate": 4096
   },
   "channels": [
     {
       "id": 0,
       "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
-        "video_enc": "h264"
+        "src_type": "file",
+        "url": "/userdata/1126.mp4",
+        "loop": false
       },
       "models": [
         {
@@ -56,9 +55,9 @@
     {
       "id": 1,
       "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.151/Streaming/Channels/101",
-        "video_enc": "h264"
+        "src_type": "file",
+        "url": "/userdata/1126.mp4",
+        "loop": false
       },
       "models": [
         {
@@ -86,8 +85,9 @@
     {
       "id": 2,
       "stream": {
-        "src_type": "usb",
-        "device": "/dev/video81"
+        "src_type": "file",
+        "url": "/userdata/1126.mp4",
+        "loop": false
       },
       "models": [
         {
@@ -115,424 +115,9 @@
     {
       "id": 3,
       "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
-        "video_enc": "h264"
-      },
-      "models": [
-        {
-          "id": "helmet",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8.rknn",
-          "label_path": "assets/labels_helmet.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": -1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      },
-      "logic_parameters": {},
-      "enable": true,
-      "roi_zones": []
-    },
-    {
-      "id": 4,
-      "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.151/Streaming/Channels/101",
-        "video_enc": "h264"
-      },
-      "models": [
-        {
-          "id": "helmet",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8.rknn",
-          "label_path": "assets/labels_helmet.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": -1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      },
-      "logic_parameters": {},
-      "enable": true,
-      "roi_zones": []
-    },
-    {
-      "id": 5,
-      "stream": {
-        "src_type": "usb",
-        "device": "/dev/video81"
-      },
-      "models": [
-        {
-          "id": "helmet",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8.rknn",
-          "label_path": "assets/labels_helmet.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": -1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      },
-      "logic_parameters": {},
-      "enable": true,
-      "roi_zones": []
-    },
-    {
-      "id": 6,
-      "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
-        "video_enc": "h264"
-      },
-      "models": [
-        {
-          "id": "helmet",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8.rknn",
-          "label_path": "assets/labels_helmet.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": -1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      },
-      "logic_parameters": {},
-      "enable": true,
-      "roi_zones": []
-    },
-    {
-      "id": 7,
-      "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.151/Streaming/Channels/101",
-        "video_enc": "h264"
-      },
-      "models": [
-        {
-          "id": "helmet",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8.rknn",
-          "label_path": "assets/labels_helmet.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": -1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      },
-      "logic_parameters": {},
-      "enable": true,
-      "roi_zones": []
-    },
-    {
-      "id": 8,
-      "stream": {
-        "src_type": "usb",
-        "device": "/dev/video81"
-      },
-      "models": [
-        {
-          "id": "helmet",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8.rknn",
-          "label_path": "assets/labels_helmet.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": -1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      },
-      "logic_parameters": {},
-      "enable": true,
-      "roi_zones": []
-    },
-    {
-      "id": 9,
-      "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
-        "video_enc": "h264"
-      },
-      "models": [
-        {
-          "id": "helmet",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8.rknn",
-          "label_path": "assets/labels_helmet.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": -1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      },
-      "logic_parameters": {},
-      "enable": true,
-      "roi_zones": []
-    },
-    {
-      "id": 10,
-      "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.151/Streaming/Channels/101",
-        "video_enc": "h264"
-      },
-      "models": [
-        {
-          "id": "helmet",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8.rknn",
-          "label_path": "assets/labels_helmet.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": -1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      },
-      "logic_parameters": {},
-      "enable": true,
-      "roi_zones": []
-    },
-    {
-      "id": 11,
-      "stream": {
-        "src_type": "usb",
-        "device": "/dev/video81"
-      },
-      "models": [
-        {
-          "id": "helmet",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8.rknn",
-          "label_path": "assets/labels_helmet.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": -1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      },
-      "logic_parameters": {},
-      "enable": true,
-      "roi_zones": []
-    },
-    {
-      "id": 12,
-      "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
-        "video_enc": "h264"
-      },
-      "models": [
-        {
-          "id": "helmet",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8.rknn",
-          "label_path": "assets/labels_helmet.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": -1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      },
-      "logic_parameters": {},
-      "enable": true,
-      "roi_zones": []
-    },
-    {
-      "id": 13,
-      "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.151/Streaming/Channels/101",
-        "video_enc": "h264"
-      },
-      "models": [
-        {
-          "id": "helmet",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8.rknn",
-          "label_path": "assets/labels_helmet.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": -1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      },
-      "logic_parameters": {},
-      "enable": true,
-      "roi_zones": []
-    },
-    {
-      "id": 14,
-      "stream": {
-        "src_type": "usb",
-        "device": "/dev/video81"
-      },
-      "models": [
-        {
-          "id": "helmet",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8.rknn",
-          "label_path": "assets/labels_helmet.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": -1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      },
-      "logic_parameters": {},
-      "enable": true,
-      "roi_zones": []
-    },
-    {
-      "id": 15,
-      "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.150/Streaming/Channels/101",
-        "video_enc": "h264"
-      },
-      "models": [
-        {
-          "id": "helmet",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8.rknn",
-          "label_path": "assets/labels_helmet.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": -1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      },
-      "logic_parameters": {},
-      "enable": true,
-      "roi_zones": []
-    },
-    {
-      "id": 16,
-      "stream": {
-        "src_type": "rtsp",
-        "url": "rtsp://admin:jndxc301@192.168.2.151/Streaming/Channels/101",
-        "video_enc": "h264"
-      },
-      "models": [
-        {
-          "id": "helmet",
-          "enable": true,
-          "model_type": "yolov8_det",
-          "model_path": "assets/yolov8.rknn",
-          "label_path": "assets/labels_helmet.txt",
-          "version": "",
-          "obj_thresh": 0.3,
-          "nms_thresh": 0.45,
-          "detect_classes": [],
-          "npu_core": -1
-        }
-      ],
-      "logic": "logic_default",
-      "report_policy": {
-        "enabled": false,
-        "deliveries": []
-      },
-      "logic_parameters": {},
-      "enable": true,
-      "roi_zones": []
-    },
-    {
-      "id": 17,
-      "stream": {
-        "src_type": "usb",
-        "device": "/dev/video81"
+        "src_type": "file",
+        "url": "/userdata/1126.mp4",
+        "loop": false
       },
       "models": [
         {
@@ -565,250 +150,54 @@
         "y": 60
       },
       "model": {
-        "x": 380,
-        "y": 60
+        "x": 399,
+        "y": 59
       },
       "logic": {
-        "x": 680,
-        "y": 60
+        "x": 682,
+        "y": 56
       }
     },
     "1": {
       "stream": {
-        "x": 61,
-        "y": 150
+        "x": 59,
+        "y": 175
       },
       "model": {
-        "x": 381,
-        "y": 150
+        "x": 398,
+        "y": 174
       },
       "logic": {
         "x": 681,
-        "y": 150
+        "y": 171
       }
     },
     "2": {
       "stream": {
-        "x": 65,
-        "y": 239
+        "x": 48,
+        "y": 302
       },
       "model": {
-        "x": 385,
-        "y": 239
+        "x": 379,
+        "y": 302
       },
       "logic": {
-        "x": 685,
-        "y": 239
+        "x": 662,
+        "y": 300
       }
     },
     "3": {
       "stream": {
-        "x": 63,
-        "y": 329
+        "x": 46,
+        "y": 420
       },
       "model": {
-        "x": 383,
-        "y": 329
+        "x": 379,
+        "y": 418
       },
       "logic": {
-        "x": 683,
-        "y": 329
-      }
-    },
-    "4": {
-      "stream": {
-        "x": 64,
-        "y": 419
-      },
-      "model": {
-        "x": 384,
-        "y": 419
-      },
-      "logic": {
-        "x": 684,
-        "y": 419
-      }
-    },
-    "5": {
-      "stream": {
-        "x": 68,
-        "y": 508
-      },
-      "model": {
-        "x": 388,
-        "y": 508
-      },
-      "logic": {
-        "x": 688,
-        "y": 508
-      }
-    },
-    "6": {
-      "stream": {
-        "x": 894,
-        "y": 53
-      },
-      "model": {
-        "x": 1214,
-        "y": 53
-      },
-      "logic": {
-        "x": 1514,
-        "y": 53
-      }
-    },
-    "7": {
-      "stream": {
-        "x": 896,
-        "y": 144
-      },
-      "model": {
-        "x": 1216,
-        "y": 144
-      },
-      "logic": {
-        "x": 1516,
-        "y": 144
-      }
-    },
-    "8": {
-      "stream": {
-        "x": 900,
-        "y": 233
-      },
-      "model": {
-        "x": 1220,
-        "y": 233
-      },
-      "logic": {
-        "x": 1520,
-        "y": 233
-      }
-    },
-    "9": {
-      "stream": {
-        "x": 897,
-        "y": 322
-      },
-      "model": {
-        "x": 1217,
-        "y": 322
-      },
-      "logic": {
-        "x": 1517,
-        "y": 322
-      }
-    },
-    "10": {
-      "stream": {
-        "x": 898,
-        "y": 412
-      },
-      "model": {
-        "x": 1218,
-        "y": 412
-      },
-      "logic": {
-        "x": 1518,
-        "y": 412
-      }
-    },
-    "11": {
-      "stream": {
-        "x": 902,
-        "y": 502
-      },
-      "model": {
-        "x": 1222,
-        "y": 502
-      },
-      "logic": {
-        "x": 1522,
-        "y": 502
-      }
-    },
-    "12": {
-      "stream": {
-        "x": 1771,
-        "y": 42
-      },
-      "model": {
-        "x": 2091,
-        "y": 42
-      },
-      "logic": {
-        "x": 2391,
-        "y": 42
-      }
-    },
-    "13": {
-      "stream": {
-        "x": 1773,
-        "y": 133
-      },
-      "model": {
-        "x": 2093,
-        "y": 133
-      },
-      "logic": {
-        "x": 2393,
-        "y": 133
-      }
-    },
-    "14": {
-      "stream": {
-        "x": 1777,
-        "y": 222
-      },
-      "model": {
-        "x": 2097,
-        "y": 222
-      },
-      "logic": {
-        "x": 2397,
-        "y": 222
-      }
-    },
-    "15": {
-      "stream": {
-        "x": 1774,
-        "y": 311
-      },
-      "model": {
-        "x": 2094,
-        "y": 311
-      },
-      "logic": {
-        "x": 2394,
-        "y": 311
-      }
-    },
-    "16": {
-      "stream": {
-        "x": 1775,
-        "y": 402
-      },
-      "model": {
-        "x": 2095,
-        "y": 402
-      },
-      "logic": {
-        "x": 2395,
-        "y": 402
-      }
-    },
-    "17": {
-      "stream": {
-        "x": 1779,
-        "y": 491
-      },
-      "model": {
-        "x": 2099,
-        "y": 491
-      },
-      "logic": {
-        "x": 2399,
-        "y": 491
+        "x": 667,
+        "y": 420
       }
     }
   }

@@ -1,17 +1,19 @@
 """Authenticated HTTP adapter; model execution stays in the native engine."""
 import json
+import errno
 import os
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, StrictBool, StrictInt
 
+from services.asset_upload import save_asset
 from services.image_inference.engine import EngineCatalog, JobError
 from services.image_inference.jobs import ImageJobs
-from services.image_inference.sources import scan_device_images
+from services.image_inference.sources import list_device_folders, scan_device_images
 from services.image_inference.storage import require_space
 
 console_root = Path(os.environ.get('APPS_ROOT', '/opt/ai_apps')) / '_console'
@@ -43,12 +45,14 @@ class UploadJob(BaseModel):
     files: List[UploadImage] = Field(min_length=1)
 
 
-async def call(function, *args):
+async def call(function, *args, **kwargs):
     try:
-        return await run_in_threadpool(function, *args)
+        return await run_in_threadpool(function, *args, **kwargs)
     except JobError as exc:
         raise HTTPException(exc.status, str(exc)) from exc
     except OSError as exc:
+        if exc.errno in (errno.ENOSPC, errno.EDQUOT):
+            raise HTTPException(507, '存储空间不足，请清理空间后继续') from exc
         raise HTTPException(503, f'图片任务存储不可用：{exc.strerror}') from exc
 
 
@@ -67,9 +71,40 @@ async def clear_completed_jobs():
     return await call(image_jobs.clear_completed)
 
 
+@router.get('/assets')
+def list_inference_assets():
+    directory = console_root / 'model_assets'
+    result = {'models': [], 'labels': []}
+    if directory.is_dir():
+        for path in sorted(directory.iterdir()):
+            suffix = path.suffix.lower()
+            if suffix in ('.rknn', '.txt') and not path.is_symlink() and path.is_file():
+                result['models' if suffix == '.rknn' else 'labels'].append(str(path))
+    return result
+
+
+@router.post('/assets/upload')
+async def upload_inference_asset(file: UploadFile = File(...)):
+    name = Path(file.filename or '').name
+    if Path(name).suffix.lower() not in ('.rknn', '.txt'):
+        raise HTTPException(422, '请选择 .rknn 模型或 .txt 标签文件')
+    if not file.size or file.size > 1024 ** 3:
+        raise HTTPException(422, '文件不能为空且不能超过 1 GiB')
+    directory = console_root / 'model_assets'
+    await call(require_space, directory, file.size)
+    await call(directory.mkdir, mode=0o700, parents=True, exist_ok=True)
+    target = await call(save_asset, directory, name, file.file)
+    return {'path': str(target), 'renamed': target.name != name}
+
+
 @router.get('/models/info')
 async def model_info(path: str, model_type: str):
     return await call(catalog.inspect_model, path, model_type)
+
+
+@router.get('/device-folders')
+async def device_folders(path: str = Query('/', min_length=1, max_length=4096)):
+    return await call(list_device_folders, path)
 
 
 @router.post('/device-images')
@@ -110,10 +145,15 @@ async def upload_image(job_id: str, index: int, request: Request):
                 await call(image_jobs.write_input, job_id, index, output, chunk)
             if received != expected:
                 raise HTTPException(422, '图片上传不完整')
+        await call(image_jobs.upload_complete, job_id, index)
         return {'received': received}
     except FileExistsError as exc:
         raise HTTPException(409, '该图片已上传或正在上传') from exc
     except BaseException as exc:
+        if (isinstance(exc, HTTPException) and exc.status_code == 507 or
+                isinstance(exc, OSError) and exc.errno in (errno.ENOSPC, errno.EDQUOT)):
+            await call(image_jobs.pause_upload, job_id, index, '存储空间不足，请清理空间后继续上传')
+            raise HTTPException(507, '存储空间不足，请清理空间后继续上传') from exc
         try:
             await call(image_jobs.discard_upload, job_id)
         except HTTPException:
@@ -137,6 +177,11 @@ async def discard_upload(job_id: str):
 @router.post('/jobs/{job_id}/cancel')
 async def cancel(job_id: str):
     return await call(image_jobs.cancel, job_id)
+
+
+@router.post('/jobs/{job_id}/resume', status_code=202)
+async def resume(job_id: str):
+    return await call(image_jobs.resume, job_id)
 
 
 @router.get('/jobs/{job_id}/items/{index}')

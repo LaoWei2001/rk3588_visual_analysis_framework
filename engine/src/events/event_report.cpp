@@ -50,13 +50,10 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
         cJSON_Delete(policy);
         return result(EventReportStatus::DISABLED, "", "report policy is disabled");
     }
-    DeliveryRequirements requirements = delivery_requirements(policy, input.event_type);
-    requirements.annotated_image = true;
-    requirements.raw_image = true;
-    // Local evidence is independent of whether an external delivery is configured.
-    const uint32_t media_flags = requirements.media_flags | EVENT_MEDIA_IMAGE;
+    // Every accepted event requests both local images. Deliveries may additionally request video.
+    const bool need_video = delivery_needs_video(policy, input.event_type);
     const int resolved_video_source_channel_id = identity.video_source_channel_id;
-    if ((media_flags & EVENT_MEDIA_VIDEO) && !app_ctrl_has_channel(resolved_video_source_channel_id))
+    if (need_video && !app_ctrl_has_channel(resolved_video_source_channel_id))
     {
         cJSON_Delete(policy);
         return result(EventReportStatus::INVALID_REQUEST, "", "event video source channel is not available");
@@ -73,7 +70,7 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
     const bool allow_merge = input.merge_mode == EventMergeMode::POLICY && merge_sec > 0.0f;
 
     pthread_mutex_lock(&g_mtx);
-    if (!ensure_workers_locked((media_flags & EVENT_MEDIA_IMAGE) != 0))
+    if (!ensure_workers_locked())
     {
         record_failure("event worker unavailable", "");
         pthread_mutex_unlock(&g_mtx);
@@ -93,7 +90,7 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
         merge_job.trigger_unix_ms = ctx->unix_ms;
         merge_job.trigger_time = ctx->time_str();
         merge_job.fields = input.fields;
-        merge_job.extend_video = (media_flags & EVENT_MEDIA_VIDEO) != 0;
+        merge_job.extend_video = need_video;
         pthread_mutex_lock(&g_persist_mtx);
         g_persist_jobs.push(std::move(merge_job));
         pthread_cond_signal(&g_persist_cv);
@@ -142,7 +139,7 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
     cJSON *source = cJSON_CreateObject();
     if (identity.source_channel_id >= 0)
         cJSON_AddNumberToObject(source, "channel_id", identity.source_channel_id);
-    if (media_flags & EVENT_MEDIA_VIDEO)
+    if (need_video)
         cJSON_AddNumberToObject(source, "video_channel_id", resolved_video_source_channel_id);
     if (composite_image)
     {
@@ -176,22 +173,19 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
 
     cJSON *media_root = cJSON_CreateObject();
     cJSON_AddNumberToObject(media_root, "schema_version", 3);
-    cJSON_AddStringToObject(media_root, "status", media_flags == EVENT_MEDIA_NONE ? "ready" : "requested");
+    cJSON_AddStringToObject(media_root, "status", "requested");
     cJSON *media_entries = cJSON_CreateObject();
-    if (media_flags & EVENT_MEDIA_IMAGE)
     {
         cJSON *image = cJSON_CreateObject();
         cJSON_AddStringToObject(image, "status", "requested");
         cJSON_AddStringToObject(image, "error", "");
         cJSON *files = cJSON_CreateObject();
-        if (requirements.annotated_image)
-            cJSON_AddStringToObject(files, "annotated_image", "");
-        if (requirements.raw_image)
-            cJSON_AddStringToObject(files, "raw_image", "");
+        cJSON_AddStringToObject(files, "annotated_image", "");
+        cJSON_AddStringToObject(files, "raw_image", "");
         cJSON_AddItemToObject(image, "files", files);
         cJSON_AddItemToObject(media_entries, "image", image);
     }
-    if (media_flags & EVENT_MEDIA_VIDEO)
+    if (need_video)
     {
         cJSON *video = cJSON_CreateObject();
         cJSON_AddStringToObject(video, "status", "requested");
@@ -214,15 +208,14 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
     persist_job.event_dir = dir;
     persist_job.merge_key = merge_key;
     std::vector<std::string> media_errors;
-    if (media_flags & EVENT_MEDIA_IMAGE)
     {
-        const cv::Mat *event_frame = composite_image ? nullptr : ctx->business_frame();
+        const cv::Mat *event_frame = composite_image ? nullptr : ctx->source_frame();
         const bool has_composite_frame =
             composite_image && std::any_of(composite_image->panes.begin(), composite_image->panes.end(),
                                            [](const ImageJob::Pane &pane) { return !pane.frame.empty(); });
         if ((!composite_image && (!event_frame || event_frame->empty())) || (composite_image && !has_composite_frame))
         {
-            const char *reason = composite_image ? "all selected channel frames are empty" : "current frame is empty";
+            const char *reason = composite_image ? "all selected channel frames are empty" : "source frame is unavailable";
             cJSON *image = cJSON_GetObjectItemCaseSensitive(media_entries, "image");
             cJSON_ReplaceItemInObjectCaseSensitive(image, "status", cJSON_CreateString("failed"));
             cJSON_ReplaceItemInObjectCaseSensitive(image, "error", cJSON_CreateString(reason));
@@ -234,8 +227,6 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
             cJSON_ReplaceItemInObjectCaseSensitive(image, "status", cJSON_CreateString("generating"));
             ImageJob job;
             job.event_dir = dir;
-            job.need_annotated = requirements.annotated_image;
-            job.need_raw = requirements.raw_image;
             job.overlay_mode = image_overlay;
             if (composite_image)
             {
@@ -247,10 +238,9 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
             }
             else
             {
-                /* CPU 帧在推理完成后不再修改；Mat 引用计数保证像素活到图片线程，
-                 * 避免在 Logic 热路径深拷贝 640×640×3。 */
+                /* 原始帧只读。图片线程通过 Mat 引用保留像素，绘制标注时再复制。 */
                 job.raw = *event_frame;
-                if (job.need_annotated && image_overlay != "none")
+                if (image_overlay != "none")
                 {
                     job.render_params = channel_render_params(*ctx);
                     job.render_params.show_fps = 0;
@@ -278,7 +268,7 @@ static EventReportResult report_event_impl(ChannelContext *ctx, const EventReque
         }
     }
 
-    if (media_flags & EVENT_MEDIA_VIDEO)
+    if (need_video)
     {
         cJSON *video = cJSON_GetObjectItemCaseSensitive(media_entries, "video");
         cJSON_ReplaceItemInObjectCaseSensitive(video, "status", cJSON_CreateString("generating"));
@@ -366,7 +356,6 @@ EventReportResult RuntimeEventSink::report(GlobalContext &context, const EventRe
     cJSON_Delete(policy);
     if (!image_selection_valid)
         return invalid(image_selection_error);
-    const bool need_image = true;
 
     CompositeImage composite;
 
@@ -379,79 +368,76 @@ EventReportResult RuntimeEventSink::report(GlobalContext &context, const EventRe
                out->logic.config_generation == runtime->generation;
     };
 
-    if (need_image)
+    std::vector<int> image_channel_ids;
+    if (image_selection.mode == "selected")
     {
-        std::vector<int> image_channel_ids;
-        if (image_selection.mode == "selected")
-        {
-            for (int channel_id : image_selection.channel_ids)
-                append_unique_channel(image_channel_ids, channel_id);
-        }
-        else if (image_selection.mode == "event_evidence")
-        {
-            for (int channel_id : request.evidence_channel_ids)
-                append_unique_channel(image_channel_ids, channel_id);
-        }
-        else if (VisionContextAccess::connected_channels(*gctx))
-        {
-            for (int channel_id : *VisionContextAccess::connected_channels(*gctx))
-                append_unique_channel(image_channel_ids, channel_id);
-        }
-
-        /* 旧全局 Logic 可能尚未填写 evidence_channel_ids；这时使用全部连入通道，
-         * 但绝不再挑其中一路冒充“主通道”。selected 为空则让图片明确失败。 */
-        if (image_channel_ids.empty() && image_selection.mode == "event_evidence" &&
-            VisionContextAccess::connected_channels(*gctx))
-            for (int channel_id : *VisionContextAccess::connected_channels(*gctx))
-                append_unique_channel(image_channel_ids, channel_id);
-
-        composite.width = runtime->config.disp_width & ~3;
-        composite.height = runtime->config.disp_height & ~1;
-        composite.selection_mode = image_selection.mode;
-        composite.requested_channel_ids = image_channel_ids;
-        composite.panes.reserve(image_channel_ids.size());
-
-        for (int channel_id : image_channel_ids)
-        {
-            ChannelFrameSnapshot snapshot;
-            if (!capture_report_frame(channel_id, &snapshot))
-            {
-                composite.missing_channel_ids.push_back(channel_id);
-                continue;
-            }
-
-            ImageJob::Pane pane;
-            pane.channel_id = channel_id;
-            pane.publication_seq = snapshot.logic.publication_seq;
-            pane.frame_id = snapshot.logic.frame_seq;
-            pane.frame_unix_ms = snapshot.logic.frame_unix_ms;
-            pane.frame = snapshot.frame;
-            pane.results = snapshot.results;
-            pane.rois = snapshot.rois;
-            pane.commands = snapshot.draw_cmds;
-            const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, channel_id);
-            if (channel && channel->inference_roi.has_roi())
-                pane.inference_roi = channel->inference_roi;
-            pane.render_params.chnId = channel_id;
-            pane.render_params.inputW = pane.frame.cols;
-            pane.render_params.inputH = pane.frame.rows;
-            pane.render_params.disp_fps = snapshot.logic.disp_fps;
-            pane.render_params.infer_fps = snapshot.logic.infer_fps;
-            pane.render_params.result_frame_id = snapshot.logic.frame_seq;
-            pane.render_params.show_fps = 0;
-            pane.render_params.target_mask = static_cast<uint8_t>(DrawCommand::DISPLAY | DrawCommand::IMAGE);
-            pane.render_params.show_system_overlays = true;
-            pane.render_params.show_custom_overlays = true;
-            pane.render_params.depth_background = channel_uses_depth_background(channel);
-            composite.panes.push_back(std::move(pane));
-        }
-
-        /* 缺失通道采用紧凑跳过策略；任意一路可用就继续生成图片。全部不可用时仍进入
-         * 本地事件箱，由 report_event_impl 将图片明确标记为 failed，而不是丢弃告警。 */
-        const int pane_count = static_cast<int>(composite.panes.size());
-        composite.cols = std::max(1, std::min(runtime->config.tile_cols, std::max(1, pane_count)));
-        composite.rows = std::max(1, (std::max(1, pane_count) + composite.cols - 1) / composite.cols);
+        for (int channel_id : image_selection.channel_ids)
+            append_unique_channel(image_channel_ids, channel_id);
     }
+    else if (image_selection.mode == "event_evidence")
+    {
+        for (int channel_id : request.evidence_channel_ids)
+            append_unique_channel(image_channel_ids, channel_id);
+    }
+    else if (VisionContextAccess::connected_channels(*gctx))
+    {
+        for (int channel_id : *VisionContextAccess::connected_channels(*gctx))
+            append_unique_channel(image_channel_ids, channel_id);
+    }
+
+    /* 旧全局 Logic 可能尚未填写 evidence_channel_ids；这时使用全部连入通道，
+     * 但绝不再挑其中一路冒充“主通道”。selected 为空则让图片明确失败。 */
+    if (image_channel_ids.empty() && image_selection.mode == "event_evidence" &&
+        VisionContextAccess::connected_channels(*gctx))
+        for (int channel_id : *VisionContextAccess::connected_channels(*gctx))
+            append_unique_channel(image_channel_ids, channel_id);
+
+    composite.width = runtime->config.disp_width & ~3;
+    composite.height = runtime->config.disp_height & ~1;
+    composite.selection_mode = image_selection.mode;
+    composite.requested_channel_ids = image_channel_ids;
+    composite.panes.reserve(image_channel_ids.size());
+
+    for (int channel_id : image_channel_ids)
+    {
+        ChannelFrameSnapshot snapshot;
+        if (!capture_report_frame(channel_id, &snapshot))
+        {
+            composite.missing_channel_ids.push_back(channel_id);
+            continue;
+        }
+
+        ImageJob::Pane pane;
+        pane.channel_id = channel_id;
+        pane.publication_seq = snapshot.logic.publication_seq;
+        pane.frame_id = snapshot.logic.frame_seq;
+        pane.frame_unix_ms = snapshot.logic.frame_unix_ms;
+        pane.frame = snapshot.frame;
+        pane.results = snapshot.results;
+        pane.rois = snapshot.rois;
+        pane.commands = snapshot.draw_cmds;
+        const ChannelConfig *channel = app_ctrl_runtime_channel_config(runtime, channel_id);
+        if (channel && channel->inference_roi.has_roi())
+            pane.inference_roi = channel->inference_roi;
+        pane.render_params.chnId = channel_id;
+        pane.render_params.inputW = pane.frame.cols;
+        pane.render_params.inputH = pane.frame.rows;
+        pane.render_params.disp_fps = snapshot.logic.disp_fps;
+        pane.render_params.infer_fps = snapshot.logic.infer_fps;
+        pane.render_params.result_frame_id = snapshot.logic.frame_seq;
+        pane.render_params.show_fps = 0;
+        pane.render_params.target_mask = static_cast<uint8_t>(DrawCommand::DISPLAY | DrawCommand::IMAGE);
+        pane.render_params.show_system_overlays = true;
+        pane.render_params.show_custom_overlays = true;
+        pane.render_params.depth_background = channel_uses_depth_background(channel);
+        composite.panes.push_back(std::move(pane));
+    }
+
+    /* 缺失通道采用紧凑跳过策略；任意一路可用就继续生成图片。全部不可用时仍进入
+     * 本地事件箱，由 report_event_impl 将图片明确标记为 failed，而不是丢弃告警。 */
+    const int pane_count = static_cast<int>(composite.panes.size());
+    composite.cols = std::max(1, std::min(runtime->config.tile_cols, std::max(1, pane_count)));
+    composite.rows = std::max(1, (std::max(1, pane_count) + composite.cols - 1) / composite.cols);
 
     /* 全局事件直接使用全局节点的上报配置，不借用任意通道充当事件身份。 */
     ChannelConfig report_config;
@@ -478,7 +464,7 @@ EventReportResult RuntimeEventSink::report(GlobalContext &context, const EventRe
     identity.video_source_channel_id = gctx->config->media_source_channel_id;
     for (const ImageJob::Pane &pane : composite.panes)
         identity.snapshot_unix_ms = std::max(identity.snapshot_unix_ms, pane.frame_unix_ms);
-    return report_event_impl(&ctx, request, need_image ? &composite : nullptr, identity);
+    return report_event_impl(&ctx, request, &composite, identity);
 }
 } // namespace
 

@@ -24,6 +24,8 @@ export interface EventRecord {
   }>
 }
 export interface RecordsResp {
+  matching_ids: string[]
+  raw_available: Record<string, boolean>
   records: EventRecord[]
   event_types: string[]
   count: number
@@ -35,10 +37,11 @@ export interface RecordsResp {
 export const fetchRecords = (
   name: string,
   limit = 500,
-  filters?: { startUnixMs?: number; endUnixMs?: number; eventType?: string },
+  filters?: { startUnixMs?: number; endUnixMs?: number; eventType?: string; mediaType?: string },
 ) => api.get<RecordsResp>(`/apps/${name}/records`, {
   params: {
     limit,
+    media_type: filters?.mediaType,
     start_unix_ms: filters?.startUnixMs,
     end_unix_ms: filters?.endUnixMs,
     event_type: filters?.eventType || undefined,

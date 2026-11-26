@@ -43,6 +43,7 @@ struct AlgoResult
     std::string model_id;      // 同通道多模型来源ID
     std::string model_type;    // yolov8_det / yolov8_pose / yolo26_pose / ...
     int model_index = 0;       // 在本次有效模型列表中的顺序
+    bool show_detection_box = true; // Business logic may supply its own localized boxes.
     cv::Scalar box_color = cv::Scalar(-1, -1, -1); // (-1,-1,-1) means use default color
 
     /** @brief 返回包围框的整数中心；坐标需在 int 可表示范围内。

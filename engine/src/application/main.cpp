@@ -41,6 +41,22 @@ int main(int argc, char **argv)
     setvbuf(stdout, nullptr, _IOLBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
 
+    if (argc >= 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0))
+    {
+        std::printf("用法\n  %s [配置.json]\n  %s <工具选项>\n\n", argv[0], argv[0]);
+        std::puts("默认配置为 ./assets/config.json。程序在前台运行，按 Ctrl+C 停止。\n\n"
+                  "工具选项\n"
+                  "  -h, --help                         显示本帮助\n"
+                  "  --validate-config <配置.json>      校验视频配置及其引用的文件\n"
+                  "  --list-logics                      列出通道级业务逻辑\n"
+                  "  --list-global-logics               列出全局业务逻辑\n"
+                  "  --inspect-model <模型.rknn> [类型] 查看模型输入输出，可指定模型类型检查兼容性\n"
+                  "  --image-inference-capabilities     查看图片推理支持的模型类型和限制\n"
+                  "  --infer-images <任务.json>         执行图片推理任务\n"
+                  "  --watchdog-protocol                显示引擎支持的看门狗协议");
+        return 0;
+    }
+
     if (argc == 2 && strcmp(argv[1], "--image-inference-capabilities") == 0)
         return image_inference_capabilities_cli();
     if (argc == 3 && strcmp(argv[1], "--infer-images") == 0)

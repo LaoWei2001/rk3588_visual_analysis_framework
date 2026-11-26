@@ -73,7 +73,6 @@ class YOLO : public ModelBase
     int model_w_ = 640;
     int model_h_ = 640;
     int num_classes_ = 80;
-    int io_num_in_ = 0;
     int io_num_out_ = 0;
     std::vector<rknn_tensor_attr> out_attrs_;
     std::vector<std::string> labels_;

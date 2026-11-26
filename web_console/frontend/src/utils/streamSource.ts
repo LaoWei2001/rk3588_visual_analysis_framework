@@ -2,7 +2,7 @@
  * 视频源输入类型 (src_type) 工具。
  *
  * 设计原则（与 C++ 端保持一致）：src_type 是【必填】字段，前后端都【不再自动推断】。
- *   - C++  : config.cpp 的 normalize_src_type() 仅做大小写归一；缺省即视为配置错误并拒绝加载。
+ *   - C++  : 缺省即拒绝加载，显式 rtsp 下的绝对路径使用文件播放。
  *   - 前端 : 这里只读取【显式】的 src_type，不再根据 url/device 猜测类型。
  *
  * 因此：新建视频流节点时必须显式带上 src_type（见 EditorPage 的默认节点数据），
@@ -13,7 +13,7 @@ export type SrcType = 'rtsp' | 'usb' | 'file'
 
 /** 下拉选项（顺序即 UI 展示顺序）。供视频流节点的"输入类型"选择器复用。 */
 export const SRC_TYPES: { value: SrcType; label: string }[] = [
-  { value: 'rtsp', label: 'RTSP 摄像头' },
+  { value: 'rtsp', label: '网络视频（RTSP / HTTP）' },
   { value: 'usb',  label: 'USB 摄像头' },
   { value: 'file', label: 'RK3588 本地文件' },
 ]
@@ -27,4 +27,13 @@ export const SRC_TYPES: { value: SrcType; label: string }[] = [
 export function getSrcType(d: Record<string, unknown> | null | undefined): string {
   if (!d) return ''
   return String(d.src_type ?? '').trim().toLowerCase()
+}
+
+export function isFilePlaybackSource(d: Record<string, unknown>): boolean {
+  const type = getSrcType(d)
+  return type === 'file' || (type === 'rtsp' && String(d.url ?? '').startsWith('/'))
+}
+
+export function networkVideoProtocol(url: string): string {
+  return /^(rtsps?|https?):\/\//.exec(url)?.[1] ?? ''
 }
